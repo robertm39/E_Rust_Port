@@ -12,3 +12,6 @@ This port must support all of the features of the original, so that the Rust exe
 
 # Testing
 Write thorough tests to confirm functionality and performance.
+
+# Agent-Made Docs
+Agent-made docs are in `DOCS.md` and in the locations specified in that file. Agents are absolutely not permitted to modify `AGENTS.md` in any way; they should modify `DOCS.md` instead.
