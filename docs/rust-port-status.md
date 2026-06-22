@@ -7,6 +7,7 @@ This document tracks Rust implementation slices and the original C source units 
 Rust files:
 
 - `Cargo.toml`
+- `src/basics/dstrings.rs`
 - `src/basics/error.rs`
 - `src/inout/commandline.rs`
 - `src/prover/version.rs`
@@ -16,6 +17,7 @@ Rust files:
 
 Original C references:
 
+- [`BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`](c_source_docs/BASICS/clb_dstrings.md)
 - [`BASICS/clb_error.h`, `BASICS/clb_error.c`](c_source_docs/BASICS/clb_error.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
 - [`PROVER/e_version.h`](c_source_docs/PROVER/e_version.md)
@@ -25,6 +27,7 @@ Original C references:
 Implemented behavior:
 
 - A root Rust package with library and `eprover` binary targets.
+- The `DStr` byte-buffer behavior from `clb_dstrings`, including append, byte-buffer append, integer append, string-array append, last-character deletion, reset, minimize, line reading, and the distinct C growth rules for string and byte appends.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - The core `CLStateGetOpt` command-line parser rules from `cio_commandline`: long options require `--name=value` for required arguments, long optional arguments default when `=` is absent, short required arguments accept attached or following values, short optional arguments use the default, `--` stops option parsing, and processed options are removed from the remaining argument list.
