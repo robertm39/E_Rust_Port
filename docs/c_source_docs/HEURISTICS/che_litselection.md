@@ -1,0 +1,391 @@
+<!-- BEGIN AUTO-GENERATED: c_source_docs -->
+# HEURISTICS / che_litselection
+
+## Source Files
+
+- [HEURISTICS/che_litselection.h](../../../eprover/HEURISTICS/che_litselection.h)
+- [HEURISTICS/che_litselection.c](../../../eprover/HEURISTICS/che_litselection.c)
+
+## Purpose
+
+Functions for selection certain literals (and hence superposition strategies). the GNU Lesser General Public License. <1> Fri May 21 22:17:06 GMT 1999
+
+Within the source tree, this unit belongs to `HEURISTICS`. Clause evaluation and strategy machinery: heuristic control blocks, priority functions, weight functions, literal selection, automatic strategy selection, and feature extraction.
+
+Authors noted in source headers: Stephan Schulz
+
+## Public Surface
+
+Exported declarations are primarily taken from headers. For standalone program sources, externally visible definitions are listed as the source scan finds them.
+
+### Types
+
+- `LitEvalCell`
+- `LitEval_p`
+- `LitSelNameFunAssocCell`
+- `LiteralSelectionFun`
+
+### Macros And Constants
+
+- `CHE_LITSELECTION`
+- `LitEvalInit(cell)`
+- `VAR_FACTOR`
+- `lit_sel_diff_weight(handle)`
+- `pred_dist_array_free(array)`
+
+### Globals
+
+- None found in the source scan.
+
+### Exported Functions
+
+- `LiteralSelectionFun GetLitSelFun(char* name)`
+- `char* GetLitSelName(LiteralSelectionFun fun)`
+- `void GSelectMinInfpos(OCB_p ocb, Clause_p clause)`
+- `void HSelectMinInfpos(OCB_p ocb, Clause_p clause)`
+- `void LitSelAppendNames(DStr_p str)`
+- `void MSelectComplexExceptUniqMaxHorn(OCB_p ocb, Clause_p clause)`
+- `void MSelectLargestOrientableLiteral(OCB_p ocb, Clause_p clause)`
+- `void MSelectSmallestOrientableLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectAllCondOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectAntiRROptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplex(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexAHP(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexAHPExceptRRHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexExceptRRHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexExceptUniqMaxHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexExceptUniqMaxPosHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexPreferEQ(OCB_p ocb, Clause_p clause)`
+- `void PSelectComplexPreferNEQ(OCB_p ocb, Clause_p clause)`
+- `void PSelectCondOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectDepth2OptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectDiffNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectFirstVariableLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectGroundNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectLComplex(OCB_p ocb, Clause_p clause)`
+- `void PSelectLargestNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectLargestOrientableLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectMaxLComplex(OCB_p ocb, Clause_p clause)`
+- `void PSelectMaxLComplexNoTypePred(OCB_p ocb, Clause_p clause)`
+- `void PSelectMaxLComplexNoXTypePred(OCB_p ocb, Clause_p clause)`
+- `void PSelectMin2Infpos(OCB_p ocb, Clause_p clause)`
+- `void PSelectMinInfpos(OCB_p ocb, Clause_p clause)`
+- `void PSelectMinInfposNoTypePred(OCB_p ocb, Clause_p clause)`
+- `void PSelectMinOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectMinOptimalNoRXTypePred(OCB_p ocb, Clause_p clause)`
+- `void PSelectMinOptimalNoTypePred(OCB_p ocb, Clause_p clause)`
+- `void PSelectMinOptimalNoXTypePred(OCB_p ocb, Clause_p clause)`
+- `void PSelectNDepth2OptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectNegativeLiterals(OCB_p ocb, Clause_p clause)`
+- `void PSelectNewComplex(OCB_p ocb, Clause_p clause)`
+- `void PSelectNewComplexAHP(OCB_p ocb, Clause_p clause)`
+- `void PSelectNewComplexAHPExceptRRHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectNewComplexAHPExceptUniqMaxHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectNewComplexExceptUniqMaxHorn(OCB_p ocb, Clause_p clause)`
+- `void PSelectNonAntiRROptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectNonRROptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectNonStrongRROptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectPDepth2OptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectSmallestNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectSmallestOrientableLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectStrongRRNonRROptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectUnlessPosMaxOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectUnlessUniqMaxOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectUnlessUniqMaxPosOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void PSelectUnlessUniqMaxSmallestOrientable(OCB_p ocb, Clause_p clause)`
+- `void PSelectUnlessUniqPosMaxOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectAllCondOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectAntiRROptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectCQAr(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArEqLast(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNT(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNTEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNTEqFirstUnlessPDom(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNTNp(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNTNpEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNXTEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNp(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNpEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQArNpEqFirstUnlessPDom(OCB_p ocb, Clause_p clause)`
+- `void SelectCQGrArEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIAr(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArEqLast(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNT(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNTEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNTNp(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNTNpEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNXTEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNp(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIArNpEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIPrecW(OCB_p ocb, Clause_p clause)`
+- `void SelectCQIPrecWNTNp(OCB_p ocb, Clause_p clause)`
+- `void SelectCQPrecW(OCB_p ocb, Clause_p clause)`
+- `void SelectCQPrecWNTNp(OCB_p ocb, Clause_p clause)`
+- `void SelectComplex(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexAHP(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexAHPExceptRRHorn(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexExceptRRHorn(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexExceptUniqMaxHorn(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexExceptUniqMaxPosHorn(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexG(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexPreferEQ(OCB_p ocb, Clause_p clause)`
+- `void SelectComplexPreferNEQ(OCB_p ocb, Clause_p clause)`
+- `void SelectCondOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectDepth2OptimalLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectDiffNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectDiversificationLiterals(OCB_p ocb, Clause_p clause)`
+- `void SelectDiversificationPreferIntoLiterals(OCB_p ocb, Clause_p clause)`
+- `void SelectFirstVariableLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectGrCQArEqFirst(OCB_p ocb, Clause_p clause)`
+- `void SelectGroundNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectLComplex(OCB_p ocb, Clause_p clause)`
+- `void SelectLargestNegativeLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectLargestOrientableLiteral(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplex(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexAPPNTNp(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexAPPNoType(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexAvoidAppVar(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexAvoidPosPred(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexAvoidPosUPred(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexG(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexNoTypePred(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexNoXTypePred(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexPreferAppVar(OCB_p ocb, Clause_p clause)`
+- `void SelectMaxLComplexStronglyAvoidAppVar(OCB_p ocb, Clause_p clause)`
+- `void SelectMin2Infpos(OCB_p ocb, Clause_p clause)`
+- `void SelectMinInfpos(OCB_p ocb, Clause_p clause)`
+- `void SelectMinInfposNoTypePred(OCB_p ocb, Clause_p clause)`
+- `void SelectMinOptimalLiteral(OCB_p ocb, Clause_p clause)`
+- ... 27 more
+
+## Implementation Notes
+
+### Internal Functions
+
+- `clause_select_pos`
+- `complex_weight`
+- `complex_weight_ahp`
+- `diversification_prefer_into_weight`
+- `diversification_weight`
+- `find_lcomplex_literal`
+- `find_max_xtype_no_type_lit`
+- `find_maxlcomplex_literal`
+- `find_ng_min11_infpos_no_xtype_lit`
+- `find_smallest_max_neg_ground_lit`
+- `find_smallest_neg_ground_lit`
+- `maxlcomplex_weight`
+- `maxlcomplexappNTNp_weight`
+- `maxlcomplexavoidappvar_weight`
+- `maxlcomplexavoidpred_weight`
+- `maxlcomplexavoidprednotype_weight`
+- `maxlcomplexstronglyavoidappvar_weight`
+- `maxlcomplexstronglypreferappvar_weight`
+- `new_complex_notp_ahp`
+- `new_complex_notp_ahp_ns`
+- `pos_pred_dist_array_compute`
+- `select_cq_ar_eqf_weight`
+- `select_cq_ar_eql_weight`
+- `select_cq_ar_weight`
+- `select_cq_arnp_eqf_weight`
+- `select_cq_arnp_weight`
+- `select_cq_arnt_eqf_weight`
+- `select_cq_arnt_weight`
+- `select_cq_arntnp_eqf_weight`
+- `select_cq_arntnp_weight`
+- `select_cq_arnxt_eqf_weight`
+- `select_cq_iar_eqf_weight`
+- `select_cq_iar_eql_weight`
+- `select_cq_iar_weight`
+- `select_cq_iarnp_eqf_weight`
+- `select_cq_iarnp_weight`
+- `select_cq_iarnt_eqf_weight`
+- `select_cq_iarnt_weight`
+- `select_cq_iarntnp_eqf_weight`
+- `select_cq_iarntnp_weight`
+- `select_cq_iarnxt_eqf_weight`
+- `select_cq_iprecw_weight`
+- `select_cq_iprecwntnp_weight`
+- `select_cq_precw_weight`
+- `select_cq_precwntnp_weight`
+- `select_cqgr_ar_eqf_weight`
+- `select_grcq_ar_eqf_weight`
+
+### Source-Level Behavior
+
+- `find_maxlcomplex_literal`: Find a maximal negative literal to select (see SelectMaxLComplex() below.
+- `find_lcomplex_literal`: Find a non-maximal negative literal to select (see SelectComplex() below.
+- `find_smallest_neg_ground_lit`: Return smallest negative ground literal, or NULL if no negative ground literal exists.
+- `find_smallest_max_neg_ground_lit`: Return the ground literal with the smallest maximal side. Assumes that all literals have been oriented (if possible).
+- `find_ng_min11_infpos_no_xtype_lit`: Return the non-ground, non-xpos literal with the smallest number of inference positions.
+- `find_max_xtype_no_type_lit`: Return the biggest xtype literal (but never a type literal).
+- `clause_select_pos`: Select all positive literals in clause.
+- `lit_eval_compare`: Return integer smaller than 0, 0, or int > than zero if le1 is smaller, equal to, or larger than le2 (by weight). Highest priority is implicit sign!
+- `generic_uniq_selection`: Function implementing generic weight-based selection for cases where at most one negative literal is selected (the one which is assigned minimal weight by weight_fun).
+- `pos_pred_dist_array_compute`: Compute a distribution array of predicate symbols (or uninterpreted predicate symbols in positive literals of clause.
+- `generic_app_var_sel`: Factors out computation needed for Avoid/PrefferAppVar family of functions.
+- `GetLitSelFun`: Given an external name, return a literal selection function or NULL if the name does not match any known function.
+- `GetLitSelName`: Given a LiteralSelectionFun, return the corresponding name. Fails/Undefined, if function is not found.
+- `LitSelAppendNames`: Append all valid literal selection function names (comma-separated) to str.
+- `SelectNoLiterals`: Unselect all literals (now a dummy, this is done further up).
+- `SelectNoGeneration`: Do nothing with a clause.
+- `SelectNegativeLiterals`: If the clause has negative literals, mark them as selected.
+- `PSelectNegativeLiterals`: If the clause has negative literals, mark all literals as selected.
+- `SelectFirstVariableLiteral`: Select first literal of the form X!=Y.
+- `PSelectFirstVariableLiteral`: If a literal of the form X!=Y exist, select it and all positive literals. Otherwise unselect all literals.
+- `SelectLargestNegativeLiteral`: Select the largest of the clauses negative literals.
+- `PSelectLargestNegativeLiteral`: If clause has negative literals, select the largest of the clauses negative literals and positive literals.
+- `SelectSmallestNegativeLiteral`: Select the smallest of the clauses negative literals.
+- `PSelectSmallestNegativeLiteral`: If clause has negative literals, select the smallest of the clauses negative literals and positive literals.
+- `SelectLargestOrientableLiteral`: If there is at least one negative orientable literal, select the largest one, otherwise select the largest one.
+- `PSelectLargestOrientableLiteral`: If there is at least one negative orientable literal, select the largest one, otherwise select the largest one. Also select positive literals.
+- `MSelectLargestOrientableLiteral`: For horn clauses, call PSelectLargestOrientableLiteral, otherwise call SelectLargestOrientableLiteral.
+- `SelectSmallestOrientableLiteral`: If there is at least one negative orientable literal, select the smallest one, otherwise select the largest one.
+- `PSelectSmallestOrientableLiteral`: If there is at least one negative orientable literal, select the smallest one, otherwise select the largest one. Also select positive literals.
+- `MSelectSmallestOrientableLiteral`: For horn clauses, call PSelectSmallestOrientableLiteral, otherwise call SelectSmallestOrientableLiteral.
+- `SelectDiffNegativeLiteral`: Select the most unbalanced of the clauses negative literals.
+- `PSelectDiffNegativeLiteral`: If clause has negative literals, select the most unbalanced one of the clauses negative literals and all positive literals.
+- `SelectGroundNegativeLiteral`: If there are negative ground literals, select the one with maximal lit_sel_diff_weight.
+- `PSelectGroundNegativeLiteral`: If there are negative ground literals, select the one with maximal lit_sel_diff_weight and select all positive literals.
+- `SelectOptimalLiteral`: (Hah! Believe it at your peril ;-). If there is a ground negative literal, select it, otherwise select the negative literal with the largest size difference.
+- `PSelectOptimalLiteral`: (Hah! Believe it at your peril ;-). If there is a ground negative literal, select it, otherwise select the negative literal with the largest size difference and all positive literals.
+- `SelectMinOptimalLiteral`: If there is a ground negative literal, select it, otherwise select the smallest negative literal.
+- `PSelectMinOptimalLiteral`: If there is a ground negative literal, select it, otherwise select the smallest negative literal and positive literals.
+- `SelectMinOptimalNoTypePred`: If there is a ground negative literal, select it, otherwise select the smallest negative literal, but never select type literals.
+- `PSelectMinOptimalNoTypePred`: If there is a ground negative literal, select it, otherwise select the smallest negative literal, but never select type literals. If a negative literal is selected, also select positive ones.
+- `SelectMinOptimalNoXTypePred`: If there is a ground negative literal, select it, otherwise select the smallest negative literal, but never select extendet type literals.
+- `PSelectMinOptimalNoXTypePred`: If there is a ground negative literal, select it, otherwise select the smallest negative literal, but never select extendet type literals. If a negative literal is selected, also select positive ones.
+- `SelectMinOptimalNoRXTypePred`: If there is a ground negative literal, select it, otherwise select the smallest negative literal, but never select real extended type literals.
+- `PSelectMinOptimalNoRXTypePred`: If there is a ground negative literal, select it, otherwise select the smallest negative literal, but never select real extendet type literals. If a negative literal is selected, also select positive ones.
+- `SelectCondOptimalLiteral`: As above, but if the clause has a positive literal that is very uninstantiated, select no literal at all.
+- `PSelectCondOptimalLiteral`: As above, but select positive literals as well.
+- `SelectAllCondOptimalLiteral`: As above, but if the clause has only positive literals that are very uninstantiated, select no literal at all.
+- `PSelectAllCondOptimalLiteral`: As above, but select positive literals as well.
+- `SelectDepth2OptimalLiteral`: Select optimal literal unless there is a literal with depth <= 2, then select no literal.
+- `PSelectDepth2OptimalLiteral`: As above, but select positive literals as well.
+- `SelectPDepth2OptimalLiteral`: Select optimal literal unless there is a positive literal with depth <= 2, then select no literal.
+- `PSelectPDepth2OptimalLiteral`: As above, with positive literals.
+- `SelectNDepth2OptimalLiteral`: Select optimal literal unless there is a negative literal with depth <= 2, then select no literal.
+- `PSelectNDepth2OptimalLiteral`: As above, with positive literals.
+- `SelectNonRROptimalLiteral`: If a clause is not range-restricted, select the optimal literal, otherwise select no literal.
+- `PSelectNonRROptimalLiteral`: If a clause is not range-restricted, select the optimal literal and positive literals, otherwise select no literal.
+- `SelectNonStrongRROptimalLiteral`: If a clause is not strongly range-restricted, select the optimal literal, otherwise select no literal.
+- `PSelectNonStrongRROptimalLiteral`: If a clause is not Strong range-restricted, select the optimal literal and positive literals, otherwise select no literal.
+- `SelectAntiRROptimalLiteral`: If a clause is anti-range-restricted, select the optimal literal, otherwise select no literal.
+- `PSelectAntiRROptimalLiteral`: If a clause is anti-range-restricted, select the optimal literal and positive literals, otherwise select no literal.
+- `SelectNonAntiRROptimalLiteral`: If a clause is not anti-range-restricted, select the optimal literal, otherwise select no literal.
+- `PSelectNonAntiRROptimalLiteral`: If a clause is not anti-range-restricted, select the optimal literal and positive literals, otherwise select no literal.
+- `SelectStrongRRNonRROptimalLiteral`: If a clause is not range-restricted or strongly range-restricted select the optimal literal, otherwise select no literal.
+- `PSelectStrongRRNonRROptimalLiteral`: If a clause is not range-restricted or strongly range-restricted select the optimal literal and positive literals, otherwise select no literal.
+- `SelectUnlessUniqMaxOptimalLiteral`: If a clause has a single maximal literal, do not select, otherwise select the optimal literal.
+- `PSelectUnlessUniqMaxOptimalLiteral`: If a clause has a single maximal literal, do not select, otherwise select the optimal literal.
+- `SelectUnlessUniqMaxSmallestOrientable`: If a clause has a single maximal literal, do not select, otherwise select the smallest orientable literal.
+- `PSelectUnlessUniqMaxSmallestOrientable`: If a clause has a single maximal literal, do not select, otherwise select the smallest orientable literal and all positive ones.
+- `SelectUnlessPosMaxOptimalLiteral`: If a clause has a positive maximal literal (i.e. is potentially reductive), do not select, otherwise select optimal literal.
+- `PSelectUnlessPosMaxOptimalLiteral`: If a clause has a positive maximal literal (i.e. is potentially reductive), do not select, otherwise select optimal literal and positive literals.
+- `SelectUnlessUniqPosMaxOptimalLiteral`: If a clause has a uniqe positive maximal literal do not select, otherwise select optimal literal.
+- `PSelectUnlessUniqPosMaxOptimalLiteral`: If a clause has a uniqe positive maximal literal do not select, otherwise select optimal literal and positive literals.
+- `SelectUnlessUniqMaxPosOptimalLiteral`: If a clause has a maximal literal that is positive, do not select, otherwise select optimal literal.
+- `PSelectUnlessUniqMaxPosOptimalLiteral`: If a clause has a maximal literal that is positive, do not select, otherwise select optimal literal.
+- `SelectComplex`: If there is a pure variable literal, select it. Otherwise, if there is at least one ground literal, select the smallest one. Otherwise, select the literal with the largest size difference.
+- `PSelectComplex`: If there is a pure variable literal, select it. Otherwise, if there is at least one ground literal, select the smallest one. Otherwise, select the literal with the largest size difference and the positive literals.
+- `SelectComplexExceptRRHorn`: If a clause is Horn and range-restricted, do no select. Otherwise use SelectComplex() (above).
+- `PSelectComplexExceptRRHorn`: If a clause is Horn and range-restricted, do no select. Otherwise use PSelectComplex() (above).
+- `SelectLComplex`: Similar to SelectComplex, but always select largest diff literals first.
+- `PSelectLComplex`: Similar to PSelectComplex, but always select largest diff literals first.
+- `SelectMaxLComplex`: If there is more than one maximal literal, select a negative literal, with the following priority: Maximal, pure variable Maximal, largest difference ground Maximal, largest difference non-ground pure variable largest difference ground largest difference non-ground
+- `PSelectMaxLComplex`: As above, but in the default case select positive literals as well.
+- `SelectMaxLComplexNoTypePred`: If there is more than one maximal literal, select a negative literal, with the following priority: Maximal, pure variable Maximal, largest difference ground Maximal, largest difference non-ground pure variable largest difference ground largest difference non-ground Never select a type literal. If all negative literals are type literals, select nothing.
+- `PSelectMaxLComplexNoTypePred`: If there is more than one maximal literal, select a negative literal, with the following priority: Maximal, pure variable Maximal, largest difference ground Maximal, largest difference non-ground pure variable largest difference ground largest difference non-ground Never select a type literal. If all negative literals are type literals, select nothing. If s...
+- `SelectMaxLComplexNoXTypePred`: If there is more than one maximal literal, select a negative literal, with the following priority: Maximal, pure variable Maximal, largest difference ground Maximal, largest difference non-ground pure variable largest difference ground largest difference non-ground Never select an extended type literal P(X1,...,Xn). If all negative literals are extended typ...
+- `PSelectMaxLComplexNoXTypePred`: If there is more than one maximal literal, select a negative literal, with the following priority: Maximal, pure variable Maximal, largest difference ground Maximal, largest difference non-ground pure variable largest difference ground largest difference non-ground Never select an extended type literal. If all negative literals are extended type literals, s...
+- `SelectComplexPreferNEQ`: Select a negative literal as in SelectComplex, but prefer non-equational literals.
+- `PSelectComplexPreferNEQ`: Select a negative literal as in PSelectComplex, but prefer non-equational literals.
+- `SelectComplexPreferEQ`: Select a negative literal as in SelectComplex, but prefer equational literals.
+- `PSelectComplexPreferEQ`: Select a negative literal as in PSelectComplex, but prefer equational literals.
+- `SelectComplexExceptUniqMaxHorn`: Select literal as in SelectComplex unless the clause is a Horn clause with a unique maximal literal.
+- `PSelectComplexExceptUniqMaxHorn`: Select literal as in PSelectComplex unless the clause is a Horn clause with a unique maximal literal.
+- `MSelectComplexExceptUniqMaxHorn`: For horn clauses, call PSelectComplexExceptUniqMaxHorn, otherwise call SelectComplexExceptUniqMaxHorn.
+- `SelectNewComplex`: If there is a negative ground literal, select the one with the smallest maximal side. Else: Select the minimal inference position non-XType orientable negative literal. Else: Select the lagest XType literal. Never select a Type literal - if all negative literals are type literals, do not select at all.
+- `PSelectNewComplex`: If there is a negative ground literal, select the one with the smallest maximal side. Else: Select the minimal inference position non-XType orientable negative literal. Else: Select the lagest XType literal. Never select a Type literal - if all negative literals are type literals, do not select at all. If anything is selected, select positive literals as we...
+- `SelectNewComplexExceptUniqMaxHorn`: Select literal as in SelectNewsComplex unless the clause is a Horn clause with a unique maximal literal.
+- `PSelectNewComplexExceptUniqMaxHorn`: Select literal as in PSelectNewsComplex unless the clause is a Horn clause with a unique maximal literal.
+- `SelectMinInfpos`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights.
+- `PSelectMinInfpos`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights, and select positive literals as well.
+- `HSelectMinInfpos`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights. If this is not ground, select positive ones as well.
+- `GSelectMinInfpos`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights. If this is ground, select positive ones as well.
+- `SelectMinInfposNoTypePred`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights, but never select type predicates.
+- `PSelectMinInfposNoTypePred`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights, but never select type predicates. If literal is selected, also select positive ones.
+- `SelectMin2Infpos`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights for f_weight = 1, v_weight = 2
+- `PSelectMin2Infpos`: Select the literal with the smallest number of potential inference positions, i.e. smallest sum of maximal size weights (as above), and select positive literals as well.
+- `SelectComplexExceptUniqMaxPosHorn`: Select literal as in SelectComplex unless the clause is a Horn clause with a unique maximal positive literal.
+- `PSelectComplexExceptUniqMaxPosHorn`: Select literal as in PSelectComplex unless the clause is a Horn clause with a unique maximal positive literal.
+- `diversification_weight`: Assign pseudo-random weight to negative literals, 0 to positive ones.
+- `SelectDiversificationLiterals`: Systematically select a pseudo-random literal in clause (where pseudo is large and random in small).
+- `diversification_prefer_into_weight`: Assing pseudo-random weight to negative literals, 0 to positive ones. However, always prefer literals comming from the into clause of a paramodulation to those of a from clause.
+- `SelectDiversificationPreferIntoLiterals`: Systematically select a pseudo-random literal in clause (where pseudo is large and random in small), but prefer into-literals.
+- `maxlcomplex_weight`: Initialize weights to mimic SelectMaxLComplexWeight()
+- `SelectMaxLComplexG`: Reimplementation of SelectMaxLComplex() using the generic literal selection framework.
+- `maxlcomplexavoidpred_weight`: Initialize weights to mimic SelectMaxLComplexWeight(), but defer literals with which occur often in pred_dist.
+- `maxlcomplexavoidappvar_weight`: Initialize weights to mimic SelectMaxLComplexWeight(), but defer literals with applied variables, and put them right after pure vars and defer literals which occur often in pred_dist.
+- `maxlcomplexstronglyavoidappvar_weight`: Initialize weights to mimic SelectMaxLComplexWeight(), but defer literals with applied variables, and put them right after maximal lits and defer literals which occur often in pred_dist.
+- `maxlcomplexstronglypreferappvar_weight`: Initialize weights to mimic SelectMaxLComplexWeight(), but prefer literals with applied variables and defer literals which occur often in pred_dist.
+- `SelectMaxLComplexAvoidPosPred`: As SelectMaxLComplex, but preferably select literals that do not share the predicate symbol with a positive literal.
+- `SelectMaxLComplexAvoidAppVar`: As SelectMaxLComplex, but preferably select literals that do not have applied variables and the ones that do not share the predicate symbol with a positive literal.
+- `SelectMaxLComplexStronglyAvoidAppVar`: As above, but avoids app vars stronger (considers them even before maximality of literals).
+- ... 47 more
+
+### Dependencies
+
+- `"che_litselection.h"`
+- `<ccl_clauses.h>`
+- `<clb_simple_stuff.h>`
+
+### Compile-Time Conditions
+
+- `CHE_LITSELECTION`
+
+## Porting Notes
+
+- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
+- Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
+- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
+- Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
+<!-- END AUTO-GENERATED: c_source_docs -->
+
+
+
+
+
+
+
+
+<!-- BEGIN MANUAL REVIEW: c_source_docs -->
+## Manual Review
+
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+
+Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselection.c`.
+
+### Review Notes
+
+- Reviewed as a paired implementation/header unit in `HEURISTICS` covering 2 source file(s), about 7371 lines, 151 scanned public declarations, 47 scanned internal function definitions, and 167 structured function-comment blocks.
+- Literal-selection policy affects completeness and inference generation; match default and named policies carefully.
+- Strategy code. Preserve clause-evaluation semantics, priority ordering, weight formulas, and feature extraction because small changes can alter search behavior.
+- Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
+- SAT/propositional integration has a separate assignment/result vocabulary; keep conversions and ownership boundaries explicit.
+- Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
+- File-static state should be audited for thread-safety and reset behavior in the Rust port.
+- Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Porting Focus
+
+- Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
+- Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
+- If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+<!-- END MANUAL REVIEW: c_source_docs -->

@@ -1,0 +1,116 @@
+<!-- BEGIN AUTO-GENERATED: c_source_docs -->
+# EXTERNAL / cex_csscpa
+
+## Source Files
+
+- [EXTERNAL/cex_csscpa.h](../../../eprover/EXTERNAL/cex_csscpa.h)
+- [EXTERNAL/cex_csscpa.c](../../../eprover/EXTERNAL/cex_csscpa.c)
+
+## Purpose
+
+Functions and datetype realizing the CSSCPA control component. the GNU Lesser General Public License. <1> Mon Apr 10 00:10:07 GMT 2000 New
+
+Within the source tree, this unit belongs to `EXTERNAL`. Optional external integration helpers, including CSSCPA filtering support.
+
+Authors noted in source headers: Stephan Schulz, Geoff Sutcliffe
+
+## Public Surface
+
+Exported declarations are primarily taken from headers. For standalone program sources, externally visible definitions are listed as the source scan finds them.
+
+### Types
+
+- `CSSCPAStateCell`
+- `CSSCPAState_p`
+- `ClauseStatusType`
+
+### Macros And Constants
+
+- `CEX_CSSCPA`
+- `CSSCPAStateCellAlloc()`
+- `CSSCPAStateCellFree(junk)`
+
+### Globals
+
+- None found in the source scan.
+
+### Exported Functions
+
+- `CSSCPAState_p CSSCPAStateAlloc(void)`
+- `bool CSSCPAProcessClause(CSSCPAState_p state, Clause_p clause, bool accept, float weight_delta, float average_delta)`
+- `void CSSCPALoop(Scanner_p in, CSSCPAState_p state)`
+- `void CSSCPAStateFree(CSSCPAState_p junk)`
+
+## Implementation Notes
+
+### Internal Functions
+
+- `collect_subsumed`
+- `find_unit_contradiction`
+- `print_csscpa_state`
+
+### Source-Level Behavior
+
+- `ClauseStatusString`: Return a string of the clause status
+- `print_csscpa_state`: Print the clause status and state statistics given.
+- `collect_subsumed`: Push all clauses in set that are subsumed by clause onto subsumed. Return weight of all these clauses.
+- `find_unit_contradiction`: Given a (unit) clause and a clause set, check any of the unit clauses with opposite sign in set for unifiability. Return the first clause that unifies, otherwise return NULL.
+- `CSSCPAStateAlloc`: Allocate an empty, allocated CSSCPA state.
+- `CSSCPAStateFree`: Free a CSSCPAState and return associated data structures.
+- `CSSCPAProcessClause`: Process a clause for CSSCPA: - If it is subsumed or tautological, delete it. - If accept is true or clause subsumes clauses with a higher combined weight than clause, remove all clauses subsume by clause and add clause to state. - Otherwise delete clause. / Returns true if clause has been accepted.
+- `CSSCPALoop`: Read CSSCPA-clause commands and process them. Terminate if no input remains.
+
+### Dependencies
+
+- `"cex_csscpa.h"`
+- `<ccl_subsumption.h>`
+- `<ccl_tautologies.h>`
+- `<cio_output.h>`
+
+### Compile-Time Conditions
+
+- `CEX_CSSCPA`
+
+## Porting Notes
+
+- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
+- Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
+- Allocation helpers and paired free functions are part of the performance contract; keep allocation granularity and reuse behavior visible in the Rust design.
+- Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
+- Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
+- Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.
+<!-- END AUTO-GENERATED: c_source_docs -->
+
+
+
+
+
+
+
+
+<!-- BEGIN MANUAL REVIEW: c_source_docs -->
+## Manual Review
+
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+
+Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
+
+### Review Notes
+
+- Reviewed as a paired implementation/header unit in `EXTERNAL` covering 2 source file(s), about 637 lines, 7 scanned public declarations, 3 scanned internal function definitions, and 8 structured function-comment blocks.
+- Functions and datetype realizing the CSSCPA control component. the GNU Lesser General Public License. <1> Mon Apr 10 00:10:07 GMT 2000 New
+- External integration code. Treat formats, command-line behavior, and temporary files as compatibility surfaces.
+- Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
+- Clause and literal mutations can invalidate cached weights, indexes, or derivation metadata; keep update ordering visible.
+- Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
+- Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
+- Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Porting Focus
+
+- Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
+- Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
+- If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+<!-- END MANUAL REVIEW: c_source_docs -->

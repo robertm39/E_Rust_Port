@@ -1,0 +1,105 @@
+<!-- BEGIN AUTO-GENERATED: c_source_docs -->
+# INOUT / cio_signals
+
+## Source Files
+
+- [INOUT/cio_signals.h](../../../eprover/INOUT/cio_signals.h)
+- [INOUT/cio_signals.c](../../../eprover/INOUT/cio_signals.c)
+
+## Purpose
+
+Signal handler for limit signals...not really necessary, but may work around some Solaris bugs. Also some support infrastructure... the GNU Lesser General Public License. <1> Fri Nov 6 14:50:28 MET 1998
+
+Within the source tree, this unit belongs to `INOUT`. Input/output substrate: scanners, parsers, command-line handling, streams, files, temp files, signals, network helpers, and output formatting.
+
+Authors noted in source headers: Stephan Schulz
+
+## Public Surface
+
+Exported declarations are primarily taken from headers. For standalone program sources, externally visible definitions are listed as the source scan finds them.
+
+### Types
+
+- None found in the source scan.
+
+### Macros And Constants
+
+- `CCO_SIGNALS`
+
+### Globals
+
+- `extern bool SilentTimeOut`
+- `extern rlim_t HardTimeLimit`
+- `extern rlim_t ScheduleTimeLimit`
+- `extern rlim_t SoftTimeLimit`
+- `extern rlim_t SystemTimeLimit`
+- `extern sig_atomic_t SigTermCaught`
+- `extern sig_atomic_t TimeIsUp`
+- `extern sig_atomic_t TimeLimitIsSoft`
+
+### Exported Functions
+
+- `void ESigTermSchedHandler(int mysignal)`
+- `void ESignalHandler(int mysignal)`
+- `void ESignalSetup(int mysignal)`
+
+## Implementation Notes
+
+### Internal Functions
+
+- None found in the source scan.
+
+### Source-Level Behavior
+
+- `ESignalSetup`: Set up ESignalHandler() as handle for mysignal, check for errors.
+- `ESignalHandler`: Handle signals...print message and exit or continue, depending on the signal.
+- `ESigTermSchedHandler`: Record a caught SIGTERM.
+
+### Dependencies
+
+- `"cio_signals.h"`
+- `<cio_tempfile.h>`
+- `<signal.h>`
+- `<sys/resource.h>`
+- `<sys/time.h>`
+- `<sys/types.h>`
+
+### Compile-Time Conditions
+
+- `CCO_SIGNALS`
+
+## Porting Notes
+
+- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
+<!-- END AUTO-GENERATED: c_source_docs -->
+
+
+
+
+
+
+
+
+<!-- BEGIN MANUAL REVIEW: c_source_docs -->
+## Manual Review
+
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+
+Source files reviewed: `INOUT/cio_signals.h`, `INOUT/cio_signals.c`.
+
+### Review Notes
+
+- Reviewed as a paired implementation/header unit in `INOUT` covering 2 source file(s), about 264 lines, 11 scanned public declarations, 0 scanned internal function definitions, and 3 structured function-comment blocks.
+- Signal handler for limit signals...not really necessary, but may work around some Solaris bugs. Also some support infrastructure... the GNU Lesser General Public License. <1> Fri Nov 6 14:50:28 MET 1998
+- Parsing and output code. Scanner state, token consumption, include handling, and fatal parse errors are part of the observable interface.
+- Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- File-static state should be audited for thread-safety and reset behavior in the Rust port.
+- Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Porting Focus
+
+- Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
+- Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
+- If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+<!-- END MANUAL REVIEW: c_source_docs -->

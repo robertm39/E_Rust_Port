@@ -1,0 +1,107 @@
+<!-- BEGIN AUTO-GENERATED: c_source_docs -->
+# PCL2 / pcl_analysis
+
+## Source Files
+
+- [PCL2/pcl_analysis.h](../../../eprover/PCL2/pcl_analysis.h)
+- [PCL2/pcl_analysis.c](../../../eprover/PCL2/pcl_analysis.c)
+
+## Purpose
+
+Code for analysing PCL protocols, replacing (much of) what used to be in ANALYSIS for old E style proofs. the GNU Lesser General Public License. <1> Tue Feb 3 23:26:44 CET 2004
+
+Within the source tree, this unit belongs to `PCL2`. PCL protocol and proof-object support: proof steps, mini-protocols, identifiers, positions, expressions, checking, lemmas, and proof analysis.
+
+Authors noted in source headers: Stephan Schulz
+
+## Public Surface
+
+Exported declarations are primarily taken from headers. For standalone program sources, externally visible definitions are listed as the source scan finds them.
+
+### Types
+
+- None found in the source scan.
+
+### Macros And Constants
+
+- `PCLStepUpdateGRefs(prot, step)`
+- `PCL_ANALYSIS`
+
+### Globals
+
+- None found in the source scan.
+
+### Exported Functions
+
+- `long PCLExprProofDistance(PCLProt_p prot, PCLExpr_p expr)`
+- `long PCLProtSelectExamples(PCLProt_p prot, long neg_examples)`
+- `long PCLStepProofDistance(PCLProt_p prot, PCLStep_p step)`
+- `void PCLExprUpdateGRefs(PCLProt_p prot, PCLExpr_p expr, bool proofstep)`
+- `void PCLProtProofDistance(PCLProt_p prot)`
+- `void PCLProtUpdateGRefs(PCLProt_p prot)`
+
+## Implementation Notes
+
+### Internal Functions
+
+- None found in the source scan.
+
+### Source-Level Behavior
+
+- `pcl_example_cmp`: Compare two PCL steps as follows: All proof steps are equal and smaller than all non-proof steps. Non-proof steps are compared by gen_ref/(sim_ref+1).
+- `PCLExprProofDistance`: Find the longest inference chain from the nearest proof clause referenced in the expression. If no proof clause is among its ancestors, return LONG_MAX. Assumes that proof clauses are marked!
+- `PCLStepProofDistance`: Find the longest inference chain from the nearest proof clause referenced in the steps expression (or 0 if step is proof step). If no proof clause is among its ancestors, return LONG_MAX. Assumes that proof clauses are marked! Non-proof initial clauses get PCL_PROOF_DIST_DEFAULT.
+- `PCLProtProofDistance`: Compute the proof distance for all steps in protocol. Assumes that proof steps are already identified.
+- `PCLExprUpdateGRefs`: Update the reference counters in all parents of expr appropriately.
+- `PCLProtUpdateGRefs`: For all steps, mark how often they are used to generate or simplify proof or non-proof clauses. Assumes that proof steps are already identified.
+- `PCLProtSelectExamples`: Select examples for pattern-based learning. Selects all proof clauses and up to neg_examples negative examples. Negative examples are selected by ratio of generating to simplifying applications (generating bad, simplification good). Returns number of steps selected.
+
+### Dependencies
+
+- `"pcl_analysis.h"`
+- `<pcl_protocol.h>`
+
+### Compile-Time Conditions
+
+- `PCL_ANALYSIS`
+
+## Porting Notes
+
+- Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
+- Assertions encode local invariants; translate them into debug assertions or explicit checks where callers can violate them.
+- Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
+- Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
+- Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
+<!-- END AUTO-GENERATED: c_source_docs -->
+
+
+
+
+
+
+
+
+<!-- BEGIN MANUAL REVIEW: c_source_docs -->
+## Manual Review
+
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+
+Source files reviewed: `PCL2/pcl_analysis.h`, `PCL2/pcl_analysis.c`.
+
+### Review Notes
+
+- Reviewed as a paired implementation/header unit in `PCL2` covering 2 source file(s), about 438 lines, 6 scanned public declarations, 0 scanned internal function definitions, and 7 structured function-comment blocks.
+- Code for analysing PCL protocols, replacing (much of) what used to be in ANALYSIS for old E style proofs. the GNU Lesser General Public License. <1> Tue Feb 3 23:26:44 CET 2004
+- Proof-object code. Preserve identifier handling, step structure, protocol syntax, and proof-checking side effects.
+- Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
+- Proof output/checking code is externally consumed; preserve identifiers, step ordering, and formatting details.
+- Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
+- Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+
+### Porting Focus
+
+- Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
+- Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
+- If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+<!-- END MANUAL REVIEW: c_source_docs -->
