@@ -28,7 +28,10 @@ from typing import Any, Iterable, Sequence
 
 
 SZS_RE = re.compile(r"\bSZS\s+status\s+([^\s]+)", re.IGNORECASE)
+SZS_OUTPUT_START_RE = re.compile(r"\bSZS\s+output\s+start\s+([^\s]+)", re.IGNORECASE)
+SZS_OUTPUT_END_RE = re.compile(r"\bSZS\s+output\s+end\s+([^\s]+)", re.IGNORECASE)
 EXPECTED_RE = re.compile(r"^%\s*Status\s*:\s*([^\s]+)", re.MULTILINE | re.IGNORECASE)
+SATURATION_GENERATED_ID_RE = re.compile(r"\bc_\d+_\d+\b")
 VOLATILE_LINE_RE = re.compile(
     r"(?:User time|System time|Total time|Maximum resident|date|timestamp)\s*:",
     re.IGNORECASE,
@@ -71,6 +74,13 @@ def git(source: Path, *arguments: str) -> str:
         "git",
         "-c",
         f"safe.directory={source}",
+        # The checked-in upstream source lives on the Windows filesystem.  Windows
+        # Git may materialize it with CRLF line endings, while the WSL build
+        # driver runs Linux Git with LF defaults.  Use the Windows normalization
+        # policy only when inspecting that original checkout; cloned build trees
+        # on WSL/ext4 keep normal Linux line endings.
+        "-c",
+        "core.autocrlf=true",
         "-C",
         str(source),
         *arguments,
@@ -285,7 +295,53 @@ def normalize_output(text: str, replacements: Iterable[tuple[str, str]] = ()) ->
         if old:
             normalized = normalized.replace(old, new)
     lines = [line.rstrip() for line in normalized.splitlines() if not VOLATILE_LINE_RE.search(line)]
+    lines = normalize_saturation_blocks(lines)
     return "\n".join(lines).strip()
+
+
+def normalize_saturation_blocks(lines: Iterable[str]) -> list[str]:
+    """Sort saturation listings while preserving proof order.
+
+    E can emit the same saturated clause/formula set in a different order across
+    two runs of the same binary.  That is not a semantic proof-output mismatch.
+    Actual refutation/proof blocks remain order-sensitive because proof order is
+    part of the derivation structure.
+    """
+
+    result: list[str] = []
+    saturation_body: list[str] | None = None
+
+    def flush_saturation_body() -> None:
+        nonlocal saturation_body
+        if saturation_body is not None:
+            result.extend(sorted(saturation_body, key=lambda line: line.strip()))
+            saturation_body = None
+
+    for line in lines:
+        start = SZS_OUTPUT_START_RE.search(line)
+        if start and start.group(1).lower() == "saturation":
+            flush_saturation_body()
+            result.append(line)
+            saturation_body = []
+            continue
+
+        if saturation_body is not None:
+            end = SZS_OUTPUT_END_RE.search(line)
+            if end:
+                flush_saturation_body()
+                result.append(line)
+            else:
+                saturation_body.append(normalize_saturation_line(line))
+            continue
+
+        result.append(line)
+
+    flush_saturation_body()
+    return result
+
+
+def normalize_saturation_line(line: str) -> str:
+    return SATURATION_GENERATED_ID_RE.sub("<CLAUSE_ID>", line)
 
 
 def output_shape(stdout: str, stderr: str) -> dict[str, Any]:

@@ -66,7 +66,13 @@ then rerun this command:
 
 function Convert-ToWslPath([string]$Path) {
     $absolute = [System.IO.Path]::GetFullPath($Path)
-    $converted = & wsl.exe -d $Distro -- wslpath -a $absolute
+    if ($absolute -match '^([A-Za-z]):[\\/](.*)$') {
+        $drive = $Matches[1].ToLowerInvariant()
+        $tail = ($Matches[2] -replace '\\', '/')
+        return "/mnt/$drive/$tail"
+    }
+
+    $converted = & wsl.exe -d $Distro -- wslpath -a -- $absolute
     if ($LASTEXITCODE -ne 0) {
         throw "Could not convert '$absolute' to a WSL path."
     }

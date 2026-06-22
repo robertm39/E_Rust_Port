@@ -22,6 +22,29 @@ class OutputParsingTests(unittest.TestCase):
             "problem <PROBLEM>\nproof",
         )
 
+    def test_normalization_sorts_only_saturation_blocks(self):
+        saturation_a = (
+            "% SZS output start Saturation\n"
+            "cnf(c_0_2, plain, p, inference(spm,[status(thm)],[c_0_1])).\n"
+            "cnf(c_0_3, plain, q, inference(spm,[status(thm)],[c_0_1]))."
+        )
+        saturation_b = (
+            "% SZS output start Saturation\n"
+            "cnf(c_0_11, plain, q, inference(spm,[status(thm)],[c_0_9])).\n"
+            "cnf(c_0_10, plain, p, inference(spm,[status(thm)],[c_0_8]))."
+        )
+        self.assertEqual(
+            e_interop.normalize_output(saturation_a),
+            e_interop.normalize_output(saturation_b),
+        )
+
+        proof_a = "% SZS output start CNFRefutation\ncnf(step2, plain, $true).\ncnf(step1, plain, $true)."
+        proof_b = "% SZS output start CNFRefutation\ncnf(step1, plain, $true).\ncnf(step2, plain, $true)."
+        self.assertNotEqual(
+            e_interop.normalize_output(proof_a),
+            e_interop.normalize_output(proof_b),
+        )
+
     def test_output_shape_tracks_proof_markers(self):
         shape = e_interop.output_shape(
             "# SZS status Theorem\n# SZS output start CNFRefutation\n# SZS output end CNFRefutation\n",
