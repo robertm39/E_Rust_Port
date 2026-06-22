@@ -1,0 +1,100 @@
+# Building and comparing E on Windows
+
+The upstream C implementation is built as a Linux reference under WSL 2. The
+Windows Rust executable is compared with that reference for compatibility.
+Performance is measured separately using native Linux builds of both programs
+inside the same WSL instance.
+
+The tooling never configures or builds in `eprover/`. It clones the current
+upstream commit into `~/.cache/e-rust-port/`, which is on WSL's Linux filesystem.
+
+## One-time setup
+
+WSL 2 is enabled on this machine, but an Ubuntu distribution must be installed.
+From an elevated PowerShell prompt run:
+
+```powershell
+wsl --install -d Ubuntu-24.04
+```
+
+Restart if requested, launch Ubuntu once, and create the Linux user. Then, from
+the repository root in a normal PowerShell prompt, install the C build tools:
+
+```powershell
+.\e-interop.ps1 setup
+```
+
+The `setup` command installs `build-essential`, `gawk`, `git`, Python 3, and GNU
+time. It validates the distribution and compiler after installation.
+
+For Linux Rust benchmarks, also install Rust inside WSL using
+[rustup](https://rustup.rs/). The Windows Rust installation cannot produce the
+native WSL benchmark binary.
+
+## Build the C references
+
+```powershell
+.\e-interop.ps1 build-reference
+```
+
+This builds both `eprover` and `eprover-ho`. The cache contains isolated source
+trees, binaries, and `~/.cache/e-rust-port/reference.json`, which records the
+upstream commit, compiler, distribution, configuration, versions, hashes, and
+binary paths. Rerunning the command replaces builds for the same commit.
+
+The command refuses to run if the nested `eprover` Git repository is dirty and
+checks it again after the build.
+
+## Compatibility comparison
+
+Once the Rust port provides the required binary target named `eprover`, build
+the Windows release executable and compare it:
+
+```powershell
+cargo build --locked --release --bin eprover
+.\e-interop.ps1 compare -RustExe .\target\release\eprover.exe
+```
+
+Use `-Corpus C:\path\to\TPTP` for a different corpus. The default run covers
+the bundled smoke, TPTP, LOP, higher-order, stdin, malformed-input, resource
+limit, proof-output, and included-axiom paths. Every command receives the same
+strategy, deterministic-sort, CPU-limit, and memory-limit options. WSL and
+Windows paths, including `TPTP`, are translated independently.
+
+To validate the harness before the Rust executable exists, compare the C
+reference with itself:
+
+```powershell
+.\e-interop.ps1 compare -SelfTest
+```
+
+Compatibility reports are written to `.artifacts/e-compare/<timestamp>/` as
+JSON and CSV. Complete stdout, stderr, and normalized output are retained for
+each mismatch. A mismatch in exit code, timeout state, SZS status, output
+structure, or normalized output makes the command fail.
+
+## Performance comparison
+
+```powershell
+.\e-interop.ps1 benchmark -Runs 5
+```
+
+The benchmark uses WSL Cargo to build `eprover` in release mode. Cargo's target
+directory, both binaries, and a copied corpus are kept on WSL's ext4 filesystem;
+the benchmark refuses `/mnt/c` artifacts. It performs discarded warmups and
+seeded, interleaved C/Rust trials, one process at a time.
+
+Reports contain every sample plus median wall time, median CPU time, maximum
+resident memory, per-problem Rust/C ratios, and the aggregate geometric-mean
+ratio. Ratios above `1.10` are warnings rather than failures. Override this with
+`-RegressionThreshold`, and use `-TimeoutSeconds` or `-MemoryLimitMb` to change
+the shared limits.
+
+## Tool tests
+
+Run the standard-library unit tests inside WSL:
+
+```powershell
+$repo = wsl -d Ubuntu-24.04 -- wslpath -a $PWD.Path
+wsl -d Ubuntu-24.04 -- bash -lc "cd '$repo/tools/e-interop' && python3 -m unittest -v"
+```
