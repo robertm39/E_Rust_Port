@@ -248,6 +248,67 @@ impl Scanner {
         test_idnum(self.current_token(), ids)
     }
 
+    #[must_use]
+    pub fn test_no_skip(&self) -> bool {
+        !self.current_token().skipped
+    }
+
+    #[must_use]
+    pub fn test_tok_no_skip(&self, toks: TokenType) -> bool {
+        self.test_no_skip() && self.test_tok(toks)
+    }
+
+    pub fn check_tok(&self, toks: TokenType) -> Result<(), Diagnostic> {
+        if self.test_tok(toks) {
+            Ok(())
+        } else {
+            Err(self.current_token_error(&format!(
+                "{} expected, but {} read ",
+                describe_token(toks),
+                describe_token(self.current_token().kind)
+            )))
+        }
+    }
+
+    pub fn check_tok_no_skip(&self, toks: TokenType) -> Result<(), Diagnostic> {
+        if self.current_token().skipped {
+            Err(self.current_token_error(&format!(
+                "{} expected, but {} read ",
+                describe_token(toks),
+                describe_token(TokenType::SKIP_TOKEN)
+            )))
+        } else {
+            self.check_tok(toks)
+        }
+    }
+
+    pub fn check_id(&self, ids: &str) -> Result<(), Diagnostic> {
+        if self.test_id(ids) {
+            Ok(())
+        } else {
+            Err(self.current_token_error(&format!(
+                "Identifier ({ids}) expected, but {}('{}') read ",
+                describe_token(self.current_token().kind),
+                self.current_token().literal()
+            )))
+        }
+    }
+
+    pub fn accept_tok(&mut self, toks: TokenType) -> Result<(), Diagnostic> {
+        self.check_tok(toks)?;
+        self.next_token()
+    }
+
+    pub fn accept_tok_no_skip(&mut self, toks: TokenType) -> Result<(), Diagnostic> {
+        self.check_tok_no_skip(toks)?;
+        self.next_token()
+    }
+
+    pub fn accept_id(&mut self, ids: &str) -> Result<(), Diagnostic> {
+        self.check_id(ids)?;
+        self.next_token()
+    }
+
     fn scan_real_token(&mut self, index: usize) -> Result<(), Diagnostic> {
         self.tok_sequence[index].skipped = false;
         self.tok_sequence[index].comment.reset();
@@ -507,6 +568,18 @@ impl Scanner {
 
     fn token_error(&self, index: usize, message: &str) -> Diagnostic {
         let token = &self.tok_sequence[index];
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{}(just read '{}'): {message}",
+                token_pos_rep(token),
+                token.literal()
+            ),
+        )
+    }
+
+    fn current_token_error(&self, message: &str) -> Diagnostic {
+        let token = self.current_token();
         Diagnostic::new(
             ErrorCode::SYNTAX_ERROR,
             format!(
