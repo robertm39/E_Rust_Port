@@ -62,13 +62,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Keep the Rust port close to the C ownership model visible in this unit's allocation/free helpers and exported APIs.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 

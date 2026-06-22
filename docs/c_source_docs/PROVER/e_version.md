@@ -70,13 +70,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Preserve compile-time feature gates and debug-only behavior as explicit Rust configuration or narrowly scoped runtime options.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 

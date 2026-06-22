@@ -96,13 +96,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Container APIs often transfer raw pointers without ownership annotations; document and encode ownership at the Rust boundary.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 

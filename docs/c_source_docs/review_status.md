@@ -276,13 +276,6 @@ Every source unit listed here has a corresponding Markdown page and has been rev
 | yes | [TERMS/cte_varsets](TERMS/cte_varsets.md) | `TERMS/cte_varsets.h`, `TERMS/cte_varsets.c` |
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Notes
 

@@ -351,13 +351,6 @@ The documentation is organized by source unit: a `.c` and `.h` file with the sam
 - [cte_varsets](TERMS/cte_varsets.md) - TERMS/cte_varsets.h, TERMS/cte_varsets.c
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Notes
 

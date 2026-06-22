@@ -83,13 +83,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Parser routines usually advance scanner state and may report fatal errors; keep token-consumption behavior exact.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 

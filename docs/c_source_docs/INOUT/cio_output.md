@@ -71,13 +71,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Audit global state carefully; many E modules rely on process-wide counters, caches, or option variables.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 

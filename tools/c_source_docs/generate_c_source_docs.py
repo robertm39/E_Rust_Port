@@ -694,8 +694,7 @@ def replace_auto_region(existing: str, new_auto: str) -> str:
         end += len(AUTO_END)
         prefix = existing[:begin]
         suffix = existing[end:]
-        if suffix.startswith("\n"):
-            suffix = suffix[1:]
+        suffix = suffix.lstrip("\n")
         return f"{prefix}{new_auto}\n{suffix}".rstrip() + "\n"
     if existing.strip():
         return f"{new_auto}\n{existing.rstrip()}\n"

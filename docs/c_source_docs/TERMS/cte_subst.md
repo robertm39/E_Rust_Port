@@ -97,13 +97,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Term sharing and term-bank insertion are semantic constraints, not just memory optimizations.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 

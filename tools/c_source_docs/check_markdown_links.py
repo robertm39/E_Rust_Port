@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check local Markdown links in docs/c_source_docs."""
+"""Check local Markdown links in DOCS.md and docs/c_source_docs."""
 
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ def is_external(target: str) -> bool:
 
 def main() -> int:
     errors: list[str] = []
-    for md_path in sorted(DOC_ROOT.rglob("*.md")):
+    md_paths = [REPO_ROOT / "DOCS.md", *sorted(DOC_ROOT.rglob("*.md"))]
+    for md_path in md_paths:
         text = md_path.read_text(encoding="utf-8", errors="replace")
         for match in LINK_RE.finditer(text):
             target = match.group(1).strip()
@@ -42,7 +43,7 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print(f"OK: checked local links in {len(list(DOC_ROOT.rglob('*.md')))} Markdown files.")
+    print(f"OK: checked local links in {len(md_paths)} Markdown files.")
     return 0
 
 

@@ -61,13 +61,6 @@ Exported declarations are primarily taken from headers. For standalone program s
 - Clause/literal mutation affects indexing, derivation, and proof reconstruction; preserve update ordering.
 <!-- END AUTO-GENERATED: c_source_docs -->
 
-
-
-
-
-
-
-
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
