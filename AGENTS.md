@@ -14,4 +14,4 @@ This port must support all of the features of the original, so that the Rust exe
 Write thorough tests to confirm functionality and performance.
 
 # Agent-Made Docs
-Agent-made docs are in `DOCS.md` and in the locations specified in that file. Agents are absolutely not permitted to modify `AGENTS.md` in any way; they should modify `DOCS.md` instead. Also, Rust code standards are specified in `docs/c_source_docs/rust-code-standards.md`, and you must follow them (unless they conflict with this file).
+Agent-made docs are in `DOCS.md` and in the locations specified in that file. Agents are absolutely not permitted to modify `AGENTS.md` in any way; they should modify `DOCS.md` instead. Also, Rust code standards are specified in `docs/rust-code-standards.md`, and you must follow them (unless they conflict with this file).
