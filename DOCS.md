@@ -6,6 +6,8 @@ Agent-made documentation belongs in this file and in the documentation locations
 
 Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-code-standards.md), including clippy pedantic checks and the ban on unsafe Rust.
 
+Current Rust port implementation status is tracked in [`docs/rust-port-status.md`](docs/rust-port-status.md).
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
