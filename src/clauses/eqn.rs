@@ -1,7 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::eqn_props::{
-    EqnProperties, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
-    EP_NO_PROPS, EP_PSEUDO_LIT,
+    EqnProperties, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
+    EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
 };
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::signature::{FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
@@ -140,6 +140,79 @@ impl Eqn {
             bank,
             true,
         )
+    }
+
+    /// Encodes a literal as a shared `$eq`/`$neq` term-bank term.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either side is not present in the bank, or if term-bank top
+    /// insertion invariants are violated, matching the C assertions.
+    pub fn terms_tb_term_encode(
+        bank: &mut TermBank,
+        lterm: &Term,
+        rterm: &Term,
+        positive: bool,
+        direction: PatEqnDirection,
+    ) -> Result<Term, Diagnostic> {
+        assert!(
+            bank.find(lterm).is_some(),
+            "left term must already be in the term bank"
+        );
+        assert!(
+            bank.find(rterm).is_some(),
+            "right term must already be in the term bank"
+        );
+
+        let f_code = bank.signature_mut().get_eqn_code(positive);
+        assert_ne!(f_code, 0, "equality code allocation must succeed");
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(bank.signature().type_bank().bool_type()));
+        if direction == PatEqnDirection::Normal {
+            term.set_argument(0, lterm.clone());
+            term.set_argument(1, rterm.clone());
+        } else {
+            term.set_argument(0, rterm.clone());
+            term.set_argument(1, lterm.clone());
+        }
+        bank.term_top_insert(term)
+    }
+
+    pub fn tb_term_encode(
+        &self,
+        bank: &mut TermBank,
+        direction: PatEqnDirection,
+    ) -> Result<Term, Diagnostic> {
+        Self::terms_tb_term_encode(
+            bank,
+            &self.lterm,
+            &self.rterm,
+            self.is_positive(),
+            direction,
+        )
+    }
+
+    /// Decodes a shared `$eq`/`$neq` term into an equation/literal cell.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the term is not headed by the bank's equality/inequality code
+    /// or if either argument slot is uninitialized, matching the C assertions
+    /// and direct argument access.
+    pub fn tb_term_decode(bank: &mut TermBank, eqn: &Term) -> Result<Self, Diagnostic> {
+        assert!(
+            eqn.f_code() == bank.signature().eqn_code()
+                || eqn.f_code() == bank.signature().neqn_code(),
+            "encoded equation term must use equality or inequality code"
+        );
+        let positive = eqn.f_code() == bank.signature().eqn_code();
+        let left = eqn
+            .argument(0)
+            .unwrap_or_else(|| panic!("encoded equation left argument is uninitialized"));
+        let right = eqn
+            .argument(1)
+            .unwrap_or_else(|| panic!("encoded equation right argument is uninitialized"));
+        Self::alloc(left, right, bank, positive)
     }
 
     #[must_use]
@@ -483,8 +556,8 @@ impl Eqn {
 mod tests {
     use super::Eqn;
     use crate::clauses::eqn_props::{
-        EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT,
-        EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
+        PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL, EP_IS_ORIENTED,
+        EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
     use crate::terms::signature::{
         FunctionProperties, Signature, FP_CL_SPLIT_DEF, FP_IS_INTEGER, FP_PSEUDO_PRED,
@@ -586,6 +659,59 @@ mod tests {
         let neq = Eqn::alloc_flatten(neq_term, &mut bank, true).unwrap();
         assert!(neq.is_negative());
         assert!(neq.is_equ_lit(&bank));
+    }
+
+    #[test]
+    fn term_bank_encoding_and_decoding_match_c_shape() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "a");
+        let right = typed_const(&mut bank, "b");
+
+        let encoded =
+            Eqn::terms_tb_term_encode(&mut bank, &left, &right, true, PatEqnDirection::Normal)
+                .unwrap();
+        assert_eq!(encoded.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            encoded.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        assert_eq!(encoded.argument(0), Some(left.clone()));
+        assert_eq!(encoded.argument(1), Some(right.clone()));
+        assert!(encoded.is_shared());
+
+        let decoded = Eqn::tb_term_decode(&mut bank, &encoded).unwrap();
+        assert!(decoded.is_positive());
+        assert!(decoded.is_equ_lit(&bank));
+        assert_eq!(decoded.left(), &left);
+        assert_eq!(decoded.right(), &right);
+
+        let reversed =
+            Eqn::terms_tb_term_encode(&mut bank, &left, &right, false, PatEqnDirection::Reverse)
+                .unwrap();
+        assert_eq!(reversed.f_code(), bank.signature().neqn_code());
+        assert_eq!(reversed.argument(0), Some(right.clone()));
+        assert_eq!(reversed.argument(1), Some(left.clone()));
+        let decoded_reversed = Eqn::tb_term_decode(&mut bank, &reversed).unwrap();
+        assert!(decoded_reversed.is_negative());
+        assert_eq!(decoded_reversed.left(), &right);
+        assert_eq!(decoded_reversed.right(), &left);
+    }
+
+    #[test]
+    fn instance_term_bank_encoding_uses_current_polarity() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "a");
+        let right = typed_const(&mut bank, "b");
+        let mut eq = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        eq.flip_prop(EP_IS_POSITIVE);
+
+        let encoded = eq
+            .tb_term_encode(&mut bank, PatEqnDirection::Normal)
+            .unwrap();
+
+        assert_eq!(encoded.f_code(), bank.signature().neqn_code());
+        assert_eq!(encoded.argument(0), Some(left));
+        assert_eq!(encoded.argument(1), Some(right));
     }
 
     #[test]
