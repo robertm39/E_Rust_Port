@@ -201,9 +201,11 @@ impl Token {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Scanner {
     source: InputStream,
+    source_stack: Vec<InputStream>,
     default_dir: String,
     ignore_comments: bool,
     format: IoFormat,
+    include_key: Option<String>,
     include_pos: Option<String>,
     tok_sequence: [Token; MAX_TOKEN_LOOKAHEAD],
     current: usize,
@@ -226,24 +228,51 @@ impl Scanner {
         Self::from_file_with_default_dir(path, ignore_comments, None)
     }
 
+    pub fn from_file_following_includes(
+        path: &Path,
+        ignore_comments: bool,
+        include_key: &str,
+    ) -> Result<Self, Diagnostic> {
+        Self::from_file_with_options(path, ignore_comments, None, Some(include_key.to_owned()))
+    }
+
     pub fn from_file_with_default_dir(
         path: &Path,
         ignore_comments: bool,
         default_dir: Option<&str>,
     ) -> Result<Self, Diagnostic> {
+        Self::from_file_with_options(path, ignore_comments, default_dir, None)
+    }
+
+    fn from_file_with_options(
+        path: &Path,
+        ignore_comments: bool,
+        default_dir: Option<&str>,
+        include_key: Option<String>,
+    ) -> Result<Self, Diagnostic> {
         let name = path.to_string_lossy();
         let (stream, resolved_default_dir) = create_file_stream(&name, default_dir)?;
-        let mut scanner = Self::from_stream(stream, ignore_comments)?;
+        let mut scanner = Self::from_stream_with_include_key(stream, ignore_comments, include_key)?;
         scanner.default_dir = resolved_default_dir;
         Ok(scanner)
     }
 
     pub fn from_stream(source: InputStream, ignore_comments: bool) -> Result<Self, Diagnostic> {
+        Self::from_stream_with_include_key(source, ignore_comments, None)
+    }
+
+    fn from_stream_with_include_key(
+        source: InputStream,
+        ignore_comments: bool,
+        include_key: Option<String>,
+    ) -> Result<Self, Diagnostic> {
         let mut scanner = Self {
             source,
+            source_stack: Vec::new(),
             default_dir: String::new(),
             ignore_comments,
             format: IoFormat::Lop,
+            include_key,
             include_pos: None,
             tok_sequence: std::array::from_fn(|_| Token::default()),
             current: 0,
@@ -438,7 +467,7 @@ impl Scanner {
     fn scan_real_token(&mut self, index: usize) -> Result<(), Diagnostic> {
         self.tok_sequence[index].skipped = false;
         self.tok_sequence[index].comment.reset();
-        self.scan_token(index)?;
+        self.scan_token_follow_includes(index)?;
 
         while test_tok(&self.tok_sequence[index], TokenType::SKIP_TOKEN) {
             self.tok_sequence[index].skipped = true;
@@ -446,7 +475,43 @@ impl Scanner {
                 let comment = self.tok_sequence[index].literal.copy();
                 self.tok_sequence[index].comment.append_buffer(&comment);
             }
+            self.scan_token_follow_includes(index)?;
+        }
+        Ok(())
+    }
+
+    fn scan_token_follow_includes(&mut self, index: usize) -> Result<(), Diagnostic> {
+        self.scan_token(index)?;
+        let follows_include = self
+            .include_key
+            .as_deref()
+            .is_some_and(|include_key| test_id(&self.tok_sequence[index], include_key));
+
+        if follows_include {
+            let mut name = automatic_include_prefix();
             self.scan_token(index)?;
+            self.check_scanned_token(index, TokenType::OPEN_BRACKET)?;
+            self.scan_token(index)?;
+            self.check_scanned_token(
+                index,
+                TokenType::IDENT | TokenType::STRING | TokenType::SQ_STRING,
+            )?;
+            if test_tok(&self.tok_sequence[index], TokenType::IDENT) {
+                name.push_str(&self.tok_sequence[index].literal());
+            } else {
+                name.push_str(&strip_quote_core(self.tok_sequence[index].literal_bytes())?);
+            }
+            self.push_file_source(Path::new(&name))?;
+            self.scan_token_follow_includes(index)?;
+        } else if self.include_key.is_some()
+            && test_tok(&self.tok_sequence[index], TokenType::NO_TOKEN)
+            && self.pop_source()
+        {
+            self.scan_token(index)?;
+            self.check_scanned_token(index, TokenType::CLOSE_BRACKET)?;
+            self.scan_token(index)?;
+            self.check_scanned_token(index, TokenType::FULLSTOP)?;
+            self.scan_token_follow_includes(index)?;
         }
         Ok(())
     }
@@ -715,6 +780,36 @@ impl Scanner {
             ),
         )
     }
+
+    fn check_scanned_token(&self, index: usize, toks: TokenType) -> Result<(), Diagnostic> {
+        if test_tok(&self.tok_sequence[index], toks) {
+            Ok(())
+        } else {
+            Err(self.token_error(
+                index,
+                &format!(
+                    "{} expected, but {} read ",
+                    describe_token(toks),
+                    describe_token(self.tok_sequence[index].kind)
+                ),
+            ))
+        }
+    }
+
+    fn push_file_source(&mut self, path: &Path) -> Result<(), Diagnostic> {
+        let stream = InputStream::from_file(path)?;
+        let previous = std::mem::replace(&mut self.source, stream);
+        self.source_stack.push(previous);
+        Ok(())
+    }
+
+    fn pop_source(&mut self) -> bool {
+        let Some(previous) = self.source_stack.pop() else {
+            return false;
+        };
+        self.source = previous;
+        true
+    }
 }
 
 #[must_use]
@@ -908,6 +1003,17 @@ fn strip_quote_core(bytes: &[u8]) -> Result<String, Diagnostic> {
         ));
     }
     Ok(String::from_utf8_lossy(&bytes[1..bytes.len() - 1]).into_owned())
+}
+
+fn automatic_include_prefix() -> String {
+    let Some(value) = std::env::var_os("TPTP") else {
+        return String::new();
+    };
+    let mut prefix = value.to_string_lossy().into_owned();
+    if !prefix.is_empty() && !prefix.ends_with('/') {
+        prefix.push('/');
+    }
+    prefix
 }
 
 #[cfg(test)]
@@ -1120,6 +1226,43 @@ mod tests {
                 .map(|entry| entry.val1),
             Some(1)
         );
+    }
+
+    #[test]
+    fn include_key_splices_included_files_and_resumes_parent_stream() {
+        let dir = temp_dir("include-key");
+        remove_dir_if_present(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root_path = dir.join("root.p");
+        let child_path = dir.join("child.ax");
+        let grand_path = dir.join("grand.ax");
+        let child_name = slash_path(&child_path);
+        let grand_name = slash_path(&grand_path);
+        std::fs::write(
+            &root_path,
+            format!("include('{child_name}'). root_tail").as_bytes(),
+        )
+        .unwrap();
+        std::fs::write(
+            &child_path,
+            format!("include('{grand_name}'). child_tail").as_bytes(),
+        )
+        .unwrap();
+        std::fs::write(&grand_path, b"grand").unwrap();
+
+        let root_name = slash_path(&root_path);
+        let mut scanner =
+            Scanner::from_file_following_includes(Path::new(&root_name), false, "include").unwrap();
+
+        assert_eq!(scanner.current_token().literal(), "grand");
+        scanner.next_token().unwrap();
+        assert_eq!(scanner.current_token().literal(), "child_tail");
+        scanner.next_token().unwrap();
+        assert_eq!(scanner.current_token().literal(), "root_tail");
+        scanner.next_token().unwrap();
+        assert_eq!(scanner.current_token().kind(), TokenType::NO_TOKEN);
+
+        remove_dir_if_present(&dir);
     }
 
     #[test]
