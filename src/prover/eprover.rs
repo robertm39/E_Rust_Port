@@ -47,6 +47,10 @@ pub enum EProverFlag {
     Auto = 1 << 3,
     DeterministicRewriteSort = 1 << 4,
     DeterministicNewSort = 1 << 5,
+    PrintFormulas = 1 << 6,
+    PruneOnly = 1 << 7,
+    CnfOnly = 1 << 8,
+    RequireNonempty = 1 << 9,
 }
 
 impl EProverFlags {
@@ -269,11 +273,25 @@ where
             EProverOption::SyntaxOnly => {
                 config.flags.set(EProverFlag::SyntaxOnly);
             }
+            EProverOption::PrintFormulas => {
+                config.flags.set(EProverFlag::SyntaxOnly);
+                config.flags.set(EProverFlag::PrintFormulas);
+            }
+            EProverOption::PruneOnly => {
+                config.output_level = 4;
+                config.flags.set(EProverFlag::PruneOnly);
+            }
+            EProverOption::CnfOnly => {
+                config.flags.set(EProverFlag::CnfOnly);
+            }
             EProverOption::PrintPid => {
                 config.flags.set(EProverFlag::PrintPid);
             }
             EProverOption::PrintVersion => {
                 config.flags.set(EProverFlag::PrintVersion);
+            }
+            EProverOption::RequireNonempty => {
+                config.flags.set(EProverFlag::RequireNonempty);
             }
             EProverOption::Auto => {
                 config.flags.set(EProverFlag::Auto);
@@ -338,7 +356,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 
 #[cfg(test)]
 mod tests {
-    use super::{process_options, run, EProverAction};
+    use super::{process_options, run, EProverAction, EProverFlag};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::inout::output::{output_level, set_output_level};
@@ -408,6 +426,30 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.schedule_time_limit, Some(25));
+    }
+
+    #[test]
+    fn process_options_records_input_mode_flags_like_c() {
+        let action = process_options(["eprover", "--print-formulas"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.flags.contains(EProverFlag::SyntaxOnly));
+        assert!(config.flags.contains(EProverFlag::PrintFormulas));
+
+        let action = process_options(["eprover", "--prune"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.output_level, 4);
+        assert!(config.flags.contains(EProverFlag::PruneOnly));
+
+        let action = process_options(["eprover", "--cnf", "--error-on-empty"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.flags.contains(EProverFlag::CnfOnly));
+        assert!(config.flags.contains(EProverFlag::RequireNonempty));
     }
 
     #[test]
