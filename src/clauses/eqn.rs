@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
@@ -18,6 +19,30 @@ use crate::terms::termtypes::{
     term_del_prop, term_set_prop, term_var_del_prop, term_var_search_prop, term_var_set_prop,
     DerefType, Term, TermProperties, TP_OP_FLAG, TP_PRED_POS,
 };
+
+fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
+    match (left, right) {
+        (true, false) => 1,
+        (false, true) => -1,
+        _ => 0,
+    }
+}
+
+fn cmp_i64(left: i64, right: i64) -> i32 {
+    match left.cmp(&right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+fn cmp_i32(left: i32, right: i32) -> i32 {
+    match left.cmp(&right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Eqn {
@@ -704,6 +729,66 @@ impl Eqn {
             && self.equal(other)
     }
 
+    #[must_use]
+    pub fn subsume_q_order_compare(&self, other: &Self, bank: &TermBank) -> i32 {
+        self.subsume_q_order_compare_for_problem_type(other, bank, problem_type())
+    }
+
+    #[must_use]
+    fn subsume_q_order_compare_for_problem_type(
+        &self,
+        other: &Self,
+        bank: &TermBank,
+        problem_type: ProblemType,
+    ) -> i32 {
+        let mut result = cmp_bool_as_c(self.is_positive(), other.is_positive());
+        if result != 0 {
+            return result;
+        }
+
+        let self_is_equ_lit = self.is_equ_lit(bank);
+        let other_is_equ_lit = other.is_equ_lit(bank);
+        result = cmp_bool_as_c(self_is_equ_lit, other_is_equ_lit);
+        if result != 0 {
+            return result;
+        }
+
+        if problem_type == ProblemType::FirstOrder && !self_is_equ_lit {
+            result = cmp_i64(self.lterm.f_code(), other.lterm.f_code());
+        }
+        result
+    }
+
+    #[must_use]
+    pub fn subsume_inverse_compare(&self, other: &Self, bank: &TermBank) -> i32 {
+        let result = other.subsume_q_order_compare(self, bank);
+        if result != 0 {
+            result
+        } else {
+            cmp_i64(other.standard_weight(), self.standard_weight())
+        }
+    }
+
+    #[must_use]
+    pub fn subsume_inverse_refined_compare(&self, other: &Self, bank: &TermBank) -> i32 {
+        let result = self.subsume_inverse_compare(other, bank);
+        if result != 0 {
+            result
+        } else {
+            cmp_i32(self.pos, other.pos)
+        }
+    }
+
+    #[must_use]
+    pub fn subsume_compare(&self, other: &Self, bank: &TermBank) -> i32 {
+        let result = self.subsume_q_order_compare(other, bank);
+        if result != 0 {
+            result
+        } else {
+            cmp_i64(self.standard_weight(), other.standard_weight())
+        }
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -712,6 +797,7 @@ impl Eqn {
 #[cfg(test)]
 mod tests {
     use super::Eqn;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn_props::{
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
         EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
@@ -1172,6 +1258,74 @@ mod tests {
         let concrete = Eqn::alloc(left, right, &mut bank, true).unwrap();
         assert!(!with_var.equal_directed_deref(&concrete, DerefType::Never, DerefType::Never));
         assert!(with_var.equal_directed_deref(&concrete, DerefType::Once, DerefType::Never));
+    }
+
+    #[test]
+    fn subsumption_ordering_helpers_match_c_quasi_orders() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "a");
+        let right = typed_const(&mut bank, "b");
+
+        let positive = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let negative = Eqn::alloc(left.clone(), right.clone(), &mut bank, false).unwrap();
+        assert_eq!(
+            positive.subsume_q_order_compare_for_problem_type(
+                &negative,
+                &bank,
+                ProblemType::FirstOrder
+            ),
+            1
+        );
+        assert_eq!(
+            negative.subsume_q_order_compare_for_problem_type(
+                &positive,
+                &bank,
+                ProblemType::FirstOrder
+            ),
+            -1
+        );
+
+        let p = typed_pred_const(&mut bank, "p");
+        let q = typed_pred_const(&mut bank, "q");
+        let p_lit = Eqn::alloc(p.clone(), bank.true_term().clone(), &mut bank, true).unwrap();
+        let q_lit = Eqn::alloc(q.clone(), bank.true_term().clone(), &mut bank, true).unwrap();
+
+        assert_eq!(
+            positive.subsume_q_order_compare_for_problem_type(
+                &p_lit,
+                &bank,
+                ProblemType::FirstOrder
+            ),
+            1
+        );
+        assert_eq!(
+            p_lit.subsume_q_order_compare_for_problem_type(&q_lit, &bank, ProblemType::FirstOrder),
+            super::cmp_i64(p.f_code(), q.f_code())
+        );
+        assert_eq!(
+            p_lit.subsume_q_order_compare_for_problem_type(&q_lit, &bank, ProblemType::HigherOrder),
+            0
+        );
+        assert_eq!(
+            p_lit.subsume_q_order_compare_for_problem_type(
+                &q_lit,
+                &bank,
+                ProblemType::NotInitialized
+            ),
+            0
+        );
+
+        let heavy_left = typed_unary(&mut bank, "f", &left);
+        let heavy = Eqn::alloc(heavy_left, right, &mut bank, true).unwrap();
+        assert!(positive.subsume_inverse_compare(&heavy, &bank) > 0);
+        assert!(positive.subsume_compare(&heavy, &bank) < 0);
+
+        let mut first = Eqn::alloc(left.clone(), left.clone(), &mut bank, true).unwrap();
+        let mut second = Eqn::alloc(left.clone(), left, &mut bank, true).unwrap();
+        first.set_position(10);
+        second.set_position(20);
+        assert!(first.subsume_inverse_refined_compare(&second, &bank) < 0);
+        assert!(second.subsume_inverse_refined_compare(&first, &bank) > 0);
     }
 
     #[test]
