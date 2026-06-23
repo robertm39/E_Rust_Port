@@ -19,8 +19,156 @@ const MEGA: u64 = 1_048_576;
 const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
+const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+
+const LITERAL_SELECTION_STRATEGIES: &[&str] = &[
+    "NoSelection",
+    "NoGeneration",
+    "SelectNegativeLiterals",
+    "PSelectNegativeLiterals",
+    "SelectPureVarNegLiterals",
+    "PSelectPureVarNegLiterals",
+    "SelectLargestNegLit",
+    "PSelectLargestNegLit",
+    "SelectSmallestNegLit",
+    "PSelectSmallestNegLit",
+    "SelectLargestOrientable",
+    "PSelectLargestOrientable",
+    "MSelectLargestOrientable",
+    "SelectSmallestOrientable",
+    "PSelectSmallestOrientable",
+    "MSelectSmallestOrientable",
+    "SelectDiffNegLit",
+    "PSelectDiffNegLit",
+    "SelectGroundNegLit",
+    "PSelectGroundNegLit",
+    "SelectOptimalLit",
+    "PSelectOptimalLit",
+    "SelectMinOptimalLit",
+    "PSelectMinOptimalLit",
+    "SelectMinOptimalNoTypePred",
+    "PSelectMinOptimalNoTypePred",
+    "SelectMinOptimalNoXTypePred",
+    "PSelectMinOptimalNoXTypePred",
+    "SelectMinOptimalNoRXTypePred",
+    "PSelectMinOptimalNoRXTypePred",
+    "SelectCondOptimalLit",
+    "PSelectCondOptimalLit",
+    "SelectAllCondOptimalLit",
+    "PSelectAllCondOptimalLit",
+    "SelectOptimalRestrDepth2",
+    "PSelectOptimalRestrDepth2",
+    "SelectOptimalRestrPDepth2",
+    "PSelectOptimalRestrPDepth2",
+    "SelectOptimalRestrNDepth2",
+    "PSelectOptimalRestrNDepth2",
+    "SelectNonRROptimalLit",
+    "PSelectNonRROptimalLit",
+    "SelectNonStrongRROptimalLit",
+    "PSelectNonStrongRROptimalLit",
+    "SelectAntiRROptimalLit",
+    "PSelectAntiRROptimalLit",
+    "SelectNonAntiRROptimalLit",
+    "PSelectNonAntiRROptimalLit",
+    "SelectStrongRRNonRROptimalLit",
+    "PSelectStrongRRNonRROptimalLit",
+    "SelectUnlessUniqMax",
+    "PSelectUnlessUniqMax",
+    "SelectUnlessPosMax",
+    "PSelectUnlessPosMax",
+    "SelectUnlessUniqPosMax",
+    "PSelectUnlessUniqPosMax",
+    "SelectUnlessUniqMaxPos",
+    "PSelectUnlessUniqMaxPos",
+    "SelectComplex",
+    "PSelectComplex",
+    "SelectComplexExceptRRHorn",
+    "PSelectComplexExceptRRHorn",
+    "SelectLComplex",
+    "PSelectLComplex",
+    "SelectMaxLComplex",
+    "PSelectMaxLComplex",
+    "SelectMaxLComplexNoTypePred",
+    "PSelectMaxLComplexNoTypePred",
+    "SelectMaxLComplexNoXTypePred",
+    "PSelectMaxLComplexNoXTypePred",
+    "SelectComplexPreferNEQ",
+    "PSelectComplexPreferNEQ",
+    "SelectComplexPreferEQ",
+    "PSelectComplexPreferEQ",
+    "SelectComplexExceptUniqMaxHorn",
+    "PSelectComplexExceptUniqMaxHorn",
+    "MSelectComplexExceptUniqMaxHorn",
+    "SelectNewComplex",
+    "PSelectNewComplex",
+    "SelectNewComplexExceptUniqMaxHorn",
+    "PSelectNewComplexExceptUniqMaxHorn",
+    "SelectMinInfpos",
+    "PSelectMinInfpos",
+    "HSelectMinInfpos",
+    "GSelectMinInfpos",
+    "SelectMinInfposNoTypePred",
+    "PSelectMinInfposNoTypePred",
+    "SelectMin2Infpos",
+    "PSelectMin2Infpos",
+    "SelectComplexExceptUniqMaxPosHorn",
+    "PSelectComplexExceptUniqMaxPosHorn",
+    "SelectUnlessUniqMaxSmallestOrientable",
+    "PSelectUnlessUniqMaxSmallestOrientable",
+    "SelectDivLits",
+    "SelectDivPreferIntoLits",
+    "SelectMaxLComplexG",
+    "SelectMaxLComplexAvoidPosPred",
+    "SelectMaxLComplexAPPNTNp",
+    "SelectMaxLComplexAPPNoType",
+    "SelectMaxLComplexAvoidPosUPred",
+    "SelectComplexG",
+    "SelectComplexAHP",
+    "PSelectComplexAHP",
+    "SelectNewComplexAHP",
+    "PSelectNewComplexAHP",
+    "SelectComplexAHPExceptRRHorn",
+    "PSelectComplexAHPExceptRRHorn",
+    "SelectNewComplexAHPExceptRRHorn",
+    "PSelectNewComplexAHPExceptRRHorn",
+    "SelectNewComplexAHPExceptUniqMaxHorn",
+    "PSelectNewComplexAHPExceptUniqMaxHorn",
+    "SelectNewComplexAHPNS",
+    "SelectVGNonCR",
+    "SelectCQArEqLast",
+    "SelectCQArEqFirst",
+    "SelectCQIArEqLast",
+    "SelectCQIArEqFirst",
+    "SelectCQAr",
+    "SelectCQIAr",
+    "SelectCQArNpEqFirst",
+    "SelectCQIArNpEqFirst",
+    "SelectGrCQArEqFirst",
+    "SelectCQGrArEqFirst",
+    "SelectCQArNTEqFirst",
+    "SelectCQIArNTEqFirst",
+    "SelectCQArNTNpEqFirst",
+    "SelectCQIArNTNpEqFirst",
+    "SelectCQArNXTEqFirst",
+    "SelectCQIArNXTEqFirst",
+    "SelectCQArNTNp",
+    "SelectCQIArNTNp",
+    "SelectCQArNT",
+    "SelectCQIArNT",
+    "SelectCQArNp",
+    "SelectCQIArNp",
+    "SelectCQArNpEqFirstUnlessPDom",
+    "SelectCQArNTEqFirstUnlessPDom",
+    "SelectCQPrecW",
+    "SelectCQIPrecW",
+    "SelectCQPrecWNTNp",
+    "SelectCQIPrecWNTNp",
+    "SelectMaxLComplexAvoidAppVar",
+    "SelectMaxLComplexStronglyAvoidAppVar",
+    "SelectMaxLComplexPreferAppVar",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EProverAction {
@@ -119,6 +267,165 @@ impl Default for PreprocessingConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum ParamodulationType {
+    #[default]
+    Plain = 0,
+    Sim = 1,
+    OrientedSim = 2,
+    SuperSim = 3,
+    OrientedSuperSim = 4,
+    DecreasingSim = 5,
+    SizeDecreasingSim = 6,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeuristicConfig {
+    pub name: String,
+    pub prefer_initial_clauses: bool,
+    pub filter_orphans_limit: i64,
+    pub forward_contract_limit: i64,
+}
+
+impl Default for HeuristicConfig {
+    fn default() -> Self {
+        Self {
+            name: DEFAULT_HEURISTIC_NAME.to_owned(),
+            prefer_initial_clauses: false,
+            filter_orphans_limit: i64::MAX,
+            forward_contract_limit: i64::MAX,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LiteralSelectionLimits {
+    pub positive_min: i64,
+    pub positive_max: i64,
+    pub negative_min: i64,
+    pub negative_max: i64,
+    pub all_min: i64,
+    pub all_max: i64,
+    pub weight_min: i64,
+}
+
+impl Default for LiteralSelectionLimits {
+    fn default() -> Self {
+        Self {
+            positive_min: 0,
+            positive_max: i64::MAX,
+            negative_min: 0,
+            negative_max: i64::MAX,
+            all_min: 0,
+            all_max: i64::MAX,
+            weight_min: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ParamodLiteralInheritanceConfig {
+    pub any_clause: bool,
+    pub goal_clause: bool,
+    pub conjecture_clause: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiteralSelectionConfig {
+    pub strategy: String,
+    pub limits: LiteralSelectionLimits,
+    pub select_on_processing_only: bool,
+    pub inherit_paramod_literals: ParamodLiteralInheritanceConfig,
+}
+
+impl Default for LiteralSelectionConfig {
+    fn default() -> Self {
+        Self {
+            strategy: "NoSelection".to_owned(),
+            limits: LiteralSelectionLimits::default(),
+            select_on_processing_only: false,
+            inherit_paramod_literals: ParamodLiteralInheritanceConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CondensingConfig {
+    pub enabled: bool,
+    pub aggressive: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InferenceConfig {
+    pub enable_eq_factoring: bool,
+    pub enable_neg_unit_paramod: bool,
+    pub enable_given_forward_simplification: bool,
+    pub paramodulation: ParamodulationType,
+    pub condensing: CondensingConfig,
+}
+
+impl Default for InferenceConfig {
+    fn default() -> Self {
+        Self {
+            enable_eq_factoring: true,
+            enable_neg_unit_paramod: true,
+            enable_given_forward_simplification: true,
+            paramodulation: ParamodulationType::Plain,
+            condensing: CondensingConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompletenessConfig {
+    pub inference_system_complete: bool,
+    pub assume_inference_system_complete: bool,
+    pub incomplete: bool,
+}
+
+impl Default for CompletenessConfig {
+    fn default() -> Self {
+        Self {
+            inference_system_complete: true,
+            assume_inference_system_complete: false,
+            incomplete: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SplittingConfig {
+    pub classes: i64,
+    pub method: i64,
+    pub aggressive: bool,
+    pub fresh_defs: bool,
+    pub diseq_decomposition: i64,
+    pub diseq_decomp_maxarity: i64,
+}
+
+impl Default for SplittingConfig {
+    fn default() -> Self {
+        Self {
+            classes: 0,
+            method: 0,
+            aggressive: false,
+            fresh_defs: true,
+            diseq_decomposition: 0,
+            diseq_decomp_maxarity: i64::MAX,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SearchControlConfig {
+    pub heuristic: HeuristicConfig,
+    pub literal_selection: LiteralSelectionConfig,
+    pub inference: InferenceConfig,
+    pub completeness: CompletenessConfig,
+    pub splitting: SplittingConfig,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EProverConfig {
     pub files: Vec<String>,
@@ -141,6 +448,7 @@ pub struct EProverConfig {
     pub parse_strategy_file: Option<String>,
     pub sine: Option<String>,
     pub preprocessing: PreprocessingConfig,
+    pub search: SearchControlConfig,
     pub strategy_scheduling: bool,
     pub schedule_cores: i64,
     pub serialize_schedule: bool,
@@ -223,6 +531,7 @@ impl Default for EProverConfig {
             parse_strategy_file: None,
             sine: None,
             preprocessing: PreprocessingConfig::default(),
+            search: SearchControlConfig::default(),
             strategy_scheduling: false,
             schedule_cores: 1,
             serialize_schedule: false,
@@ -462,6 +771,8 @@ fn apply_parsed_option(
         apply_schedule_option(config, parsed)?;
     } else if is_preprocessing_option(option_code) {
         apply_preprocessing_option(config, parsed)?;
+    } else if is_search_control_option(option_code) {
+        apply_search_control_option(config, parsed)?;
     } else {
         unreachable!("unhandled eprover option");
     }
@@ -591,6 +902,72 @@ const fn is_preprocessing_option(option: EProverOption) -> bool {
             | EProverOption::PresatSimplify
             | EProverOption::AcHandling
             | EProverOption::AcNonAggressive
+    )
+}
+
+const fn is_search_control_option(option: EProverOption) -> bool {
+    is_literal_selection_option(option)
+        || is_heuristic_control_option(option)
+        || is_inference_control_option(option)
+        || is_splitting_option(option)
+}
+
+const fn is_literal_selection_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::LiteralSelectionStrategy
+            | EProverOption::NoGeneration
+            | EProverOption::SelectOnProcessingOnly
+            | EProverOption::InheritParamodLiterals
+            | EProverOption::InheritGoalParamodLiterals
+            | EProverOption::InheritConjectureParamodLiterals
+            | EProverOption::SelectionPosMin
+            | EProverOption::SelectionPosMax
+            | EProverOption::SelectionNegMin
+            | EProverOption::SelectionNegMax
+            | EProverOption::SelectionAllMin
+            | EProverOption::SelectionAllMax
+            | EProverOption::SelectionWeightMin
+    )
+}
+
+const fn is_heuristic_control_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::PreferInitialClauses
+            | EProverOption::ExpertHeuristic
+            | EProverOption::FilterOrphansLimit
+            | EProverOption::ForwardContractLimit
+            | EProverOption::DeleteBadLimit
+    )
+}
+
+const fn is_inference_control_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::AssumeCompleteness
+            | EProverOption::AssumeIncompleteness
+            | EProverOption::DisableEqFactoring
+            | EProverOption::DisableParamodIntoNegUnits
+            | EProverOption::Condense
+            | EProverOption::CondenseAggressive
+            | EProverOption::DisableGivenClauseForwardContraction
+            | EProverOption::SimulParamod
+            | EProverOption::OrientedSimulParamod
+            | EProverOption::SupersimulParamod
+            | EProverOption::OrientedSupersimulParamod
+    )
+}
+
+const fn is_splitting_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::SplitClauses
+            | EProverOption::SplitMethod
+            | EProverOption::SplitAggressive
+            | EProverOption::SplitReuseDefs
+            | EProverOption::DisequalityDecomposition
+            | EProverOption::DisequalityDecompMaxArity
     )
 }
 
@@ -852,6 +1229,199 @@ fn apply_ac_handling(config: &mut EProverConfig, arg: &str) -> Result<(), Diagno
     Ok(())
 }
 
+fn apply_search_control_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let option_code = parsed.option().option_code;
+    if is_literal_selection_option(option_code) {
+        apply_literal_selection_option(config, parsed)?;
+    } else if is_heuristic_control_option(option_code) {
+        apply_heuristic_control_option(config, parsed)?;
+    } else if is_inference_control_option(option_code) {
+        apply_inference_control_option(config, option_code);
+    } else if is_splitting_option(option_code) {
+        apply_splitting_option(config, parsed)?;
+    } else {
+        unreachable!("non-search-control option routed to search-control handler");
+    }
+    Ok(())
+}
+
+fn apply_literal_selection_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::LiteralSelectionStrategy => set_literal_selection_strategy(config, value)?,
+        EProverOption::NoGeneration => {
+            "NoGeneration".clone_into(&mut config.search.literal_selection.strategy);
+        }
+        EProverOption::SelectOnProcessingOnly => {
+            config.search.literal_selection.select_on_processing_only = true;
+        }
+        EProverOption::InheritParamodLiterals => {
+            config
+                .search
+                .literal_selection
+                .inherit_paramod_literals
+                .any_clause = true;
+        }
+        EProverOption::InheritGoalParamodLiterals => {
+            config
+                .search
+                .literal_selection
+                .inherit_paramod_literals
+                .goal_clause = true;
+        }
+        EProverOption::InheritConjectureParamodLiterals => {
+            config
+                .search
+                .literal_selection
+                .inherit_paramod_literals
+                .conjecture_clause = true;
+        }
+        EProverOption::SelectionPosMin => {
+            config.search.literal_selection.limits.positive_min =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SelectionPosMax => {
+            config.search.literal_selection.limits.positive_max =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SelectionNegMin => {
+            config.search.literal_selection.limits.negative_min =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SelectionNegMax => {
+            config.search.literal_selection.limits.negative_max =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SelectionAllMin => {
+            config.search.literal_selection.limits.all_min = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SelectionAllMax => {
+            config.search.literal_selection.limits.all_max = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SelectionWeightMin => {
+            config.search.literal_selection.limits.weight_min =
+                get_int_arg(parsed.option(), value)?;
+        }
+        _ => unreachable!("non-literal-selection option routed to literal-selection handler"),
+    }
+    Ok(())
+}
+
+fn set_literal_selection_strategy(
+    config: &mut EProverConfig,
+    value: &str,
+) -> Result<(), Diagnostic> {
+    if LITERAL_SELECTION_STRATEGIES.contains(&value) {
+        value.clone_into(&mut config.search.literal_selection.strategy);
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Wrong argument to option -W (--literal-selection-strategy). Possible values: {}",
+                LITERAL_SELECTION_STRATEGIES.join(", ")
+            ),
+        ))
+    }
+}
+
+fn apply_heuristic_control_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::PreferInitialClauses => {
+            config.search.heuristic.prefer_initial_clauses = true;
+        }
+        EProverOption::ExpertHeuristic => {
+            value.clone_into(&mut config.search.heuristic.name);
+        }
+        EProverOption::FilterOrphansLimit => {
+            config.search.heuristic.filter_orphans_limit = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::ForwardContractLimit => {
+            config.search.heuristic.forward_contract_limit = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::DeleteBadLimit => {
+            config.delete_bad_limit = get_int_arg(parsed.option(), value)?;
+        }
+        _ => unreachable!("non-heuristic-control option routed to heuristic-control handler"),
+    }
+    Ok(())
+}
+
+fn apply_inference_control_option(config: &mut EProverConfig, option: EProverOption) {
+    match option {
+        EProverOption::AssumeCompleteness => {
+            config.search.completeness.assume_inference_system_complete = true;
+        }
+        EProverOption::AssumeIncompleteness => {
+            config.search.completeness.incomplete = true;
+        }
+        EProverOption::DisableEqFactoring => {
+            config.search.inference.enable_eq_factoring = false;
+            config.search.completeness.inference_system_complete = false;
+        }
+        EProverOption::DisableParamodIntoNegUnits => {
+            config.search.inference.enable_neg_unit_paramod = false;
+            config.search.completeness.inference_system_complete = false;
+        }
+        EProverOption::Condense => config.search.inference.condensing.enabled = true,
+        EProverOption::CondenseAggressive => {
+            config.search.inference.condensing.enabled = true;
+            config.search.inference.condensing.aggressive = true;
+        }
+        EProverOption::DisableGivenClauseForwardContraction => {
+            config.search.inference.enable_given_forward_simplification = false;
+        }
+        EProverOption::SimulParamod => {
+            config.search.inference.paramodulation = ParamodulationType::Sim;
+        }
+        EProverOption::OrientedSimulParamod => {
+            config.search.inference.paramodulation = ParamodulationType::OrientedSim;
+        }
+        EProverOption::SupersimulParamod => {
+            config.search.inference.paramodulation = ParamodulationType::SuperSim;
+        }
+        EProverOption::OrientedSupersimulParamod => {
+            config.search.inference.paramodulation = ParamodulationType::OrientedSuperSim;
+        }
+        _ => unreachable!("non-inference-control option routed to inference-control handler"),
+    }
+}
+
+fn apply_splitting_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::SplitClauses => {
+            config.search.splitting.classes = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::SplitMethod => {
+            config.search.splitting.method = get_int_arg_check_range(parsed.option(), value, 0, 2)?;
+        }
+        EProverOption::SplitAggressive => config.search.splitting.aggressive = true,
+        EProverOption::SplitReuseDefs => config.search.splitting.fresh_defs = false,
+        EProverOption::DisequalityDecomposition => {
+            config.search.splitting.diseq_decomposition = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::DisequalityDecompMaxArity => {
+            config.search.splitting.diseq_decomp_maxarity = get_int_arg(parsed.option(), value)?;
+        }
+        _ => unreachable!("non-splitting option routed to splitting handler"),
+    }
+    Ok(())
+}
+
 fn apply_limit_option(
     config: &mut EProverConfig,
     parsed: &ParsedOpt<'_, EProverOption>,
@@ -994,7 +1564,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverFlag, MEGA,
+        EProverAction, EProverFlag, ParamodulationType, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -1445,6 +2015,171 @@ mod tests {
         );
 
         let error = process_options(["eprover", "--presat-simplify=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+    }
+
+    #[test]
+    fn process_options_records_literal_selection_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.literal_selection.strategy, "NoSelection");
+        assert_eq!(
+            config.search.literal_selection.limits.positive_max,
+            i64::MAX
+        );
+        assert_eq!(
+            config.search.literal_selection.limits.negative_max,
+            i64::MAX
+        );
+        assert_eq!(config.search.literal_selection.limits.all_max, i64::MAX);
+        assert!(!config.search.literal_selection.select_on_processing_only);
+
+        let action = process_options([
+            "eprover",
+            "-W",
+            "SelectMaxLComplex",
+            "--select-on-processing-only",
+            "-i",
+            "-j",
+            "--inherit-conjecture-pm-literals",
+            "--selection-pos-min=1",
+            "--selection-pos-max=2",
+            "--selection-neg-min=3",
+            "--selection-neg-max=4",
+            "--selection-all-min=5",
+            "--selection-all-max=6",
+            "--selection-weight-min=7",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let selection = &config.search.literal_selection;
+        assert_eq!(selection.strategy, "SelectMaxLComplex");
+        assert!(selection.select_on_processing_only);
+        assert!(selection.inherit_paramod_literals.any_clause);
+        assert!(selection.inherit_paramod_literals.goal_clause);
+        assert!(selection.inherit_paramod_literals.conjecture_clause);
+        assert_eq!(selection.limits.positive_min, 1);
+        assert_eq!(selection.limits.positive_max, 2);
+        assert_eq!(selection.limits.negative_min, 3);
+        assert_eq!(selection.limits.negative_max, 4);
+        assert_eq!(selection.limits.all_min, 5);
+        assert_eq!(selection.limits.all_max, 6);
+        assert_eq!(selection.limits.weight_min, 7);
+
+        let action = process_options(["eprover", "--no-generation"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.literal_selection.strategy, "NoGeneration");
+    }
+
+    #[test]
+    fn process_options_records_heuristic_limits_and_completeness_like_c() {
+        let action = process_options([
+            "eprover",
+            "--prefer-initial-clauses",
+            "-x",
+            "Auto",
+            "--filter-orphans-limit",
+            "--forward-contract-limit=88",
+            "--delete-bad-limit",
+            "--assume-completeness",
+            "--assume-incompleteness",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.search.heuristic.prefer_initial_clauses);
+        assert_eq!(config.search.heuristic.name, "Auto");
+        assert_eq!(config.search.heuristic.filter_orphans_limit, 100);
+        assert_eq!(config.search.heuristic.forward_contract_limit, 88);
+        assert_eq!(config.delete_bad_limit, 1_500_000);
+        assert!(config.search.completeness.inference_system_complete);
+        assert!(config.search.completeness.assume_inference_system_complete);
+        assert!(config.search.completeness.incomplete);
+    }
+
+    #[test]
+    fn process_options_records_inference_and_splitting_state_like_c() {
+        let action = process_options([
+            "eprover",
+            "--disable-eq-factoring",
+            "--disable-paramod-into-neg-units",
+            "--condense-aggressive",
+            "--disable-given-clause-fw-contraction",
+            "--oriented-supersimul-paramod",
+            "--split-clauses",
+            "--split-method=2",
+            "--split-aggressive",
+            "--split-reuse-defs",
+            "--disequality-decomposition",
+            "--disequality-decomp-maxarity=3",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let inference = &config.search.inference;
+        assert!(!inference.enable_eq_factoring);
+        assert!(!inference.enable_neg_unit_paramod);
+        assert!(!inference.enable_given_forward_simplification);
+        assert_eq!(
+            inference.paramodulation,
+            ParamodulationType::OrientedSuperSim
+        );
+        assert!(inference.condensing.enabled);
+        assert!(inference.condensing.aggressive);
+        assert!(!config.search.completeness.inference_system_complete);
+        assert_eq!(config.search.splitting.classes, 7);
+        assert_eq!(config.search.splitting.method, 2);
+        assert!(config.search.splitting.aggressive);
+        assert!(!config.search.splitting.fresh_defs);
+        assert_eq!(config.search.splitting.diseq_decomposition, 1024);
+        assert_eq!(config.search.splitting.diseq_decomp_maxarity, 3);
+
+        let action = process_options(["eprover", "--simul-paramod"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.inference.paramodulation,
+            ParamodulationType::Sim
+        );
+
+        let action = process_options(["eprover", "--oriented-simul-paramod"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.inference.paramodulation,
+            ParamodulationType::OrientedSim
+        );
+
+        let action = process_options(["eprover", "--supersimul-paramod"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.inference.paramodulation,
+            ParamodulationType::SuperSim
+        );
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_search_control_args() {
+        let error = process_options(["eprover", "-W", "none"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error.message().starts_with(
+            "Wrong argument to option -W (--literal-selection-strategy). Possible values: "
+        ));
+        assert!(error.message().contains("NoSelection"));
+
+        let error = process_options(["eprover", "--split-method=3"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
