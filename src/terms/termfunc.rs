@@ -15,6 +15,7 @@ use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -170,6 +171,51 @@ fn c_arity(arity: usize) -> Result<i32, Diagnostic> {
             "Term arity is too large for C-compatible signatures",
         )
     })
+}
+
+/// Writes a first-order term without assigning special semantics to symbols.
+///
+/// # Panics
+///
+/// Panics if a non-constant term has an uninitialized argument, matching the
+/// C precondition that all argument slots are valid term pointers.
+pub fn term_write_simple(
+    output: &mut impl fmt::Write,
+    term: &Term,
+    sig: &Signature,
+) -> fmt::Result {
+    if term.is_free_var() {
+        return write!(output, "{}", var_print_string(term.f_code()));
+    }
+
+    write!(
+        output,
+        "{}",
+        sig.find_name(term.f_code()).unwrap_or("<unknown>")
+    )?;
+    if !term.is_const() {
+        write!(output, "(")?;
+        let first = term
+            .argument(0)
+            .unwrap_or_else(|| panic!("term argument 0 is uninitialized"));
+        term_write_simple(output, &first, sig)?;
+        for index in 1..term.arity() {
+            write!(output, ",")?;
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            term_write_simple(output, &arg, sig)?;
+        }
+        write!(output, ")")?;
+    }
+    Ok(())
+}
+
+#[must_use]
+pub fn term_simple_string(term: &Term, sig: &Signature) -> String {
+    let mut output = String::new();
+    let _ = term_write_simple(&mut output, term, sig);
+    output
 }
 
 #[must_use]
@@ -850,9 +896,10 @@ mod tests {
         term_is_def_term, term_is_flat, term_is_ground_compute, term_is_subterm,
         term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
         term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
-        term_sig_insert, term_standard_weight, term_struct_equal, term_struct_equal_deref,
-        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
-        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
+        term_sig_insert, term_simple_string, term_standard_weight, term_struct_equal,
+        term_struct_equal_deref, term_struct_equal_no_deref, term_struct_prefix_equal,
+        term_struct_weight_compare, term_sym_type_weight, term_weight_compute, var_print_string,
+        VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -980,6 +1027,26 @@ mod tests {
         let error = term_parse(&mut object, &mut sig, &vars).unwrap_err();
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("Object cannot have argument list"));
+    }
+
+    #[test]
+    fn term_print_simple_serializes_unshared_tree_shape() {
+        let (sig, _vars, term) = parse_unshared("f(a,X,g(Y))");
+
+        assert_eq!(term_simple_string(&term, &sig), "f(a,X1,g(X2))");
+
+        let (empty_sig, _vars, empty) = parse_unshared("f()");
+        assert_eq!(term_simple_string(&empty, &empty_sig), "f");
+    }
+
+    #[test]
+    fn term_print_simple_round_trips_through_unshared_parser() {
+        let (sig, _vars, term) = parse_unshared("f(a,X,g(Y))");
+        let printed = term_simple_string(&term, &sig);
+        let (round_sig, _round_vars, round_term) = parse_unshared(&printed);
+
+        assert_eq!(printed, "f(a,X1,g(X2))");
+        assert_eq!(term_simple_string(&round_term, &round_sig), printed);
     }
 
     #[test]
