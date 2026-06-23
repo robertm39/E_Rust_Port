@@ -3,8 +3,8 @@ use crate::clauses::clause::Clause;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
 use crate::clauses::groundconstr::{
-    clause_collect_var_constr, sig_collect_constant_terms, LitOccTable, TermIdentitySet,
-    VarConstraintMap,
+    clause_collect_var_constr, lit_occ_add_clause_slice_alt, sig_collect_constant_terms,
+    term_identity_set_from_terms, LitOccTable, TermIdentitySet, VarConstraintMap,
 };
 use crate::clauses::propclauses::{PropClause, PropClauseSet};
 use crate::terms::termbanks::TermBank;
@@ -646,6 +646,70 @@ pub fn clause_slice_create_ground_instances(
     Ok(outcome)
 }
 
+/// Creates constrained ground instances for a slice of clauses.
+///
+/// This is the `ClauseSetCreateConstrGroundInstances` loop shape without
+/// depending on the real C-style `ClauseSet` owner, which is not ported yet.
+///
+/// # Errors
+///
+/// Returns a diagnostic if collecting default ground terms or copying an
+/// instantiated literal into the term bank fails.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`VarSetInst::constrained_alloc`] and
+/// [`clause_create_ground_instances`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ccl_grounding control flags"
+)]
+pub fn clause_slice_create_constrained_ground_instances(
+    bank: &mut TermBank,
+    clauses: &[Clause],
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+    give_up: Option<i64>,
+    just_one_instance: Option<i64>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
+    let mut default_terms = Vec::new();
+    sig_collect_constant_terms(
+        bank,
+        &mut default_terms,
+        just_one_instance.filter(|f_code| *f_code != 0),
+    )?;
+    let default_term_tree = term_identity_set_from_terms(&default_terms);
+    let mut positive_table = LitOccTable::alloc(bank.signature());
+    let mut negative_table = LitOccTable::alloc(bank.signature());
+    lit_occ_add_clause_slice_alt(&mut positive_table, &mut negative_table, clauses);
+
+    let mut outcome = GroundInstanceOutcome::Complete;
+    for clause in clauses {
+        let mut inst = VarSetInst::constrained_alloc(
+            &positive_table,
+            &negative_table,
+            clause,
+            &default_term_tree,
+        );
+        if give_up.is_some_and(|limit| {
+            limit != 0
+                && constrained_estimate_exceeds_limit(groundset.members(), inst.estimate(), limit)
+        }) {
+            return Ok(GroundInstanceOutcome::EstimateLimitExceeded);
+        }
+        if !clause_create_ground_instances(
+            bank, clause, &mut inst, groundset, subsume, resolve, taut_check,
+        )? {
+            outcome = GroundInstanceOutcome::EmptyClause;
+            break;
+        }
+    }
+    groundset.set_complete(GroundSetState::Complete);
+    Ok(outcome)
+}
+
 #[must_use]
 pub fn print_dimacs_header_string(max_lit: i64, members: i64) -> String {
     let max_lit = if max_lit <= 0 { 1 } else { max_lit };
@@ -722,6 +786,11 @@ fn estimated_instances_exceed_limit(vars: i64, alternatives: usize, give_up: i64
     false
 }
 
+#[allow(clippy::cast_precision_loss)]
+fn constrained_estimate_exceeds_limit(members: i64, estimate: f64, give_up: i64) -> bool {
+    members as f64 + estimate > give_up as f64
+}
+
 fn variable_constraint_key(variable: &Term) -> i64 {
     -variable.f_code()
 }
@@ -743,9 +812,10 @@ fn usize_diff_as_i32(left: usize, right: usize) -> i32 {
 mod tests {
     use super::{
         clause_cmp_by_len, clause_create_ground_instances, clause_eqlit_recode, clause_get_max_lit,
-        clause_print_dimacs_string, clause_slice_create_ground_instances, eqn_eqlit_recode,
-        print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState,
-        VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        clause_print_dimacs_string, clause_slice_create_constrained_ground_instances,
+        clause_slice_create_ground_instances, eqn_eqlit_recode, print_dimacs_header_string,
+        GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState, VarSetInst,
+        DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
@@ -1390,5 +1460,116 @@ mod tests {
         assert_eq!(groundset.complete(), GroundSetState::Complete);
         assert_eq!(groundset.members(), 1);
         assert_eq!(groundset.dimacs_print_members(), 2);
+    }
+
+    #[test]
+    fn constrained_slice_grounding_uses_opposite_sign_literal_constraints() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let second = typed_const(&mut bank, "b");
+        let x = typed_var(&bank, -2);
+        let negative_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&first));
+        let query_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let clauses = vec![
+            clause_from(vec![predicate_literal(&mut bank, &negative_atom, false)]),
+            clause_from(vec![predicate_literal(&mut bank, &query_atom, true)]),
+        ];
+        let mut groundset = GroundSet::new();
+
+        assert_eq!(
+            clause_slice_create_constrained_ground_instances(
+                &mut bank,
+                &clauses,
+                &mut groundset,
+                false,
+                false,
+                false,
+                None,
+                None,
+            )
+            .unwrap(),
+            GroundInstanceOutcome::Complete
+        );
+
+        let allowed_ground = predicate_atom(&mut bank, "p", std::slice::from_ref(&first));
+        let rejected_ground = predicate_atom(&mut bank, "p", std::slice::from_ref(&second));
+        assert_eq!(
+            groundset.units().get(&allowed_ground.entry_no()),
+            Some(&GcuEncoding::Both)
+        );
+        assert!(!groundset.units().contains_key(&rejected_ground.entry_no()));
+        assert_eq!(x.binding(), None);
+    }
+
+    #[test]
+    fn constrained_slice_grounding_supports_unique_default_instance() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let second = typed_const(&mut bank, "b");
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let negative_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&y));
+        let query_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let clauses = vec![
+            clause_from(vec![predicate_literal(&mut bank, &negative_atom, false)]),
+            clause_from(vec![predicate_literal(&mut bank, &query_atom, true)]),
+        ];
+        let mut groundset = GroundSet::new();
+
+        assert_eq!(
+            clause_slice_create_constrained_ground_instances(
+                &mut bank,
+                &clauses,
+                &mut groundset,
+                false,
+                false,
+                false,
+                None,
+                Some(second.f_code()),
+            )
+            .unwrap(),
+            GroundInstanceOutcome::Complete
+        );
+
+        let first_ground = predicate_atom(&mut bank, "p", std::slice::from_ref(&first));
+        let second_ground = predicate_atom(&mut bank, "p", std::slice::from_ref(&second));
+        assert!(!groundset.units().contains_key(&first_ground.entry_no()));
+        assert_eq!(
+            groundset.units().get(&second_ground.entry_no()),
+            Some(&GcuEncoding::Both)
+        );
+    }
+
+    #[test]
+    fn constrained_slice_grounding_reports_per_clause_estimate_limit() {
+        let mut bank = test_bank();
+        let _first = typed_const(&mut bank, "a");
+        let _second = typed_const(&mut bank, "b");
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let negative_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&y));
+        let query_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let clauses = vec![
+            clause_from(vec![predicate_literal(&mut bank, &negative_atom, false)]),
+            clause_from(vec![predicate_literal(&mut bank, &query_atom, true)]),
+        ];
+        let mut groundset = GroundSet::new();
+
+        assert_eq!(
+            clause_slice_create_constrained_ground_instances(
+                &mut bank,
+                &clauses,
+                &mut groundset,
+                false,
+                false,
+                false,
+                Some(1),
+                None,
+            )
+            .unwrap(),
+            GroundInstanceOutcome::EstimateLimitExceeded
+        );
+        assert_eq!(groundset.complete(), GroundSetState::Unknown);
+        assert_eq!(groundset.members(), 0);
     }
 }
