@@ -1,9 +1,12 @@
+use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::ProblemType;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::functypes::{func_symb_parse, FuncSymbType};
 use crate::terms::simpletypes::{
-    alloc_simple_sort, sort_is_user_defined, type_alloc, type_app_encoded_name, Type, TypeConsCode,
-    TypeUniqueId, ARROW_TYPE_CONS, INVALID_TYPE_UID, ST_BOOL, ST_INDIVIDUALS, ST_INTEGER, ST_KIND,
-    ST_RATIONAL, ST_REAL,
+    alloc_arrow_type, alloc_simple_sort, sort_is_user_defined, type_alloc, type_app_encoded_name,
+    Type, TypeConsCode, TypeUniqueId, ARROW_TYPE_CONS, INVALID_TYPE_UID, ST_BOOL, ST_INDIVIDUALS,
+    ST_INTEGER, ST_KIND, ST_RATIONAL, ST_REAL,
 };
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -247,6 +250,31 @@ impl TypeBank {
         shared_arg_type
     }
 
+    pub fn parse_type_from_current_problem(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Type, Diagnostic> {
+        self.parse_type(scanner, problem_type())
+    }
+
+    pub fn parse_type(
+        &mut self,
+        scanner: &mut Scanner,
+        problem_type: ProblemType,
+    ) -> Result<Type, Diagnostic> {
+        let type_ = match problem_type {
+            ProblemType::FirstOrder => self.parse_fo_type(scanner)?,
+            ProblemType::HigherOrder => self.parse_ho_type(scanner)?,
+            ProblemType::NotInitialized => {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Problem type is not initialized",
+                ));
+            }
+        };
+        Ok(self.insert_type_shared(type_))
+    }
+
     #[must_use]
     pub fn type_is_user_defined(&self, type_: &Type) -> bool {
         type_.type_uid() > self.max_predefined_count
@@ -381,6 +409,175 @@ impl TypeBank {
         }
     }
 
+    fn parse_single_type(&mut self, scanner: &mut Scanner) -> Result<Type, Diagnostic> {
+        let mut id = DynamicString::new();
+        let id_type = func_symb_parse(scanner, &mut id)?;
+        if !matches!(
+            id_type,
+            FuncSymbType::IdentFreeFun | FuncSymbType::IdentInterpreted
+        ) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Function identifier expected",
+            ));
+        }
+
+        let name = id.view().into_owned();
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let mut args = Vec::new();
+            let first_arg = self.parse_single_type(scanner)?;
+            ensure_not_kind(&first_arg)?;
+            args.push(first_arg);
+
+            while scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                let arg = self.parse_single_type(scanner)?;
+                ensure_not_kind(&arg)?;
+                args.push(arg);
+            }
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+            let tc_code = self.find_or_define_constructor(&name, args.len())?;
+            Ok(self.insert_type_shared(type_alloc(tc_code, args)))
+        } else {
+            let tc_code = self.find_or_define_simple_sort(&name)?;
+            Ok(self.insert_type_shared(alloc_simple_sort(tc_code)))
+        }
+    }
+
+    fn parse_fo_type(&mut self, scanner: &mut Scanner) -> Result<Type, Diagnostic> {
+        let mut open_parens = 0;
+        while open_parens < 2 && scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            open_parens += 1;
+        }
+
+        let mut args = vec![self.parse_single_type(scanner)?];
+        while scanner.test_tok(TokenType::MULT) {
+            scanner.accept_tok(TokenType::MULT)?;
+            args.push(self.parse_single_type(scanner)?);
+        }
+
+        if open_parens != 0 && scanner.test_tok(TokenType::CLOSE_BRACKET) {
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            open_parens -= 1;
+        }
+
+        if scanner.test_tok(TokenType::GREATER_SIGN) {
+            scanner.accept_tok(TokenType::GREATER_SIGN)?;
+            args.push(self.parse_single_type(scanner)?);
+        }
+
+        if open_parens != 0 {
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        }
+
+        if args.len() == 1 {
+            Ok(args.remove(0))
+        } else {
+            Ok(alloc_arrow_type(args))
+        }
+    }
+
+    fn parse_ho_type(&mut self, scanner: &mut Scanner) -> Result<Type, Diagnostic> {
+        let left_arg = if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let type_ = self.parse_type(scanner, ProblemType::HigherOrder)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            type_
+        } else {
+            self.parse_single_type(scanner)?
+        };
+
+        if scanner.test_tok(
+            TokenType::CLOSE_BRACKET
+                | TokenType::FULLSTOP
+                | TokenType::CLOSE_SQUARE
+                | TokenType::COMMA
+                | TokenType::EQUAL_SIGN
+                | TokenType::NEG_EQUAL_SIGN
+                | TokenType::FOF_BIN_OP,
+        ) {
+            return Ok(left_arg);
+        }
+
+        let mut args = vec![left_arg];
+        let mut right_arg;
+        loop {
+            if scanner.test_tok(TokenType::MULT) {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Mixing of first order and higher order syntax is forbidden",
+                ));
+            }
+            scanner.accept_tok(TokenType::GREATER_SIGN)?;
+            right_arg = if scanner.test_tok(TokenType::OPEN_BRACKET) {
+                scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+                let type_ = self.parse_type(scanner, ProblemType::HigherOrder)?;
+                scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+                type_
+            } else {
+                self.parse_type(scanner, ProblemType::HigherOrder)?
+            };
+            args.push(right_arg.clone());
+            if scanner.test_tok(
+                TokenType::CLOSE_BRACKET
+                    | TokenType::FULLSTOP
+                    | TokenType::CLOSE_SQUARE
+                    | TokenType::COMMA,
+            ) {
+                break;
+            }
+        }
+
+        if right_arg.is_arrow() {
+            let last_index = args.len() - 1;
+            args[last_index] = right_arg.args()[0].clone();
+            args.extend(right_arg.args()[1..].iter().cloned());
+        }
+
+        Ok(alloc_arrow_type(args))
+    }
+
+    fn find_or_define_constructor(
+        &mut self,
+        name: &str,
+        arity: usize,
+    ) -> Result<TypeConsCode, Diagnostic> {
+        let tc_code = self.find_tc_code(name);
+        if tc_code == NAME_NOT_FOUND {
+            self.define_type_constructor(name, arity)
+        } else if self.find_tc_arity(tc_code) == Some(arity) {
+            Ok(tc_code)
+        } else {
+            Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "Redefinition of type constructor {}. Mismatch in number of arguments.",
+                    self.find_tc_name(tc_code).unwrap_or(name)
+                ),
+            ))
+        }
+    }
+
+    fn find_or_define_simple_sort(&mut self, name: &str) -> Result<TypeConsCode, Diagnostic> {
+        let tc_code = self.find_tc_code(name);
+        if tc_code == NAME_NOT_FOUND {
+            self.define_simple_sort(name)
+        } else if self.find_tc_arity(tc_code) == Some(0) {
+            Ok(tc_code)
+        } else {
+            Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "Type constructor {}has not been declared as simple sort.",
+                    self.find_tc_name(tc_code).unwrap_or(name)
+                ),
+            ))
+        }
+    }
+
     fn print_fo_arrow(
         &self,
         output: &mut impl Write,
@@ -434,6 +631,17 @@ impl TypeBank {
     }
 }
 
+fn ensure_not_kind(arg: &Type) -> Result<(), Diagnostic> {
+    if arg.is_kind() {
+        Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Only ground types supported.",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TypeConstructorNameInfo {
     code: TypeConsCode,
@@ -471,10 +679,15 @@ mod tests {
     use super::{TypeBank, NAME_NOT_FOUND, TYPEBANK_HASH_MASK, TYPEBANK_SIZE};
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
+    use crate::inout::scanner::{Scanner, TokenType};
     use crate::terms::simpletypes::{
         alloc_arrow_type, alloc_simple_sort, sort_is_user_defined, type_alloc, ARROW_TYPE_CONS,
         INVALID_TYPE_UID, ST_BOOL, ST_INDIVIDUALS, ST_INTEGER, ST_KIND, ST_RATIONAL, ST_REAL,
     };
+
+    fn scanner(source: &str) -> Scanner {
+        Scanner::from_user_string(source, false).unwrap()
+    }
 
     fn string_from(bytes: Vec<u8>) -> String {
         String::from_utf8(bytes).unwrap()
@@ -683,5 +896,121 @@ mod tests {
             string_from(output),
             "%-- person.\ntff(typedecl1, type, type_7: $tType).\n%-- person > $o.\ntff(typedecl2, type, type_8: $tType).\n"
         );
+    }
+
+    #[test]
+    fn parse_type_reads_first_order_simple_and_arrow_types() {
+        let mut bank = TypeBank::new();
+        let mut input = scanner("$i. $i > $o. (($i * $int) > $o).");
+
+        let individual = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        assert_eq!(individual, bank.i_type());
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        let predicate = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        assert!(predicate.is_arrow());
+        assert_eq!(predicate.args()[0], bank.i_type());
+        assert_eq!(predicate.args()[1], bank.bool_type());
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        let binary = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        assert_eq!(binary.arity(), 3);
+        assert_eq!(binary.args()[0], bank.i_type());
+        assert_eq!(binary.args()[1], bank.integer_type());
+        assert_eq!(binary.args()[2], bank.bool_type());
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+    }
+
+    #[test]
+    fn parse_type_reads_type_constructor_applications_and_checks_arity() {
+        let mut bank = TypeBank::new();
+        let mut input = scanner("list($i). list($i). list($i, $o).");
+
+        let list = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+        let repeated = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        assert_eq!(list, repeated);
+        assert_eq!(bank.find_tc_arity(bank.find_tc_code("list")), Some(1));
+        assert_eq!(list.args()[0], bank.i_type());
+
+        let error = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Mismatch in number of arguments"));
+    }
+
+    #[test]
+    fn parse_single_type_rejects_constructor_kind_arguments_and_sort_mismatch() {
+        let mut bank = TypeBank::new();
+        let mut input = scanner("list($tType). list.");
+        let error = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(error.message(), "Only ground types supported.");
+
+        let list_code = bank.define_type_constructor("list", 1).unwrap();
+        assert!(sort_is_user_defined(list_code));
+        let mut input = scanner("list.");
+        let error = bank
+            .parse_type(&mut input, ProblemType::FirstOrder)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("has not been declared as simple sort"));
+    }
+
+    #[test]
+    fn parse_type_reads_higher_order_arrows_and_flattens_right_nesting() {
+        let mut bank = TypeBank::new();
+        let mut input = scanner("$i > $int > $o. ($i > $o) > $o.");
+
+        let curried = bank
+            .parse_type(&mut input, ProblemType::HigherOrder)
+            .unwrap();
+        assert_eq!(curried.arity(), 3);
+        assert_eq!(curried.args()[0], bank.i_type());
+        assert_eq!(curried.args()[1], bank.integer_type());
+        assert_eq!(curried.args()[2], bank.bool_type());
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        let higher = bank
+            .parse_type(&mut input, ProblemType::HigherOrder)
+            .unwrap();
+        assert_eq!(higher.arity(), 2);
+        assert!(higher.args()[0].is_arrow());
+        assert_eq!(higher.args()[1], bank.bool_type());
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+    }
+
+    #[test]
+    fn parse_type_reports_higher_order_mixed_syntax_and_missing_problem_type() {
+        let mut bank = TypeBank::new();
+        let mut input = scanner("$i * $o.");
+        let error = bank
+            .parse_type(&mut input, ProblemType::HigherOrder)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Mixing of first order"));
+
+        let mut input = scanner("$i.");
+        let error = bank
+            .parse_type(&mut input, ProblemType::NotInitialized)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
     }
 }
