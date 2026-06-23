@@ -2,8 +2,8 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::inout::scanner::{Scanner, TokenType};
-use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
+use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::terms::functypes::{func_symb_parse, func_symb_token, FunCode, FuncSymbType};
 use crate::terms::simpletypes::{
     alloc_arrow_type, arrow_type_flattened, is_choice_type, type_app_encoded_name,
     type_get_max_arity, type_is_predicate, type_is_type_constructor, Type,
@@ -787,6 +787,138 @@ impl Signature {
         let f_code = self.insert_id(name, arity, true);
         self.set_func_prop(f_code, FP_FOF_OP);
         f_code
+    }
+
+    fn print_operator(
+        &self,
+        output: &mut impl Write,
+        f_code: FunCode,
+        comments: bool,
+        problem_type: ProblemType,
+    ) -> io::Result<()> {
+        let fun = self.func(f_code);
+        if comments {
+            write!(
+                output,
+                "   {:<13} : {:2}    %  {:2} {:2} ",
+                fun.pname,
+                fun.arity,
+                f_code,
+                fun.properties.bits()
+            )?;
+            if let Some(type_) = &fun.type_ {
+                self.type_bank.print_tstp(output, type_, problem_type)?;
+            } else {
+                output.write_all(b"(no type)")?;
+            }
+            writeln!(output)
+        } else {
+            writeln!(output, "   {:<13} : {:2}", fun.pname, fun.arity)
+        }
+    }
+
+    pub fn print(&self, output: &mut impl Write) -> io::Result<()> {
+        writeln!(
+            output,
+            "% Signature ({:2} symbols out of {:2} allocated):",
+            self.f_count, self.size
+        )?;
+        writeln!(output, "%     -Symbol-    -Arity- -Encoding-")?;
+        for f_code in 1..=self.f_count {
+            self.print_operator(output, f_code, true, problem_type())?;
+        }
+        Ok(())
+    }
+
+    pub fn print_special(&self, output: &mut impl Write) -> io::Result<()> {
+        writeln!(output, "% Special symbols:")?;
+        for f_code in 1..=self.f_count {
+            if self.is_special(f_code) {
+                self.print_operator(output, f_code, true, problem_type())?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn print_ac_status(&self, output: &mut impl Write) -> io::Result<()> {
+        for f_code in 1..=self.f_count {
+            let fun = self.func(f_code);
+            if fun.properties.contains_all(FP_IS_AC) {
+                writeln!(output, "% {} is AC", fun.name)?;
+            } else if fun.properties.contains_all(FP_ASSOCIATIVE) {
+                writeln!(output, "% {} is associative", fun.name)?;
+            } else if fun.properties.contains_all(FP_COMMUTATIVE) {
+                writeln!(output, "% {} is commutative", fun.name)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn parse_known_operator(&self, scanner: &mut Scanner) -> Result<FunCode, Diagnostic> {
+        let token = scanner.current_token().clone();
+        let mut id = DynamicString::new();
+        func_symb_parse(scanner, &mut id)?;
+        let name = id.view().into_owned();
+        let f_code = self.find_f_code(&name);
+        if f_code == 0 {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!("{} {name} undeclared", token_pos_rep(&token)),
+            ));
+        }
+        Ok(f_code)
+    }
+
+    pub fn parse_symbol_declaration(
+        &mut self,
+        scanner: &mut Scanner,
+        special_id: bool,
+    ) -> Result<FunCode, Diagnostic> {
+        let token = scanner.current_token().clone();
+        let mut id = DynamicString::new();
+        func_symb_parse(scanner, &mut id)?;
+        scanner.accept_tok(TokenType::COLON)?;
+        let arity_token = scanner.current_token().clone();
+        let arity = i32::try_from(arity_token.numval()).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{} arity {} does not fit signature arity",
+                    token_pos_rep(&arity_token),
+                    arity_token.numval()
+                ),
+            )
+        })?;
+        scanner.accept_tok(TokenType::POS_INT)?;
+
+        let name = id.view().into_owned();
+        let f_code = self.insert_id(&name, arity, special_id);
+        if f_code == 0 {
+            let registered_code = self.find_f_code(&name);
+            let registered_arity = self.find_arity(registered_code).unwrap_or(0);
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{} {name} declared with arity {arity} but registered with arity {registered_arity}",
+                    token_pos_rep(&token)
+                ),
+            ));
+        }
+        Ok(f_code)
+    }
+
+    pub fn parse_declarations(
+        &mut self,
+        scanner: &mut Scanner,
+        special_ids: bool,
+    ) -> Result<FunCode, Diagnostic> {
+        let mut result = 0;
+        while scanner.test_tok(func_symb_token())
+            && scanner.look_token(1).kind().intersects(TokenType::COLON)
+        {
+            result = self.parse_symbol_declaration(scanner, special_ids)?;
+        }
+        Ok(result)
     }
 
     pub fn get_eqn_code(&mut self, positive: bool) -> FunCode {
@@ -1754,6 +1886,99 @@ mod tests {
         assert!(!sig.is_special(and));
         sig.set_special(alpha, true);
         assert!(sig.is_special(alpha));
+    }
+
+    #[test]
+    fn debug_print_helpers_follow_signature_comment_shape() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let f = sig.insert_id_for_problem("f", 2, false, ProblemType::FirstOrder);
+        sig.declare_final_type(
+            f,
+            alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual.clone(),
+            ]),
+        )
+        .unwrap();
+        sig.insert_id_for_problem("untyped", 0, false, ProblemType::FirstOrder);
+        let special = sig.insert_fof_op("$and", 2);
+
+        let mut output = Vec::new();
+        sig.print(&mut output).unwrap();
+        let printed = string_from(output);
+        assert!(printed.starts_with(
+            "% Signature ( 5 symbols out of 20 allocated):\n%     -Symbol-    -Arity- -Encoding-\n"
+        ));
+        assert!(printed.contains("   f             :  2    %"));
+        assert!(printed.contains("($i * $i) > $i") || printed.contains("$i > $i > $i"));
+        assert!(printed.contains("   untyped       :  0    %"));
+        assert!(printed.contains("(no type)"));
+
+        let mut special_output = Vec::new();
+        sig.print_special(&mut special_output).unwrap();
+        let special_printed = string_from(special_output);
+        assert!(special_printed.starts_with("% Special symbols:\n"));
+        assert!(special_printed.contains("$true"));
+        assert!(special_printed.contains("$and"));
+        assert!(!special_printed.contains("   f             :"));
+        assert!(sig.is_special(special));
+    }
+
+    #[test]
+    fn ac_status_prints_raw_names_in_precedence_order() {
+        let mut sig = signature();
+        let ac = sig.insert_id_for_problem("ac", 2, false, ProblemType::FirstOrder);
+        let assoc = sig.insert_id_for_problem("assoc", 2, false, ProblemType::FirstOrder);
+        let comm = sig.insert_id_for_problem("comm", 2, false, ProblemType::FirstOrder);
+        sig.set_func_prop(ac, FP_ASSOCIATIVE | FP_COMMUTATIVE);
+        sig.set_func_prop(assoc, FP_ASSOCIATIVE);
+        sig.set_func_prop(comm, FP_COMMUTATIVE);
+
+        let mut output = Vec::new();
+        sig.print_ac_status(&mut output).unwrap();
+
+        assert_eq!(
+            string_from(output),
+            "% ac is AC\n% assoc is associative\n% comm is commutative\n"
+        );
+    }
+
+    #[test]
+    fn legacy_signature_parser_reads_arity_declarations_and_known_symbols() {
+        let mut sig = signature();
+        let mut input = scanner("f:2 $p:1 0012:0");
+
+        let last = sig.parse_declarations(&mut input, true).unwrap();
+
+        let f = sig.find_f_code("f");
+        let p = sig.find_f_code("$p");
+        assert_eq!(last, p);
+        assert_eq!(sig.find_arity(f), Some(2));
+        assert_eq!(sig.find_arity(p), Some(1));
+        assert!(sig.is_special(f));
+        assert!(sig.is_special(p));
+        assert_eq!(input.current_token().literal(), "0012");
+
+        let mut known = scanner("$p");
+        assert_eq!(sig.parse_known_operator(&mut known).unwrap(), p);
+
+        let mut numeric = scanner("0012:0");
+        let code = sig.parse_symbol_declaration(&mut numeric, false).unwrap();
+        assert_eq!(sig.find_f_code("12"), code);
+        assert_eq!(sig.find_arity(code), Some(0));
+    }
+
+    #[test]
+    fn parse_known_operator_reports_undeclared_symbols() {
+        let sig = signature();
+        let mut input = scanner("missing");
+
+        let error = sig.parse_known_operator(&mut input).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("missing undeclared"));
     }
 
     #[test]
