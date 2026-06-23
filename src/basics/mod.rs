@@ -9,6 +9,7 @@ pub mod intmap;
 pub mod min_heap;
 pub mod numtrees;
 pub mod numxtrees;
+pub mod partial_orderings;
 pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod permastrings;
