@@ -22,6 +22,7 @@ pub mod properties;
 pub mod pstacks;
 pub mod ptrees;
 pub mod quadtrees;
+pub mod regmem;
 pub mod simple_stuff;
 pub mod stringtrees;
 pub mod sysdate;

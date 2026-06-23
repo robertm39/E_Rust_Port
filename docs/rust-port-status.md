@@ -32,6 +32,7 @@ Rust files:
 - `src/basics/pstacks.rs`
 - `src/basics/ptrees.rs`
 - `src/basics/quadtrees.rs`
+- `src/basics/regmem.rs`
 - `src/basics/stringtrees.rs`
 - `src/basics/sysdate.rs`
 - `src/basics/verbose.rs`
@@ -71,6 +72,7 @@ Original C references:
 - [`BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`](c_source_docs/BASICS/clb_pstacks.md)
 - [`BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`](c_source_docs/BASICS/clb_ptrees.md)
 - [`BASICS/clb_quadtrees.h`, `BASICS/clb_quadtrees.c`](c_source_docs/BASICS/clb_quadtrees.md)
+- [`BASICS/clb_regmem.h`, `BASICS/clb_regmem.c`](c_source_docs/BASICS/clb_regmem.md)
 - [`BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`](c_source_docs/BASICS/clb_stringtrees.md)
 - [`BASICS/clb_sysdate.h`, `BASICS/clb_sysdate.c`](c_source_docs/BASICS/clb_sysdate.md)
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
@@ -107,6 +109,7 @@ Implemented behavior:
 - `NumXTree` numeric-keyed four-slot value map behavior from `clb_numxtrees`, including duplicate-preserving store semantics with defaulted extra slots, full-entry insertion, lookup, mutable value-slot rewrite, extraction/deletion, root-like draining, node/max-key queries, deterministic sorted traversal, and limited traversal starting at the first key greater than or equal to the limit.
 - `PTree` pointer/identity-set behavior from `clb_ptrees`, including duplicate-preserving store semantics, lookup, binary lookup alias, extraction/deletion/root-like draining, destructive and non-destructive merge helpers, stack/vector conversion, copying, shared-element and intersection helpers, equivalence/subset checks, in-order visits, and debug printing.
 - `QuadTree` four-part pointer/integer-keyed map behavior from `clb_quadtrees`, including pointer-then-integer pair comparison, duplicate-preserving insertion, mutable root-like lookup, extraction/deletion, deterministic sorted traversal, and mixed integer/pointer payload helpers.
+- Registered persistent-memory helpers from `clb_regmem`, including process-global registration, allocation/reallocation/freeing, cleanup of all registered areas, `RegMemProvide` doubling behavior, and zero-filled newly provided tails.
 - `SysDate` logical-time helpers from `clb_sysdate`, including creation/invalid sentinels, ordering/equality/maximum macros, increment mutation order, overflow reporting instead of undefined signed overflow, and C-shaped unsigned-long printing.
 - Verbose-level helpers from `clb_verbose`, including the global `Verbose` default, nonzero level-1 gate, `>= 2` and `>= 10` gates, closure helpers for macro-like conditional execution, and `VERBOUT`/`VERBOUTARG` formatting with explicit flushes.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
@@ -132,6 +135,7 @@ Known gaps:
 - `ObjTree` and `ObjMap` model comparison-function behavior with `Ord` keys and safe owned values; exact C splay-root locality, raw pointer ownership transfer, and allocator reuse are not modeled.
 - `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
 - `QuadTree` currently uses Rust `BTreeMap` and caller-provided ordered pointer identities; exact C splay-root locality and raw pointer-address ordering should be revisited when comparison caches are integrated with term storage.
+- `RegMem` uses explicit opaque handles and initialized byte buffers instead of raw registered pointers and uninitialized `SecureMalloc` memory; call sites that need typed static scratch space should wrap those handles at the ownership boundary.
 - `SysDate` uses an LP64-shaped `i64` raw value to match the WSL/Linux C reference build; if a native Windows C reference becomes relevant, C `long` width and `SysDatePrint` output need a target-specific audit.
 - Verbose output helpers are not yet wired into the executable's parsed `--verbose` option or all future progress-reporting call sites.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
@@ -152,6 +156,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `MinHeap` preserves the C helper directions where `decr_key` drops down and `incr_key` bubbles up, despite those names appearing reversed for a conventional min-heap. Rename or wrap only after all heap users are audited.
 - `ObjTree` and `ObjMap` replace comparison-function/raw-pointer storage with ordered Rust keys and explicit ownership; revisit this once term, clause, and substitution arenas define stable handle identity and deleter responsibilities.
 - `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, `PTree`, and `QuadTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
+- `RegMem` in C stores raw allocation pointers in a global `PTree` and frees them at process shutdown; the Rust handle registry preserves cleanup semantics, but later code should prefer explicit owner structs where persistent scratch memory can be scoped.
 - `IntMap` keeps C density transitions and null-slot quirks, but its hidden read/delete-time array growth in C is a likely cleanup target if compatibility tests show no observable dependency.
 - Permanent strings use `Arc<str>` to keep Rust handles valid after registry clearing; later term/signature ownership should decide whether stable arena handles are a better identity model.
 - `clb_simple_stuff` includes historical global-state behavior in `ProblemType` and JKISS random generation; the Rust port should centralize these states before parallel parsing or solving is introduced.
