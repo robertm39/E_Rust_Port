@@ -1,4 +1,5 @@
 use crate::basics::error::Diagnostic;
+use crate::basics::pstacks::PStack;
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::FunCode;
 use crate::terms::garbage_coll::GcAdmin;
@@ -10,7 +11,7 @@ use crate::terms::termtypes::{
     term_deref, DerefType, Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_GARBAGE_FLAG,
     TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM, TP_HAS_EQ_NEQ_SYM,
     TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_HAS_LAMBDA_SUBTERM, TP_HAS_NON_PATTERN_VAR, TP_IGNORE_PROPS,
-    TP_IS_BETA_REDUCIBLE, TP_IS_GROUND, TP_IS_SHARED, TP_PRED_POS,
+    TP_IS_BETA_REDUCIBLE, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG, TP_PRED_POS,
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typecheck::type_infer_sort;
@@ -258,6 +259,101 @@ impl TermBank {
         Ok(term)
     }
 
+    /// Sets properties by repointing `term_ref` to the banked top-cell variant.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `term_ref` is a variable, matching the C assertion in
+    /// `TBRefSetProp`.
+    pub fn ref_set_prop(
+        &mut self,
+        term_ref: &mut Term,
+        prop: TermProperties,
+    ) -> Result<(), Diagnostic> {
+        assert!(
+            !term_ref.is_any_var(),
+            "properties do not work for variables"
+        );
+        if term_ref.query_prop(prop) {
+            return Ok(());
+        }
+        let new = Term::top_copy(term_ref);
+        new.set_prop(prop);
+        *term_ref = self.term_top_insert(new)?;
+        Ok(())
+    }
+
+    pub fn ref_del_prop(
+        &mut self,
+        term_ref: &mut Term,
+        prop: TermProperties,
+    ) -> Result<(), Diagnostic> {
+        if !term_ref.is_any_prop_set(prop) || term_ref.is_any_var() {
+            return Ok(());
+        }
+        let new = Term::top_copy(term_ref);
+        new.del_prop(prop);
+        *term_ref = self.term_top_insert(new)?;
+        Ok(())
+    }
+
+    pub fn gc_mark_term(&self, term: &Term) {
+        let mut stack = vec![term.clone()];
+        while let Some(current) = stack.pop() {
+            if current.give_props(TP_GARBAGE_FLAG) == self.garbage_state {
+                current.flip_prop(TP_GARBAGE_FLAG);
+                stack.extend(current.argument_clones().into_iter().flatten());
+                if current.is_rewritten() {
+                    if let Some(replacement) = current.rw_replace_field() {
+                        stack.push(replacement);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sweeps unmarked terms and flips the bank garbage state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bank's `$true` term is currently marked rewritten,
+    /// matching the C assertion before `TBGCSweep` marks roots.
+    #[must_use]
+    pub fn gc_sweep(&mut self) -> i64 {
+        assert!(
+            !self.true_term.is_rewritten(),
+            "true term must not be rewritten during GC"
+        );
+        self.gc_mark_term(&self.true_term);
+        self.gc_mark_term(&self.false_term);
+        for term in self.min_terms.values() {
+            self.gc_mark_term(term);
+        }
+        let recovered = self.term_store.gc_sweep(self.garbage_state);
+        self.garbage_state = if self.garbage_state == TP_IGNORE_PROPS {
+            TP_GARBAGE_FLAG
+        } else {
+            TP_IGNORE_PROPS
+        };
+        self.recovered += u64::try_from(recovered).unwrap_or(0);
+        recovered
+    }
+
+    #[must_use]
+    pub fn find_repr(&mut self, term: &Term) -> Option<Term> {
+        if term.is_any_var() || term.is_const() {
+            return self.find(term);
+        }
+
+        let work = Term::top_copy(term);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg?;
+            let repr = self.find_repr(&arg)?;
+            work.set_argument(index, repr);
+        }
+        self.find(&work)
+    }
+
     fn insert_with_mode(
         &mut self,
         term: &Term,
@@ -363,6 +459,55 @@ impl TermBank {
 }
 
 #[must_use]
+pub fn tb_term_del_prop_count(term: &Term, prop: TermProperties) -> i64 {
+    let mut count = 0;
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.query_prop(prop) {
+            current.del_prop(prop);
+            count += 1;
+            stack.extend(current.argument_clones().into_iter().flatten());
+        }
+    }
+    count
+}
+
+#[must_use]
+pub fn tb_term_set_prop_count(term: &Term, prop: TermProperties) -> i64 {
+    let mut count = 0;
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if !current.query_prop(prop) {
+            current.set_prop(prop);
+            count += 1;
+            stack.extend(current.argument_clones().into_iter().flatten());
+        }
+    }
+    count
+}
+
+/// Collects shared subterms, using `TPOpFlag` as the visited marker.
+///
+/// # Panics
+///
+/// Panics if `term` is not shared, matching the C assertion in
+/// `TBTermCollectSubterms`.
+pub fn tb_term_collect_subterms(term: &Term, collector: &mut PStack<Term>) -> i64 {
+    assert!(term.is_shared(), "subterm collection expects shared terms");
+    if term.query_prop(TP_OP_FLAG) {
+        return 0;
+    }
+
+    let mut count = 1;
+    term.set_prop(TP_OP_FLAG);
+    collector.push(term.clone());
+    for arg in term.argument_clones().into_iter().flatten() {
+        count += tb_term_collect_subterms(&arg, collector);
+    }
+    count
+}
+
+#[must_use]
 pub fn tb_cell_ident(term: &Term) -> i64 {
     if term.is_free_var() {
         term.f_code()
@@ -408,13 +553,17 @@ enum InsertMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        tb_cell_ident, tb_term_is_ground, term_is_false_term, term_is_true_term, TermBank,
+        tb_cell_ident, tb_term_collect_subterms, tb_term_del_prop_count, tb_term_is_ground,
+        tb_term_set_prop_count, term_is_false_term, term_is_true_term, TermBank,
     };
+    use crate::basics::pstacks::PStack;
+    use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{Signature, SIG_FALSE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termtypes::{
-        DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_HAS_APP_VAR, TP_HAS_NON_PATTERN_VAR,
-        TP_IS_GROUND, TP_IS_SHARED, TP_PRED_POS,
+        DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_GARBAGE_FLAG,
+        TP_HAS_APP_VAR, TP_HAS_NON_PATTERN_VAR, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG,
+        TP_PRED_POS,
     };
     use crate::terms::typebanks::TypeBank;
 
@@ -547,5 +696,110 @@ mod tests {
 
         assert!(shared.query_prop(TP_HAS_APP_VAR | TP_HAS_NON_PATTERN_VAR));
         assert_eq!(shared.weight(), DEFAULT_VWEIGHT + DEFAULT_FWEIGHT);
+    }
+
+    #[test]
+    fn reference_property_helpers_follow_current_top_key_behavior() {
+        let (mut bank, a_code) = bank_with_symbol("a", 0);
+        let mut term = bank.create_const_term(a_code).unwrap();
+
+        bank.ref_set_prop(&mut term, TP_CHECK_FLAG).unwrap();
+
+        assert!(term.query_prop(TP_CHECK_FLAG));
+        let same = term.clone();
+        bank.ref_del_prop(&mut term, TP_CHECK_FLAG).unwrap();
+
+        assert_eq!(term, same);
+        assert!(term.query_prop(TP_CHECK_FLAG));
+    }
+
+    #[test]
+    fn property_count_helpers_prune_by_current_property_state() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let f = Term::top_alloc(f_code, 1);
+        f.set_argument(0, a.clone());
+        let shared = bank.insert(&f, DerefType::Never).unwrap();
+
+        assert_eq!(tb_term_set_prop_count(&shared, TP_CHECK_FLAG), 2);
+        assert!(shared.query_prop(TP_CHECK_FLAG));
+        assert!(a.query_prop(TP_CHECK_FLAG));
+        assert_eq!(tb_term_set_prop_count(&shared, TP_CHECK_FLAG), 0);
+        assert_eq!(tb_term_del_prop_count(&shared, TP_CHECK_FLAG), 2);
+        assert!(!shared.query_prop(TP_CHECK_FLAG));
+        assert!(!a.query_prop(TP_CHECK_FLAG));
+    }
+
+    #[test]
+    fn gc_mark_and_sweep_keep_roots_min_terms_and_rewrite_targets() {
+        let mut sig = Signature::new(TypeBank::new());
+        let keep_code = sig.insert_id("keep", 0, false);
+        let dead_code = sig.insert_id("dead", 0, false);
+        let repl_code = sig.insert_id("repl", 0, false);
+        let i_type = sig.type_bank().i_type();
+        sig.declare_type(keep_code, i_type.clone()).unwrap();
+        sig.declare_type(dead_code, i_type.clone()).unwrap();
+        sig.declare_type(repl_code, i_type).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let keep = bank.create_min_term(keep_code).unwrap();
+        let dead = bank.create_const_term(dead_code).unwrap();
+        let replacement = bank.create_const_term(repl_code).unwrap();
+        term_add_rw_link(
+            &keep,
+            &replacement,
+            None,
+            false,
+            RwResultType::LimitedRewritable,
+        );
+
+        let recovered = bank.gc_sweep();
+
+        assert_eq!(recovered, 1);
+        assert_eq!(bank.recovered(), 1);
+        assert_eq!(bank.garbage_state(), TP_GARBAGE_FLAG);
+        assert_eq!(bank.find(&dead), None);
+        assert_eq!(bank.find(&keep), Some(keep.clone()));
+        assert_eq!(bank.find(&replacement), Some(replacement));
+    }
+
+    #[test]
+    fn find_repr_uses_this_banks_shared_arguments() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let f = Term::top_alloc(f_code, 1);
+        f.set_argument(0, a.clone());
+        let shared = bank.insert(&f, DerefType::Never).unwrap();
+        let external_a = Term::const_cell_alloc(a_code);
+        external_a.set_type(a.type_());
+        let external_f = Term::top_alloc(f_code, 1);
+        external_f.set_type(shared.type_());
+        external_f.set_argument(0, external_a);
+
+        assert_eq!(bank.find_repr(&external_f), Some(shared));
+    }
+
+    #[test]
+    fn collect_subterms_sets_op_flag_and_skips_existing_marks() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let f = Term::top_alloc(f_code, 1);
+        f.set_argument(0, a.clone());
+        let shared = bank.insert(&f, DerefType::Never).unwrap();
+        let mut collector = PStack::new();
+
+        assert_eq!(tb_term_collect_subterms(&shared, &mut collector), 2);
+        assert_eq!(collector.len(), 2);
+        assert!(shared.query_prop(TP_OP_FLAG));
+        assert!(a.query_prop(TP_OP_FLAG));
+        assert_eq!(tb_term_collect_subterms(&shared, &mut collector), 0);
     }
 }
