@@ -18,6 +18,7 @@ Rust files:
 - `src/basics/numxtrees.rs`
 - `src/basics/pdarrays.rs`
 - `src/basics/pdrangearrays.rs`
+- `src/basics/permastrings.rs`
 - `src/basics/properties.rs`
 - `src/basics/pstacks.rs`
 - `src/basics/ptrees.rs`
@@ -44,6 +45,7 @@ Original C references:
 - [`BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`](c_source_docs/BASICS/clb_numxtrees.md)
 - [`BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`](c_source_docs/BASICS/clb_pdarrays.md)
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
+- [`BASICS/clb_permastrings.h`, `BASICS/clb_permastrings.c`](c_source_docs/BASICS/clb_permastrings.md)
 - [`BASICS/clb_properties.h`](c_source_docs/BASICS/clb_properties.md)
 - [`BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`](c_source_docs/BASICS/clb_pstacks.md)
 - [`BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`](c_source_docs/BASICS/clb_ptrees.md)
@@ -65,6 +67,7 @@ Implemented behavior:
 - `PDRangeArr` signed-index dynamic arrays from `clb_pdrangearrays`, including low/limit key tracking, upward and downward expansion, C-compatible offset shifts, pointer-member counting, deletion, copying, and integer increment helpers.
 - `FixedDArray` fixed-size integer vector helpers from `clb_fixdarrays`, including initialization, component-wise add/subtract/weighted-add/min/max, copying, and C-shaped debug printing.
 - `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
+- Permanent string registry behavior from `clb_permastrings`, including duplicate interning, owned-string store, null-shaped optional lookup, explicit global registry clearing, and returned shared strings that remain valid for Rust holders after the registry is cleared.
 - Property-bit helpers from `clb_properties`, including set/delete/flip/assign, all-bit and any-bit queries, masked property extraction, and masked equivalence checks.
 - `StrTree` string-keyed map behavior from `clb_stringtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction, deletion, and deterministic sorted traversal.
 - `FloatTree` floating-point-keyed map behavior from `clb_floattrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction/deletion, node queries, deterministic sorted traversal for ordered float keys, signed-zero equivalence, infinities, and deterministic NaN bucketing.
@@ -87,5 +90,6 @@ Known gaps:
 - `NumTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `NumXTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
+- Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
