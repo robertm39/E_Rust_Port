@@ -10,7 +10,10 @@ use crate::terms::termbanks::{
     tb_term_del_prop_count, tb_term_is_ground, tb_term_is_type_term, tb_term_is_x_type_term,
     TermBank,
 };
-use crate::terms::termfunc::{term_has_f_code, term_is_def_term};
+use crate::terms::termfunc::{
+    term_has_f_code, term_is_def_term, term_lex_compare, term_standard_weight,
+    term_struct_equal_deref, term_struct_weight_compare,
+};
 use crate::terms::termtypes::{
     term_del_prop, term_set_prop, term_var_del_prop, term_var_search_prop, term_var_set_prop,
     DerefType, Term, TermProperties, TP_OP_FLAG, TP_PRED_POS,
@@ -605,6 +608,102 @@ impl Eqn {
         EqnSide::NoSide
     }
 
+    #[must_use]
+    pub fn standard_weight(&self) -> i64 {
+        term_standard_weight(&self.lterm) + term_standard_weight(&self.rterm)
+    }
+
+    pub fn canonize(&mut self) {
+        if term_struct_weight_compare(&self.lterm, &self.rterm) == 0
+            && term_lex_compare(&self.lterm, &self.rterm) < 0
+        {
+            self.swap_sides();
+        }
+    }
+
+    #[must_use]
+    pub fn struct_weight_compare(&self, other: &Self, bank: &TermBank) -> i64 {
+        if self.is_positive() && !other.is_positive() {
+            return -1;
+        }
+        if other.is_positive() && !self.is_positive() {
+            return 1;
+        }
+        if self.is_equ_lit(bank) && !other.is_equ_lit(bank) {
+            return -1;
+        }
+        if other.is_equ_lit(bank) && !self.is_equ_lit(bank) {
+            return 1;
+        }
+        let weight_cmp = self.standard_weight() - other.standard_weight();
+        if weight_cmp != 0 {
+            return weight_cmp;
+        }
+        let left_cmp = term_struct_weight_compare(&self.lterm, &other.lterm);
+        if left_cmp != 0 {
+            return left_cmp;
+        }
+        term_struct_weight_compare(&self.rterm, &other.rterm)
+    }
+
+    #[must_use]
+    pub fn struct_weight_lex_compare(&self, other: &Self, bank: &TermBank) -> i64 {
+        let structural = self.struct_weight_compare(other, bank);
+        if structural != 0 {
+            return structural;
+        }
+        let left_cmp = term_lex_compare(&self.lterm, &other.lterm);
+        if left_cmp != 0 {
+            return left_cmp;
+        }
+        term_lex_compare(&self.rterm, &other.rterm)
+    }
+
+    #[must_use]
+    pub fn equal_directed(&self, other: &Self) -> bool {
+        self.lterm == other.lterm && self.rterm == other.rterm
+    }
+
+    #[must_use]
+    pub fn equal_directed_deref(
+        &self,
+        other: &Self,
+        left_deref: DerefType,
+        right_deref: DerefType,
+    ) -> bool {
+        if left_deref == DerefType::Never && right_deref == DerefType::Never {
+            self.equal_directed(other)
+        } else {
+            term_struct_equal_deref(&self.lterm, &other.lterm, left_deref, right_deref)
+                && term_struct_equal_deref(&self.rterm, &other.rterm, left_deref, right_deref)
+        }
+    }
+
+    #[must_use]
+    pub fn equal_deref(&self, other: &Self, left_deref: DerefType, right_deref: DerefType) -> bool {
+        let directed = self.equal_directed_deref(other, left_deref, right_deref);
+        if directed || (self.is_oriented() && other.is_oriented()) {
+            return directed;
+        }
+        if left_deref == DerefType::Never && right_deref == DerefType::Never {
+            self.lterm == other.rterm && self.rterm == other.lterm
+        } else {
+            term_struct_equal_deref(&self.lterm, &other.rterm, left_deref, right_deref)
+                && term_struct_equal_deref(&self.rterm, &other.lterm, left_deref, right_deref)
+        }
+    }
+
+    #[must_use]
+    pub fn equal(&self, other: &Self) -> bool {
+        self.equal_deref(other, DerefType::Never, DerefType::Never)
+    }
+
+    #[must_use]
+    pub fn literal_equal(&self, other: &Self) -> bool {
+        EqnProperties::are_equiv(self.properties, other.properties, EP_IS_POSITIVE)
+            && self.equal(other)
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -623,7 +722,7 @@ mod tests {
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
-    use crate::terms::termtypes::{Term, TP_CHECK_FLAG, TP_PRED_POS};
+    use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_PRED_POS};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -1005,6 +1104,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pseudo.is_definition(&bank, 1), EqnSide::NoSide);
+    }
+
+    #[test]
+    fn canonicalization_and_structural_comparison_match_c_order() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "a");
+        let right = typed_const(&mut bank, "b");
+        let mut eq = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        eq.set_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+
+        assert_eq!(
+            eq.standard_weight(),
+            term_standard_weight(&left) + term_standard_weight(&right)
+        );
+        eq.canonize();
+        assert_eq!(eq.left(), &right);
+        assert_eq!(eq.right(), &left);
+        assert!(!eq.is_oriented());
+        assert!(!eq.query_prop(EP_MAX_IS_UP_TO_DATE));
+
+        let positive = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let negative = Eqn::alloc(left.clone(), right.clone(), &mut bank, false).unwrap();
+        assert!(positive.struct_weight_compare(&negative, &bank) < 0);
+        assert!(negative.struct_weight_compare(&positive, &bank) > 0);
+
+        let atom = typed_pred_const(&mut bank, "p");
+        let predicate_lit = Eqn::alloc(atom, bank.true_term().clone(), &mut bank, true).unwrap();
+        assert!(positive.struct_weight_compare(&predicate_lit, &bank) < 0);
+
+        let heavier_left = typed_unary(&mut bank, "f", &left);
+        let heavier = Eqn::alloc(heavier_left, right.clone(), &mut bank, true).unwrap();
+        assert!(heavier.struct_weight_compare(&positive, &bank) > 0);
+
+        let lex_a = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let lex_b = Eqn::alloc(right, left, &mut bank, true).unwrap();
+        assert!(lex_a.struct_weight_lex_compare(&lex_b, &bank) < 0);
+    }
+
+    #[test]
+    fn equality_helpers_follow_commutative_and_deref_rules() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "a");
+        let right = typed_const(&mut bank, "b");
+        let eq = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let directed = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let swapped = Eqn::alloc(right.clone(), left.clone(), &mut bank, true).unwrap();
+
+        assert!(eq.equal_directed(&directed));
+        assert!(eq.equal(&swapped));
+        assert!(eq.literal_equal(&swapped));
+
+        let negative_swapped = Eqn::alloc(right.clone(), left.clone(), &mut bank, false).unwrap();
+        assert!(eq.equal(&negative_swapped));
+        assert!(!eq.literal_equal(&negative_swapped));
+
+        let mut oriented_left = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let mut oriented_right = Eqn::alloc(right.clone(), left.clone(), &mut bank, true).unwrap();
+        oriented_left.set_prop(EP_IS_ORIENTED);
+        oriented_right.set_prop(EP_IS_ORIENTED);
+        assert!(!oriented_left.equal(&oriented_right));
+
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        x.set_binding(Some(left.clone()));
+        let with_var = Eqn::alloc(x, right.clone(), &mut bank, true).unwrap();
+        let concrete = Eqn::alloc(left, right, &mut bank, true).unwrap();
+        assert!(!with_var.equal_directed_deref(&concrete, DerefType::Never, DerefType::Never));
+        assert!(with_var.equal_directed_deref(&concrete, DerefType::Once, DerefType::Never));
     }
 
     #[test]
