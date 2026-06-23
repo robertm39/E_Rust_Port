@@ -29,6 +29,7 @@ use crate::terms::termtypes::{
     term_var_search_prop, term_var_set_prop, DerefType, Term, TermProperties, TP_OP_FLAG,
     TP_PRED_POS,
 };
+use crate::terms::termvars::VarBank;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
@@ -1378,6 +1379,12 @@ impl Eqn {
         result
     }
 
+    pub fn subst_norm(&self, subst: &mut Substitution, vars: &VarBank) -> usize {
+        let result = subst.norm_term(&self.lterm, vars);
+        subst.norm_term(&self.rterm, vars);
+        result
+    }
+
     #[must_use]
     pub fn syntax_compare(&self, other: &Self, bank: &TermBank) -> i32 {
         if self.is_equ_lit(bank) && !other.is_equ_lit(bank) {
@@ -1575,7 +1582,9 @@ mod tests {
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
-    use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS};
+    use crate::terms::termtypes::{
+        DerefType, Term, TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
+    };
     use crate::terms::typebanks::TypeBank;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2499,6 +2508,40 @@ mod tests {
         negative.set_prop(EP_IS_ORIENTED);
         assert!(!first.literal_unify_one_way(&mut negative, &mut subst, true));
         assert!(negative.is_oriented());
+    }
+
+    #[test]
+    fn substitution_normalization_binds_variables_on_both_equation_sides() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let left_var = bank.vars().var_assert_alloc(-2, &type_);
+        let right_var = bank.vars().var_assert_alloc(-4, &type_);
+        let existing_var = bank.vars().var_assert_alloc(-6, &type_);
+        let existing_binding = typed_const(&mut bank, "a");
+        let right_const = typed_const(&mut bank, "b");
+        let left = typed_unary(&mut bank, "f", &left_var);
+        let right = typed_binary(&mut bank, "g", &right_var, &right_const);
+        let eq = Eqn::alloc(left, right, &mut bank, true).unwrap();
+        let mut subst = Substitution::new();
+        subst.add_binding(&existing_var, &existing_binding);
+
+        let backtrack = eq.subst_norm(&mut subst, bank.vars());
+
+        assert_eq!(backtrack, 1);
+        assert_eq!(subst.len(), 3);
+        assert!(existing_var.binding().is_some());
+        let left_binding = left_var.binding().unwrap();
+        let right_binding = right_var.binding().unwrap();
+        assert!(left_binding.is_free_var());
+        assert!(right_binding.is_free_var());
+        assert_ne!(left_binding, right_binding);
+        assert!(left_binding.query_prop(TP_SPECIAL_FLAG));
+        assert!(right_binding.query_prop(TP_SPECIAL_FLAG));
+
+        subst.backtrack_to_pos(backtrack);
+        assert!(existing_var.binding().is_some());
+        assert!(left_var.binding().is_none());
+        assert!(right_var.binding().is_none());
     }
 
     #[test]
