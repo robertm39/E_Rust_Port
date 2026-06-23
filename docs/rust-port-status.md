@@ -56,6 +56,7 @@ Rust files:
 - `src/prover/version.rs`
 - `src/prover/options.rs`
 - `src/prover/eprover.rs`
+- `src/terms/dbvars.rs`
 - `src/terms/functypes.rs`
 - `src/terms/signature.rs`
 - `src/terms/simplesorts.rs`
@@ -125,6 +126,7 @@ Original C references:
 - [`PROVER/e_version.h`](c_source_docs/PROVER/e_version.md)
 - [`PROVER/e_options.h`](c_source_docs/PROVER/e_options.md)
 - [`PROVER/eprover.c`](c_source_docs/PROVER/eprover.md)
+- [`TERMS/cte_dbvars.h`, `TERMS/cte_dbvars.c`](c_source_docs/TERMS/cte_dbvars.md)
 - [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
 - [`TERMS/cte_signature.h`, `TERMS/cte_signature.c`](c_source_docs/TERMS/cte_signature.md)
 - [`TERMS/cte_simplesorts.h`, `TERMS/cte_simplesorts.c`](c_source_docs/TERMS/cte_simplesorts.md)
@@ -187,6 +189,7 @@ Implemented behavior:
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
+- Shared De Bruijn-variable bank helpers from `cte_dbvars`, including nested index/type-UID lookup, unique shared DB variable allocation, DB-variable property initialization, arrow-type eta-expandable marking, and bank clearing.
 - Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
 - Initial signature helpers from `cte_signature`, including exact function-property bits and special-code constants, `$true`/`$false` initialization, optional list-symbol initialization, name/code/arity lookup, quoted-name lookup, first-order multi-arity name fixing, property mutation/query helpers, polymorphic and special-symbol flags, type declaration/fixing, predicate/function classification, alpha-rank computation, pop/backtrack behavior, capacity-growth accounting, arity statistics, FOF operator insertion, internal-code insertion, lazy equality/disjunction/list-code helpers, generated symbol counters, and feature-offset computation.
 - Simple-sort table helpers from `cte_simplesorts`, including predefined sort constants, default-sort state, insertion-order sort IDs, duplicate-preserving lookup, reserved default table initialization order, TSTP sort parsing through `FuncSymbParse`, TSTP sort printing, and C-shaped debug table rendering.
