@@ -14,8 +14,10 @@ use crate::inout::scanner::IoFormat;
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
+use crate::terms::termtypes::RewriteLevel;
 
 const MEGA: u64 = 1_048_576;
+const C_INT_MAX: i64 = i32::MAX as i64;
 const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
@@ -25,6 +27,18 @@ const DEFAULT_DB_WEIGHT: i64 = 10;
 const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+
+const GROUNDING_STRATEGY_NAMES: &[&str] = &[
+    "NoGrounding",
+    "PseudoVar",
+    "FirstConst",
+    "ConjMinMinFreq",
+    "ConjMaxMinFreq",
+    "ConjMinMaxFreq",
+    "ConjMaxMaxFreq",
+    "GlobalMax",
+    "GlobalMin",
+];
 
 const PRECEDENCE_GENERATION_METHODS: &[&str] = &[
     "none",
@@ -346,6 +360,21 @@ pub enum ParamodulationType {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
+pub enum GroundingStrategy {
+    #[default]
+    NoGrounding = 0,
+    PseudoVar = 1,
+    FirstConst = 2,
+    ConjMinMinFreq = 3,
+    ConjMaxMinFreq = 4,
+    ConjMinMaxFreq = 5,
+    ConjMaxMaxFreq = 6,
+    GlobalMax = 7,
+    GlobalMin = 8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
 pub enum TermOrdering {
     NoOrdering = 0,
     Optimize = 1,
@@ -392,6 +421,7 @@ pub struct TermOrderingConfig {
     pub literal_comparison: LiteralComparison,
     pub lambda_weight: i64,
     pub db_weight: i64,
+    pub rewrite_strong_rhs_inst: bool,
 }
 
 impl Default for TermOrderingConfig {
@@ -408,6 +438,7 @@ impl Default for TermOrderingConfig {
             literal_comparison: LiteralComparison::Normal,
             lambda_weight: DEFAULT_LAMBDA_WEIGHT,
             db_weight: DEFAULT_DB_WEIGHT,
+            rewrite_strong_rhs_inst: false,
         }
     }
 }
@@ -489,12 +520,46 @@ pub struct CondensingConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DemodulationConfig {
+    pub forward_demod: RewriteLevel,
+    pub lambda_demod: bool,
+    pub prefer_general: bool,
+}
+
+impl Default for DemodulationConfig {
+    fn default() -> Self {
+        Self {
+            forward_demod: RewriteLevel::FullRewrite,
+            lambda_demod: false,
+            prefer_general: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ContextSimplificationConfig {
+    pub forward: bool,
+    pub forward_aggressive: bool,
+    pub backward: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EqualityResolutionConfig {
+    pub destructive: bool,
+    pub strong_destructive: bool,
+    pub aggressive: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InferenceConfig {
     pub enable_eq_factoring: bool,
     pub enable_neg_unit_paramod: bool,
     pub enable_given_forward_simplification: bool,
     pub paramodulation: ParamodulationType,
     pub condensing: CondensingConfig,
+    pub demodulation: DemodulationConfig,
+    pub context_simplification: ContextSimplificationConfig,
+    pub equality_resolution: EqualityResolutionConfig,
 }
 
 impl Default for InferenceConfig {
@@ -505,6 +570,9 @@ impl Default for InferenceConfig {
             enable_given_forward_simplification: true,
             paramodulation: ParamodulationType::Plain,
             condensing: CondensingConfig::default(),
+            demodulation: DemodulationConfig::default(),
+            context_simplification: ContextSimplificationConfig::default(),
+            equality_resolution: EqualityResolutionConfig::default(),
         }
     }
 }
@@ -549,6 +617,48 @@ impl Default for SplittingConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SearchSupportConfig {
+    pub use_tptp_sos: bool,
+    pub lift_lambdas: bool,
+    pub strong_unit_forward_subsumption: bool,
+}
+
+impl Default for SearchSupportConfig {
+    fn default() -> Self {
+        Self {
+            use_tptp_sos: false,
+            lift_lambdas: true,
+            strong_unit_forward_subsumption: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SatCheckConfig {
+    pub grounding: GroundingStrategy,
+    pub step_limit: i64,
+    pub size_limit: i64,
+    pub ttinsert_limit: i64,
+    pub normconst: bool,
+    pub normalize: bool,
+    pub decision_limit: i64,
+}
+
+impl Default for SatCheckConfig {
+    fn default() -> Self {
+        Self {
+            grounding: GroundingStrategy::NoGrounding,
+            step_limit: i64::MAX,
+            size_limit: i64::MAX,
+            ttinsert_limit: i64::MAX,
+            normconst: false,
+            normalize: false,
+            decision_limit: 10_000,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SearchControlConfig {
     pub ordering: TermOrderingConfig,
@@ -557,6 +667,8 @@ pub struct SearchControlConfig {
     pub inference: InferenceConfig,
     pub completeness: CompletenessConfig,
     pub splitting: SplittingConfig,
+    pub support: SearchSupportConfig,
+    pub sat_check: SatCheckConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1044,6 +1156,7 @@ const fn is_search_control_option(option: EProverOption) -> bool {
     is_literal_selection_option(option)
         || is_heuristic_control_option(option)
         || is_inference_control_option(option)
+        || is_inference_processing_option(option)
         || is_splitting_option(option)
 }
 
@@ -1113,6 +1226,32 @@ const fn is_inference_control_option(option: EProverOption) -> bool {
             | EProverOption::OrientedSimulParamod
             | EProverOption::SupersimulParamod
             | EProverOption::OrientedSupersimulParamod
+    )
+}
+
+const fn is_inference_processing_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::SosUsesInputTypes
+            | EProverOption::DestructiveEr
+            | EProverOption::StrongDestructiveEr
+            | EProverOption::DestructiveErAggressive
+            | EProverOption::ForwardContextSr
+            | EProverOption::ForwardContextSrAggressive
+            | EProverOption::BackwardContextSr
+            | EProverOption::PreferGeneralDemodulators
+            | EProverOption::ForwardDemodLevel
+            | EProverOption::DemodUnderLambda
+            | EProverOption::StrongRwInst
+            | EProverOption::StrongForwardSubsumption
+            | EProverOption::SatCheckProcInterval
+            | EProverOption::SatCheckGenInterval
+            | EProverOption::SatCheckTTInsertInterval
+            | EProverOption::SatCheck
+            | EProverOption::SatCheckDecisionLimit
+            | EProverOption::SatCheckNormalizeConst
+            | EProverOption::SatCheckNormalizeUnproc
+            | EProverOption::LiftLambdas
     )
 }
 
@@ -1540,6 +1679,8 @@ fn apply_search_control_option(
         apply_heuristic_control_option(config, parsed)?;
     } else if is_inference_control_option(option_code) {
         apply_inference_control_option(config, option_code);
+    } else if is_inference_processing_option(option_code) {
+        apply_inference_processing_option(config, parsed)?;
     } else if is_splitting_option(option_code) {
         apply_splitting_option(config, parsed)?;
     } else {
@@ -1695,6 +1836,121 @@ fn apply_inference_control_option(config: &mut EProverConfig, option: EProverOpt
         }
         _ => unreachable!("non-inference-control option routed to inference-control handler"),
     }
+}
+
+fn apply_inference_processing_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::SosUsesInputTypes => config.search.support.use_tptp_sos = true,
+        EProverOption::DestructiveEr => {
+            config.search.inference.equality_resolution.destructive = true;
+        }
+        EProverOption::StrongDestructiveEr => {
+            config.search.inference.equality_resolution.destructive = true;
+            config
+                .search
+                .inference
+                .equality_resolution
+                .strong_destructive = true;
+        }
+        EProverOption::DestructiveErAggressive => {
+            config.search.inference.equality_resolution.aggressive = true;
+        }
+        EProverOption::ForwardContextSr => {
+            config.search.inference.context_simplification.forward = true;
+        }
+        EProverOption::ForwardContextSrAggressive => {
+            config.search.inference.context_simplification.forward = true;
+            config
+                .search
+                .inference
+                .context_simplification
+                .forward_aggressive = true;
+        }
+        EProverOption::BackwardContextSr => {
+            config.search.inference.context_simplification.backward = true;
+        }
+        EProverOption::PreferGeneralDemodulators => {
+            config.search.inference.demodulation.prefer_general = true;
+        }
+        EProverOption::ForwardDemodLevel => set_forward_demod_level(config, parsed, value)?,
+        EProverOption::DemodUnderLambda => {
+            config.search.inference.demodulation.lambda_demod =
+                get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::StrongRwInst => {
+            config.search.ordering.rewrite_strong_rhs_inst = true;
+        }
+        EProverOption::StrongForwardSubsumption => {
+            config.search.support.strong_unit_forward_subsumption = true;
+        }
+        EProverOption::SatCheckProcInterval => {
+            config.search.sat_check.step_limit =
+                get_int_arg_check_range(parsed.option(), value, 1, i64::MAX)?;
+        }
+        EProverOption::SatCheckGenInterval => {
+            config.search.sat_check.size_limit =
+                get_int_arg_check_range(parsed.option(), value, 1, i64::MAX)?;
+        }
+        EProverOption::SatCheckTTInsertInterval => {
+            config.search.sat_check.ttinsert_limit =
+                get_int_arg_check_range(parsed.option(), value, 1, i64::MAX)?;
+        }
+        EProverOption::SatCheck => set_sat_check_grounding(config, value)?,
+        EProverOption::SatCheckDecisionLimit => {
+            config.search.sat_check.decision_limit =
+                get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::SatCheckNormalizeConst => config.search.sat_check.normconst = true,
+        EProverOption::SatCheckNormalizeUnproc => config.search.sat_check.normalize = true,
+        EProverOption::LiftLambdas => {
+            config.search.support.lift_lambdas = get_bool_arg(parsed.option(), value)?;
+        }
+        _ => unreachable!("non-inference-processing option routed to handler"),
+    }
+    Ok(())
+}
+
+fn set_forward_demod_level(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+    value: &str,
+) -> Result<(), Diagnostic> {
+    config.search.inference.demodulation.forward_demod =
+        match get_int_arg_check_range(parsed.option(), value, 0, 2)? {
+            0 => RewriteLevel::NoRewrite,
+            1 => RewriteLevel::RuleRewrite,
+            2 => RewriteLevel::FullRewrite,
+            _ => unreachable!("forward demodulation range was already checked"),
+        };
+    Ok(())
+}
+
+fn set_sat_check_grounding(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    config.search.sat_check.grounding = match value {
+        "NoGrounding" => GroundingStrategy::NoGrounding,
+        "PseudoVar" => GroundingStrategy::PseudoVar,
+        "FirstConst" => GroundingStrategy::FirstConst,
+        "ConjMinMinFreq" => GroundingStrategy::ConjMinMinFreq,
+        "ConjMaxMinFreq" => GroundingStrategy::ConjMaxMinFreq,
+        "ConjMinMaxFreq" => GroundingStrategy::ConjMinMaxFreq,
+        "ConjMaxMaxFreq" => GroundingStrategy::ConjMaxMaxFreq,
+        "GlobalMax" => GroundingStrategy::GlobalMax,
+        "GlobalMin" => GroundingStrategy::GlobalMin,
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                format!(
+                    "Wrong argument to option --sat-check. Possible values: {}",
+                    GROUNDING_STRATEGY_NAMES.join(", ")
+                ),
+            ));
+        }
+    };
+    Ok(())
 }
 
 fn apply_splitting_option(
@@ -1864,7 +2120,8 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverFlag, LiteralComparison, ParamodulationType, TermOrdering, MEGA,
+        EProverAction, EProverFlag, GroundingStrategy, LiteralComparison, ParamodulationType,
+        TermOrdering, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -1875,6 +2132,7 @@ mod tests {
         set_soft_time_limit, soft_time_limit, RLIM_INFINITY_COMPAT,
     };
     use crate::prover::version::VERSION;
+    use crate::terms::termtypes::RewriteLevel;
     use std::sync::{Mutex, OnceLock};
 
     fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -2471,6 +2729,125 @@ mod tests {
     }
 
     #[test]
+    fn process_options_records_inference_processing_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let inference = &config.search.inference;
+        assert_eq!(
+            inference.demodulation.forward_demod,
+            RewriteLevel::FullRewrite
+        );
+        assert!(!inference.demodulation.lambda_demod);
+        assert!(!inference.demodulation.prefer_general);
+        assert!(!inference.context_simplification.forward);
+        assert!(!inference.context_simplification.forward_aggressive);
+        assert!(!inference.context_simplification.backward);
+        assert!(!inference.equality_resolution.destructive);
+        assert!(!inference.equality_resolution.strong_destructive);
+        assert!(!inference.equality_resolution.aggressive);
+        assert!(!config.search.support.use_tptp_sos);
+        assert!(config.search.support.lift_lambdas);
+        assert!(!config.search.support.strong_unit_forward_subsumption);
+        assert!(!config.search.ordering.rewrite_strong_rhs_inst);
+
+        let action = process_options([
+            "eprover",
+            "--sos-uses-input-types",
+            "--destructive-er",
+            "--strong-destructive-er",
+            "--destructive-er-aggressive",
+            "--forward-context-sr-aggressive",
+            "--backward-context-sr",
+            "--prefer-general-demodulators",
+            "--forward-demod-level=1",
+            "--demod-under-lambda=true",
+            "--strong-rw-inst",
+            "--strong-forward-subsumption",
+            "--lift-lambdas=false",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let inference = &config.search.inference;
+        assert!(config.search.support.use_tptp_sos);
+        assert!(inference.equality_resolution.destructive);
+        assert!(inference.equality_resolution.strong_destructive);
+        assert!(inference.equality_resolution.aggressive);
+        assert!(inference.context_simplification.forward);
+        assert!(inference.context_simplification.forward_aggressive);
+        assert!(inference.context_simplification.backward);
+        assert!(inference.demodulation.prefer_general);
+        assert_eq!(
+            inference.demodulation.forward_demod,
+            RewriteLevel::RuleRewrite
+        );
+        assert!(inference.demodulation.lambda_demod);
+        assert!(config.search.ordering.rewrite_strong_rhs_inst);
+        assert!(config.search.support.strong_unit_forward_subsumption);
+        assert!(!config.search.support.lift_lambdas);
+
+        let action = process_options(["eprover", "--destructive-er-aggressive"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(!config.search.inference.equality_resolution.destructive);
+        assert!(config.search.inference.equality_resolution.aggressive);
+    }
+
+    #[test]
+    fn process_options_records_sat_check_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let sat_check = &config.search.sat_check;
+        assert_eq!(sat_check.grounding, GroundingStrategy::NoGrounding);
+        assert_eq!(sat_check.step_limit, i64::MAX);
+        assert_eq!(sat_check.size_limit, i64::MAX);
+        assert_eq!(sat_check.ttinsert_limit, i64::MAX);
+        assert!(!sat_check.normconst);
+        assert!(!sat_check.normalize);
+        assert_eq!(sat_check.decision_limit, 10_000);
+
+        let action = process_options([
+            "eprover",
+            "--satcheck-proc-interval",
+            "--satcheck-gen-interval=6",
+            "--satcheck-ttinsert-interval",
+            "--satcheck=ConjMinMinFreq",
+            "--satcheck-decision-limit",
+            "--satcheck-normalize-const",
+            "--satcheck-normalize-unproc",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let sat_check = &config.search.sat_check;
+        assert_eq!(sat_check.step_limit, 5_000);
+        assert_eq!(sat_check.size_limit, 6);
+        assert_eq!(sat_check.ttinsert_limit, 5_000_000);
+        assert_eq!(sat_check.grounding, GroundingStrategy::ConjMinMinFreq);
+        assert_eq!(sat_check.decision_limit, 100);
+        assert!(sat_check.normconst);
+        assert!(sat_check.normalize);
+
+        let action =
+            process_options(["eprover", "--satcheck", "--satcheck-decision-limit=-1"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.sat_check.grounding,
+            GroundingStrategy::FirstConst
+        );
+        assert_eq!(config.search.sat_check.decision_limit, -1);
+    }
+
+    #[test]
     fn process_options_rejects_invalid_search_control_args() {
         let error = process_options(["eprover", "-W", "none"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
@@ -2480,6 +2857,38 @@ mod tests {
         assert!(error.message().contains("NoSelection"));
 
         let error = process_options(["eprover", "--split-method=3"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--forward-demod-level=3"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--demod-under-lambda=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--lift-lambdas=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--satcheck-proc-interval=0"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--satcheck-gen-interval=0"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--satcheck-ttinsert-interval=0"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--satcheck=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error
+            .message()
+            .starts_with("Wrong argument to option --sat-check. Possible values: "));
+        assert!(error.message().contains("ConjMinMinFreq"));
+
+        let error = process_options(["eprover", "--satcheck-decision-limit=-2"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error =
+            process_options(["eprover", "--satcheck-decision-limit=2147483648"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
@@ -2500,6 +2909,7 @@ mod tests {
         assert_eq!(ordering.literal_comparison, LiteralComparison::Normal);
         assert_eq!(ordering.lambda_weight, 20);
         assert_eq!(ordering.db_weight, 10);
+        assert!(!ordering.rewrite_strong_rhs_inst);
 
         let action = process_options([
             "eprover",
