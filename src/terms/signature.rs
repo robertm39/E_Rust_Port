@@ -1,7 +1,10 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::functypes::FunCode;
-use crate::terms::simpletypes::{alloc_arrow_type, type_is_predicate, Type};
+use crate::terms::simpletypes::{
+    alloc_arrow_type, arrow_type_flattened, is_choice_type, type_get_max_arity, type_is_predicate,
+    Type,
+};
 use crate::terms::typebanks::TypeBank;
 use std::collections::BTreeMap;
 use std::ops::{BitOr, BitOrAssign};
@@ -633,6 +636,32 @@ impl Signature {
         self.find_arity(f_code) == Some(0) && !self.is_predicate(f_code)
     }
 
+    #[must_use]
+    pub const fn is_simple_answer_pred(&self, f_code: FunCode) -> bool {
+        f_code == self.answer_code
+    }
+
+    /// Checks whether `f_code` is one of the built-in logical symbols.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `f_code` is not a positive function code, matching the C
+    /// macro assertion.
+    #[must_use]
+    pub fn is_logical_symbol(&self, f_code: FunCode) -> bool {
+        assert!(
+            f_code > 0,
+            "logical-symbol checks require a positive f-code"
+        );
+        self.query_prop(f_code, FP_FOF_OP)
+            || f_code == SIG_TRUE_CODE
+            || f_code == SIG_FALSE_CODE
+            || f_code == self.eqn_code
+            || f_code == self.neqn_code
+            || f_code == self.qex_code
+            || f_code == self.qall_code
+    }
+
     pub fn set_func_prop(&mut self, f_code: FunCode, prop: FunctionProperties) {
         self.func_mut(f_code).properties.insert(prop);
     }
@@ -847,6 +876,57 @@ impl Signature {
         code
     }
 
+    /// Returns a fresh typed generated symbol and declares its type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the flattened type arity does not fit in a C `int`/Rust
+    /// `i32`, matching the inherited signature arity representation.
+    pub fn get_new_typed_f_code(
+        &mut self,
+        prefix: &str,
+        args: &[Type],
+        counter: &mut i64,
+        ret_type: &Type,
+        props: FunctionProperties,
+    ) -> Result<FunCode, Diagnostic> {
+        let symbol_type = self
+            .type_bank
+            .insert_type_shared(arrow_type_flattened(args, ret_type));
+        let max_arity = i32::try_from(type_get_max_arity(&symbol_type))
+            .expect("typed symbol arity fits in i32");
+        let f_code = self.get_new_f_code(max_arity, prefix, counter, props);
+        self.declare_type(f_code, symbol_type.clone())?;
+        if type_is_predicate(&symbol_type) {
+            self.declare_is_predicate(f_code)?;
+        } else {
+            self.declare_is_function(f_code)?;
+        }
+        Ok(f_code)
+    }
+
+    pub fn get_new_typed_skolem(
+        &mut self,
+        args: &[Type],
+        ret_type: &Type,
+    ) -> Result<FunCode, Diagnostic> {
+        let mut counter = self.newpred_count;
+        let code = self.get_new_typed_f_code("esk", args, &mut counter, ret_type, FP_DEF_PRED)?;
+        self.newpred_count = counter;
+        Ok(code)
+    }
+
+    pub fn get_new_typed_def_code(
+        &mut self,
+        args: &[Type],
+        ret_type: &Type,
+    ) -> Result<FunCode, Diagnostic> {
+        let mut counter = self.newdef_count;
+        let code = self.get_new_typed_f_code("edef", args, &mut counter, ret_type, FP_DEF_FUN)?;
+        self.newdef_count = counter;
+        Ok(code)
+    }
+
     pub fn pop_id(&mut self) -> FunCode {
         if self.f_count == 0 {
             return 0;
@@ -955,6 +1035,50 @@ impl Signature {
             }
         }
         result
+    }
+
+    #[must_use]
+    pub fn has_unimplemented_interpreted_symbols(&self) -> bool {
+        self.external_f_codes()
+            .any(|f_code| self.query_prop(f_code, FP_INTERPRETED))
+    }
+
+    /// Checks for a declared choice-symbol type among external symbols.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an external symbol has no type, matching the C implementation's
+    /// direct `SigGetType` dereference in this path.
+    #[must_use]
+    pub fn has_choice_sym(&self) -> bool {
+        self.external_f_codes().any(|f_code| {
+            is_choice_type(
+                self.get_type(f_code)
+                    .expect("choice-symbol scan requires external symbol types"),
+            )
+        })
+    }
+
+    /// Mirrors C `SigSymbolUnifiesWithVar`.
+    ///
+    /// The C condition contains broad disjuncts, including
+    /// `f_code != SIG_DB_LAMBDA_CODE`, so most nonzero symbols return `true`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `f_code` is zero, matching the C assertion.
+    #[must_use]
+    pub fn symbol_unifies_with_var(&self, f_code: FunCode) -> bool {
+        assert_ne!(
+            f_code, 0,
+            "variable-unification symbol code must be nonzero"
+        );
+        problem_type() == ProblemType::HigherOrder
+            || f_code == SIG_TRUE_CODE
+            || f_code == SIG_FALSE_CODE
+            || f_code != SIG_DB_LAMBDA_CODE
+            || f_code <= 0
+            || !self.is_predicate(f_code)
     }
 
     #[must_use]
@@ -1451,6 +1575,42 @@ mod tests {
     }
 
     #[test]
+    fn typed_generated_symbol_helpers_declare_types_and_preserve_c_counters() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+
+        let typed_skolem = sig
+            .get_new_typed_skolem(std::slice::from_ref(&individual), &individual)
+            .unwrap();
+        assert_eq!(sig.find_name(typed_skolem), Some("esk1_1"));
+        assert_eq!(sig.newpred_count(), 1);
+        assert_eq!(sig.skolem_count(), 0);
+        assert!(sig.query_prop(typed_skolem, FP_DEF_PRED | FP_TYPE_FIXED));
+        assert!(sig.is_function(typed_skolem));
+        assert_eq!(
+            sig.get_type(typed_skolem)
+                .expect("typed generated symbol has type")
+                .args(),
+            &[individual.clone(), individual.clone()]
+        );
+
+        let typed_def = sig
+            .get_new_typed_def_code(std::slice::from_ref(&individual), &bool_type)
+            .unwrap();
+        assert_eq!(sig.find_name(typed_def), Some("edef1_1"));
+        assert_eq!(sig.newdef_count(), 1);
+        assert!(sig.query_prop(typed_def, FP_DEF_FUN | FP_TYPE_FIXED));
+        assert!(sig.is_predicate(typed_def));
+        assert_eq!(
+            sig.get_type(typed_def)
+                .expect("typed generated predicate has type")
+                .args(),
+            &[individual, bool_type]
+        );
+    }
+
+    #[test]
     fn typed_application_symbols_are_named_by_type_uids_and_reused() {
         let mut sig = signature();
         let individual = sig.type_bank().i_type();
@@ -1480,5 +1640,55 @@ mod tests {
             &[unary_type.clone(), individual.clone(), bool_type.clone()]
         );
         assert_eq!(sig.get_typed_app(&unary_type, &individual, &bool_type), app);
+    }
+
+    #[test]
+    fn signature_predicate_helpers_follow_c_macro_shapes() {
+        let mut sig = signature();
+        sig.insert_internal_codes().unwrap();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let pred = sig.insert_id_for_problem("p", 1, false, ProblemType::FirstOrder);
+        sig.declare_final_type(pred, alloc_arrow_type(vec![individual, bool_type]))
+            .unwrap();
+
+        assert!(sig.is_simple_answer_pred(sig.answer_code()));
+        assert!(!sig.is_simple_answer_pred(pred));
+        assert!(sig.is_logical_symbol(SIG_TRUE_CODE));
+        assert!(sig.is_logical_symbol(SIG_FALSE_CODE));
+        assert!(sig.is_logical_symbol(sig.eqn_code()));
+        assert!(sig.is_logical_symbol(sig.qex_code()));
+        assert!(sig.is_logical_symbol(sig.not_code()));
+        assert!(!sig.is_logical_symbol(sig.answer_code()));
+
+        assert!(!sig.has_unimplemented_interpreted_symbols());
+        let interpreted = sig.insert_id_for_problem("$custom", 0, false, ProblemType::FirstOrder);
+        sig.set_func_prop(interpreted, FP_INTERPRETED);
+        assert!(sig.has_unimplemented_interpreted_symbols());
+
+        assert!(sig.symbol_unifies_with_var(pred));
+        assert!(sig.symbol_unifies_with_var(-2));
+    }
+
+    #[test]
+    fn choice_symbol_scan_uses_declared_external_types() {
+        let mut sig = signature();
+        assert!(!sig.has_choice_sym());
+
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let predicate = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let choice_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![predicate, individual.clone()]));
+        let choice = sig.insert_id_for_problem("choice", 1, false, ProblemType::FirstOrder);
+        sig.declare_final_type(choice, choice_type).unwrap();
+
+        assert!(sig.has_choice_sym());
     }
 }
