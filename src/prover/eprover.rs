@@ -10,6 +10,7 @@ use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
 use crate::inout::output::set_output_level;
+use crate::inout::scanner::IoFormat;
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
@@ -26,6 +27,52 @@ pub enum EProverAction {
     Run(Box<EProverConfig>),
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum DocOutputFormat {
+    #[default]
+    NoFormat = 0,
+    Lop = 1,
+    Pcl = 2,
+    Tstp = 3,
+    Tptp = 4,
+    Xml = 5,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EquationPrintConfig {
+    pub use_infix: bool,
+    pub full_equational_rep: bool,
+    pub print_oriented: bool,
+}
+
+impl Default for EquationPrintConfig {
+    fn default() -> Self {
+        Self {
+            use_infix: true,
+            full_equational_rep: false,
+            print_oriented: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PclOutputConfig {
+    pub full_terms: bool,
+    pub compact: bool,
+    pub shell_level: i64,
+}
+
+impl Default for PclOutputConfig {
+    fn default() -> Self {
+        Self {
+            full_terms: true,
+            compact: false,
+            shell_level: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EProverConfig {
     pub files: Vec<String>,
@@ -36,6 +83,11 @@ pub struct EProverConfig {
     pub proof_output: i64,
     pub force_derivation_output: i64,
     pub training_examples: Option<i64>,
+    pub parse_format: IoFormat,
+    pub output_format: IoFormat,
+    pub doc_output_format: DocOutputFormat,
+    pub equation_print: EquationPrintConfig,
+    pub pcl_output: PclOutputConfig,
     pub saturated_output_descriptor: String,
     pub filter_saturated_descriptor: String,
     pub select_strategy: Option<String>,
@@ -107,6 +159,11 @@ impl Default for EProverConfig {
             proof_output: 0,
             force_derivation_output: 0,
             training_examples: None,
+            parse_format: IoFormat::Auto,
+            output_format: IoFormat::Lop,
+            doc_output_format: DocOutputFormat::NoFormat,
+            equation_print: EquationPrintConfig::default(),
+            pcl_output: PclOutputConfig::default(),
             saturated_output_descriptor: DEFAULT_OUTPUT_DESCRIPTOR.to_owned(),
             filter_saturated_descriptor: DEFAULT_FILTER_DESCRIPTOR.to_owned(),
             select_strategy: None,
@@ -341,7 +398,10 @@ fn apply_parsed_option(
         | EProverOption::FullDerivation
         | EProverOption::ForceDerivation
         | EProverOption::RecordGivenClauses
-        | EProverOption::TrainingExamples => {
+        | EProverOption::TrainingExamples
+        | EProverOption::PclTermsCompressed
+        | EProverOption::PclCompact
+        | EProverOption::PclShellLevel => {
             apply_proof_option(config, parsed)?;
             Ok(None)
         }
@@ -363,6 +423,20 @@ fn apply_parsed_option(
         | EProverOption::TermBankInsertLimit
         | EProverOption::Answers => {
             apply_limit_option(config, parsed)?;
+            Ok(None)
+        }
+        EProverOption::EqnNoInfix
+        | EProverOption::FullEquationalRep
+        | EProverOption::PrintOrientedEqLitsAsRules
+        | EProverOption::LopIn
+        | EProverOption::PclOut
+        | EProverOption::TptpIn
+        | EProverOption::TptpOut
+        | EProverOption::TptpFormat
+        | EProverOption::TstpIn
+        | EProverOption::TstpOut
+        | EProverOption::TstpFormat => {
+            apply_format_option(config, parsed);
             Ok(None)
         }
         EProverOption::SyntaxOnly
@@ -458,6 +532,12 @@ fn apply_proof_option(
             config.training_examples =
                 Some(get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?);
         }
+        EProverOption::PclTermsCompressed => config.pcl_output.full_terms = false,
+        EProverOption::PclCompact => config.pcl_output.compact = true,
+        EProverOption::PclShellLevel => {
+            config.pcl_output.shell_level =
+                get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 0, 2)?;
+        }
         _ => unreachable!("non-proof option routed to proof handler"),
     }
     Ok(())
@@ -532,6 +612,43 @@ fn apply_limit_option(
         _ => unreachable!("non-limit option routed to limit handler"),
     }
     Ok(())
+}
+
+fn apply_format_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
+    match parsed.option().option_code {
+        EProverOption::EqnNoInfix => config.equation_print.use_infix = false,
+        EProverOption::FullEquationalRep => config.equation_print.full_equational_rep = true,
+        EProverOption::PrintOrientedEqLitsAsRules => {
+            config.equation_print.print_oriented = true;
+        }
+        EProverOption::LopIn => config.parse_format = IoFormat::Lop,
+        EProverOption::PclOut => config.doc_output_format = DocOutputFormat::Pcl,
+        EProverOption::TptpIn => config.parse_format = IoFormat::Tptp,
+        EProverOption::TptpOut => {
+            config.output_format = IoFormat::Tptp;
+            config.equation_print.full_equational_rep = false;
+            config.equation_print.use_infix = false;
+        }
+        EProverOption::TptpFormat => {
+            config.parse_format = IoFormat::Tptp;
+            config.output_format = IoFormat::Tptp;
+            config.equation_print.full_equational_rep = false;
+            config.equation_print.use_infix = false;
+        }
+        EProverOption::TstpIn => config.parse_format = IoFormat::Tstp,
+        EProverOption::TstpOut => {
+            config.doc_output_format = DocOutputFormat::Tstp;
+            config.output_format = IoFormat::Tstp;
+            config.equation_print.use_infix = true;
+        }
+        EProverOption::TstpFormat => {
+            config.parse_format = IoFormat::Tstp;
+            config.doc_output_format = DocOutputFormat::Tstp;
+            config.output_format = IoFormat::Tstp;
+            config.equation_print.use_infix = true;
+        }
+        _ => unreachable!("non-format option routed to format handler"),
+    }
 }
 
 fn apply_input_mode_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
@@ -621,11 +738,13 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, process_options, run, EProverAction, EProverFlag, MEGA,
+        auto_memory_limit_from_system_mb, process_options, run, DocOutputFormat, EProverAction,
+        EProverFlag, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::inout::output::{output_level, set_output_level};
+    use crate::inout::scanner::IoFormat;
     use crate::inout::signals::{
         hard_time_limit, schedule_time_limit, set_hard_time_limit, set_schedule_time_limit,
         set_soft_time_limit, soft_time_limit, RLIM_INFINITY_COMPAT,
@@ -852,6 +971,84 @@ mod tests {
         };
         assert_eq!(config.answer_limit, 7);
         assert_eq!(config.print_strategy.as_deref(), Some("Named"));
+    }
+
+    #[test]
+    fn process_options_records_format_state_like_c() {
+        let action = process_options([
+            "eprover",
+            "--lop-in",
+            "--pcl-out",
+            "--pcl-terms-compressed",
+            "--pcl-compact",
+            "--pcl-shell-level",
+            "--print-oriented-eqlits-as-rules",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.parse_format, IoFormat::Lop);
+        assert_eq!(config.output_format, IoFormat::Lop);
+        assert_eq!(config.doc_output_format, DocOutputFormat::Pcl);
+        assert!(!config.pcl_output.full_terms);
+        assert!(config.pcl_output.compact);
+        assert_eq!(config.pcl_output.shell_level, 1);
+        assert!(config.equation_print.print_oriented);
+
+        let action = process_options(["eprover", "--pcl-shell-level=2"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.pcl_output.shell_level, 2);
+    }
+
+    #[test]
+    fn process_options_records_tptp_and_tstp_format_side_effects_like_c() {
+        let action = process_options(["eprover", "--full-equational-rep", "--tptp-out"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.output_format, IoFormat::Tptp);
+        assert!(!config.equation_print.full_equational_rep);
+        assert!(!config.equation_print.use_infix);
+
+        let action = process_options(["eprover", "--tptp2-format"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.parse_format, IoFormat::Tptp);
+        assert_eq!(config.output_format, IoFormat::Tptp);
+        assert!(!config.equation_print.use_infix);
+
+        let action = process_options([
+            "eprover",
+            "--eqn-no-infix",
+            "--full-equational-rep",
+            "--tstp-out",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.output_format, IoFormat::Tstp);
+        assert_eq!(config.doc_output_format, DocOutputFormat::Tstp);
+        assert!(config.equation_print.use_infix);
+        assert!(config.equation_print.full_equational_rep);
+
+        let action = process_options(["eprover", "--tptp3-format"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.parse_format, IoFormat::Tstp);
+        assert_eq!(config.output_format, IoFormat::Tstp);
+        assert_eq!(config.doc_output_format, DocOutputFormat::Tstp);
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_pcl_shell_level() {
+        let error = process_options(["eprover", "--pcl-shell-level=3"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
