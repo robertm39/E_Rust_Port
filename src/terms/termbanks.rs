@@ -1,5 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::FunCode;
 use crate::terms::garbage_coll::GcAdmin;
@@ -532,6 +533,81 @@ impl TermBank {
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
             let shared = self.insert_instantiated_fo(&arg)?;
+            copy.set_argument(index, shared);
+        }
+        self.term_top_insert(copy)
+    }
+
+    pub fn insert_instantiated(&mut self, term: &Term) -> Result<Term, Diagnostic> {
+        self.insert_instantiated_for_problem(term, problem_type())
+    }
+
+    pub fn insert_instantiated_for_problem(
+        &mut self,
+        term: &Term,
+        problem_type: ProblemType,
+    ) -> Result<Term, Diagnostic> {
+        if problem_type == ProblemType::HigherOrder {
+            self.insert_instantiated_ho(term, true)
+        } else {
+            self.insert_instantiated_fo(term)
+        }
+    }
+
+    /// Inserts a higher-order instantiated term, sharing variable bindings.
+    ///
+    /// # Panics
+    ///
+    /// Panics if applied free-variable binding expansion is required. That C
+    /// path depends on LFHO `TermDeref`/binding-cache support that is not
+    /// represented in Rust yet.
+    pub fn insert_instantiated_ho(
+        &mut self,
+        term: &Term,
+        follow_bind: bool,
+    ) -> Result<Term, Diagnostic> {
+        if term_is_ground_for_insert(term) && term.is_shared() {
+            return Ok(term.clone());
+        }
+
+        if term.is_free_var() {
+            if let Some(binding) = term.binding() {
+                return if follow_bind {
+                    self.insert(&binding, DerefType::Never)
+                } else {
+                    Ok(term.clone())
+                };
+            }
+            let type_ = term.type_().expect("free variable must have a type");
+            return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
+        }
+        if term.is_db_var() {
+            let type_ = term.type_().expect("DB variable must have a type");
+            return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
+        }
+
+        let ignore_args = if term.is_applied_free_var() && follow_bind {
+            let head = term.argument(0).expect("applied variable has a head");
+            head.binding().map_or(0, |binding| {
+                if binding.is_lambda() {
+                    1
+                } else {
+                    binding.arity() + usize::from(binding.is_free_var())
+                }
+            })
+        } else {
+            0
+        };
+        assert_eq!(
+            ignore_args, 0,
+            "applied free-variable binding expansion requires term-bank dereference support"
+        );
+
+        let copy = Term::top_copy_without_args(term);
+        copy.set_properties(TP_IGNORE_PROPS);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_instantiated_ho(&arg, follow_bind && index >= ignore_args)?;
             copy.set_argument(index, shared);
         }
         self.term_top_insert(copy)
@@ -1125,6 +1201,7 @@ mod tests {
         INSERT_NO_PROPS_CACHE_THRESHOLD,
     };
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{Signature, SIG_FALSE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
@@ -1354,6 +1431,56 @@ mod tests {
         assert_eq!(fo.argument(0), Some(a.clone()));
         assert!(!fo.query_prop(TP_CHECK_FLAG));
         assert_eq!(bank.insert_instantiated_fo(&a).unwrap(), a);
+    }
+
+    #[test]
+    fn higher_order_instantiated_insertion_shares_unshared_bindings() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(a_code, i_type.clone())
+            .unwrap();
+        let unshared_a = Term::const_cell_alloc(a_code);
+        unshared_a.set_type(Some(i_type.clone()));
+        let unshared_binding = Term::top_alloc(f_code, 1);
+        unshared_binding.set_type(Some(i_type.clone()));
+        unshared_binding.set_argument(0, unshared_a);
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        var.set_binding(Some(unshared_binding.clone()));
+
+        let shared_binding = bank.insert_instantiated_ho(&var, true).unwrap();
+
+        assert!(shared_binding.is_shared());
+        assert_eq!(shared_binding.f_code(), f_code);
+        assert!(shared_binding.argument(0).unwrap().is_shared());
+        assert_eq!(bank.find(&shared_binding), Some(shared_binding.clone()));
+
+        let kept = bank.insert_instantiated_ho(&var, false).unwrap();
+        assert_eq!(kept, var);
+    }
+
+    #[test]
+    fn instantiated_problem_type_wrapper_dispatches_to_higher_order_path() {
+        let (mut bank, _f_code) = bank_with_symbol("holder", 0);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(a_code, i_type.clone())
+            .unwrap();
+        let unshared_a = Term::const_cell_alloc(a_code);
+        unshared_a.set_type(Some(i_type.clone()));
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        var.set_binding(Some(unshared_a));
+
+        let shared = bank
+            .insert_instantiated_for_problem(&var, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert!(shared.is_shared());
+        assert_eq!(shared.f_code(), a_code);
     }
 
     #[test]
