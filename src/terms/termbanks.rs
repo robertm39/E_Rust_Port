@@ -7,7 +7,9 @@ use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::{Type, TypeUniqueId};
 use crate::terms::termcellstore::TermCellStore;
-use crate::terms::termfunc::{term_is_ground_compute, term_standard_weight};
+use crate::terms::termfunc::{
+    term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_standard_weight,
+};
 use crate::terms::termtypes::{
     term_deref, DerefType, Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_GARBAGE_FLAG,
     TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM, TP_HAS_EQ_NEQ_SYM,
@@ -513,6 +515,74 @@ impl TermBank {
             }
         }
         self.create_const_term(best).map(Some)
+    }
+
+    /// Applies `mapper` recursively like C `TermMap`.
+    ///
+    /// `mapper` must return either `None` to stop recursion at `term`, or a
+    /// shared term with the same type as the input term. Returning a different
+    /// term restarts mapping at that replacement; returning the same term maps
+    /// the arguments recursively.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `mapper` returns an unshared or differently typed term, or if
+    /// recursive argument mapping produces an unshared or differently typed
+    /// argument, matching the C assertions in `TermMap`.
+    pub fn map_term<F>(&mut self, term: &Term, map_fn: &mut F) -> Result<Term, Diagnostic>
+    where
+        F: FnMut(&mut Self, &Term) -> Result<Option<Term>, Diagnostic>,
+    {
+        let Some(mapped_term) = map_fn(self, term)? else {
+            return Ok(term.clone());
+        };
+        assert!(
+            mapped_term.is_shared(),
+            "term mapper must return shared terms"
+        );
+        assert_eq!(
+            mapped_term.type_(),
+            term.type_(),
+            "term mapper must preserve term type"
+        );
+
+        if mapped_term != term.clone() {
+            return self.map_term(&mapped_term, map_fn);
+        }
+        if term.is_any_var() {
+            return Ok(term.clone());
+        }
+
+        let copy = Term::top_copy_without_args(term);
+        let mut changed = false;
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let mapped_arg = self.map_term(&arg, map_fn)?;
+            assert!(
+                mapped_arg.is_shared(),
+                "term mapper must return shared arguments"
+            );
+            assert_eq!(
+                mapped_arg.type_(),
+                arg.type_(),
+                "term mapper must preserve argument type"
+            );
+            if mapped_arg != arg {
+                changed = true;
+            }
+            copy.set_argument(index, mapped_arg);
+        }
+
+        if changed {
+            self.term_top_insert(copy)
+        } else {
+            Ok(term.clone())
+        }
+    }
+
+    #[must_use]
+    pub fn term_apply_arg(&mut self, source: &Term, arg: &Term) -> Term {
+        term_apply_arg_unshared(self.sig.type_bank_mut(), source, arg)
     }
 
     /// Sets properties by repointing `term_ref` to the banked top-cell variant.
@@ -1124,6 +1194,69 @@ mod tests {
             .unwrap();
         assert_eq!(selected.f_code(), second_individual);
         assert!(selected.is_shared());
+    }
+
+    #[test]
+    fn term_map_recurses_only_when_mapper_returns_the_same_shared_term() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let b_code = bank.signature_mut().insert_id("b", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(a_code, i_type.clone())
+            .unwrap();
+        bank.signature_mut().declare_type(b_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let root = Term::top_alloc(f_code, 1);
+        root.set_argument(0, a.clone());
+        let shared_root = bank.insert(&root, DerefType::Never).unwrap();
+
+        let mut stopped_visits = 0;
+        let stopped = bank
+            .map_term(&shared_root, &mut |_, _| {
+                stopped_visits += 1;
+                Ok(None)
+            })
+            .unwrap();
+        assert_eq!(stopped, shared_root);
+        assert_eq!(stopped_visits, 1);
+
+        let mut replace_a = |_: &mut TermBank, term: &Term| {
+            if term == &a {
+                Ok(Some(b.clone()))
+            } else {
+                Ok(Some(term.clone()))
+            }
+        };
+        let mapped_root = bank.map_term(&shared_root, &mut replace_a).unwrap();
+
+        assert_ne!(mapped_root, shared_root);
+        assert_eq!(mapped_root.argument(0), Some(b));
+        assert!(mapped_root.is_shared());
+    }
+
+    #[test]
+    fn term_apply_arg_uses_bank_type_storage_and_preserves_application_shape() {
+        let mut type_bank = TypeBank::new();
+        let i_type = type_bank.i_type();
+        let arrow =
+            type_bank.insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let mut sig = Signature::new(type_bank);
+        let f_code = sig.insert_id("f", 0, false);
+        sig.declare_type(f_code, arrow).unwrap();
+        let a_code = sig.insert_id("a", 0, false);
+        sig.declare_type(a_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let function = bank.create_const_term(f_code).unwrap();
+        let arg = bank.create_const_term(a_code).unwrap();
+
+        let applied = bank.term_apply_arg(&function, &arg);
+
+        assert_eq!(applied.f_code(), f_code);
+        assert_eq!(applied.arity(), 1);
+        assert_eq!(applied.argument(0), Some(arg));
+        assert_eq!(applied.type_(), Some(i_type));
     }
 
     #[test]
