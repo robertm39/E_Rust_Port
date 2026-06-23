@@ -1,11 +1,14 @@
 use std::fmt;
+use std::fs::File;
 use std::io::{self, Write};
+use std::path::Path;
 
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState,
 };
+use crate::inout::output::set_output_level;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 
@@ -111,6 +114,49 @@ impl From<io::Error> for EProverError {
     fn from(value: io::Error) -> Self {
         Self::Io(value)
     }
+}
+
+enum ConfiguredOutput<'a, W: Write + ?Sized> {
+    Writer(&'a mut W),
+    File(File),
+}
+
+impl<W: Write + ?Sized> Write for ConfiguredOutput<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Writer(writer) => writer.write(buffer),
+            Self::File(file) => file.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Writer(writer) => writer.flush(),
+            Self::File(file) => file.flush(),
+        }
+    }
+}
+
+fn open_configured_output<'a, W: Write + ?Sized>(
+    stdout: &'a mut W,
+    output_file: Option<&str>,
+) -> Result<ConfiguredOutput<'a, W>, Diagnostic> {
+    let Some(name) = output_file else {
+        return Ok(ConfiguredOutput::Writer(stdout));
+    };
+    if name == "-" {
+        return Ok(ConfiguredOutput::Writer(stdout));
+    }
+
+    let path = Path::new(name);
+    File::create(path)
+        .map(ConfiguredOutput::File)
+        .map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot open file {}: {error}", path.display()),
+            )
+        })
 }
 
 pub fn run<I, S>(
@@ -219,13 +265,16 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         )
     })?;
     set_verbose_level(verbose);
+    let _ = set_output_level(config.output_level);
+    let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
-        writeln!(stdout, "# Pid: {}", std::process::id())?;
+        writeln!(output, "# Pid: {}", std::process::id())?;
     }
     if config.flags.contains(EProverFlag::PrintVersion) {
-        writeln!(stdout, "# Version: {VERSION}")?;
+        writeln!(output, "# Version: {VERSION}")?;
     }
+    output.flush()?;
 
     Err(Diagnostic::new(
         ErrorCode::OTHER_ERROR,
@@ -239,11 +288,20 @@ mod tests {
     use super::{process_options, run, EProverAction};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
+    use crate::inout::output::{output_level, set_output_level};
+    use crate::prover::version::VERSION;
     use std::sync::{Mutex, OnceLock};
 
     fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("eprover-{name}-{}.out", std::process::id()))
     }
 
     #[test]
@@ -323,5 +381,62 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("out of int range"));
         assert_eq!(verbose_level(), 0);
+    }
+
+    #[test]
+    fn run_applies_output_level_options_to_global_gate() {
+        let _guard = global_test_lock();
+        let _ = set_output_level(1);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(["eprover", "--silent"], &mut stdout, &mut stderr).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(output_level(), 0);
+
+        let error = run(["eprover", "--output-level=3"], &mut stdout, &mut stderr).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(output_level(), 3);
+        let _ = set_output_level(1);
+    }
+
+    #[test]
+    fn run_print_info_uses_configured_output_target() {
+        let _guard = global_test_lock();
+        let path = temp_path("print-info");
+        let _ = std::fs::remove_file(&path);
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--print-version", "-o", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(stdout.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("# Version: {VERSION}\n")
+        );
+        std::fs::remove_file(&path).unwrap();
+
+        let error = run(
+            ["eprover", "--print-version", "-o", "-"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("# Version: {VERSION}\n")
+        );
     }
 }
