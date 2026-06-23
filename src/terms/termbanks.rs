@@ -556,11 +556,14 @@ impl TermBank {
 
     /// Inserts a higher-order instantiated term, sharing variable bindings.
     ///
+    /// Applied free-variable bindings are expanded once for this insertion path,
+    /// but the LFHO `binding_cache`/owner-bank fields are still deferred.
+    ///
     /// # Panics
     ///
-    /// Panics if applied free-variable binding expansion is required. That C
-    /// path depends on LFHO `TermDeref`/binding-cache support that is not
-    /// represented in Rust yet.
+    /// Panics if a free/DB variable has no type or an argument slot is
+    /// uninitialized, matching the C preconditions for
+    /// `TBInsertInstantiatedHO`.
     pub fn insert_instantiated_ho(
         &mut self,
         term: &Term,
@@ -586,24 +589,22 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let ignore_args = if term.is_applied_free_var() && follow_bind {
+        let (term, ignore_args) = if term.is_applied_free_var() && follow_bind {
             let head = term.argument(0).expect("applied variable has a head");
-            head.binding().map_or(0, |binding| {
-                if binding.is_lambda() {
-                    1
-                } else {
-                    binding.arity() + usize::from(binding.is_free_var())
-                }
-            })
+            if let Some(binding) = head.binding() {
+                let ignore_args = Self::applied_binding_ignore_args(&binding);
+                (self.deref_applied_free_var_once(term)?, ignore_args)
+            } else {
+                (term.clone(), 0)
+            }
         } else {
-            0
+            (term.clone(), 0)
         };
-        assert_eq!(
-            ignore_args, 0,
-            "applied free-variable binding expansion requires term-bank dereference support"
-        );
+        if term_is_ground_for_insert(&term) && term.is_shared() {
+            return Ok(term);
+        }
 
-        let copy = Term::top_copy_without_args(term);
+        let copy = Term::top_copy_without_args(&term);
         copy.set_properties(TP_IGNORE_PROPS);
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
@@ -611,6 +612,68 @@ impl TermBank {
             copy.set_argument(index, shared);
         }
         self.term_top_insert(copy)
+    }
+
+    fn applied_binding_ignore_args(binding: &Term) -> usize {
+        if binding.is_lambda() {
+            1
+        } else {
+            binding.arity() + usize::from(binding.is_free_var())
+        }
+    }
+
+    /// Expands an applied free variable once, like LFHO `applied_var_deref`.
+    ///
+    /// This deliberately does not populate the C `binding_cache`; the expanded
+    /// result is shared immediately through this bank.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `term` is not an applied free variable with a bound head.
+    pub fn deref_applied_free_var_once(&mut self, term: &Term) -> Result<Term, Diagnostic> {
+        assert!(term.is_applied_free_var(), "expected applied free variable");
+        assert!(term.arity() > 1, "applied variable must have arguments");
+        let head = term.argument(0).expect("applied variable has a head");
+        let binding = head.binding().expect("applied variable head is bound");
+
+        let expanded = if binding.is_any_var() || binding.is_lambda() {
+            let expanded = Term::top_alloc(term.f_code(), term.arity());
+            expanded.set_properties(term.give_props(TP_PRED_POS));
+            expanded.set_type(term.type_());
+            expanded.set_argument(0, binding);
+            for index in 1..term.arity() {
+                let arg = term
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                expanded.set_argument(index, arg);
+            }
+            expanded
+        } else {
+            let expanded = Term::top_alloc(binding.f_code(), binding.arity() + term.arity() - 1);
+            expanded.set_properties(binding.give_props(TP_PRED_POS));
+            expanded.set_type(term.type_());
+            for index in 0..binding.arity() {
+                let arg = binding
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("binding argument {index} is uninitialized"));
+                expanded.set_argument(index, arg);
+            }
+            for index in 1..term.arity() {
+                let arg = term
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                expanded.set_argument(binding.arity() + index - 1, arg);
+            }
+            expanded
+        };
+
+        for (index, arg) in expanded.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("expanded argument {index} is uninitialized"));
+            if !arg.is_free_var() && !arg.is_shared() {
+                expanded.set_argument(index, self.insert_ignore_var(&arg, DerefType::Never)?);
+            }
+        }
+        self.term_top_insert(expanded)
     }
 
     /// Inserts a copy whose free variables are replaced by alternative vars.
@@ -1481,6 +1544,69 @@ mod tests {
 
         assert!(shared.is_shared());
         assert_eq!(shared.f_code(), a_code);
+    }
+
+    #[test]
+    fn higher_order_instantiated_insertion_expands_applied_function_bindings() {
+        let mut type_bank = TypeBank::new();
+        let i_type = type_bank.i_type();
+        let arrow =
+            type_bank.insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let mut sig = Signature::new(type_bank);
+        let g_code = sig.insert_id("g", 0, false);
+        sig.declare_type(g_code, arrow.clone()).unwrap();
+        let b_code = sig.insert_id("b", 0, false);
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let binding = Term::const_cell_alloc(g_code);
+        binding.set_type(Some(arrow.clone()));
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(arrow));
+        head.set_binding(Some(binding));
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, b.clone());
+
+        let expanded = bank.insert_instantiated_ho(&app, true).unwrap();
+
+        assert_eq!(expanded.f_code(), g_code);
+        assert_eq!(expanded.arity(), 1);
+        assert_eq!(expanded.argument(0), Some(b));
+        assert!(expanded.is_shared());
+    }
+
+    #[test]
+    fn higher_order_applied_expansion_preserves_ignored_bound_prefix_args() {
+        let mut type_bank = TypeBank::new();
+        let i_type = type_bank.i_type();
+        let arrow =
+            type_bank.insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let mut sig = Signature::new(type_bank);
+        let b_code = sig.insert_id("b", 0, false);
+        let c_code = sig.insert_id("c", 0, false);
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        sig.declare_type(c_code, arrow.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let c = bank.create_const_term(c_code).unwrap();
+        let ignored_head = Term::const_cell_alloc(-4);
+        ignored_head.set_type(Some(arrow.clone()));
+        ignored_head.set_binding(Some(c));
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(arrow.clone()));
+        head.set_binding(Some(ignored_head.clone()));
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, b.clone());
+
+        let expanded = bank.insert_instantiated_ho(&app, true).unwrap();
+
+        assert!(expanded.is_phony_app());
+        assert_eq!(expanded.argument(0), Some(ignored_head));
+        assert_eq!(expanded.argument(1), Some(b));
     }
 
     #[test]
