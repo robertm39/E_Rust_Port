@@ -401,23 +401,26 @@ pub(crate) fn reset_memory_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn memory_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    match LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         int_array_alloc, mem_add_new_chunk, mem_debug_print_stats, mem_flush_free_list,
-        mem_free_list_print, memory_stats, reset_memory_for_tests, secure_malloc, secure_realloc,
-        secure_strdup, secure_strndup, size_free, size_malloc, MemoryPolicy, MEM_ALIGN,
-        MEM_MULTIPLIER,
+        mem_free_list_print, memory_stats, memory_test_lock, reset_memory_for_tests, secure_malloc,
+        secure_realloc, secure_strdup, secure_strndup, size_free, size_malloc, MemoryPolicy,
+        MEM_ALIGN, MEM_MULTIPLIER,
     };
-    use std::sync::{Mutex, OnceLock};
-
-    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
 
     #[test]
     fn old_policy_reuses_exact_size_blocks() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         let mut block = size_malloc(MemoryPolicy::OldExact, 64).unwrap();
@@ -436,7 +439,7 @@ mod tests {
 
     #[test]
     fn new_policy_aligns_small_blocks_and_populates_chunks() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         let block = size_malloc(MemoryPolicy::NewAligned, 1).unwrap();
@@ -451,7 +454,7 @@ mod tests {
 
     #[test]
     fn explicit_newmem_chunk_adds_free_blocks() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         assert_eq!(mem_add_new_chunk(2), Ok(MEM_MULTIPLIER));
@@ -462,7 +465,7 @@ mod tests {
 
     #[test]
     fn secure_realloc_preserves_prefix_and_counts_shapes() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         let mut block = secure_malloc(3).unwrap();
@@ -482,7 +485,7 @@ mod tests {
 
     #[test]
     fn secure_string_helpers_copy_bytes_and_add_nul() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         assert_eq!(secure_strdup("abc").unwrap().allocation_bytes(), b"abc\0");
@@ -498,7 +501,7 @@ mod tests {
 
     #[test]
     fn int_arrays_are_zero_initialized_and_stats_are_printable() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         assert_eq!(int_array_alloc(4).unwrap(), vec![0; 4]);

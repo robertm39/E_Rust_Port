@@ -65,17 +65,11 @@ pub const fn constants() -> (usize, usize, usize, usize, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::{constants, memory_stats, size_free_real, size_malloc_real, MEM_ALIGN};
-    use crate::basics::memory::reset_memory_for_tests;
-    use std::sync::{Mutex, OnceLock};
-
-    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
+    use crate::basics::memory::{memory_test_lock, reset_memory_for_tests};
 
     #[test]
     fn newmem_wrapper_uses_aligned_chunk_policy() {
-        let _guard = global_test_lock();
+        let _guard = memory_test_lock();
         reset_memory_for_tests();
 
         let block = size_malloc_real(17).unwrap();
