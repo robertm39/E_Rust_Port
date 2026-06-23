@@ -66,6 +66,7 @@ Rust files:
 - `src/terms/simpletypes.rs`
 - `src/terms/subst.rs`
 - `src/terms/termcellstore.rs`
+- `src/terms/termbanks.rs`
 - `src/terms/termcpos.rs`
 - `src/terms/termfunc.rs`
 - `src/terms/termpos.rs`
@@ -140,6 +141,7 @@ Original C references:
 - [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
 - [`TERMS/cte_subst.h`, `TERMS/cte_subst.c`](c_source_docs/TERMS/cte_subst.md)
 - [`TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`](c_source_docs/TERMS/cte_termcellstore.md)
+- [`TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`](c_source_docs/TERMS/cte_termbanks.md)
 - [`TERMS/cte_termcpos.h`, `TERMS/cte_termcpos.c`](c_source_docs/TERMS/cte_termcpos.md)
 - [`TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`](c_source_docs/TERMS/cte_termfunc.md)
 - [`TERMS/cte_termpos.h`, `TERMS/cte_termpos.c`](c_source_docs/TERMS/cte_termpos.md)
@@ -207,6 +209,7 @@ Implemented behavior:
 - Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
 - Substitution stack helpers from `cte_subst`, including binding stack positions, typed free-variable binding assertions, single/position/full backtracking, fresh-variable normalization with `TPSpecialFlag`, one-step renaming checks with `TPOpFlag`, skolem backtracking, simple skolemization, complete-instance binding, app-variable prefix binding, and problem-type-gated higher-order binding detection.
 - Term-cell store helpers from `cte_termcellstore`, including exact hash size/mask constants, C-shaped f-code and argument-pointer hashing, hashed splay-tree buckets, insert/find/extract/delete accounting for entries and argument counts, property mutation across all buckets, node counting, GC sweep by `TPGarbageFlag` state, distribution printing, and explicit store exit.
+- Initial term-bank helpers from `cte_termbanks`, including bank allocation with `$true`/`$false`, variable and DB-variable banks, insertion counters, recursive `TBInsert`, `TBInsertIgnoreVar`, `TBInsertNoProps`, top-cell sharing through `TermCellStore`, duplicate reuse with property merging, shared-term metadata computation, `TBFind`, constant/min-term creation, node counts, and simple term-bank macro predicates.
 - Compact term-position helpers from `cte_termcpos`, including `TermCPos` root-position semantics, left-to-right preorder subterm lookup, missing-position handling, and Rust-side conversions between explicit and compact positions for future callers.
 - Initial unshared term-function helpers from `cte_termfunc`, including variable-code printing, variable-normalization discriminants, flatness tests, structural equality with and without dereferencing, prefix structural equality, structural-weight and lexicographic comparisons, subterm checks, default/function-sum/nonlinear/symbol-type/DAG weights, depth, definition-term recognition, f-code and variable/ground queries, max variable-code search, variable/f-code collection, left-to-right linearization, the inherited adjacent-only duplicate check, prefix creation, simple argument application, untyped checks, DB-closed checks, and order computation.
 - Explicit term-position helpers from `cte_termpos`, including the two-stack-slot component shape, top-position detection, subterm lookup via the last stored superterm/index pair, leftmost-innermost first/next traversal order, C-shaped dotted position printing, and address-oriented debug printing.
@@ -327,3 +330,6 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_replace` stores a raw `struct clause_cell*` demodulator pointer in rewrite links. Rust currently stores an opaque nonzero demodulator id until clauses are ported; revisit the field type when clause ownership and `REWRITE_AT_SUBTERM` are represented directly.
 - `TBTermPosReplace` from `cte_replace` is deferred until `cte_termbanks` is available, because the C behavior creates top copies and reinserts through `TBInsertNoProps`/`TBTermTopInsert`, with LFHO branches calling `MakeRewrittenTerm`.
 - `cte_garbage_coll` registers raw `void*` clause/formula-set pointers in `PTree` sets. Rust currently models these as opaque nonzero IDs; replace them with typed stable handles once clause and formula set ownership is ported.
+- The initial `cte_termbanks` slice does not store a back-pointer from each term to its owning bank. The C field is only active under LFHO; add a typed owner handle when applied-variable normalization and term-bank-aware dereferencing are ported.
+- `NormalizePatternAppVar` from `cte_termbanks` is not ported yet. Rust currently marks applied free-variable bank terms as non-pattern application variables instead of normalizing them to a single pattern variable; revisit this with the LFHO/lambda term-bank slice.
+- `cte_termbanks` parser, printing, replacement insertion, instantiated insertion variants, GC marking/sweeping, subterm collection, representative lookup, constant-frequency selection, `TermMap`, `TermApplyArg`, and LFHO `MakeRewrittenTerm` paths remain to be ported in later term-bank slices.
