@@ -4,9 +4,12 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_TYPE_CONJECTURE,
 };
+use crate::clauses::clausepos::ClausePos;
+use crate::clauses::eqn_props::EqnSide;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::term_compute_order;
 use crate::terms::termtypes::TermProperties;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
@@ -376,6 +379,22 @@ impl ClauseSet {
         result
     }
 
+    #[must_use]
+    pub fn find_eq_definition(&self, bank: &TermBank, min_arity: usize) -> Option<ClausePos> {
+        self.find_eq_definition_from_index(bank, min_arity, 0)
+    }
+
+    #[must_use]
+    pub fn find_eq_definition_from_id(
+        &self,
+        bank: &TermBank,
+        min_arity: usize,
+        start_ident: i64,
+    ) -> Option<ClausePos> {
+        let start = self.position_by_id(start_ident)?;
+        self.find_eq_definition_from_index(bank, min_arity, start)
+    }
+
     pub fn push_clause_refs<'a>(&'a self, stack: &mut PStack<&'a Clause>) -> i64 {
         let mut pushed = 0;
         for clause in &self.clauses {
@@ -383,6 +402,23 @@ impl ClauseSet {
             pushed += 1;
         }
         pushed
+    }
+
+    pub fn split_conjecture_refs<'a>(
+        &'a self,
+        conjectures: &mut Vec<&'a Clause>,
+        rest: &mut Vec<&'a Clause>,
+    ) -> i64 {
+        let mut found = 0;
+        for clause in &self.clauses {
+            if clause.is_conjecture() {
+                conjectures.push(clause);
+                found += 1;
+            } else {
+                rest.push(clause);
+            }
+        }
+        found
     }
 
     pub fn count_conjectures(&self, hypos: &mut i64) -> i64 {
@@ -399,8 +435,37 @@ impl ClauseSet {
     }
 
     #[must_use]
+    pub fn conjecture_order(&self, sig: &Signature) -> usize {
+        let mut order = 0;
+        for clause in &self.clauses {
+            for literal in clause.literals().as_slice() {
+                order = order.max(term_compute_order(sig, literal.left()));
+                order = order.max(term_compute_order(sig, literal.right()));
+            }
+        }
+        order
+    }
+
+    #[must_use]
     pub fn is_untyped(&self) -> bool {
         self.clauses.iter().all(Clause::is_untyped)
+    }
+
+    fn find_eq_definition_from_index(
+        &self,
+        bank: &TermBank,
+        min_arity: usize,
+        start: usize,
+    ) -> Option<ClausePos> {
+        for clause in self.clauses.iter().skip(start) {
+            let side = clause.is_eq_definition(bank, min_arity);
+            if side != EqnSide::NoSide {
+                let mut pos = ClausePos::for_clause(clause.clone());
+                pos.set_side(side);
+                return Some(pos);
+            }
+        }
+        None
     }
 
     fn position_by_id(&self, ident: i64) -> Option<usize> {
@@ -452,6 +517,7 @@ mod tests {
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::EqnSide;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
@@ -640,6 +706,21 @@ mod tests {
         let mut hypotheses = 10;
         assert_eq!(set.count_conjectures(&mut hypotheses), 2);
         assert_eq!(hypotheses, 11);
+
+        let mut conjectures = Vec::new();
+        let mut rest = Vec::new();
+        assert_eq!(set.split_conjecture_refs(&mut conjectures, &mut rest), 2);
+        assert_eq!(
+            conjectures
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![ids[2], ids[3]]
+        );
+        assert_eq!(
+            rest.iter().map(|clause| clause.ident()).collect::<Vec<_>>(),
+            vec![ids[0], ids[1]]
+        );
     }
 
     #[test]
@@ -683,6 +764,20 @@ mod tests {
         let mut clause_stack = PStack::new();
         assert_eq!(set.push_clause_refs(&mut clause_stack), 2);
         assert_eq!(clause_stack.len(), 2);
+
+        let default_type = bank.signature().type_bank().default_type();
+        let arrow_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![default_type.clone(), default_type]));
+        let higher_order = bank.vars().var_assert_alloc(-6, &arrow_type);
+        set.insert(clause_from(vec![literal(
+            &mut bank,
+            &higher_order,
+            &higher_order,
+            true,
+        )]));
+        assert!(set.conjecture_order(bank.signature()) > 0);
     }
 
     #[test]
@@ -705,5 +800,35 @@ mod tests {
 
         assert_eq!(set.find_freq_symbol(bank.signature(), 1, false), g_code);
         assert_eq!(set.find_freq_symbol(bank.signature(), 1, true), g_code);
+    }
+
+    #[test]
+    fn equality_definition_lookup_returns_reduced_clause_position_from_start() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let x = typed_var(&bank, -2);
+        let fx = typed_unary(&mut bank, "f", &x);
+        let non_definition = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let definition = clause_from(vec![literal(&mut bank, &fx, &a, true)]);
+        let late_definition = clause_from(vec![literal(&mut bank, &fx, &b, true)]);
+        let definition_id = definition.ident();
+        let late_definition_id = late_definition.ident();
+        let set = ClauseSet::from_clauses([non_definition, definition, late_definition]);
+
+        let found = set.find_eq_definition(&bank, 1).unwrap();
+        assert_eq!(found.clause().map(Clause::ident), Some(definition_id));
+        assert_eq!(found.literal_index(), Some(0));
+        assert_eq!(found.side(), EqnSide::LeftSide);
+        assert!(found.term_pos().is_top_pos());
+
+        let found_from_late = set
+            .find_eq_definition_from_id(&bank, 1, late_definition_id)
+            .unwrap();
+        assert_eq!(
+            found_from_late.clause().map(Clause::ident),
+            Some(late_definition_id)
+        );
+        assert!(set.find_eq_definition_from_id(&bank, 1, i64::MAX).is_none());
     }
 }
