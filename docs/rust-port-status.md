@@ -57,6 +57,7 @@ Rust files:
 - `src/prover/options.rs`
 - `src/prover/eprover.rs`
 - `src/terms/functypes.rs`
+- `src/terms/simplesorts.rs`
 - `src/terms/simpletypes.rs`
 - `src/bin/eprover.rs`
 
@@ -112,6 +113,7 @@ Original C references:
 - [`PROVER/e_options.h`](c_source_docs/PROVER/e_options.md)
 - [`PROVER/eprover.c`](c_source_docs/PROVER/eprover.md)
 - [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
+- [`TERMS/cte_simplesorts.h`, `TERMS/cte_simplesorts.c`](c_source_docs/TERMS/cte_simplesorts.md)
 - [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
 
 Implemented behavior:
@@ -160,6 +162,7 @@ Implemented behavior:
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
 - Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
+- Simple-sort table helpers from `cte_simplesorts`, including predefined sort constants, default-sort state, insertion-order sort IDs, duplicate-preserving lookup, reserved default table initialization order, TSTP sort parsing through `FuncSymbParse`, TSTP sort printing, and C-shaped debug table rendering.
 - Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
 
 Known gaps:
@@ -235,3 +238,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cio_signals` mixes async signal-handler work with non-async-signal-safe operations such as cleanup, formatted diagnostics, and resource-limit calls. Rust keeps the state machine testable and side effects explicit; later executable integration should decide which behavior belongs in real signal handlers and which should move to cooperative polling.
 - `cte_functypes` rational normalization uses checked Rust integer parsing instead of C `strtoll`, whose overflow behavior saturates and sets `errno` that this code ignores. If huge numeric TPTP literals are compatibility-relevant, compare against the C reference and decide whether to emulate that overflow quirk.
 - `cte_simpletypes` uses pointer-address ordering in `TypesCmp`, and the C source notes this causes clause-sorting differences. Rust preserves handle identity comparisons where needed, but later term/type-bank integration should avoid making proof search depend on allocator-address order unless reference compatibility requires it.
+- `cte_simplesorts.c` includes `cte_functypes.c` directly rather than the header; Rust uses the normal module boundary. Keep an eye on duplicate-definition assumptions if build/link behavior is ever compared at C object-file granularity.
