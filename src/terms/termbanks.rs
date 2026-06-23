@@ -11,14 +11,17 @@ use crate::terms::termfunc::{
     term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_standard_weight,
 };
 use crate::terms::termtypes::{
-    term_deref, DerefType, Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_GARBAGE_FLAG,
-    TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM, TP_HAS_EQ_NEQ_SYM,
-    TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_HAS_LAMBDA_SUBTERM, TP_HAS_NON_PATTERN_VAR, TP_IGNORE_PROPS,
-    TP_IS_BETA_REDUCIBLE, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG, TP_PRED_POS,
+    term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
+    DEFAULT_VWEIGHT, TP_GARBAGE_FLAG, TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM,
+    TP_HAS_EQ_NEQ_SYM, TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_HAS_LAMBDA_SUBTERM,
+    TP_HAS_NON_PATTERN_VAR, TP_IGNORE_PROPS, TP_IS_BETA_REDUCIBLE, TP_IS_GROUND, TP_IS_SHARED,
+    TP_OP_FLAG, TP_PRED_POS,
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typecheck::type_infer_sort;
 use std::collections::BTreeMap;
+
+const INSERT_NO_PROPS_CACHE_THRESHOLD: u32 = 8096;
 
 #[derive(Clone, Debug)]
 pub struct TermBank {
@@ -161,6 +164,25 @@ impl TermBank {
     /// precondition for `TBInsertNoProps`.
     pub fn insert_no_props(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
         self.insert_with_mode(term, deref, InsertMode::NoProperties)
+    }
+
+    /// Inserts without properties, using a term-identity cache for large terms.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a free/DB variable has no type, matching the C preconditions
+    /// for `TBInsertNoPropsCached`.
+    pub fn insert_no_props_cached(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+    ) -> Result<Term, Diagnostic> {
+        if term.f_count() > INSERT_NO_PROPS_CACHE_THRESHOLD {
+            let mut cache = BTreeMap::new();
+            self.insert_no_props_cached_inner(term, deref, &mut cache)
+        } else {
+            self.insert_no_props(term, deref)
+        }
     }
 
     /// Inserts a term while reusing shared ground subterms unchanged.
@@ -713,6 +735,39 @@ impl TermBank {
         self.term_top_insert(copy)
     }
 
+    fn insert_no_props_cached_inner(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+        cache: &mut BTreeMap<usize, Term>,
+    ) -> Result<Term, Diagnostic> {
+        let mut current_deref = deref;
+        let term = term_deref(term, &mut current_deref);
+        let cache_key = term_identity_id(&term);
+        if let Some(cached) = cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
+
+        let inserted = if term.is_free_var() {
+            let type_ = term.type_().expect("free variable must have a type");
+            self.vars.var_assert_alloc(term.f_code(), &type_)
+        } else if term.is_db_var() {
+            let type_ = term.type_().expect("DB variable must have a type");
+            self.db_vars.request_db_var(&type_, term.f_code())
+        } else {
+            let copy = Term::top_copy_without_args(&term);
+            copy.set_properties(TP_IGNORE_PROPS);
+            for (index, arg) in term.argument_clones().into_iter().enumerate() {
+                let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                let shared = self.insert_no_props_cached_inner(&arg, current_deref, cache)?;
+                copy.set_argument(index, shared);
+            }
+            self.term_top_insert(copy)?
+        };
+        cache.insert(cache_key, inserted.clone());
+        Ok(inserted)
+    }
+
     fn set_top_insert_metadata(&self, term: &Term) {
         let type_ = term.type_().expect("shared terms have types");
         if term.is_db_var() {
@@ -890,6 +945,7 @@ mod tests {
     use super::{
         tb_cell_ident, tb_term_collect_subterms, tb_term_del_prop_count, tb_term_is_ground,
         tb_term_set_prop_count, term_is_false_term, term_is_true_term, TermBank,
+        INSERT_NO_PROPS_CACHE_THRESHOLD,
     };
     use crate::basics::pstacks::PStack;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
@@ -989,6 +1045,32 @@ mod tests {
         assert_eq!(shared.f_code(), -2);
         assert_eq!(tb_cell_ident(&shared), -2);
         assert_eq!(bank.term_nodes(), 3);
+    }
+
+    #[test]
+    fn cached_no_property_insertion_reuses_duplicate_source_subterms() {
+        let (mut bank, f_code) = bank_with_symbol("f", 2);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = Term::const_cell_alloc(a_code);
+        a.set_prop(TP_CHECK_FLAG);
+        let root = Term::top_alloc(f_code, 2);
+        root.set_f_count(INSERT_NO_PROPS_CACHE_THRESHOLD + 1);
+        root.set_prop(TP_CHECK_FLAG);
+        root.set_argument(0, a.clone());
+        root.set_argument(1, a);
+
+        let inserted = bank
+            .insert_no_props_cached(&root, DerefType::Never)
+            .unwrap();
+        let left = inserted.argument(0).unwrap();
+        let right = inserted.argument(1).unwrap();
+
+        assert_eq!(left, right);
+        assert!(left.is_shared());
+        assert!(!left.query_prop(TP_CHECK_FLAG));
+        assert!(!inserted.query_prop(TP_CHECK_FLAG));
     }
 
     #[test]
