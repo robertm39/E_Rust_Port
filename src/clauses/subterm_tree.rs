@@ -2,10 +2,11 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clausecpos::CompactPos;
 use crate::clauses::clausepos_tree::{clause_key, ClauseTPosTree};
 use crate::terms::termtypes::{term_identity_id, Term};
+use std::cmp::Ordering;
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::fmt::{self, Write};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SubtermOcc {
     term_key: usize,
     term: Term,
@@ -79,7 +80,27 @@ impl SubtermOcc {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+impl PartialEq for SubtermOcc {
+    fn eq(&self, other: &Self) -> bool {
+        self.term_key == other.term_key
+    }
+}
+
+impl Eq for SubtermOcc {}
+
+impl PartialOrd for SubtermOcc {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SubtermOcc {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.term_key.cmp(&other.term_key)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct SubtermTree {
     entries: BTreeMap<usize, SubtermOcc>,
 }

@@ -483,6 +483,11 @@ where
         self.index.find(&key)
     }
 
+    pub fn find_mut(&mut self, term: &Term) -> Option<&mut FPTree<T>> {
+        let key = (self.fp_fun)(term);
+        self.index.find_mut(&key)
+    }
+
     pub fn insert(&mut self, term: &Term) -> &mut FPTree<T> {
         let key = (self.fp_fun)(term);
         self.index.insert(&key)
