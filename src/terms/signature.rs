@@ -903,6 +903,65 @@ impl Signature {
         Ok(())
     }
 
+    pub fn print_types(
+        &self,
+        output: &mut impl Write,
+        problem_type: ProblemType,
+    ) -> io::Result<()> {
+        for f_code in 1..=self.f_count {
+            if f_code > 1 {
+                output.write_all(b", ")?;
+            }
+            let fun = self.func(f_code);
+            write!(output, "{}:", fun.name)?;
+            if let Some(type_) = &fun.type_ {
+                self.type_bank.print_tstp(output, type_, problem_type)?;
+            } else {
+                output.write_all(b"<no type>")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn print_type_decls_tstp(
+        &self,
+        output: &mut impl Write,
+        problem_type: ProblemType,
+    ) -> io::Result<()> {
+        let tag = tstp_decl_tag(problem_type);
+        for f_code in self.external_f_codes() {
+            let fun = self.func(f_code);
+            if let Some(type_) = &fun.type_ {
+                write!(output, "{tag}(decl_{f_code}, type, {}: ", fun.name)?;
+                self.type_bank.print_tstp(output, type_, problem_type)?;
+                output.write_all(b").\n")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn print_type_decls_tstp_selective(
+        &self,
+        output: &mut impl Write,
+        symbols: &BTreeSet<FunCode>,
+        problem_type: ProblemType,
+    ) -> io::Result<()> {
+        let tag = tstp_decl_tag(problem_type);
+        for f_code in self.external_f_codes() {
+            if !symbols.contains(&f_code) {
+                continue;
+            }
+            let fun = self.func(f_code);
+            let Some(type_) = &fun.type_ else {
+                continue;
+            };
+            write!(output, "{tag}(decl_{f_code}, type, {}: ", fun.pname)?;
+            self.type_bank.print_tstp(output, type_, problem_type)?;
+            output.write_all(b").\n")?;
+        }
+        Ok(())
+    }
+
     pub fn get_new_skolem_code(&mut self, arity: i32) -> FunCode {
         let mut counter = self.skolem_count;
         let code = self.get_new_f_code(arity, "esk", &mut counter, FP_SKOLEM_SYMBOL);
@@ -1259,6 +1318,14 @@ fn raw_signature_name(name: &str) -> String {
 
 fn diagnostic_to_io(diagnostic: &Diagnostic) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, diagnostic.message().to_owned())
+}
+
+fn tstp_decl_tag(problem_type: ProblemType) -> &'static str {
+    if problem_type == ProblemType::HigherOrder {
+        "thf"
+    } else {
+        "tff"
+    }
 }
 
 fn split_signature_name(name: &str) -> (String, String) {
@@ -1868,6 +1935,43 @@ mod tests {
                 predicate_type.type_uid(),
                 predicate_type.type_uid()
             )
+        );
+    }
+
+    #[test]
+    fn type_print_helpers_use_c_symbol_ranges_and_names() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let predicate_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![individual, bool_type]));
+        let quoted = sig.insert_id_for_problem("'quoted'", 1, false, ProblemType::FirstOrder);
+        sig.declare_final_type(quoted, predicate_type).unwrap();
+        let untyped = sig.insert_id_for_problem("untyped", 0, false, ProblemType::FirstOrder);
+
+        let mut output = Vec::new();
+        sig.print_types(&mut output, ProblemType::FirstOrder)
+            .unwrap();
+        assert_eq!(
+            string_from(output),
+            "$true:$o, $false:$o, quoted:$i > $o, untyped:<no type>"
+        );
+
+        let mut output = Vec::new();
+        sig.print_type_decls_tstp(&mut output, ProblemType::FirstOrder)
+            .unwrap();
+        assert_eq!(string_from(output), "tff(decl_3, type, quoted: $i > $o).\n");
+
+        let mut selected = BTreeSet::new();
+        selected.insert(quoted);
+        selected.insert(untyped);
+        let mut output = Vec::new();
+        sig.print_type_decls_tstp_selective(&mut output, &selected, ProblemType::HigherOrder)
+            .unwrap();
+        assert_eq!(
+            string_from(output),
+            "thf(decl_3, type, 'quoted': $i > $o).\n"
         );
     }
 
