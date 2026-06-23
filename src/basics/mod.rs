@@ -3,6 +3,7 @@ pub mod dstacks;
 pub mod dstrings;
 pub mod error;
 pub mod fixdarrays;
+pub mod numtrees;
 pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod properties;
