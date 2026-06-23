@@ -7,5 +7,6 @@ pub mod clausepos_tree;
 pub mod eqn;
 pub mod eqn_props;
 pub mod eqnlist;
+pub mod garbage_coll;
 pub mod subterm_index;
 pub mod subterm_tree;
