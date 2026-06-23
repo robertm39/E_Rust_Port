@@ -2,6 +2,7 @@ pub mod acterms;
 pub mod dbvars;
 pub mod functypes;
 pub mod garbage_coll;
+pub mod match_mgu;
 pub mod replace;
 pub mod signature;
 pub mod simplesorts;
