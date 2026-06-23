@@ -192,6 +192,37 @@ impl GroundSet {
         true
     }
 
+    pub fn unit_simplify_clause(&self, clause: &mut Clause, subsume: bool, resolve: bool) -> bool {
+        let mut index = 0;
+        let mut changed = false;
+        while let Some(literal) = clause.literals().as_slice().get(index) {
+            let status = self
+                .units
+                .get(&literal.left().entry_no())
+                .copied()
+                .unwrap_or(GcuEncoding::None);
+            let (same_sign, opposite_sign) = if literal.is_positive() {
+                (GcuEncoding::Pos, GcuEncoding::Neg)
+            } else {
+                (GcuEncoding::Neg, GcuEncoding::Pos)
+            };
+
+            if subsume && status.contains(same_sign) {
+                return true;
+            }
+            if resolve && status.contains(opposite_sign) {
+                let _ = clause.literals_mut().delete_element(index);
+                changed = true;
+            } else {
+                index += 1;
+            }
+        }
+        if changed {
+            clause.recompute_lit_counts();
+        }
+        false
+    }
+
     #[must_use]
     pub fn dimacs_string(&self) -> String {
         let mut result = String::new();
@@ -947,5 +978,58 @@ mod tests {
                 "  {first_entry} 0\n -{second_entry} 0\n  {first_entry} -{second_entry} 0\n -1 0\n  1 0\n"
             )
         );
+    }
+
+    #[test]
+    fn ground_set_unit_simplify_detects_subsuming_same_signed_units() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p", &[]);
+        let second = predicate_atom(&mut bank, "q", &[]);
+        let mut set = GroundSet::new();
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        let mut clause = clause_from(vec![
+            predicate_literal(&mut bank, &second, false),
+            predicate_literal(&mut bank, &first, true),
+        ]);
+        let original_literal_count = clause.literal_number();
+
+        assert!(set.unit_simplify_clause(&mut clause, true, true));
+
+        assert_eq!(clause.literal_number(), original_literal_count);
+    }
+
+    #[test]
+    fn ground_set_unit_simplify_resolves_opposite_signed_units_like_c() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p", &[]);
+        let second = predicate_atom(&mut bank, "q", &[]);
+        let third = predicate_atom(&mut bank, "r", &[]);
+        let mut set = GroundSet::new();
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+        let mut clause = clause_from(vec![
+            predicate_literal(&mut bank, &first, false),
+            predicate_literal(&mut bank, &second, true),
+            predicate_literal(&mut bank, &third, true),
+        ]);
+        let original_weight = clause.weight();
+
+        assert!(!set.unit_simplify_clause(&mut clause, false, true));
+
+        assert_eq!(clause.literal_number(), 1);
+        assert_eq!(clause.positive_literal_count(), 1);
+        assert_eq!(clause.negative_literal_count(), 0);
+        assert_eq!(
+            clause.literals().as_slice()[0].left().entry_no(),
+            third.entry_no()
+        );
+        assert_eq!(clause.weight(), original_weight);
+        assert_ne!(clause.weight(), clause.standard_weight());
     }
 }
