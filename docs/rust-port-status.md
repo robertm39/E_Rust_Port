@@ -18,6 +18,8 @@ Rust files:
 - `src/basics/min_heap.rs`
 - `src/basics/numtrees.rs`
 - `src/basics/numxtrees.rs`
+- `src/basics/objmaps.rs`
+- `src/basics/objtrees.rs`
 - `src/basics/partial_orderings.rs`
 - `src/basics/pdarrays.rs`
 - `src/basics/pdrangearrays.rs`
@@ -53,6 +55,8 @@ Original C references:
 - [`BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`](c_source_docs/BASICS/clb_min_heap.md)
 - [`BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`](c_source_docs/BASICS/clb_numtrees.md)
 - [`BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`](c_source_docs/BASICS/clb_numxtrees.md)
+- [`BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`](c_source_docs/BASICS/clb_objmaps.md)
+- [`BASICS/clb_objtrees.h`, `BASICS/clb_objtrees.c`](c_source_docs/BASICS/clb_objtrees.md)
 - [`BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_orderings.c`](c_source_docs/BASICS/clb_partial_orderings.md)
 - [`BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`](c_source_docs/BASICS/clb_pdarrays.md)
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
@@ -85,6 +89,7 @@ Implemented behavior:
 - Shared `IntOrP` integer/pointer payload shape from `clb_defines`, represented as a checked Rust enum for containers that mix long integer tags and pointer-like handles.
 - `IntMap` multi-representation integer map behavior from `clb_intmap`, including empty/single/array/tree states, density-triggered representation switching, `get_ref` slot creation with null values, assignment and deletion return behavior, entry-count inflation for repeated null array references, inclusive sorted range iteration over non-null values, and debug printing.
 - `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
+- Object tree/map behavior from `clb_objtrees` and `clb_objmaps`, including comparison-based object storage, duplicate-preserving object insertions, mutable root-like lookups, object extraction/root extraction, unique merges, map store/get-ref/find/extract semantics, null-value map slots, sorted traversal, and explicit free-with-deleter hooks.
 - Partial-ordering helpers from `clb_partial_orderings`, including exact `CompareResult` and `HoOrderKind` discriminants, quasi-order conversion, inverse relation handling, and the C comparison-symbol table.
 - Permanent string registry behavior from `clb_permastrings`, including duplicate interning, owned-string store, null-shaped optional lookup, explicit global registry clearing, and returned shared strings that remain valid for Rust holders after the registry is cleared.
 - `PList` doubly linked list behavior from `clb_plist`, including explicit anchor cells, insertion after arbitrary list cells, extraction and reinsertion across anchors, deletion, clearing/freeing anchors, forward/backward navigation, and mixed integer/pointer payload helpers.
@@ -118,6 +123,7 @@ Known gaps:
 - `FloatTree` currently uses Rust `BTreeMap` with an internal total-order float key; exact C splay-root locality and C's accidental behavior for NaN keys are not modeled beyond deterministic handling.
 - `NumTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `NumXTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
+- `ObjTree` and `ObjMap` model comparison-function behavior with `Ord` keys and safe owned values; exact C splay-root locality, raw pointer ownership transfer, and allocator reuse are not modeled.
 - `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
 - `QuadTree` currently uses Rust `BTreeMap` and caller-provided ordered pointer identities; exact C splay-root locality and raw pointer-address ordering should be revisited when comparison caches are integrated with term storage.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
@@ -136,6 +142,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `PQueue` exposes absolute internal ring indices for iteration and C has a public grow routine that is only coherent for the full-ring state; later callers should keep those details encapsulated behind safer traversal APIs.
 - `FixedDArray` currently mirrors C assertion-style size contracts; callers fed by user input may eventually need recoverable error paths instead of invariant panics.
 - `MinHeap` preserves the C helper directions where `decr_key` drops down and `incr_key` bubbles up, despite those names appearing reversed for a conventional min-heap. Rename or wrap only after all heap users are audited.
+- `ObjTree` and `ObjMap` replace comparison-function/raw-pointer storage with ordered Rust keys and explicit ownership; revisit this once term, clause, and substitution arenas define stable handle identity and deleter responsibilities.
 - `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, `PTree`, and `QuadTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
 - `IntMap` keeps C density transitions and null-slot quirks, but its hidden read/delete-time array growth in C is a likely cleanup target if compatibility tests show no observable dependency.
 - Permanent strings use `Arc<str>` to keep Rust handles valid after registry clearing; later term/signature ownership should decide whether stable arena handles are a better identity model.
