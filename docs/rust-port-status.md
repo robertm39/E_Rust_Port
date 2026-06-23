@@ -57,6 +57,7 @@ Rust files:
 - `src/prover/options.rs`
 - `src/prover/eprover.rs`
 - `src/terms/functypes.rs`
+- `src/terms/simpletypes.rs`
 - `src/bin/eprover.rs`
 
 Original C references:
@@ -111,6 +112,7 @@ Original C references:
 - [`PROVER/e_options.h`](c_source_docs/PROVER/e_options.md)
 - [`PROVER/eprover.c`](c_source_docs/PROVER/eprover.md)
 - [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
+- [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
 
 Implemented behavior:
 
@@ -158,6 +160,7 @@ Implemented behavior:
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
 - Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
+- Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
 
 Known gaps:
 
@@ -194,6 +197,7 @@ Known gaps:
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
 - `FuncSymbParse` is present for string scanners, but downstream term/signature parsers are not ported yet and scanner file/include handling remains incomplete.
+- Simple types are represented with safe shared handles rather than raw `Type_p`; this preserves pointer identity for Rust-held values, but allocator address reuse and exact pointer ordering may differ from C.
 
 ## C Behaviors To Revisit After Compatibility
 
@@ -230,3 +234,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cio_multiplexer` has a likely source typo: `TCPChannelSendMsg` stores messages in `channel->out` and callers set write readiness based on `TCPChannelHasOutMsg`, but `TCPChannelWrite` checks and drains `channel->in`. Rust drains the outbound queue to match the comments and caller contract; revisit against the C server/client paths before claiming byte-for-byte compatibility for that subsystem.
 - `cio_signals` mixes async signal-handler work with non-async-signal-safe operations such as cleanup, formatted diagnostics, and resource-limit calls. Rust keeps the state machine testable and side effects explicit; later executable integration should decide which behavior belongs in real signal handlers and which should move to cooperative polling.
 - `cte_functypes` rational normalization uses checked Rust integer parsing instead of C `strtoll`, whose overflow behavior saturates and sets `errno` that this code ignores. If huge numeric TPTP literals are compatibility-relevant, compare against the C reference and decide whether to emulate that overflow quirk.
+- `cte_simpletypes` uses pointer-address ordering in `TypesCmp`, and the C source notes this causes clause-sorting differences. Rust preserves handle identity comparisons where needed, but later term/type-bank integration should avoid making proof search depend on allocator-address order unless reference compatibility requires it.
