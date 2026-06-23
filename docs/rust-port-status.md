@@ -28,6 +28,7 @@ Rust files:
 - `src/basics/simple_stuff.rs`
 - `src/basics/pstacks.rs`
 - `src/basics/ptrees.rs`
+- `src/basics/quadtrees.rs`
 - `src/basics/stringtrees.rs`
 - `src/inout/basicparser.rs`
 - `src/inout/commandline.rs`
@@ -61,6 +62,7 @@ Original C references:
 - [`BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`](c_source_docs/BASICS/clb_simple_stuff.md)
 - [`BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`](c_source_docs/BASICS/clb_pstacks.md)
 - [`BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`](c_source_docs/BASICS/clb_ptrees.md)
+- [`BASICS/clb_quadtrees.h`, `BASICS/clb_quadtrees.c`](c_source_docs/BASICS/clb_quadtrees.md)
 - [`BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`](c_source_docs/BASICS/clb_stringtrees.md)
 - [`INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`](c_source_docs/INOUT/cio_basicparser.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
@@ -92,6 +94,7 @@ Implemented behavior:
 - `NumTree` numeric-keyed map behavior from `clb_numtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction/deletion, root-like draining, node/max-key queries, debug printing, deterministic sorted traversal, and limited traversal starting at the first key greater than or equal to the limit.
 - `NumXTree` numeric-keyed four-slot value map behavior from `clb_numxtrees`, including duplicate-preserving store semantics with defaulted extra slots, full-entry insertion, lookup, mutable value-slot rewrite, extraction/deletion, root-like draining, node/max-key queries, deterministic sorted traversal, and limited traversal starting at the first key greater than or equal to the limit.
 - `PTree` pointer/identity-set behavior from `clb_ptrees`, including duplicate-preserving store semantics, lookup, binary lookup alias, extraction/deletion/root-like draining, destructive and non-destructive merge helpers, stack/vector conversion, copying, shared-element and intersection helpers, equivalence/subset checks, in-order visits, and debug printing.
+- `QuadTree` four-part pointer/integer-keyed map behavior from `clb_quadtrees`, including pointer-then-integer pair comparison, duplicate-preserving insertion, mutable root-like lookup, extraction/deletion, deterministic sorted traversal, and mixed integer/pointer payload helpers.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - Initial stream and scanner support for string sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, and position formatting.
@@ -112,6 +115,7 @@ Known gaps:
 - `NumTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `NumXTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
+- `QuadTree` currently uses Rust `BTreeMap` and caller-provided ordered pointer identities; exact C splay-root locality and raw pointer-address ordering should be revisited when comparison caches are integrated with term storage.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
 - The JKISS wrapper preserves the exported C module's static-state behavior, including the fact that the `JKISSRand` state argument does not drive the random sequence; call-site-level compatibility should be revisited when random-dependent heuristics are ported.
 - The help option table is intentionally partial until the full option table is ported.
@@ -128,7 +132,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `PQueue` exposes absolute internal ring indices for iteration and C has a public grow routine that is only coherent for the full-ring state; later callers should keep those details encapsulated behind safer traversal APIs.
 - `FixedDArray` currently mirrors C assertion-style size contracts; callers fed by user input may eventually need recoverable error paths instead of invariant panics.
 - `MinHeap` preserves the C helper directions where `decr_key` drops down and `incr_key` bubbles up, despite those names appearing reversed for a conventional min-heap. Rename or wrap only after all heap users are audited.
-- `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, and `PTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
+- `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, `PTree`, and `QuadTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
 - `IntMap` keeps C density transitions and null-slot quirks, but its hidden read/delete-time array growth in C is a likely cleanup target if compatibility tests show no observable dependency.
 - Permanent strings use `Arc<str>` to keep Rust handles valid after registry clearing; later term/signature ownership should decide whether stable arena handles are a better identity model.
 - `clb_simple_stuff` includes historical global-state behavior in `ProblemType` and JKISS random generation; the Rust port should centralize these states before parallel parsing or solving is introduced.

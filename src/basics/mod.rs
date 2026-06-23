@@ -18,5 +18,6 @@ pub mod pqueue;
 pub mod properties;
 pub mod pstacks;
 pub mod ptrees;
+pub mod quadtrees;
 pub mod simple_stuff;
 pub mod stringtrees;
