@@ -68,6 +68,8 @@ Rust files:
 - `src/terms/termvars.rs`
 - `src/terms/termweightext.rs`
 - `src/terms/typebanks.rs`
+- `src/terms/varhash.rs`
+- `src/terms/varsets.rs`
 - `src/bin/eprover.rs`
 
 Original C references:
@@ -133,6 +135,8 @@ Original C references:
 - [`TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`](c_source_docs/TERMS/cte_termvars.md)
 - [`TERMS/cte_termweightext.h`, `TERMS/cte_termweightext.c`](c_source_docs/TERMS/cte_termweightext.md)
 - [`TERMS/cte_typebanks.h`, `TERMS/cte_typebanks.c`](c_source_docs/TERMS/cte_typebanks.md)
+- [`TERMS/cte_varhash.h`, `TERMS/cte_varhash.c`](c_source_docs/TERMS/cte_varhash.md)
+- [`TERMS/cte_varsets.h`, `TERMS/cte_varsets.c`](c_source_docs/TERMS/cte_varsets.md)
 
 Implemented behavior:
 
@@ -191,6 +195,8 @@ Implemented behavior:
 - Shared variable-bank helpers from `cte_termvars`, including default bank initialization, sort-indexed normal-variable stacks, even fresh-variable f-codes, odd alternative-variable f-codes, explicit f-code allocation, default-sort and typed external-name allocation, scoped external-name restoration, v-count reset/set-to-used behavior, property mutation across bank variables, shadow-bank pairing/copying, cardinality, and the C loop-bound quirk in variable collection.
 - Term-weight extension helpers from `cte_termweightext`, including exact extension-style discriminants, stored multiplier/data fields, simple root weighting, subterm sum weighting, subterm max weighting, free-variable descent suppression, and C stack traversal order for subterms.
 - Type-bank helpers from `cte_typebanks`, including predefined constructor registration order, cached built-in shared types, name/code/arity lookups, simple-sort and type-constructor definition, recursive argument sharing, type UID assignment, structural type reuse, TSTP type parsing and printing for first-order and higher-order syntax, selected user-sort declarations, return-type rewriting, and application-encoded type declarations.
+- Variable-occurrence hash helpers from `cte_varhash`, including exact 16-bucket f-code hashing, pointer-identity entry lookup, head insertion for new bucket entries, additive occurrence counts, term traversal with dereference modes for hash distributions, and integer distributions keyed by `-f_code`.
+- Variable-set helpers from `cte_varsets`, including pointer-identity membership, insert/delete/contains/reset, term-variable collection with ground-subterm skipping, set insertion/union/merge, owned merge of the source set, and a term-keyed varset store.
 
 Known gaps:
 
@@ -284,6 +290,8 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_typebanks` hashes and orders shared compound types partly through raw argument pointer addresses, so traversal order for `TypeBankAppEncodeTypes` can depend on allocator layout. Rust prints application-encoding declarations in type UID order for deterministic output; compare against reference tests before deciding whether allocator-shaped order needs to be emulated.
 - `cte_typebanks` mutates incoming compound type objects in `force_arg_sharing` and frees duplicates after tree insertion. Rust keeps `Type` handles immutable and creates a normalized shared-argument replacement when needed, which avoids in-place ownership surprises while preserving shared-type identity for returned handles.
 - `TypeBankParseType` depends on the global C `problemType` and has a few permissive first-order edge cases, including accepting a parenthesized product without a following return type as an arrow. Rust exposes an explicit-problem-type parser plus a global-state wrapper; revisit whether odd accepted shapes need exact reference tests before tightening syntax.
+- `cte_varhash` comments say its distribution walkers are called only with first-order arguments and do not change deref state. Rust exposes explicit deref-mode parameters and preserves ordinary variable dereference, but higher-order applied-variable bindings remain blocked at the termtype boundary until term banks are ported.
+- `cte_varsets` has a `valid` flag and comments saying reset invalidates the set, but `VarSetReset` and `VarSetCollectVars` do not mutate `valid` in the C implementation. Rust leaves the flag explicit and unchanged by reset/collect; revisit once all cache users are ported.
 - `cte_termweightext` has a misspelled public enum name (`TermWeightExtenstionStyle`) and traverses subterms by pushing children left-to-right onto a LIFO stack, so callbacks see rightmost children first. Rust keeps a compatibility alias for the typo and preserves the traversal order; any future cleanup should happen behind clearer public wrappers.
 - `cte_signature` has several compatibility quirks now mirrored in Rust: `SigSetPolymorphic` ignores its `value` parameter and always sets the bit, first-order duplicate names with different arities are silently renamed with an `_ARITYFIX... ` suffix, and `SigPopId`/`SigBacktrack` do not invalidate cached alpha ranks. These should be revisited only after signature users and reference behavior are covered.
 - The lazy negative branch of C `SigGetEqnCode` appears to set properties on `sig->eqn_code` instead of `sig->neqn_code`, which can assert if `$neq` is requested before `$eq`. Rust's lazy helper sets the properties on the created code to keep the API usable; compare against reference call order before deciding whether this bug needs a stricter compatibility shim.
