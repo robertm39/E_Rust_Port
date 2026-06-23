@@ -3,11 +3,12 @@ use crate::basics::pdarrays::PDIntArray;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::functypes::FunCode;
 use crate::terms::simpletypes::{
-    alloc_arrow_type, arrow_type_flattened, is_choice_type, type_get_max_arity, type_is_predicate,
-    Type,
+    alloc_arrow_type, arrow_type_flattened, is_choice_type, type_app_encoded_name,
+    type_get_max_arity, type_is_predicate, Type,
 };
 use crate::terms::typebanks::TypeBank;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Write};
 use std::ops::{BitOr, BitOrAssign};
 
 pub const DEFAULT_SIGNATURE_SIZE: usize = 20;
@@ -856,6 +857,52 @@ impl Signature {
         f_code
     }
 
+    /// Prints type declarations for all external symbols after application encoding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an external symbol has no declared type, or if a typed
+    /// application symbol's type does not have the expected three arrow
+    /// entries. This matches the C helper's preconditions.
+    pub fn print_app_encoded_decls(&self, output: &mut impl Write) -> io::Result<()> {
+        for f_code in self.external_f_codes() {
+            let decl_no = (f_code + 1) - self.internal_symbols;
+            let name = self
+                .find_name(f_code)
+                .expect("external function code has a printable name");
+            write!(output, "tff(symboltypedecl{decl_no}, type, {name}: ")?;
+            let type_ = self
+                .get_type(f_code)
+                .expect("app-encoded declaration printing requires symbol types");
+
+            if self.query_prop(f_code, FP_TYPED_APPLICATION) {
+                let args = type_.args();
+                let left = type_app_encoded_name(
+                    args.first()
+                        .expect("typed application type has left argument"),
+                )
+                .map_err(|diagnostic| diagnostic_to_io(&diagnostic))?;
+                let right = type_app_encoded_name(
+                    args.get(1)
+                        .expect("typed application type has right argument"),
+                )
+                .map_err(|diagnostic| diagnostic_to_io(&diagnostic))?;
+                let ret = type_app_encoded_name(
+                    args.get(2)
+                        .expect("typed application type has return argument"),
+                )
+                .map_err(|diagnostic| diagnostic_to_io(&diagnostic))?;
+                write!(output, "({left} * {right}) > {ret}")?;
+            } else {
+                let type_name = type_app_encoded_name(type_)
+                    .map_err(|diagnostic| diagnostic_to_io(&diagnostic))?;
+                write!(output, "{type_name}")?;
+            }
+            output.write_all(b").\n")?;
+        }
+        Ok(())
+    }
+
     pub fn get_new_skolem_code(&mut self, arity: i32) -> FunCode {
         let mut counter = self.skolem_count;
         let code = self.get_new_f_code(arity, "esk", &mut counter, FP_SKOLEM_SYMBOL);
@@ -1210,6 +1257,10 @@ fn raw_signature_name(name: &str) -> String {
     split_signature_name(name).0
 }
 
+fn diagnostic_to_io(diagnostic: &Diagnostic) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, diagnostic.message().to_owned())
+}
+
 fn split_signature_name(name: &str) -> (String, String) {
     if let Some(rest) = name.strip_prefix('\'') {
         let raw = rest.strip_suffix('\'').unwrap_or(rest).to_owned();
@@ -1241,6 +1292,10 @@ mod tests {
 
     fn signature() -> Signature {
         Signature::new(TypeBank::new())
+    }
+
+    fn string_from(bytes: Vec<u8>) -> String {
+        String::from_utf8(bytes).unwrap()
     }
 
     #[test]
@@ -1783,6 +1838,37 @@ mod tests {
             &[unary_type.clone(), individual.clone(), bool_type.clone()]
         );
         assert_eq!(sig.get_typed_app(&unary_type, &individual, &bool_type), app);
+    }
+
+    #[test]
+    fn app_encoded_decls_print_external_symbol_types() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let predicate_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let predicate = sig.insert_id_for_problem("p", 1, false, ProblemType::FirstOrder);
+        sig.declare_final_type(predicate, predicate_type.clone())
+            .unwrap();
+        let app = sig.get_typed_app(&predicate_type, &individual, &bool_type);
+        let app_name = sig.find_name(app).unwrap();
+
+        let mut output = Vec::new();
+        sig.print_app_encoded_decls(&mut output).unwrap();
+
+        assert_eq!(
+            string_from(output),
+            format!(
+                "tff(symboltypedecl2, type, p: type_{}).\n\
+                 tff(symboltypedecl3, type, {app_name}: (type_{} * $i) > $o).\n",
+                predicate_type.type_uid(),
+                predicate_type.type_uid()
+            )
+        );
     }
 
     #[test]
