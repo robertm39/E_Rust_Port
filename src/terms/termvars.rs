@@ -75,6 +75,11 @@ impl VarBank {
     }
 
     #[must_use]
+    pub fn default_type(&self) -> Type {
+        self.0.borrow().default_type.clone()
+    }
+
+    #[must_use]
     pub fn env_depth(&self) -> usize {
         self.0.borrow().env.len()
     }

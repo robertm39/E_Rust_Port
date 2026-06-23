@@ -242,6 +242,84 @@ pub fn term_copy_keep_vars(source: &Term, deref: DerefType) -> Term {
     copy
 }
 
+/// Copies a term using a precomputed free-variable renaming map.
+///
+/// # Panics
+///
+/// Panics if a free variable is missing from `renaming`, or if a traversed
+/// argument slot is uninitialized.
+#[must_use]
+pub fn term_copy_rename_vars(renaming: &BTreeMap<FunCode, Term>, term: &Term) -> Term {
+    if term.is_free_var() {
+        return renaming
+            .get(&term.f_code())
+            .cloned()
+            .expect("free variable must have an alpha-renaming entry");
+    }
+    if term.is_db_var() {
+        return term.clone();
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.expect("term copy requires initialized args");
+        copy.set_argument(index, term_copy_rename_vars(renaming, &arg));
+    }
+    copy
+}
+
+/// Copies a term with free variables alpha-normalized by first occurrence.
+///
+/// # Panics
+///
+/// Panics if a free variable has no type, if variable-bank type invariants are
+/// violated, or if a traversed argument slot is uninitialized.
+#[must_use]
+pub fn term_copy_normalize_vars_alpha(vars: &VarBank, term: &Term) -> Term {
+    let renaming = create_var_renaming_de_bruijn(vars, term);
+    term_copy_rename_vars(&renaming, term)
+}
+
+/// Copies a term with all free variables unified to `X0`.
+///
+/// The C helper allocates the unified variable with the variable bank's default
+/// type, independent of the source variable types.
+///
+/// # Panics
+///
+/// Panics if variable-bank type invariants are violated, or if a traversed
+/// argument slot is uninitialized.
+#[must_use]
+pub fn term_copy_unify_vars(vars: &VarBank, term: &Term) -> Term {
+    if term.is_free_var() {
+        return vars.var_assert_alloc(-2, &vars.default_type());
+    }
+    if term.is_db_var() {
+        return term.clone();
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.expect("term copy requires initialized args");
+        copy.set_argument(index, term_copy_unify_vars(vars, &arg));
+    }
+    copy
+}
+
+/// Copies a term using the requested C variable-normalization style.
+///
+/// # Panics
+///
+/// Panics under the same conditions as the selected copy helper.
+#[must_use]
+pub fn term_copy_normalize_vars(vars: &VarBank, term: &Term, var_norm: VarNormStyle) -> Term {
+    match var_norm {
+        VarNormStyle::Univar => term_copy_unify_vars(vars, term),
+        VarNormStyle::Alpha => term_copy_normalize_vars_alpha(vars, term),
+        VarNormStyle::None => term_copy(term, vars, None, DerefType::Never),
+    }
+}
+
 /// Writes a first-order term without assigning special semantics to symbols.
 ///
 /// # Panics
@@ -1292,6 +1370,28 @@ fn term_find_ite_subterm_inner(term: &Term, path: &mut Vec<(Term, usize)>) -> bo
     false
 }
 
+fn create_var_renaming_de_bruijn(vars: &VarBank, term: &Term) -> BTreeMap<FunCode, Term> {
+    let mut renaming = BTreeMap::new();
+    let mut fresh_var_code = -2;
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_free_var() {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                renaming.entry(current.f_code())
+            {
+                let type_ = current.type_().expect("alpha-renamed variables have types");
+                entry.insert(vars.var_assert_alloc(fresh_var_code, &type_));
+                fresh_var_code -= 2;
+            }
+        } else {
+            for arg in current.argument_clones().into_iter().rev().flatten() {
+                stack.push(arg);
+            }
+        }
+    }
+    renaming
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1299,15 +1399,16 @@ mod tests {
         term_add_symbol_features, term_add_symbol_features_limited, term_apply_arg,
         term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
         term_collect_variables, term_compute_function_ranks, term_compute_order, term_copy,
-        term_copy_keep_vars, term_create_prefix, term_dag_weight, term_depth,
-        term_find_ite_subterm, term_find_max_var_code, term_has_f_code, term_has_unbound_variables,
-        term_is_db_closed, term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute,
-        term_is_subterm, term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
-        term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
-        term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
-        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
-        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
-        term_weight_compute, var_print_string, VarNormStyle,
+        term_copy_keep_vars, term_copy_normalize_vars, term_copy_normalize_vars_alpha,
+        term_copy_rename_vars, term_copy_unify_vars, term_create_prefix, term_dag_weight,
+        term_depth, term_find_ite_subterm, term_find_max_var_code, term_has_f_code,
+        term_has_unbound_variables, term_is_db_closed, term_is_def_term, term_is_flat,
+        term_is_ground, term_is_ground_compute, term_is_subterm, term_is_subterm_deref,
+        term_is_untyped, term_lex_compare, term_linearize, term_non_linear_weight, term_parse,
+        term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
+        term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
+        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
+        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -1406,6 +1507,69 @@ mod tests {
         assert_ne!(derefed, bound);
         assert_eq!(derefed.f_code(), 99);
         assert!(derefed.is_const());
+    }
+
+    #[test]
+    fn term_copy_normalize_vars_alpha_uses_left_to_right_first_occurrence_order() {
+        let types = TypeBank::new();
+        let i_type = types.i_type();
+        let bool_type = types.bool_type();
+        let y = typed_var(-4, &bool_type);
+        let x = typed_var(-2, &i_type);
+        let db = mk_db(0, &i_type);
+        let root = Term::top_alloc(10, 4);
+        root.set_argument(0, y.clone());
+        root.set_argument(1, x.clone());
+        root.set_argument(2, y);
+        root.set_argument(3, db.clone());
+
+        let target_vars = VarBank::new(&types);
+        let copy = term_copy_normalize_vars_alpha(&target_vars, &root);
+
+        let first = copy.argument(0).unwrap();
+        let second = copy.argument(1).unwrap();
+        let repeated = copy.argument(2).unwrap();
+        assert_eq!(first.f_code(), -2);
+        assert_eq!(first.type_(), Some(bool_type));
+        assert_eq!(second.f_code(), -4);
+        assert_eq!(second.type_(), Some(i_type));
+        assert_eq!(repeated, first);
+        assert_eq!(copy.argument(3), Some(db));
+    }
+
+    #[test]
+    fn term_copy_unify_vars_and_dispatcher_follow_c_var_norm_styles() {
+        let types = TypeBank::new();
+        let i_type = types.i_type();
+        let bool_type = types.bool_type();
+        let bool_var = typed_var(-6, &bool_type);
+        let i_var = typed_var(-8, &i_type);
+        let root = Term::top_alloc(10, 2);
+        root.set_argument(0, bool_var.clone());
+        root.set_argument(1, i_var);
+
+        let univar_bank = VarBank::new(&types);
+        let univar = term_copy_unify_vars(&univar_bank, &root);
+        let first = univar.argument(0).unwrap();
+        let second = univar.argument(1).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.f_code(), -2);
+        assert_eq!(first.type_(), Some(i_type.clone()));
+
+        let none_bank = VarBank::new(&types);
+        let copied = term_copy_normalize_vars(&none_bank, &bool_var, VarNormStyle::None);
+        assert_eq!(copied.f_code(), -6);
+        assert_eq!(copied.type_(), Some(bool_type.clone()));
+
+        let alpha_bank = VarBank::new(&types);
+        let alpha = term_copy_normalize_vars(&alpha_bank, &bool_var, VarNormStyle::Alpha);
+        assert_eq!(alpha.f_code(), -2);
+        assert_eq!(alpha.type_(), Some(bool_type));
+
+        let mut renaming = BTreeMap::new();
+        let replacement = typed_var(-20, &i_type);
+        renaming.insert(-6, replacement.clone());
+        assert_eq!(term_copy_rename_vars(&renaming, &bool_var), replacement);
     }
 
     #[test]
