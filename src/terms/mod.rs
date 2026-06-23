@@ -3,6 +3,8 @@ pub mod signature;
 pub mod simplesorts;
 pub mod simpletypes;
 pub mod termcellstore;
+pub mod termcpos;
+pub mod termpos;
 pub mod termtrees;
 pub mod termtypes;
 pub mod termvars;
