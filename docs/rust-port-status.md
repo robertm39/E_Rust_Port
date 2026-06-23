@@ -13,6 +13,7 @@ Rust files:
 - `src/basics/error.rs`
 - `src/basics/fixdarrays.rs`
 - `src/basics/floattrees.rs`
+- `src/basics/intmap.rs`
 - `src/basics/min_heap.rs`
 - `src/basics/numtrees.rs`
 - `src/basics/numxtrees.rs`
@@ -41,6 +42,7 @@ Original C references:
 - [`BASICS/clb_error.h`, `BASICS/clb_error.c`](c_source_docs/BASICS/clb_error.md)
 - [`BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`](c_source_docs/BASICS/clb_fixdarrays.md)
 - [`BASICS/clb_floattrees.h`, `BASICS/clb_floattrees.c`](c_source_docs/BASICS/clb_floattrees.md)
+- [`BASICS/clb_intmap.h`, `BASICS/clb_intmap.c`](c_source_docs/BASICS/clb_intmap.md)
 - [`BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`](c_source_docs/BASICS/clb_min_heap.md)
 - [`BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`](c_source_docs/BASICS/clb_numtrees.md)
 - [`BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`](c_source_docs/BASICS/clb_numxtrees.md)
@@ -68,6 +70,7 @@ Implemented behavior:
 - Dynamic `PDArray` and `DDArray` storage from `clb_pdarrays` and `clb_ddarrays`, including exponential and fixed-multiple growth, zero/`NULL` initialization, mutating element access that extends arrays like the C macros, delete/store/add/increment helpers, and `DDArraySelectPart` partition selection.
 - `PDRangeArr` signed-index dynamic arrays from `clb_pdrangearrays`, including low/limit key tracking, upward and downward expansion, C-compatible offset shifts, pointer-member counting, deletion, copying, and integer increment helpers.
 - `FixedDArray` fixed-size integer vector helpers from `clb_fixdarrays`, including initialization, component-wise add/subtract/weighted-add/min/max, copying, and C-shaped debug printing.
+- `IntMap` multi-representation integer map behavior from `clb_intmap`, including empty/single/array/tree states, density-triggered representation switching, `get_ref` slot creation with null values, assignment and deletion return behavior, entry-count inflation for repeated null array references, inclusive sorted range iteration over non-null values, and debug printing.
 - `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
 - Permanent string registry behavior from `clb_permastrings`, including duplicate interning, owned-string store, null-shaped optional lookup, explicit global registry clearing, and returned shared strings that remain valid for Rust holders after the registry is cleared.
 - Property-bit helpers from `clb_properties`, including set/delete/flip/assign, all-bit and any-bit queries, masked property extraction, and masked equivalence checks.
@@ -88,6 +91,7 @@ Known gaps:
 
 - The prover core, parser, clausification, saturation loop, indexing, ordering, heuristics, proof output, resource limits, and most CLI options are not implemented yet.
 - Scanner support is currently limited to string sources and does not yet implement file streams, stacked include handling, or `ScannerSetFormat` format inference.
+- `IntMap` preserves the C representation-state decisions but uses safe Rust-owned storage; the C implementation's hidden `PDRangeArr` growth during some read/delete paths and inflated null-slot entry counts should be evaluated later as compatibility risks versus cleanup opportunities.
 - `StrTree` currently uses Rust `BTreeMap` to preserve sorted traversal and lookup semantics; the C implementation's splay-tree locality optimization should be revisited if profiling shows this index on hot paths.
 - `FloatTree` currently uses Rust `BTreeMap` with an internal total-order float key; exact C splay-root locality and C's accidental behavior for NaN keys are not modeled beyond deterministic handling.
 - `NumTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
@@ -97,3 +101,18 @@ Known gaps:
 - The JKISS wrapper preserves the exported C module's static-state behavior, including the fact that the `JKISSRand` state argument does not drive the random sequence; call-site-level compatibility should be revisited when random-dependent heuristics are ported.
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
+
+## C Behaviors To Revisit After Compatibility
+
+These notes are not permission to diverge during porting. They identify inherited C behaviors that may be good cleanup candidates after the Rust executable is demonstrably drop-in compatible.
+
+- `DStr`, `PStack`, `DStack`, `PDArray`, `DDArray`, and `PDRangeArr` preserve C growth and mutating-access patterns; later APIs may want clearer separation between read-only access and access that allocates or extends storage.
+- `PStack`/`DStack` discard helpers intentionally use swap-remove behavior, which is efficient but order-destroying; keep auditing callers before exposing order-preserving variants.
+- `FixedDArray` currently mirrors C assertion-style size contracts; callers fed by user input may eventually need recoverable error paths instead of invariant panics.
+- `MinHeap` preserves the C helper directions where `decr_key` drops down and `incr_key` bubbles up, despite those names appearing reversed for a conventional min-heap. Rename or wrap only after all heap users are audited.
+- `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, and `PTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
+- `IntMap` keeps C density transitions and null-slot quirks, but its hidden read/delete-time array growth in C is a likely cleanup target if compatibility tests show no observable dependency.
+- Permanent strings use `Arc<str>` to keep Rust handles valid after registry clearing; later term/signature ownership should decide whether stable arena handles are a better identity model.
+- `clb_simple_stuff` includes historical global-state behavior in `ProblemType` and JKISS random generation; the Rust port should centralize these states before parallel parsing or solving is introduced.
+- Error handling is currently represented with structured `Diagnostic` values in many Rust paths; final executable compatibility still needs exact fatal-error stream, wording, and exit-status behavior.
+- Scanner and command-line code intentionally preserve C quirks already covered by tests, while remaining incomplete for file/include stacks, format inference, and the full option table.

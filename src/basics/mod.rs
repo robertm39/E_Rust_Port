@@ -4,6 +4,7 @@ pub mod dstrings;
 pub mod error;
 pub mod fixdarrays;
 pub mod floattrees;
+pub mod intmap;
 pub mod min_heap;
 pub mod numtrees;
 pub mod numxtrees;
