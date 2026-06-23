@@ -1,3 +1,7 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
+use std::fs;
+use std::path::Path;
+
 pub const MAX_LOOKAHEAD: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +29,7 @@ impl StreamType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InputStream {
     source: Vec<u8>,
+    data: Vec<u8>,
     stream_type: StreamType,
     string_pos: usize,
     eof_seen: bool,
@@ -54,6 +59,7 @@ impl InputStream {
     pub fn from_string(stream_type: StreamType, source: &str) -> Self {
         let mut stream = Self {
             source: source.as_bytes().to_vec(),
+            data: source.as_bytes().to_vec(),
             stream_type,
             string_pos: 0,
             eof_seen: false,
@@ -66,6 +72,30 @@ impl InputStream {
             stream.buffer[index] = stream.read_char();
         }
         stream
+    }
+
+    pub fn from_file(path: &Path) -> Result<Self, Diagnostic> {
+        let data = fs::read(path).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot open file {} for reading: {error}", path.display()),
+            )
+        })?;
+        let mut stream = Self {
+            source: path.to_string_lossy().as_bytes().to_vec(),
+            data,
+            stream_type: StreamType::File,
+            string_pos: 0,
+            eof_seen: false,
+            line: 1,
+            column: 1,
+            buffer: [None; MAX_LOOKAHEAD],
+            current: 0,
+        };
+        for index in 0..MAX_LOOKAHEAD {
+            stream.buffer[index] = stream.read_char();
+        }
+        Ok(stream)
     }
 
     #[must_use]
@@ -123,7 +153,7 @@ impl InputStream {
             return None;
         }
 
-        let Some(byte) = self.source.get(self.string_pos).copied() else {
+        let Some(byte) = self.data.get(self.string_pos).copied() else {
             self.eof_seen = true;
             return None;
         };
@@ -145,6 +175,18 @@ pub const fn real_pos(pos: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::InputStream;
+    use std::path::{Path, PathBuf};
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("streams-{name}-{}.tmp", std::process::id()))
+    }
+
+    fn remove_if_present(path: &Path) {
+        _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn stream_prefills_lookahead_and_tracks_columns_like_c_streams() {
@@ -176,5 +218,27 @@ mod tests {
         assert_eq!(stream.current_char(), None);
         stream.next_char();
         assert_eq!(stream.current_char(), None);
+    }
+
+    #[test]
+    fn file_stream_uses_filename_as_source_label_and_reads_bytes() {
+        let path = temp_path("file");
+        remove_if_present(&path);
+        std::fs::write(&path, b"ab\nc").unwrap();
+
+        let mut stream = InputStream::from_file(&path).unwrap();
+
+        assert_eq!(stream.source_bytes(), path.to_string_lossy().as_bytes());
+        assert_eq!(stream.stream_type(), super::StreamType::File);
+        assert_eq!(stream.current_char(), Some(b'a'));
+        assert_eq!(stream.look_char(1), Some(b'b'));
+        assert_eq!(stream.look_char(2), Some(b'\n'));
+        stream.next_char();
+        stream.next_char();
+        stream.next_char();
+        assert_eq!((stream.line(), stream.column()), (2, 1));
+        assert_eq!(stream.current_char(), Some(b'c'));
+
+        remove_if_present(&path);
     }
 }

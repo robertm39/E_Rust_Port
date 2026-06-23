@@ -3,6 +3,7 @@ use std::ops::BitOr;
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::inout::streams::{InputStream, StreamType};
+use std::path::Path;
 
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
 
@@ -213,6 +214,10 @@ impl Scanner {
 
     pub fn from_internal_string(source: &str, ignore_comments: bool) -> Result<Self, Diagnostic> {
         Self::from_stream(InputStream::from_internal_string(source), ignore_comments)
+    }
+
+    pub fn from_file(path: &Path, ignore_comments: bool) -> Result<Self, Diagnostic> {
+        Self::from_stream(InputStream::from_file(path)?, ignore_comments)
     }
 
     pub fn from_stream(source: InputStream, ignore_comments: bool) -> Result<Self, Diagnostic> {
@@ -785,6 +790,18 @@ fn str_n_element(candidate: &[u8], ids: &str, len: usize) -> bool {
 mod tests {
     use super::{describe_token, test_id, test_idnum, token_pos_rep, IoFormat, Scanner, TokenType};
     use crate::basics::error::ErrorCode;
+    use std::path::{Path, PathBuf};
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("scanner-{name}-{}.tmp", std::process::id()))
+    }
+
+    fn remove_if_present(path: &Path) {
+        _ = std::fs::remove_file(path);
+    }
 
     fn collect_tokens(source: &str) -> Vec<(TokenType, String, bool)> {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
@@ -853,6 +870,32 @@ mod tests {
         let token = scanner.current_token();
         assert!(token.skipped());
         assert_eq!(token.comment_bytes(), b"");
+    }
+
+    #[test]
+    fn scanner_reads_file_sources_with_filename_positions() {
+        let scanner_path = temp_path("source");
+        remove_if_present(&scanner_path);
+        std::fs::write(&scanner_path, b"  abc").unwrap();
+
+        let scanner = Scanner::from_file(&scanner_path, false).unwrap();
+
+        assert_eq!(scanner.current_token().literal(), "abc");
+        assert_eq!(
+            scanner.current_token().stream_type(),
+            super::StreamType::File
+        );
+        assert_eq!(
+            token_pos_rep(scanner.current_token()),
+            format!("{}:1:(Column 3):", scanner_path.to_string_lossy())
+        );
+
+        remove_if_present(&scanner_path);
+
+        let missing = temp_path("missing");
+        let error = Scanner::from_file(&missing, false).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().contains("Cannot open file"));
     }
 
     #[test]
