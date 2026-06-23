@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
-    get_int_arg, get_int_arg_check_range, print_options, CommandLineState,
+    get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
 use crate::inout::output::set_output_level;
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
@@ -27,6 +27,9 @@ pub struct EProverConfig {
     pub output_level: i64,
     pub verbose: i64,
     pub proof_object_level: i64,
+    pub proof_output: i64,
+    pub force_derivation_output: i64,
+    pub training_examples: Option<i64>,
     pub cpu_limit: Option<i64>,
     pub soft_cpu_limit: Option<i64>,
     pub schedule_time_limit: Option<i64>,
@@ -51,6 +54,9 @@ pub enum EProverFlag {
     PruneOnly = 1 << 7,
     CnfOnly = 1 << 8,
     RequireNonempty = 1 << 9,
+    ProofStatistics = 1 << 10,
+    FullDerivation = 1 << 11,
+    RecordGivenClauses = 1 << 12,
 }
 
 impl EProverFlags {
@@ -72,6 +78,9 @@ impl Default for EProverConfig {
             output_level: 1,
             verbose: 0,
             proof_object_level: 0,
+            proof_output: 0,
+            force_derivation_output: 0,
+            training_examples: None,
             cpu_limit: None,
             soft_cpu_limit: None,
             schedule_time_limit: None,
@@ -232,76 +241,8 @@ where
     let mut state = CommandLineState::new(argv);
     let mut config = EProverConfig::default();
     while let Some(parsed) = state.next_opt(EPROVER_OPTIONS)? {
-        match parsed.option().option_code {
-            EProverOption::Help => return Ok(EProverAction::Help),
-            EProverOption::Version => return Ok(EProverAction::Version),
-            EProverOption::Verbose => {
-                config.verbose = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
-            }
-            EProverOption::Output => {
-                config.output_file = Some(parsed.arg().unwrap_or("").to_owned());
-            }
-            EProverOption::Silent => {
-                config.output_level = 0;
-            }
-            EProverOption::OutputLevel => {
-                config.output_level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
-            }
-            EProverOption::ProofObject => {
-                config.proof_object_level =
-                    get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 0, 3)?;
-            }
-            EProverOption::CpuLimit => {
-                let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
-                if let Some(soft_limit) = config.soft_cpu_limit {
-                    check_hard_soft_limits(limit, soft_limit, true)?;
-                }
-                config.cpu_limit = Some(limit);
-                config.schedule_time_limit = Some(limit);
-            }
-            EProverOption::SoftCpuLimit => {
-                let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
-                if let Some(hard_limit) = config.cpu_limit {
-                    check_hard_soft_limits(hard_limit, limit, false)?;
-                }
-                config.soft_cpu_limit = Some(limit);
-                config.schedule_time_limit = Some(limit);
-            }
-            EProverOption::MemoryLimit => {
-                config.memory_limit = Some(parsed.arg().unwrap_or("").to_owned());
-            }
-            EProverOption::SyntaxOnly => {
-                config.flags.set(EProverFlag::SyntaxOnly);
-            }
-            EProverOption::PrintFormulas => {
-                config.flags.set(EProverFlag::SyntaxOnly);
-                config.flags.set(EProverFlag::PrintFormulas);
-            }
-            EProverOption::PruneOnly => {
-                config.output_level = 4;
-                config.flags.set(EProverFlag::PruneOnly);
-            }
-            EProverOption::CnfOnly => {
-                config.flags.set(EProverFlag::CnfOnly);
-            }
-            EProverOption::PrintPid => {
-                config.flags.set(EProverFlag::PrintPid);
-            }
-            EProverOption::PrintVersion => {
-                config.flags.set(EProverFlag::PrintVersion);
-            }
-            EProverOption::RequireNonempty => {
-                config.flags.set(EProverFlag::RequireNonempty);
-            }
-            EProverOption::Auto => {
-                config.flags.set(EProverFlag::Auto);
-            }
-            EProverOption::DeterministicRewriteSort => {
-                config.flags.set(EProverFlag::DeterministicRewriteSort);
-            }
-            EProverOption::DeterministicNewSort => {
-                config.flags.set(EProverFlag::DeterministicNewSort);
-            }
+        if let Some(action) = apply_parsed_option(&mut config, &parsed)? {
+            return Ok(action);
         }
     }
 
@@ -310,6 +251,173 @@ where
         config.files.push("-".to_owned());
     }
     Ok(EProverAction::Run(config))
+}
+
+fn apply_parsed_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<Option<EProverAction>, Diagnostic> {
+    match parsed.option().option_code {
+        EProverOption::Help => Ok(Some(EProverAction::Help)),
+        EProverOption::Version => Ok(Some(EProverAction::Version)),
+        EProverOption::Verbose
+        | EProverOption::Output
+        | EProverOption::Silent
+        | EProverOption::OutputLevel => {
+            apply_output_option(config, parsed)?;
+            Ok(None)
+        }
+        EProverOption::ProofObject
+        | EProverOption::ProofGraph
+        | EProverOption::ProofStatistics
+        | EProverOption::FullDerivation
+        | EProverOption::ForceDerivation
+        | EProverOption::RecordGivenClauses
+        | EProverOption::TrainingExamples => {
+            apply_proof_option(config, parsed)?;
+            Ok(None)
+        }
+        EProverOption::CpuLimit | EProverOption::SoftCpuLimit | EProverOption::MemoryLimit => {
+            apply_resource_option(config, parsed)?;
+            Ok(None)
+        }
+        EProverOption::SyntaxOnly
+        | EProverOption::PrintFormulas
+        | EProverOption::PruneOnly
+        | EProverOption::CnfOnly => {
+            apply_input_mode_option(config, parsed);
+            Ok(None)
+        }
+        EProverOption::PrintPid
+        | EProverOption::PrintVersion
+        | EProverOption::RequireNonempty
+        | EProverOption::Auto
+        | EProverOption::DeterministicRewriteSort
+        | EProverOption::DeterministicNewSort => {
+            apply_simple_flag(config, parsed.option().option_code);
+            Ok(None)
+        }
+    }
+}
+
+fn apply_output_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    match parsed.option().option_code {
+        EProverOption::Verbose => {
+            config.verbose = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::Output => {
+            config.output_file = Some(parsed.arg().unwrap_or("").to_owned());
+        }
+        EProverOption::Silent => {
+            config.output_level = 0;
+        }
+        EProverOption::OutputLevel => {
+            config.output_level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        _ => unreachable!("non-output option routed to output handler"),
+    }
+    Ok(())
+}
+
+fn apply_proof_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    match parsed.option().option_code {
+        EProverOption::ProofObject => {
+            let level = get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 0, 3)?;
+            config.proof_object_level = config.proof_object_level.max(level);
+            config.proof_output = config.proof_output.max(1);
+        }
+        EProverOption::ProofGraph => {
+            let level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+            config.proof_object_level = config.proof_object_level.max(1);
+            config.proof_output = level + 1;
+        }
+        EProverOption::ProofStatistics => config.flags.set(EProverFlag::ProofStatistics),
+        EProverOption::FullDerivation => config.flags.set(EProverFlag::FullDerivation),
+        EProverOption::ForceDerivation => {
+            config.force_derivation_output =
+                get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 0, 2)?;
+            config.proof_object_level = config.proof_object_level.max(1);
+        }
+        EProverOption::RecordGivenClauses => {
+            config.proof_object_level = config.proof_object_level.max(1);
+            config.flags.set(EProverFlag::RecordGivenClauses);
+        }
+        EProverOption::TrainingExamples => {
+            config.proof_object_level = config.proof_object_level.max(1);
+            config.flags.set(EProverFlag::RecordGivenClauses);
+            config.training_examples =
+                Some(get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?);
+        }
+        _ => unreachable!("non-proof option routed to proof handler"),
+    }
+    Ok(())
+}
+
+fn apply_resource_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    match parsed.option().option_code {
+        EProverOption::CpuLimit => {
+            let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+            if let Some(soft_limit) = config.soft_cpu_limit {
+                check_hard_soft_limits(limit, soft_limit, true)?;
+            }
+            config.cpu_limit = Some(limit);
+            config.schedule_time_limit = Some(limit);
+        }
+        EProverOption::SoftCpuLimit => {
+            let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+            if let Some(hard_limit) = config.cpu_limit {
+                check_hard_soft_limits(hard_limit, limit, false)?;
+            }
+            config.soft_cpu_limit = Some(limit);
+            config.schedule_time_limit = Some(limit);
+        }
+        EProverOption::MemoryLimit => {
+            config.memory_limit = Some(parsed.arg().unwrap_or("").to_owned());
+        }
+        _ => unreachable!("non-resource option routed to resource handler"),
+    }
+    Ok(())
+}
+
+fn apply_input_mode_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
+    match parsed.option().option_code {
+        EProverOption::SyntaxOnly => config.flags.set(EProverFlag::SyntaxOnly),
+        EProverOption::PrintFormulas => {
+            config.flags.set(EProverFlag::SyntaxOnly);
+            config.flags.set(EProverFlag::PrintFormulas);
+        }
+        EProverOption::PruneOnly => {
+            config.output_level = 4;
+            config.flags.set(EProverFlag::PruneOnly);
+        }
+        EProverOption::CnfOnly => config.flags.set(EProverFlag::CnfOnly),
+        _ => unreachable!("non-input-mode option routed to input-mode handler"),
+    }
+}
+
+fn apply_simple_flag(config: &mut EProverConfig, option: EProverOption) {
+    match option {
+        EProverOption::PrintPid => config.flags.set(EProverFlag::PrintPid),
+        EProverOption::PrintVersion => config.flags.set(EProverFlag::PrintVersion),
+        EProverOption::RequireNonempty => config.flags.set(EProverFlag::RequireNonempty),
+        EProverOption::Auto => config.flags.set(EProverFlag::Auto),
+        EProverOption::DeterministicRewriteSort => {
+            config.flags.set(EProverFlag::DeterministicRewriteSort);
+        }
+        EProverOption::DeterministicNewSort => {
+            config.flags.set(EProverFlag::DeterministicNewSort);
+        }
+        _ => unreachable!("non-simple flag routed to simple-flag handler"),
+    }
 }
 
 #[must_use]
@@ -450,6 +558,49 @@ mod tests {
         };
         assert!(config.flags.contains(EProverFlag::CnfOnly));
         assert!(config.flags.contains(EProverFlag::RequireNonempty));
+    }
+
+    #[test]
+    fn process_options_records_proof_output_state_like_c() {
+        let action = process_options(["eprover", "--proof-object=3", "--proof-object=1"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.proof_object_level, 3);
+        assert_eq!(config.proof_output, 1);
+
+        let action = process_options(["eprover", "--proof-graph=2"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.proof_object_level, 1);
+        assert_eq!(config.proof_output, 3);
+
+        let action =
+            process_options(["eprover", "-d", "--proof-statistics", "--record-gcs"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.flags.contains(EProverFlag::FullDerivation));
+        assert!(config.flags.contains(EProverFlag::ProofStatistics));
+        assert!(config.flags.contains(EProverFlag::RecordGivenClauses));
+        assert_eq!(config.proof_object_level, 1);
+
+        let action =
+            process_options(["eprover", "--force-deriv=2", "--training-examples=3"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.force_derivation_output, 2);
+        assert_eq!(config.training_examples, Some(3));
+        assert!(config.flags.contains(EProverFlag::RecordGivenClauses));
+        assert_eq!(config.proof_object_level, 1);
+    }
+
+    #[test]
+    fn process_options_rejects_force_derivation_outside_c_range() {
+        let error = process_options(["eprover", "--force-deriv=3"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
