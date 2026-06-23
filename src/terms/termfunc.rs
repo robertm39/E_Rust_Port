@@ -218,6 +218,53 @@ pub fn term_simple_string(term: &Term, sig: &Signature) -> String {
     output
 }
 
+/// Writes an uninstantiated term as an s-expression.
+///
+/// # Panics
+///
+/// Panics if a non-constant term has an uninitialized argument, matching the
+/// C precondition that all argument slots are valid term pointers.
+pub fn term_write_s_expr(
+    output: &mut impl fmt::Write,
+    term: &Term,
+    sig: &Signature,
+) -> fmt::Result {
+    if term.arity() != 0 {
+        write!(output, "(")?;
+    }
+
+    if term.is_db_var() {
+        write!(output, "db({})", term.f_code())?;
+    } else if term.is_free_var() {
+        write!(output, "{}", var_print_string(term.f_code()))?;
+    } else {
+        write!(
+            output,
+            "{}",
+            sig.find_name(term.f_code()).unwrap_or("<unknown>")
+        )?;
+    }
+
+    for index in 0..term.arity() {
+        write!(output, "   ")?;
+        let arg = term
+            .argument(index)
+            .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        term_write_s_expr(output, &arg, sig)?;
+    }
+    if term.arity() != 0 {
+        write!(output, ")")?;
+    }
+    Ok(())
+}
+
+#[must_use]
+pub fn term_s_expr_string(term: &Term, sig: &Signature) -> String {
+    let mut output = String::new();
+    let _ = term_write_s_expr(&mut output, term, sig);
+    output
+}
+
 #[must_use]
 pub fn term_is_flat(term: &Term) -> bool {
     if term.is_const() || term.is_free_var() {
@@ -896,10 +943,10 @@ mod tests {
         term_is_def_term, term_is_flat, term_is_ground_compute, term_is_subterm,
         term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
         term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
-        term_sig_insert, term_simple_string, term_standard_weight, term_struct_equal,
-        term_struct_equal_deref, term_struct_equal_no_deref, term_struct_prefix_equal,
-        term_struct_weight_compare, term_sym_type_weight, term_weight_compute, var_print_string,
-        VarNormStyle,
+        term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
+        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
+        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
+        term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -1047,6 +1094,20 @@ mod tests {
 
         assert_eq!(printed, "f(a,X1,g(X2))");
         assert_eq!(term_simple_string(&round_term, &round_sig), printed);
+    }
+
+    #[test]
+    fn term_print_s_expr_matches_c_spacing_and_db_var_shape() {
+        let (sig, _vars, term) = parse_unshared("f(a,X,g(Y))");
+
+        assert_eq!(term_s_expr_string(&term, &sig), "(f   a   X1   (g   X2))");
+
+        let (sig, _vars, variable) = parse_unshared("X");
+        assert_eq!(term_s_expr_string(&variable, &sig), "X1");
+
+        let db = Term::const_cell_alloc(0);
+        db.set_prop(TP_IS_DB_VAR);
+        assert_eq!(term_s_expr_string(&db, &sig), "db(0)");
     }
 
     #[test]
