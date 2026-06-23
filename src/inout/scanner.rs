@@ -7,6 +7,23 @@ use crate::inout::streams::{InputStream, StreamType};
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum IoFormat {
+    #[default]
+    Lop = 0,
+    Tptp = 1,
+    Tstp = 2,
+    Auto = 3,
+}
+
+impl IoFormat {
+    #[must_use]
+    pub const fn c_value(self) -> i32 {
+        self as i32
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TokenType(u64);
 
 impl TokenType {
@@ -180,6 +197,7 @@ impl Token {
 pub struct Scanner {
     source: InputStream,
     ignore_comments: bool,
+    format: IoFormat,
     tok_sequence: [Token; MAX_TOKEN_LOOKAHEAD],
     current: usize,
 }
@@ -201,6 +219,7 @@ impl Scanner {
         let mut scanner = Self {
             source,
             ignore_comments,
+            format: IoFormat::Lop,
             tok_sequence: std::array::from_fn(|_| Token::default()),
             current: 0,
         };
@@ -213,6 +232,25 @@ impl Scanner {
     #[must_use]
     pub fn current_token(&self) -> &Token {
         &self.tok_sequence[self.current]
+    }
+
+    #[must_use]
+    pub const fn format(&self) -> IoFormat {
+        self.format
+    }
+
+    pub fn set_format(&mut self, format: IoFormat) {
+        self.format = if format == IoFormat::Auto {
+            if self.test_id("fof|cnf|tff|thf|tcf|include") {
+                IoFormat::Tstp
+            } else if self.test_id("input_clause|input_formula") {
+                IoFormat::Tptp
+            } else {
+                IoFormat::Lop
+            }
+        } else {
+            format
+        };
     }
 
     #[must_use]
@@ -745,7 +783,7 @@ fn str_n_element(candidate: &[u8], ids: &str, len: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe_token, test_id, test_idnum, token_pos_rep, Scanner, TokenType};
+    use super::{describe_token, test_id, test_idnum, token_pos_rep, IoFormat, Scanner, TokenType};
     use crate::basics::error::ErrorCode;
 
     fn collect_tokens(source: &str) -> Vec<(TokenType, String, bool)> {
@@ -771,6 +809,31 @@ mod tests {
         assert_eq!(TokenType::ITE_TOKEN.bits(), 1 << 42);
         assert!(TokenType::FOF_BIN_OP.intersects(TokenType::NEG_EQUAL_SIGN));
         assert!(TokenType::IDENTIFIER.intersects(TokenType::IDNUM));
+    }
+
+    #[test]
+    fn scanner_format_defaults_and_auto_detection_match_c() {
+        assert_eq!(IoFormat::Lop.c_value(), 0);
+        assert_eq!(IoFormat::Tptp.c_value(), 1);
+        assert_eq!(IoFormat::Tstp.c_value(), 2);
+        assert_eq!(IoFormat::Auto.c_value(), 3);
+
+        let mut tstp_scanner = Scanner::from_user_string("fof(name, axiom, p).", false).unwrap();
+        assert_eq!(tstp_scanner.format(), IoFormat::Lop);
+        tstp_scanner.set_format(IoFormat::Auto);
+        assert_eq!(tstp_scanner.format(), IoFormat::Tstp);
+        assert_eq!(tstp_scanner.current_token().literal(), "fof");
+
+        let mut old_tptp_scanner =
+            Scanner::from_user_string("input_clause(c,axiom,[]).", false).unwrap();
+        old_tptp_scanner.set_format(IoFormat::Auto);
+        assert_eq!(old_tptp_scanner.format(), IoFormat::Tptp);
+
+        let mut lop = Scanner::from_user_string("cnf_like_but_not_exact", false).unwrap();
+        lop.set_format(IoFormat::Auto);
+        assert_eq!(lop.format(), IoFormat::Lop);
+        lop.set_format(IoFormat::Tstp);
+        assert_eq!(lop.format(), IoFormat::Tstp);
     }
 
     #[test]
