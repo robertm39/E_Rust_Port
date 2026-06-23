@@ -1,7 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::inout::scanner::{Scanner, TokenType};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,14 +78,7 @@ impl FileVars {
     }
 
     pub fn read_from_file(&mut self, file: &Path) -> Result<usize, Diagnostic> {
-        let bytes = fs::read(file).map_err(|error| {
-            Diagnostic::new(
-                ErrorCode::FILE_ERROR,
-                format!("Cannot open file {} for reading: {error}", file.display()),
-            )
-        })?;
-        let contents = String::from_utf8_lossy(&bytes);
-        let mut scanner = Scanner::from_user_string(&contents, true)?;
+        let mut scanner = Scanner::from_file(file, true)?;
         self.parse_scanner(&mut scanner, file.display().to_string())
     }
 
@@ -237,6 +229,22 @@ mod tests {
 
         let error = vars.get_int("bad").unwrap_err();
         assert!(error.message().contains(&path.display().to_string()));
+        remove_if_present(&path);
+    }
+
+    #[test]
+    fn read_from_file_uses_file_positions_for_syntax_errors() {
+        let path = temp_path("syntax");
+        remove_if_present(&path);
+        std::fs::write(&path, b"= 1;").unwrap();
+        let mut vars = FileVars::new();
+
+        let error = vars.read_from_file(&path).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains(&path.display().to_string()));
+        assert!(error.message().contains("Column 1"));
+
         remove_if_present(&path);
     }
 
