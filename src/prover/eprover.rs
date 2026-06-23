@@ -27,6 +27,8 @@ const DEFAULT_DB_WEIGHT: i64 = 10;
 const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
+const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
 
 const GROUNDING_STRATEGY_NAMES: &[&str] = &[
     "NoGrounding",
@@ -38,6 +40,11 @@ const GROUNDING_STRATEGY_NAMES: &[&str] = &[
     "ConjMaxMaxFreq",
     "GlobalMax",
     "GlobalMin",
+];
+
+const FP_INDEX_NAMES: &[&str] = &[
+    "FP0", "FPfp", "FP1", "FP2", "FP3D", "FP3W", "FP4D", "FP4W", "FP4M", "FP5M", "FP6M", "FP7",
+    "FP7M", "FP4X2_2", "FP3DFlex", "NPDT", "NoIndex",
 ];
 
 const PRECEDENCE_GENERATION_METHODS: &[&str] = &[
@@ -375,6 +382,21 @@ pub enum GroundingStrategy {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
+pub enum FvIndexFeatureType {
+    NoFeatures = 0,
+    AcFeatures = 1,
+    SsFeatures = 2,
+    AllFeatures = 3,
+    BillFeatures = 4,
+    BillPlusFeatures = 5,
+    #[default]
+    AcFold = 6,
+    AcStagger = 7,
+    CollectFeatures = 8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
 pub enum TermOrdering {
     NoOrdering = 0,
     Optimize = 1,
@@ -550,6 +572,11 @@ pub struct EqualityResolutionConfig {
     pub aggressive: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SubsumptionConfig {
+    pub forward_aggressive: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InferenceConfig {
     pub enable_eq_factoring: bool,
@@ -560,6 +587,7 @@ pub struct InferenceConfig {
     pub demodulation: DemodulationConfig,
     pub context_simplification: ContextSimplificationConfig,
     pub equality_resolution: EqualityResolutionConfig,
+    pub subsumption: SubsumptionConfig,
 }
 
 impl Default for InferenceConfig {
@@ -573,6 +601,7 @@ impl Default for InferenceConfig {
             demodulation: DemodulationConfig::default(),
             context_simplification: ContextSimplificationConfig::default(),
             equality_resolution: EqualityResolutionConfig::default(),
+            subsumption: SubsumptionConfig::default(),
         }
     }
 }
@@ -659,6 +688,71 @@ impl Default for SatCheckConfig {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WatchlistSource {
+    Inline,
+    File(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WatchlistConfig {
+    pub source: Option<WatchlistSource>,
+    pub simplify: bool,
+    pub is_static: bool,
+}
+
+impl Default for WatchlistConfig {
+    fn default() -> Self {
+        Self {
+            source: None,
+            simplify: true,
+            is_static: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeatureVectorIndexConfig {
+    pub feature_type: FvIndexFeatureType,
+    pub use_perm_vectors: bool,
+    pub eliminate_uninformative: bool,
+    pub max_symbols: i64,
+    pub symbol_slack: i64,
+}
+
+impl Default for FeatureVectorIndexConfig {
+    fn default() -> Self {
+        Self {
+            feature_type: FvIndexFeatureType::AcFold,
+            use_perm_vectors: false,
+            eliminate_uninformative: false,
+            max_symbols: 17,
+            symbol_slack: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FingerprintIndexConfig {
+    pub rw_bw_index_type: String,
+    pub pm_from_index_type: String,
+    pub pm_into_index_type: String,
+    pub pdt_use_size_constraints: bool,
+    pub pdt_use_age_constraints: bool,
+}
+
+impl Default for FingerprintIndexConfig {
+    fn default() -> Self {
+        Self {
+            rw_bw_index_type: "FP7".to_owned(),
+            pm_from_index_type: "FP7".to_owned(),
+            pm_into_index_type: "FP7".to_owned(),
+            pdt_use_size_constraints: true,
+            pdt_use_age_constraints: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SearchControlConfig {
     pub ordering: TermOrderingConfig,
@@ -669,6 +763,9 @@ pub struct SearchControlConfig {
     pub splitting: SplittingConfig,
     pub support: SearchSupportConfig,
     pub sat_check: SatCheckConfig,
+    pub watchlist: WatchlistConfig,
+    pub fv_index: FeatureVectorIndexConfig,
+    pub fingerprint_index: FingerprintIndexConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1157,6 +1254,9 @@ const fn is_search_control_option(option: EProverOption) -> bool {
         || is_heuristic_control_option(option)
         || is_inference_control_option(option)
         || is_inference_processing_option(option)
+        || is_watchlist_option(option)
+        || is_subsumption_index_option(option)
+        || is_fingerprint_index_option(option)
         || is_splitting_option(option)
 }
 
@@ -1252,6 +1352,40 @@ const fn is_inference_processing_option(option: EProverOption) -> bool {
             | EProverOption::SatCheckNormalizeConst
             | EProverOption::SatCheckNormalizeUnproc
             | EProverOption::LiftLambdas
+    )
+}
+
+const fn is_watchlist_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::Watchlist
+            | EProverOption::StaticWatchlist
+            | EProverOption::NoWatchlistSimplification
+    )
+}
+
+const fn is_subsumption_index_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::ForwardSubsumptionAggressive
+            | EProverOption::ConventionalSubsumption
+            | EProverOption::SubsumptionIndexing
+            | EProverOption::FvIndexFeatureTypes
+            | EProverOption::FvIndexMaxFeatures
+            | EProverOption::FvIndexSlack
+    )
+}
+
+const fn is_fingerprint_index_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::RewriteBackwardIndex
+            | EProverOption::ParamodFromIndex
+            | EProverOption::ParamodIntoIndex
+            | EProverOption::FingerprintIndex
+            | EProverOption::FingerprintNoSizeConstr
+            | EProverOption::PdtNoSizeConstr
+            | EProverOption::PdtNoAgeConstr
     )
 }
 
@@ -1681,6 +1815,12 @@ fn apply_search_control_option(
         apply_inference_control_option(config, option_code);
     } else if is_inference_processing_option(option_code) {
         apply_inference_processing_option(config, parsed)?;
+    } else if is_watchlist_option(option_code) {
+        apply_watchlist_option(config, parsed);
+    } else if is_subsumption_index_option(option_code) {
+        apply_subsumption_index_option(config, parsed)?;
+    } else if is_fingerprint_index_option(option_code) {
+        apply_fingerprint_index_option(config, parsed)?;
     } else if is_splitting_option(option_code) {
         apply_splitting_option(config, parsed)?;
     } else {
@@ -1953,6 +2093,161 @@ fn set_sat_check_grounding(config: &mut EProverConfig, value: &str) -> Result<()
     Ok(())
 }
 
+fn apply_watchlist_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
+    match parsed.option().option_code {
+        EProverOption::Watchlist => set_watchlist_source(config, parsed.arg().unwrap_or("")),
+        EProverOption::StaticWatchlist => {
+            config.search.watchlist.is_static = true;
+            set_watchlist_source(config, parsed.arg().unwrap_or(""));
+        }
+        EProverOption::NoWatchlistSimplification => {
+            config.search.watchlist.simplify = false;
+        }
+        _ => unreachable!("non-watchlist option routed to watchlist handler"),
+    }
+}
+
+fn set_watchlist_source(config: &mut EProverConfig, value: &str) {
+    config.search.watchlist.source = Some(
+        if value == WATCHLIST_INLINE_STRING || value == WATCHLIST_INLINE_QSTRING {
+            WatchlistSource::Inline
+        } else {
+            WatchlistSource::File(value.to_owned())
+        },
+    );
+}
+
+fn apply_subsumption_index_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::ForwardSubsumptionAggressive => {
+            config.search.inference.subsumption.forward_aggressive = true;
+        }
+        EProverOption::ConventionalSubsumption => {
+            config.search.fv_index.feature_type = FvIndexFeatureType::NoFeatures;
+        }
+        EProverOption::SubsumptionIndexing => set_subsumption_indexing(config, value)?,
+        EProverOption::FvIndexFeatureTypes => set_fv_index_feature_type(config, value)?,
+        EProverOption::FvIndexMaxFeatures => {
+            let max_symbols = get_int_arg(parsed.option(), value)?;
+            if max_symbols <= 0 {
+                return Err(Diagnostic::new(
+                    ErrorCode::USAGE_ERROR,
+                    "Argument to option --fvindex-maxfeatures has to be > 0",
+                ));
+            }
+            config.search.fv_index.max_symbols =
+                get_int_arg_check_range(parsed.option(), value, 0, i64::MAX)?;
+        }
+        EProverOption::FvIndexSlack => {
+            config.search.fv_index.symbol_slack =
+                get_int_arg_check_range(parsed.option(), value, 0, i64::MAX)?;
+        }
+        _ => unreachable!("non-subsumption-index option routed to handler"),
+    }
+    Ok(())
+}
+
+fn set_subsumption_indexing(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    match value {
+        "None" => {
+            config.search.fv_index.feature_type = FvIndexFeatureType::NoFeatures;
+            Ok(())
+        }
+        "Direct" => {
+            config.search.fv_index.use_perm_vectors = false;
+            Ok(())
+        }
+        "Perm" => {
+            config.search.fv_index.use_perm_vectors = true;
+            config.search.fv_index.eliminate_uninformative = false;
+            Ok(())
+        }
+        "PermOpt" => {
+            config.search.fv_index.use_perm_vectors = true;
+            config.search.fv_index.eliminate_uninformative = true;
+            Ok(())
+        }
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "Option --subsumption-indexing requires 'None', 'Direct', 'Perm', or 'PermOpt'.",
+        )),
+    }
+}
+
+fn set_fv_index_feature_type(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    config.search.fv_index.feature_type = match value {
+        "None" => FvIndexFeatureType::NoFeatures,
+        "AC" => FvIndexFeatureType::AcFeatures,
+        "SS" => FvIndexFeatureType::SsFeatures,
+        "All" => FvIndexFeatureType::AllFeatures,
+        "Bill" => FvIndexFeatureType::BillFeatures,
+        "BillPlus" => FvIndexFeatureType::BillPlusFeatures,
+        "ACFold" => FvIndexFeatureType::AcFold,
+        "ACStagger" => FvIndexFeatureType::AcStagger,
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                "Option --fvindex-featuretypes requires 'None', 'AC', 'SS', 'All', 'Bill', 'BillPlus', 'ACFold', 'ACStagger'.",
+            ));
+        }
+    };
+    Ok(())
+}
+
+fn apply_fingerprint_index_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::RewriteBackwardIndex => {
+            check_fp_index_arg(value, "--rw-bw-index")?;
+            value.clone_into(&mut config.search.fingerprint_index.rw_bw_index_type);
+        }
+        EProverOption::ParamodFromIndex => {
+            check_fp_index_arg(value, "--pm-from-index")?;
+            value.clone_into(&mut config.search.fingerprint_index.pm_from_index_type);
+        }
+        EProverOption::ParamodIntoIndex => {
+            check_fp_index_arg(value, "--pm-into-index")?;
+            value.clone_into(&mut config.search.fingerprint_index.pm_into_index_type);
+        }
+        EProverOption::FingerprintIndex => {
+            check_fp_index_arg(value, "--fp-index")?;
+            value.clone_into(&mut config.search.fingerprint_index.rw_bw_index_type);
+            value.clone_into(&mut config.search.fingerprint_index.pm_from_index_type);
+            value.clone_into(&mut config.search.fingerprint_index.pm_into_index_type);
+        }
+        EProverOption::FingerprintNoSizeConstr => {}
+        EProverOption::PdtNoSizeConstr => {
+            config.search.fingerprint_index.pdt_use_size_constraints = false;
+        }
+        EProverOption::PdtNoAgeConstr => {
+            config.search.fingerprint_index.pdt_use_age_constraints = false;
+        }
+        _ => unreachable!("non-fingerprint-index option routed to handler"),
+    }
+    Ok(())
+}
+
+fn check_fp_index_arg(value: &str, option_name: &str) -> Result<(), Diagnostic> {
+    if FP_INDEX_NAMES.contains(&value) {
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Wrong argument to option {option_name}. Possible values: {}",
+                FP_INDEX_NAMES.join(", ")
+            ),
+        ))
+    }
+}
+
 fn apply_splitting_option(
     config: &mut EProverConfig,
     parsed: &ParsedOpt<'_, EProverOption>,
@@ -2120,8 +2415,8 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverFlag, GroundingStrategy, LiteralComparison, ParamodulationType,
-        TermOrdering, MEGA,
+        EProverAction, EProverFlag, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, TermOrdering, WatchlistSource, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -2848,6 +3143,161 @@ mod tests {
     }
 
     #[test]
+    fn process_options_records_watchlist_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.watchlist.source, None);
+        assert!(config.search.watchlist.simplify);
+        assert!(!config.search.watchlist.is_static);
+
+        let action = process_options(["eprover", "--watchlist"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.watchlist.source,
+            Some(WatchlistSource::Inline)
+        );
+        assert!(!config.search.watchlist.is_static);
+
+        let action = process_options(["eprover", "--watchlist=Use inline watchlist type"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.watchlist.source,
+            Some(WatchlistSource::Inline)
+        );
+
+        let action = process_options([
+            "eprover",
+            "--static-watchlist=watch.p",
+            "--no-watchlist-simplification",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.watchlist.source,
+            Some(WatchlistSource::File("watch.p".to_owned()))
+        );
+        assert!(config.search.watchlist.is_static);
+        assert!(!config.search.watchlist.simplify);
+    }
+
+    #[test]
+    fn process_options_records_subsumption_index_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(!config.search.inference.subsumption.forward_aggressive);
+        assert_eq!(
+            config.search.fv_index.feature_type,
+            FvIndexFeatureType::AcFold
+        );
+        assert!(!config.search.fv_index.use_perm_vectors);
+        assert!(!config.search.fv_index.eliminate_uninformative);
+        assert_eq!(config.search.fv_index.max_symbols, 17);
+        assert_eq!(config.search.fv_index.symbol_slack, 0);
+
+        let action = process_options([
+            "eprover",
+            "--fw-subsumption-aggressive",
+            "--subsumption-indexing=Perm",
+            "--fvindex-featuretypes=BillPlus",
+            "--fvindex-maxfeatures",
+            "--fvindex-slack=3",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.search.inference.subsumption.forward_aggressive);
+        assert_eq!(
+            config.search.fv_index.feature_type,
+            FvIndexFeatureType::BillPlusFeatures
+        );
+        assert!(config.search.fv_index.use_perm_vectors);
+        assert!(!config.search.fv_index.eliminate_uninformative);
+        assert_eq!(config.search.fv_index.max_symbols, 200);
+        assert_eq!(config.search.fv_index.symbol_slack, 3);
+
+        let action = process_options(["eprover", "--conventional-subsumption"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.fv_index.feature_type,
+            FvIndexFeatureType::NoFeatures
+        );
+
+        let action = process_options([
+            "eprover",
+            "--subsumption-indexing=PermOpt",
+            "--subsumption-indexing=Direct",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(!config.search.fv_index.use_perm_vectors);
+        assert!(config.search.fv_index.eliminate_uninformative);
+    }
+
+    #[test]
+    fn process_options_records_fingerprint_index_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.fingerprint_index.rw_bw_index_type, "FP7");
+        assert_eq!(config.search.fingerprint_index.pm_from_index_type, "FP7");
+        assert_eq!(config.search.fingerprint_index.pm_into_index_type, "FP7");
+        assert!(config.search.fingerprint_index.pdt_use_size_constraints);
+        assert!(config.search.fingerprint_index.pdt_use_age_constraints);
+
+        let action = process_options([
+            "eprover",
+            "--rw-bw-index=FP0",
+            "--pm-from-index=NoIndex",
+            "--pm-into-index=NPDT",
+            "--pdt-no-size-constr",
+            "--pdt-no-age-constr",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.fingerprint_index.rw_bw_index_type, "FP0");
+        assert_eq!(
+            config.search.fingerprint_index.pm_from_index_type,
+            "NoIndex"
+        );
+        assert_eq!(config.search.fingerprint_index.pm_into_index_type, "NPDT");
+        assert!(!config.search.fingerprint_index.pdt_use_size_constraints);
+        assert!(!config.search.fingerprint_index.pdt_use_age_constraints);
+
+        let action = process_options(["eprover", "--fp-index=FP7M"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.fingerprint_index.rw_bw_index_type, "FP7M");
+        assert_eq!(config.search.fingerprint_index.pm_from_index_type, "FP7M");
+        assert_eq!(config.search.fingerprint_index.pm_into_index_type, "FP7M");
+
+        let action = process_options(["eprover", "--fp-no-size-constr"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.search.fingerprint_index.pdt_use_size_constraints);
+        assert!(config.search.fingerprint_index.pdt_use_age_constraints);
+    }
+
+    #[test]
     fn process_options_rejects_invalid_search_control_args() {
         let error = process_options(["eprover", "-W", "none"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
@@ -2890,6 +3340,36 @@ mod tests {
         let error =
             process_options(["eprover", "--satcheck-decision-limit=2147483648"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--subsumption-indexing=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option --subsumption-indexing requires 'None', 'Direct', 'Perm', or 'PermOpt'."
+        );
+
+        let error = process_options(["eprover", "--fvindex-featuretypes=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error
+            .message()
+            .starts_with("Option --fvindex-featuretypes requires "));
+
+        let error = process_options(["eprover", "--fvindex-maxfeatures=0"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Argument to option --fvindex-maxfeatures has to be > 0"
+        );
+
+        let error = process_options(["eprover", "--fvindex-slack=-1"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--rw-bw-index=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error
+            .message()
+            .starts_with("Wrong argument to option --rw-bw-index. Possible values: "));
+        assert!(error.message().contains("FP7"));
     }
 
     #[test]
