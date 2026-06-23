@@ -5,8 +5,10 @@ use crate::clauses::eqn_props::{
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
 };
 use crate::terms::acterms::term_ac_equal;
+use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::signature::{FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::type_is_predicate;
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::{
     tb_term_del_prop_count, tb_term_is_ground, tb_term_is_type_term, tb_term_is_x_type_term,
     TermBank,
@@ -42,6 +44,24 @@ fn cmp_i32(left: i32, right: i32) -> i32 {
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
     }
+}
+
+fn subsume_term_pair_directed(
+    pattern_left: &Term,
+    pattern_right: &Term,
+    target_left: &Term,
+    target_right: &Term,
+    subst: &mut Substitution,
+) -> bool {
+    let backtrack = subst.len();
+    let mut result = subst_match_complete(pattern_left, target_left, subst);
+    if result {
+        result = subst_match_complete(pattern_right, target_right, subst);
+    }
+    if !result {
+        subst.backtrack_to_pos(backtrack);
+    }
+    result
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -789,6 +809,47 @@ impl Eqn {
         }
     }
 
+    pub fn subsume_directed(&self, subsumed: &Self, subst: &mut Substitution) -> bool {
+        subsume_term_pair_directed(
+            &self.lterm,
+            &self.rterm,
+            &subsumed.lterm,
+            &subsumed.rterm,
+            subst,
+        )
+    }
+
+    pub fn subsume(&self, subsumed: &Self, subst: &mut Substitution) -> bool {
+        if self.is_oriented() && !subsumed.is_oriented() {
+            return false;
+        }
+        let result = self.subsume_directed(subsumed, subst);
+        if result || self.is_oriented() {
+            return result;
+        }
+        subsume_term_pair_directed(
+            &self.rterm,
+            &self.lterm,
+            &subsumed.lterm,
+            &subsumed.rterm,
+            subst,
+        )
+    }
+
+    #[must_use]
+    pub fn subsume_p(&self, subsumed: &Self) -> bool {
+        let mut subst = Substitution::new();
+        let result = self.subsume(subsumed, &mut subst);
+        subst.backtrack();
+        result
+    }
+
+    #[must_use]
+    pub fn literal_subsume_p(&self, subsumed: &Self) -> bool {
+        EqnProperties::are_equiv(self.properties, subsumed.properties, EP_IS_POSITIVE)
+            && self.subsume_p(subsumed)
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -806,6 +867,7 @@ mod tests {
         FunctionProperties, Signature, FP_CL_SPLIT_DEF, FP_IS_INTEGER, FP_PSEUDO_PRED,
     };
     use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_PRED_POS};
@@ -1326,6 +1388,47 @@ mod tests {
         second.set_position(20);
         assert!(first.subsume_inverse_refined_compare(&second, &bank) < 0);
         assert!(second.subsume_inverse_refined_compare(&first, &bank) > 0);
+    }
+
+    #[test]
+    fn substitution_subsumption_helpers_backtrack_like_c() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let y = bank.vars().var_assert_alloc(-4, &type_);
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+
+        let pattern = Eqn::alloc(x.clone(), b.clone(), &mut bank, true).unwrap();
+        let target = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+        let mut subst = Substitution::new();
+        assert!(pattern.subsume_directed(&target, &mut subst));
+        assert_eq!(subst.len(), 1);
+        assert_eq!(x.binding(), Some(a.clone()));
+        subst.backtrack();
+
+        let failing = Eqn::alloc(y.clone(), y.clone(), &mut bank, true).unwrap();
+        assert!(!failing.subsume_directed(&target, &mut subst));
+        assert!(subst.is_empty());
+        assert!(y.binding().is_none());
+
+        let swapped_subsumed = Eqn::alloc(b.clone(), a.clone(), &mut bank, true).unwrap();
+        assert!(pattern.subsume(&swapped_subsumed, &mut subst));
+        assert_eq!(x.binding(), Some(a.clone()));
+        subst.backtrack();
+
+        let mut oriented = pattern.clone();
+        oriented.set_prop(EP_IS_ORIENTED);
+        assert!(!oriented.subsume(&swapped_subsumed, &mut subst));
+        assert!(subst.is_empty());
+        assert!(x.binding().is_none());
+
+        assert!(pattern.subsume_p(&target));
+        assert!(x.binding().is_none());
+        assert!(pattern.literal_subsume_p(&target));
+
+        let negative = Eqn::alloc(a, b, &mut bank, false).unwrap();
+        assert!(!pattern.literal_subsume_p(&negative));
     }
 
     #[test]
