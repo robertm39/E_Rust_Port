@@ -49,6 +49,7 @@ Rust files:
 - `src/inout/network.rs`
 - `src/inout/output.rs`
 - `src/inout/scanner.rs`
+- `src/inout/signals.rs`
 - `src/inout/simplestuff.rs`
 - `src/inout/streams.rs`
 - `src/inout/tempfile.rs`
@@ -101,6 +102,7 @@ Original C references:
 - [`INOUT/cio_network.h`, `INOUT/cio_network.c`](c_source_docs/INOUT/cio_network.md)
 - [`INOUT/cio_output.h`, `INOUT/cio_output.c`](c_source_docs/INOUT/cio_output.md)
 - [`INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`](c_source_docs/INOUT/cio_scanner.md)
+- [`INOUT/cio_signals.h`, `INOUT/cio_signals.c`](c_source_docs/INOUT/cio_signals.md)
 - [`INOUT/cio_simplestuff.h`, `INOUT/cio_simplestuff.c`](c_source_docs/INOUT/cio_simplestuff.md)
 - [`INOUT/cio_streams.h`, `INOUT/cio_streams.c`](c_source_docs/INOUT/cio_streams.md)
 - [`INOUT/cio_tempfile.h`, `INOUT/cio_tempfile.c`](c_source_docs/INOUT/cio_tempfile.md)
@@ -149,6 +151,7 @@ Implemented behavior:
 - TCP channel helpers from `cio_multiplexer`, including open/closed channel state, inbound and outbound FIFO queues, complete-message detection on the front inbound message, reading into the latest incomplete inbound message or a new one after completion, string-message queuing, and single-write draining of the outbound queue.
 - TCP message helpers from `cio_network`, including exact `MsgStatus` discriminants, four-byte network-order total-length headers, transmission counts, partial single-read/write status behavior, blocking send/receive loops, C-string pack/unpack truncation at NUL bytes, and safe `TcpListener`/`TcpStream` socket wrappers.
 - Output helpers from `cio_output`, including default output level 1, `OUTPRINT` level gating, `-`/`NULL` as stdout, global output target initialization/open/close, file-open diagnostics, and dashed-status formatting.
+- Signal-state helpers from `cio_signals`, including C-shaped global time-limit state, soft/hard CPU-timeout transitions, silent timeout reporting, SIGTERM/SIGINT cleanup-once behavior, scheduler SIGTERM counting, and explicit handler outcome values for executable integration.
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
@@ -180,6 +183,7 @@ Known gaps:
 - `GlobalOutFD` is exact for stdout and Unix file targets, but native Windows file targets use an explicit unknown descriptor sentinel until signal/network output paths choose a safe platform abstraction.
 - `TCPChannelAlloc`/`TCPChannelClose` are represented with owned `Read + Write` streams instead of raw integer socket descriptors; this preserves queue and transfer behavior for Rust callers but defers exact descriptor lifetime, `close(2)` diagnostics, and `select`/`fd_set` integration until server control code is ported.
 - `CreateServerSock`/`Listen`/`CreateClientSock` are represented by safe `TcpListener`/`TcpStream` wrappers rather than raw integer socket descriptors; `listen` is a no-op because `TcpListener::bind` already creates a listening socket, and exact `SO_REUSEADDR`, backlog, descriptor-number, and `gai_strerror` diagnostics still need a platform abstraction if server/client programs require byte-identical behavior.
+- `ESignalSetup`/`ESignalHandler` preserve signal-state transitions as explicit Rust outcomes but do not install raw OS signal handlers, reset `RLIMIT_CPU`, write directly through file descriptors, call `exit`, or re-raise signals yet; those pieces require a safe platform abstraction or a dependency decision.
 - `InputClose` relies on Rust file drop for input handles, so rare C `fclose` diagnostics on read streams are not surfaced yet.
 - `TempFileName` uses a safe `create_new` retry loop instead of libc `mkstemp`; it preserves directory choice, prefix, registration, and empty-file creation, but not exact libc suffix distribution or file-mode details.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
@@ -220,3 +224,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cio_tempfile` keeps C's process-global temporary-file registry and `TMPDIR`/`/tmp` policy. Later session code should decide whether temp-file ownership should move to scoped run state while preserving signal/atexit cleanup compatibility.
 - `cio_network` has several cleanup candidates: `TCPMsgRead` prints debug progress directly to stdout, treats an empty-payload message as a closed connection after reading the header, and appends payload data through C-string APIs after partial reads. Rust keeps the wire format and empty-payload status quirk but appends only initialized bytes and omits the debug prints.
 - `cio_multiplexer` has a likely source typo: `TCPChannelSendMsg` stores messages in `channel->out` and callers set write readiness based on `TCPChannelHasOutMsg`, but `TCPChannelWrite` checks and drains `channel->in`. Rust drains the outbound queue to match the comments and caller contract; revisit against the C server/client paths before claiming byte-for-byte compatibility for that subsystem.
+- `cio_signals` mixes async signal-handler work with non-async-signal-safe operations such as cleanup, formatted diagnostics, and resource-limit calls. Rust keeps the state machine testable and side effects explicit; later executable integration should decide which behavior belongs in real signal handlers and which should move to cooperative polling.

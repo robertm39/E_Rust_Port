@@ -162,6 +162,15 @@ fn reset_temp_files_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn temp_file_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    match LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         registered_temp_file_count, reset_temp_files_for_tests, temp_file_cleanup,
@@ -171,7 +180,6 @@ mod tests {
     use std::ffi::OsString;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
 
     struct TmpDirGuard {
         previous: Option<OsString>,
@@ -187,8 +195,7 @@ mod tests {
     }
 
     fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        super::temp_file_test_lock()
     }
 
     fn target_dir() -> PathBuf {
