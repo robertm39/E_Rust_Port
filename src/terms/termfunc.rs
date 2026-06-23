@@ -2,6 +2,7 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::signature::{
     Signature, FP_INTERPRETED, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
@@ -173,6 +174,72 @@ fn c_arity(arity: usize) -> Result<i32, Diagnostic> {
             "Term arity is too large for C-compatible signatures",
         )
     })
+}
+
+/// Copies a term, allocating free variables from `vars`.
+///
+/// Non-variable cells are always copied into unshared cells. Free variables are
+/// looked up or created in `vars`; DB variables are reused unless `dbvars` is
+/// supplied.
+///
+/// # Panics
+///
+/// Panics if a copied free or DB variable has no type, if variable-bank type
+/// invariants are violated, or if dereferencing an applied variable is
+/// requested before applied-variable bank support is ported.
+#[must_use]
+pub fn term_copy(
+    source: &Term,
+    vars: &VarBank,
+    mut dbvars: Option<&mut DbVarBank>,
+    deref: DerefType,
+) -> Term {
+    let mut current_deref = deref;
+    let source = term_deref(source, &mut current_deref);
+    if source.is_free_var() {
+        let type_ = source.type_().expect("copied free variables have types");
+        return vars.var_assert_alloc(source.f_code(), &type_);
+    }
+    if source.is_db_var() {
+        return if let Some(dbvars) = dbvars.as_deref_mut() {
+            let type_ = source.type_().expect("copied DB variables have types");
+            dbvars.request_db_var(&type_, source.f_code())
+        } else {
+            source
+        };
+    }
+
+    let copy = Term::top_copy_without_args(&source);
+    for (index, arg) in source.argument_clones().into_iter().enumerate() {
+        let arg = arg.expect("term copy requires initialized args");
+        let copied = term_copy(&arg, vars, dbvars.as_deref_mut(), current_deref);
+        copy.set_argument(index, copied);
+    }
+    copy
+}
+
+/// Copies a term while preserving variable handles.
+///
+/// # Panics
+///
+/// Panics if a traversed argument slot is uninitialized, or if dereferencing an
+/// applied variable is requested before applied-variable bank support is
+/// ported.
+#[must_use]
+pub fn term_copy_keep_vars(source: &Term, deref: DerefType) -> Term {
+    let mut current_deref = deref;
+    let source = term_deref(source, &mut current_deref);
+    if source.is_any_var() {
+        return source;
+    }
+
+    let copy = Term::top_copy_without_args(&source);
+    for (index, arg) in source.argument_clones().into_iter().enumerate() {
+        let arg = arg.expect("term copy requires initialized args");
+        let copied = term_copy_keep_vars(&arg, current_deref);
+        copy.set_argument(index, copied);
+    }
+    copy
 }
 
 /// Writes a first-order term without assigning special semantics to symbols.
@@ -1231,11 +1298,11 @@ mod tests {
         term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
         term_add_symbol_features, term_add_symbol_features_limited, term_apply_arg,
         term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
-        term_collect_variables, term_compute_function_ranks, term_compute_order,
-        term_create_prefix, term_dag_weight, term_depth, term_find_ite_subterm,
-        term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
-        term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute, term_is_subterm,
-        term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
+        term_collect_variables, term_compute_function_ranks, term_compute_order, term_copy,
+        term_copy_keep_vars, term_create_prefix, term_dag_weight, term_depth,
+        term_find_ite_subterm, term_find_max_var_code, term_has_f_code, term_has_unbound_variables,
+        term_is_db_closed, term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute,
+        term_is_subterm, term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
         term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
         term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
         term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
@@ -1246,6 +1313,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::inout::scanner::Scanner;
+    use crate::terms::dbvars::{mk_db, DbVarBank};
     use crate::terms::functypes::FuncSymbType;
     use crate::terms::signature::{
         Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE,
@@ -1273,6 +1341,71 @@ mod tests {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         let term = term_parse(&mut scanner, &mut sig, &vars).unwrap();
         (sig, vars, term)
+    }
+
+    #[test]
+    fn term_copy_allocates_free_variables_from_target_bank() {
+        let types = TypeBank::new();
+        let i_type = types.i_type();
+        let source_var = typed_var(-2, &i_type);
+        let root = Term::top_alloc(10, 2);
+        root.set_type(Some(i_type.clone()));
+        root.set_prop(TP_IS_SHARED | TP_PRED_POS);
+        root.set_argument(0, source_var.clone());
+        root.set_argument(1, source_var.clone());
+
+        let target_vars = VarBank::new(&types);
+        let copy = term_copy(&root, &target_vars, None, DerefType::Never);
+
+        assert_ne!(copy, root);
+        assert_eq!(copy.f_code(), 10);
+        assert_eq!(copy.type_(), Some(i_type.clone()));
+        assert!(copy.query_prop(TP_PRED_POS));
+        assert!(!copy.query_prop(TP_IS_SHARED));
+
+        let first = copy.argument(0).unwrap();
+        let second = copy.argument(1).unwrap();
+        assert_eq!(first, second);
+        assert_ne!(first, source_var);
+        assert_eq!(first.f_code(), -2);
+        assert_eq!(first.type_(), Some(i_type));
+        assert_eq!(target_vars.f_code_find(-2), Some(first));
+    }
+
+    #[test]
+    fn term_copy_handles_db_vars_and_dereferencing_like_c() {
+        let types = TypeBank::new();
+        let i_type = types.i_type();
+        let db = mk_db(3, &i_type);
+        let root = Term::top_alloc(10, 1);
+        root.set_argument(0, db.clone());
+        let target_vars = VarBank::new(&types);
+
+        let copy_without_db_bank = term_copy(&root, &target_vars, None, DerefType::Never);
+        assert_ne!(copy_without_db_bank, root);
+        assert_eq!(copy_without_db_bank.argument(0), Some(db.clone()));
+
+        let mut db_bank = DbVarBank::new();
+        let copy_with_db_bank =
+            term_copy(&root, &target_vars, Some(&mut db_bank), DerefType::Never);
+        let copied_db = copy_with_db_bank.argument(0).unwrap();
+        assert_ne!(copied_db, db);
+        assert!(copied_db.is_db_var());
+        assert_eq!(copied_db.f_code(), 3);
+        assert_eq!(db_bank.len(), 1);
+
+        let repeated = term_copy(&root, &target_vars, Some(&mut db_bank), DerefType::Never);
+        assert_eq!(repeated.argument(0), Some(copied_db));
+
+        let bound_var = typed_var(-4, &i_type);
+        let bound = Term::const_cell_alloc(99);
+        bound.set_type(Some(i_type));
+        bound_var.set_binding(Some(bound.clone()));
+        assert_eq!(term_copy_keep_vars(&bound_var, DerefType::Never), bound_var);
+        let derefed = term_copy_keep_vars(&bound_var, DerefType::Once);
+        assert_ne!(derefed, bound);
+        assert_eq!(derefed.f_code(), 99);
+        assert!(derefed.is_const());
     }
 
     #[test]
