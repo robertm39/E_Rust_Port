@@ -2,10 +2,14 @@ use std::ops::BitOr;
 
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::stringtrees::StrTree;
+use crate::inout::fileops::{file_name_base_name, file_name_dir_name, file_name_is_absolute};
+use crate::inout::initio::tptp_dir;
 use crate::inout::streams::{InputStream, StreamType};
 use std::path::Path;
 
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
+pub const EMPTY_INCLUDE_SELECTOR_SENTINEL: &str = "** Not a legal name**";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
@@ -197,8 +201,10 @@ impl Token {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Scanner {
     source: InputStream,
+    default_dir: String,
     ignore_comments: bool,
     format: IoFormat,
+    include_pos: Option<String>,
     tok_sequence: [Token; MAX_TOKEN_LOOKAHEAD],
     current: usize,
 }
@@ -217,14 +223,28 @@ impl Scanner {
     }
 
     pub fn from_file(path: &Path, ignore_comments: bool) -> Result<Self, Diagnostic> {
-        Self::from_stream(InputStream::from_file(path)?, ignore_comments)
+        Self::from_file_with_default_dir(path, ignore_comments, None)
+    }
+
+    pub fn from_file_with_default_dir(
+        path: &Path,
+        ignore_comments: bool,
+        default_dir: Option<&str>,
+    ) -> Result<Self, Diagnostic> {
+        let name = path.to_string_lossy();
+        let (stream, resolved_default_dir) = create_file_stream(&name, default_dir)?;
+        let mut scanner = Self::from_stream(stream, ignore_comments)?;
+        scanner.default_dir = resolved_default_dir;
+        Ok(scanner)
     }
 
     pub fn from_stream(source: InputStream, ignore_comments: bool) -> Result<Self, Diagnostic> {
         let mut scanner = Self {
             source,
+            default_dir: String::new(),
             ignore_comments,
             format: IoFormat::Lop,
+            include_pos: None,
             tok_sequence: std::array::from_fn(|_| Token::default()),
             current: 0,
         };
@@ -242,6 +262,16 @@ impl Scanner {
     #[must_use]
     pub const fn format(&self) -> IoFormat {
         self.format
+    }
+
+    #[must_use]
+    pub fn default_dir(&self) -> &str {
+        &self.default_dir
+    }
+
+    #[must_use]
+    pub fn include_pos(&self) -> Option<&str> {
+        self.include_pos.as_deref()
     }
 
     pub fn set_format(&mut self, format: IoFormat) {
@@ -350,6 +380,59 @@ impl Scanner {
     pub fn accept_id(&mut self, ids: &str) -> Result<(), Diagnostic> {
         self.check_id(ids)?;
         self.next_token()
+    }
+
+    pub fn parse_include(
+        &mut self,
+        name_selector: &mut StrTree<i64, i64>,
+        skip_includes: &StrTree<i64, i64>,
+    ) -> Result<Option<Self>, Diagnostic> {
+        let include_pos = token_pos_rep(self.current_token());
+        self.accept_id("include")?;
+        self.accept_tok(TokenType::OPEN_BRACKET)?;
+        self.check_tok(TokenType::SQ_STRING)?;
+        let name = strip_quote_core(self.current_token().literal_bytes())?;
+
+        let included = if skip_includes.find(&name).is_none() {
+            let mut scanner = Self::from_file_with_default_dir(
+                Path::new(&name),
+                self.ignore_comments,
+                Some(&self.default_dir),
+            )?;
+            scanner.set_format(self.format);
+            scanner.include_pos = Some(include_pos);
+            Some(scanner)
+        } else {
+            None
+        };
+
+        self.next_token()?;
+        if self.test_tok(TokenType::COMMA) {
+            self.next_token()?;
+            self.check_tok(TokenType::NAME | TokenType::POS_INT | TokenType::OPEN_SQUARE)?;
+            if self.test_tok(TokenType::NAME | TokenType::POS_INT) {
+                name_selector.store(&self.current_token().literal(), 0, 0);
+                self.next_token()?;
+            } else {
+                self.accept_tok(TokenType::OPEN_SQUARE)?;
+                if self.test_tok(TokenType::CLOSE_SQUARE) {
+                    name_selector.store(EMPTY_INCLUDE_SELECTOR_SENTINEL, 1, 0);
+                } else {
+                    name_selector.store(&self.current_token().literal(), 0, 0);
+                    self.accept_tok(TokenType::NAME | TokenType::POS_INT)?;
+                    while self.test_tok(TokenType::COMMA) {
+                        self.next_token()?;
+                        name_selector.store(&self.current_token().literal(), 0, 0);
+                        self.accept_tok(TokenType::NAME | TokenType::POS_INT)?;
+                    }
+                }
+                self.accept_tok(TokenType::CLOSE_SQUARE)?;
+            }
+        }
+        self.accept_tok(TokenType::CLOSE_BRACKET)?;
+        self.accept_tok(TokenType::FULLSTOP)?;
+
+        Ok(included)
     }
 
     fn scan_real_token(&mut self, index: usize) -> Result<(), Diagnostic> {
@@ -786,10 +869,55 @@ fn str_n_element(candidate: &[u8], ids: &str, len: usize) -> bool {
         .any(|id| id.len() == len && candidate.get(..len) == Some(id.as_bytes()))
 }
 
+fn create_file_stream(
+    name: &str,
+    default_dir: Option<&str>,
+) -> Result<(InputStream, String), Diagnostic> {
+    if file_name_is_absolute(name) {
+        let stream = InputStream::from_file(Path::new(name))?;
+        return Ok((stream, file_name_dir_name(name)));
+    }
+
+    let mut local_default_dir = String::new();
+    if let Some(default_dir) = default_dir {
+        local_default_dir.push_str(default_dir);
+        debug_assert!(local_default_dir.is_empty() || local_default_dir.ends_with('/'));
+    }
+    local_default_dir.push_str(&file_name_dir_name(name));
+    let local_name = format!("{}{}", local_default_dir, file_name_base_name(name));
+
+    match InputStream::from_file(Path::new(&local_name)) {
+        Ok(stream) => Ok((stream, local_default_dir)),
+        Err(local_error) => {
+            let Some(mut fallback_default_dir) = tptp_dir() else {
+                return Err(local_error);
+            };
+            fallback_default_dir.push_str(&file_name_dir_name(name));
+            let fallback_name = format!("{}{}", fallback_default_dir, file_name_base_name(name));
+            let stream = InputStream::from_file(Path::new(&fallback_name))?;
+            Ok((stream, fallback_default_dir))
+        }
+    }
+}
+
+fn strip_quote_core(bytes: &[u8]) -> Result<String, Diagnostic> {
+    if bytes.len() < 2 {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Quoted string literal is too short",
+        ));
+    }
+    Ok(String::from_utf8_lossy(&bytes[1..bytes.len() - 1]).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{describe_token, test_id, test_idnum, token_pos_rep, IoFormat, Scanner, TokenType};
+    use super::{
+        describe_token, test_id, test_idnum, token_pos_rep, IoFormat, Scanner, TokenType,
+        EMPTY_INCLUDE_SELECTOR_SENTINEL,
+    };
     use crate::basics::error::ErrorCode;
+    use crate::basics::stringtrees::StrTree;
     use std::path::{Path, PathBuf};
 
     fn temp_path(name: &str) -> PathBuf {
@@ -801,6 +929,21 @@ mod tests {
 
     fn remove_if_present(path: &Path) {
         _ = std::fs::remove_file(path);
+    }
+
+    fn remove_dir_if_present(path: &Path) {
+        _ = std::fs::remove_dir_all(path);
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("scanner-{name}-{}", std::process::id()))
+    }
+
+    fn slash_path(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
     }
 
     fn collect_tokens(source: &str) -> Vec<(TokenType, String, bool)> {
@@ -896,6 +1039,87 @@ mod tests {
         let error = Scanner::from_file(&missing, false).unwrap_err();
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert!(error.message().contains("Cannot open file"));
+    }
+
+    #[test]
+    fn file_scanner_resolves_c_style_default_directories() {
+        let dir = temp_dir("default-dir");
+        remove_dir_if_present(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        let root_path = dir.join("main.p");
+        let nested_path = dir.join("nested").join("child.ax");
+        std::fs::write(&root_path, b"root").unwrap();
+        std::fs::write(&nested_path, b"child").unwrap();
+
+        let root_name = slash_path(&root_path);
+        let scanner = Scanner::from_file(Path::new(&root_name), false).unwrap();
+        assert_eq!(scanner.current_token().literal(), "root");
+        assert_eq!(scanner.default_dir(), format!("{}/", slash_path(&dir)));
+
+        let nested = Scanner::from_file_with_default_dir(
+            Path::new("nested/child.ax"),
+            false,
+            Some(scanner.default_dir()),
+        )
+        .unwrap();
+        assert_eq!(nested.current_token().literal(), "child");
+        assert_eq!(
+            nested.default_dir(),
+            format!("{}/nested/", slash_path(&dir))
+        );
+
+        remove_dir_if_present(&dir);
+    }
+
+    #[test]
+    fn parse_include_opens_relative_file_and_collects_selectors() {
+        let dir = temp_dir("include");
+        remove_dir_if_present(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root_path = dir.join("main.p");
+        let child_path = dir.join("child.ax");
+        std::fs::write(&root_path, b"include('child.ax',[foo,12]). tail").unwrap();
+        std::fs::write(&child_path, b"cnf(child,axiom,p).").unwrap();
+
+        let root_name = slash_path(&root_path);
+        let mut scanner = Scanner::from_file(Path::new(&root_name), false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+        let mut selectors = StrTree::new();
+        let skip = StrTree::new();
+
+        let included = scanner
+            .parse_include(&mut selectors, &skip)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(scanner.current_token().literal(), "tail");
+        assert_eq!(included.current_token().literal(), "cnf");
+        assert_eq!(included.format(), IoFormat::Tstp);
+        let expected_include_pos = format!("{root_name}:1:(Column 1):");
+        assert_eq!(included.include_pos(), Some(expected_include_pos.as_str()));
+        assert!(selectors.find("foo").is_some());
+        assert!(selectors.find("12").is_some());
+
+        remove_dir_if_present(&dir);
+    }
+
+    #[test]
+    fn parse_include_honors_skip_tree_and_empty_selector_sentinel() {
+        let mut scanner = Scanner::from_user_string("include('skip.ax',[]). done", false).unwrap();
+        let mut selectors = StrTree::new();
+        let mut skip = StrTree::new();
+        assert!(skip.store("skip.ax", 0, 0));
+
+        let included = scanner.parse_include(&mut selectors, &skip).unwrap();
+
+        assert!(included.is_none());
+        assert_eq!(scanner.current_token().literal(), "done");
+        assert_eq!(
+            selectors
+                .find(EMPTY_INCLUDE_SELECTOR_SENTINEL)
+                .map(|entry| entry.val1),
+            Some(1)
+        );
     }
 
     #[test]
