@@ -37,6 +37,12 @@ impl TermPos {
         self.components.len() * TERM_POS_ELEMENT_SIZE
     }
 
+    pub fn components(&self) -> impl Iterator<Item = (&Term, usize)> + '_ {
+        self.components
+            .iter()
+            .map(|component| (&component.superterm, component.index))
+    }
+
     pub fn clear(&mut self) {
         self.components.clear();
     }

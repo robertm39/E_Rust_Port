@@ -1,5 +1,6 @@
 pub mod clause;
 pub mod clause_props;
+pub mod clausecpos;
 pub mod clauseinfo;
 pub mod clausepos;
 pub mod eqn;

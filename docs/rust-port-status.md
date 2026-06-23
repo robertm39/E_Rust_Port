@@ -41,6 +41,7 @@ Rust files:
 - `src/basics/sysdate.rs`
 - `src/basics/verbose.rs`
 - `src/clauses/clause.rs`
+- `src/clauses/clausecpos.rs`
 - `src/clauses/clausepos.rs`
 - `src/clauses/clause_props.rs`
 - `src/clauses/clauseinfo.rs`
@@ -126,6 +127,7 @@ Original C references:
 - [`BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`](c_source_docs/BASICS/clb_stringtrees.md)
 - [`BASICS/clb_sysdate.h`, `BASICS/clb_sysdate.c`](c_source_docs/BASICS/clb_sysdate.md)
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
+- [`CLAUSES/ccl_clausecpos.h`, `CLAUSES/ccl_clausecpos.c`](c_source_docs/CLAUSES/ccl_clausecpos.md)
 - [`CLAUSES/ccl_clauseinfo.h`, `CLAUSES/ccl_clauseinfo.c`](c_source_docs/CLAUSES/ccl_clauseinfo.md)
 - [`CLAUSES/ccl_clausepos.h`, `CLAUSES/ccl_clausepos.c`](c_source_docs/CLAUSES/ccl_clausepos.md)
 - [`CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`](c_source_docs/CLAUSES/ccl_clauses.md)
@@ -203,6 +205,7 @@ Implemented behavior:
 - Registered persistent-memory helpers from `clb_regmem`, including process-global registration, allocation/reallocation/freeing, cleanup of all registered areas, `RegMemProvide` doubling behavior, and zero-filled newly provided tails.
 - `SysDate` logical-time helpers from `clb_sysdate`, including creation/invalid sentinels, ordering/equality/maximum macros, increment mutation order, overflow reporting instead of undefined signed overflow, and C-shaped unsigned-long printing.
 - Verbose-level helpers from `clb_verbose`, including the global `Verbose` default, nonzero level-1 gate, `>= 2` and `>= 10` gates, closure helpers for macro-like conditional execution, and `VERBOUT`/`VERBOUTARG` formatting with explicit flushes.
+- Compact clause-position helpers from `ccl_clausecpos`, including weighted term-position packing, weighted clause-position packing over literal standard weights and right-side offsets, unpacking into full `ClausePos` cursors, compact-position subterm lookup, first/next literal compact-position iteration, and relative literal-position splitting.
 - Clause source-info metadata from `ccl_clauseinfo`, including optional copied name/source fields, empty `-1` line/column allocation, TSTP/PCL source rendering with unknown and line/column fallbacks, null-info no-op rendering, and C-shaped generated identifier namespace/counter extraction.
 - Clause-position cursors from `ccl_clausepos`, including semi-initialized allocation, clause-backed and standalone literal positions, designated/other side lookup, subterm lookup through `TermPos`, C-shaped clause-position printing, positive/maximal literal cursor search, maximal-side traversal with unoriented right-side visits, leftmost-innermost maximal-subterm traversal, and rewrite-chain sequence extraction over term rewrite links.
 - Initial clause/formula property helpers from `ccl_clauses`, including exact `FormulaProperties` bit values, property set/delete/give/query/any-set operations, TPTP type masking and setting, TPTP type combination precedence, CSSCPA source bit encoding, and clause-type identifier mapping including higher-order `definition` lambda-definition marking.
@@ -301,7 +304,7 @@ Known gaps:
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
 - `FuncSymbParse`, `TermParseOperator`, term-symbol signature insertion, unshared term parsing, and simple term-bank parsing are present for string scanners, but full `TBTermParseReal`/formula/list/`let`/`ite` parser integration and scanner file/include handling remain incomplete.
-- `ccl_clauses` parser/printer/PCL/TSTP rendering, OCB-based maximal-term and multiset comparison helpers, evaluation lists, clause-set linkage, HO definition extraction, skolemization, and choice-recognition helpers are still deferred until formula printing/parsing, ordering control, new-evaluation, clause-set, lambda/HO-CSU, and choice-symbol infrastructure are available. `ccl_clausepos_tree` and `ccl_clausecpos` are still deferred until stable clause/literal handles are available for indexed positions.
+- `ccl_clauses` parser/printer/PCL/TSTP rendering, OCB-based maximal-term and multiset comparison helpers, evaluation lists, clause-set linkage, HO definition extraction, skolemization, and choice-recognition helpers are still deferred until formula printing/parsing, ordering control, new-evaluation, clause-set, lambda/HO-CSU, and choice-symbol infrastructure are available. `ccl_clausepos_tree` is still deferred until stable clause/literal handles are available for indexed positions.
 - `ccl_eqn` orientation/comparison helpers that require `OCB`/ordering control, app-encoding printing, type-distribution wrappers, term-weight-extension literal wrappers, and split-mod standard weights are still deferred until the ordering, printing, and signature special-weight layers are available.
 - `ccl_eqnlist` orientation/maximal-literal helpers that require `OCB`, print/parse/TSTP rendering, type-distribution wrappers, lambda normalization, and exact no-copy pointer-stack conversions are still deferred until ordering, printing/parsing, type-distribution, and lambda-normalization layers are available.
 - Simple types are represented with safe shared handles rather than raw `Type_p`; this preserves pointer identity for Rust-held values, but allocator address reuse and exact pointer ordering may differ from C.
@@ -449,6 +452,9 @@ These notes are not permission to diverge during porting. They identify inherite
 - `ClauseCollectSubterms` differs from `EqnListCollectSubterms` by clearing `TPOpFlag` on all newly collected terms before returning. Rust preserves the cleanup in the clause wrapper; callers should prefer the clause helper when they need temporary collection without leaving visited flags set.
 - `ClauseIsSemFalse` and `ClauseIsSemEmpty` return true for an empty clause because their C loops have no failing literal. Rust preserves the vacuous truth result; caller-level semantics should decide whether empty clauses deserve a separate explicit test in user-facing code.
 - `ClauseStructWeightCompare` asserts that the cached `weight` field equals `ClauseStandardWeight` before comparing. Rust exposes the cached weight and comparison but does not force recomputation; callers that mutate literals should update `weight` or use a comparison path that recomputes it.
+- `ccl_clausecpos` encodes positions as accumulated `TermStandardWeight`/`EqnStandardWeight` offsets rather than as tree child indices or preorder ranks. Rust preserves that compact encoding; any later weight-function change must not be reused for persisted compact positions without a compatibility boundary.
+- `PackTermPos` asserts that path superterms are not free variables or lambdas, but still carries phony-application/lambda special cases in the offset calculation. Rust keeps the assertions and phony-application branch; revisit the lambda branch only with LFHO position tests.
+- `ClauseCPosSplit` asserts if a compact position lands exactly at or beyond the end of a non-empty clause after subtracting literal weights. Rust preserves that panic; public callers should validate compact positions before accepting untrusted data.
 - `ClausePosCell` stores raw clause, literal, term-position, and user-data pointers and the C allocation helper leaves `clause`/`data` uninitialized. Rust initializes them to `None` and uses literal indices for clause-backed cursors; later indexing code should replace cloned clause snapshots with stable handles before clause positions become long-lived.
 - `ClausePosGetSide` treats every side other than `LeftSide` as the right side, while `ClausePosGetOtherSide` treats every non-left side as the left side. Rust preserves that branch shape; future public APIs should reject `NoSide`/`BothSides` at boundaries if compatibility allows.
 - `TermComputeRWSequence` says it returns true for a zero-length rewrite chain, but the C implementation initializes `res=false` and sets it true only after following at least one rewrite link. Rust preserves the implementation result and documents the comment mismatch for later cleanup.
