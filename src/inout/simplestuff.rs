@@ -1,5 +1,7 @@
 use crate::basics::dstrings::DynamicString;
-use std::io::{self, BufRead};
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::inout::network::{tcp_msg_recv_from, MsgStatus};
+use std::io::{self, BufRead, Read};
 
 pub const READ_TEXT_BLOCK_CHUNK: usize = 255;
 
@@ -65,10 +67,34 @@ where
     false
 }
 
+pub fn tcp_read_text_block_from(
+    result: &mut DynamicString,
+    reader: &mut impl Read,
+    terminator: &[u8],
+) -> Result<bool, Diagnostic> {
+    loop {
+        let (message, status) = tcp_msg_recv_from(reader);
+        if status != MsgStatus::Success {
+            return Err(Diagnostic::new(
+                ErrorCode::SYSTEM_ERROR,
+                "Could not receive string message",
+            ));
+        }
+        let received = message.unpack();
+        if received == terminator {
+            return Ok(true);
+        }
+        result.append_bytes_with_str_growth(&received);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{read_text_block, tcp_read_text_block, READ_TEXT_BLOCK_CHUNK};
+    use super::{
+        read_text_block, tcp_read_text_block, tcp_read_text_block_from, READ_TEXT_BLOCK_CHUNK,
+    };
     use crate::basics::dstrings::DynamicString;
+    use crate::inout::network::TcpMessage;
     use std::io::Cursor;
 
     #[test]
@@ -123,5 +149,29 @@ mod tests {
             b"END\n"
         ));
         assert_eq!(result.view_bytes(), b"alpha\ntail\n");
+    }
+
+    #[test]
+    fn tcp_read_text_block_from_reads_network_messages_until_terminator() {
+        let mut bytes = TcpMessage::pack("one\n").unwrap().content_bytes().to_vec();
+        bytes.extend_from_slice(TcpMessage::pack("two\n").unwrap().content_bytes());
+        bytes.extend_from_slice(TcpMessage::pack("END\n").unwrap().content_bytes());
+        bytes.extend_from_slice(TcpMessage::pack("ignored\n").unwrap().content_bytes());
+        let mut reader = Cursor::new(bytes);
+        let mut result = DynamicString::new();
+        result.append_str("prefix:");
+
+        assert!(tcp_read_text_block_from(&mut result, &mut reader, b"END\n").unwrap());
+        assert_eq!(result.view_bytes(), b"prefix:one\ntwo\n");
+    }
+
+    #[test]
+    fn tcp_read_text_block_from_reports_receive_failure() {
+        let mut reader = Cursor::new(Vec::new());
+        let mut result = DynamicString::new();
+
+        let error = tcp_read_text_block_from(&mut result, &mut reader, b"END\n").unwrap_err();
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::SYSTEM_ERROR);
+        assert_eq!(error.message(), "Could not receive string message");
     }
 }
