@@ -929,6 +929,21 @@ impl Signature {
         result
     }
 
+    #[must_use]
+    pub fn collect_sort_consts(&self, sort: &Type) -> Vec<FunCode> {
+        let default_sort = self.type_bank.i_type();
+        self.external_f_codes()
+            .filter(|&f_code| self.find_arity(f_code) == Some(0))
+            .filter(|&f_code| {
+                let symbol_sort = self
+                    .get_type(f_code)
+                    .cloned()
+                    .unwrap_or(default_sort.clone());
+                symbol_sort == *sort
+            })
+            .collect()
+    }
+
     pub fn update_feature_offset(&mut self, f_code: FunCode) {
         let feature_arity = i32::min(SIG_FEATURE_ARITY_LIMIT - 1, self.func(f_code).arity);
         let offset = if self.is_predicate(f_code) {
@@ -1266,6 +1281,38 @@ mod tests {
         assert_eq!(sig.count_arity_symbols(1, true), 1);
         assert_eq!(sig.count_symbols(false), 2);
         assert_eq!(sig.count_symbols(true), 1);
+    }
+
+    #[test]
+    fn collect_sort_consts_uses_insertion_order_and_default_individual_sort() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let animal_code = sig.type_bank_mut().define_simple_sort("$animal").unwrap();
+        let animal = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(animal_code));
+
+        let untyped = sig.insert_id_for_problem("untyped", 0, false, ProblemType::FirstOrder);
+        let typed_individual =
+            sig.insert_id_for_problem("typed_individual", 0, false, ProblemType::FirstOrder);
+        sig.declare_final_type(typed_individual, individual.clone())
+            .unwrap();
+        let typed_animal =
+            sig.insert_id_for_problem("typed_animal", 0, false, ProblemType::FirstOrder);
+        sig.declare_final_type(typed_animal, animal.clone())
+            .unwrap();
+        let unary = sig.insert_id_for_problem("unary", 1, false, ProblemType::FirstOrder);
+        sig.declare_final_type(
+            unary,
+            alloc_arrow_type(vec![individual.clone(), individual.clone()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            sig.collect_sort_consts(&individual),
+            vec![untyped, typed_individual]
+        );
+        assert_eq!(sig.collect_sort_consts(&animal), vec![typed_animal]);
     }
 
     #[test]

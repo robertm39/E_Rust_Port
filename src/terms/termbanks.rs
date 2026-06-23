@@ -5,7 +5,7 @@ use crate::terms::functypes::FunCode;
 use crate::terms::garbage_coll::GcAdmin;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_NAMED_LAMBDA_CODE};
-use crate::terms::simpletypes::TypeUniqueId;
+use crate::terms::simpletypes::{Type, TypeUniqueId};
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termtypes::{
     term_deref, DerefType, Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_GARBAGE_FLAG,
@@ -257,6 +257,58 @@ impl TermBank {
         assert!(term.type_().is_some(), "minimal term has a type");
         self.min_terms.insert(type_uid, term.clone());
         Ok(term)
+    }
+
+    pub fn get_first_const_term(&mut self, sort: &Type) -> Result<Option<Term>, Diagnostic> {
+        self.sig
+            .collect_sort_consts(sort)
+            .first()
+            .copied()
+            .map(|f_code| self.create_const_term(f_code))
+            .transpose()
+    }
+
+    /// Returns a shared constant selected by the supplied C-style comparator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either distribution array is not large enough to address all
+    /// currently known function codes, matching the C precondition that these
+    /// arrays are sized to `sig->f_count + 1`.
+    pub fn get_freq_const_term<F>(
+        &mut self,
+        sort: &Type,
+        conj_dist_array: &[i64],
+        dist_array: &[i64],
+        mut is_better: F,
+    ) -> Result<Option<Term>, Diagnostic>
+    where
+        F: FnMut(FunCode, FunCode, &[i64], &[i64]) -> bool,
+    {
+        let candidates = self.sig.collect_sort_consts(sort);
+        let Some((&first, rest)) = candidates.split_first() else {
+            return Ok(None);
+        };
+
+        let required_len = usize::try_from(self.sig.f_count())
+            .unwrap_or(usize::MAX)
+            .saturating_add(1);
+        assert!(
+            conj_dist_array.len() >= required_len,
+            "conjecture distribution must cover all function codes"
+        );
+        assert!(
+            dist_array.len() >= required_len,
+            "global distribution must cover all function codes"
+        );
+
+        let mut best = first;
+        for &candidate in rest {
+            if is_better(candidate, best, conj_dist_array, dist_array) {
+                best = candidate;
+            }
+        }
+        self.create_const_term(best).map(Some)
     }
 
     /// Sets properties by repointing `term_ref` to the banked top-cell variant.
@@ -559,7 +611,7 @@ mod tests {
     use crate::basics::pstacks::PStack;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{Signature, SIG_FALSE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
         DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_GARBAGE_FLAG,
         TP_HAS_APP_VAR, TP_HAS_NON_PATTERN_VAR, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG,
@@ -671,6 +723,71 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.f_code(), a);
+    }
+
+    #[test]
+    fn sort_constant_selection_uses_signature_candidate_order_and_frequency_comparator() {
+        let mut sig = Signature::new(TypeBank::new());
+        let individual = sig.type_bank().i_type();
+        let animal_code = sig.type_bank_mut().define_simple_sort("$animal").unwrap();
+        let animal = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(animal_code));
+        let mineral_code = sig.type_bank_mut().define_simple_sort("$mineral").unwrap();
+        let mineral = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(mineral_code));
+
+        let first_individual = sig.insert_id("first_individual", 0, false);
+        let second_individual = sig.insert_id("second_individual", 0, false);
+        sig.declare_final_type(second_individual, individual.clone())
+            .unwrap();
+        let animal_const = sig.insert_id("animal_const", 0, false);
+        sig.declare_final_type(animal_const, animal.clone())
+            .unwrap();
+        let unary = sig.insert_id("unary", 1, false);
+        sig.declare_final_type(
+            unary,
+            alloc_arrow_type(vec![individual.clone(), individual.clone()]),
+        )
+        .unwrap();
+
+        let mut bank = TermBank::new(sig).unwrap();
+        assert_eq!(
+            bank.get_first_const_term(&individual)
+                .unwrap()
+                .unwrap()
+                .f_code(),
+            first_individual
+        );
+        assert_eq!(
+            bank.get_first_const_term(&animal)
+                .unwrap()
+                .unwrap()
+                .f_code(),
+            animal_const
+        );
+        assert!(bank.get_first_const_term(&mineral).unwrap().is_none());
+
+        let len = usize::try_from(bank.signature().f_count()).unwrap() + 1;
+        let conj_dist_array = vec![0; len];
+        let mut dist_array = vec![0; len];
+        dist_array[usize::try_from(first_individual).unwrap()] = 7;
+        dist_array[usize::try_from(second_individual).unwrap()] = 2;
+
+        let selected = bank
+            .get_freq_const_term(
+                &individual,
+                &conj_dist_array,
+                &dist_array,
+                |candidate, best, _, dist| {
+                    dist[usize::try_from(candidate).unwrap()] < dist[usize::try_from(best).unwrap()]
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.f_code(), second_individual);
+        assert!(selected.is_shared());
     }
 
     #[test]
