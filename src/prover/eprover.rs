@@ -17,6 +17,8 @@ use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 
 const MEGA: u64 = 1_048_576;
 const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
+const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
+const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 
@@ -73,6 +75,50 @@ impl Default for PclOutputConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum AcHandling {
+    None = 0,
+    #[default]
+    DiscardAll = 1,
+    KeepUnits = 2,
+    KeepOrientable = 3,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GoalDefinitionConfig {
+    pub positive: bool,
+    pub negative: bool,
+    pub subterms: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreprocessingConfig {
+    pub no_preprocessing: bool,
+    pub eqdef_maxclauses: i64,
+    pub eqdef_incrlimit: i64,
+    pub goal_definitions: GoalDefinitionConfig,
+    pub relevance_prune_level: i64,
+    pub presat_interreduction: bool,
+    pub ac_handling: AcHandling,
+    pub ac_res_aggressive: bool,
+}
+
+impl Default for PreprocessingConfig {
+    fn default() -> Self {
+        Self {
+            no_preprocessing: false,
+            eqdef_maxclauses: DEFAULT_EQDEF_MAXCLAUSES,
+            eqdef_incrlimit: DEFAULT_EQDEF_INCRLIMIT,
+            goal_definitions: GoalDefinitionConfig::default(),
+            relevance_prune_level: 0,
+            presat_interreduction: false,
+            ac_handling: AcHandling::DiscardAll,
+            ac_res_aggressive: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EProverConfig {
     pub files: Vec<String>,
@@ -94,6 +140,7 @@ pub struct EProverConfig {
     pub print_strategy: Option<String>,
     pub parse_strategy_file: Option<String>,
     pub sine: Option<String>,
+    pub preprocessing: PreprocessingConfig,
     pub strategy_scheduling: bool,
     pub schedule_cores: i64,
     pub serialize_schedule: bool,
@@ -175,6 +222,7 @@ impl Default for EProverConfig {
             print_strategy: None,
             parse_strategy_file: None,
             sine: None,
+            preprocessing: PreprocessingConfig::default(),
             strategy_scheduling: false,
             schedule_cores: 1,
             serialize_schedule: false,
@@ -387,94 +435,163 @@ fn apply_parsed_option(
     config: &mut EProverConfig,
     parsed: &ParsedOpt<'_, EProverOption>,
 ) -> Result<Option<EProverAction>, Diagnostic> {
-    match parsed.option().option_code {
-        EProverOption::Help => Ok(Some(EProverAction::Help)),
-        EProverOption::Version => Ok(Some(EProverAction::Version)),
-        EProverOption::Verbose
-        | EProverOption::Output
-        | EProverOption::Silent
-        | EProverOption::OutputLevel
-        | EProverOption::PrintStatistics
-        | EProverOption::PrintDetailedStatistics
-        | EProverOption::PrintSaturated
-        | EProverOption::PrintSatInfo
-        | EProverOption::FilterSaturated => {
-            apply_output_option(config, parsed)?;
-            Ok(None)
-        }
-        EProverOption::ProofObject
-        | EProverOption::ProofGraph
-        | EProverOption::ProofStatistics
-        | EProverOption::FullDerivation
-        | EProverOption::ForceDerivation
-        | EProverOption::RecordGivenClauses
-        | EProverOption::TrainingExamples
-        | EProverOption::PclTermsCompressed
-        | EProverOption::PclCompact
-        | EProverOption::PclShellLevel => {
-            apply_proof_option(config, parsed)?;
-            Ok(None)
-        }
-        EProverOption::CpuLimit | EProverOption::SoftCpuLimit | EProverOption::MemoryLimit => {
-            apply_resource_option(config, parsed)?;
-            Ok(None)
-        }
-        EProverOption::SelectStrategy
-        | EProverOption::PrintStrategy
-        | EProverOption::ParseStrategy => {
-            apply_strategy_option(config, parsed);
-            Ok(None)
-        }
-        EProverOption::ProcessedClausesLimit
-        | EProverOption::ProcessedSetLimit
-        | EProverOption::UnprocessedLimit
-        | EProverOption::TotalClauseSetLimit
-        | EProverOption::GeneratedLimit
-        | EProverOption::TermBankInsertLimit
-        | EProverOption::Answers => {
-            apply_limit_option(config, parsed)?;
-            Ok(None)
-        }
-        EProverOption::EqnNoInfix
-        | EProverOption::FullEquationalRep
-        | EProverOption::PrintOrientedEqLitsAsRules
-        | EProverOption::LopIn
-        | EProverOption::PclOut
-        | EProverOption::TptpIn
-        | EProverOption::TptpOut
-        | EProverOption::TptpFormat
-        | EProverOption::TstpIn
-        | EProverOption::TstpOut
-        | EProverOption::TstpFormat => {
-            apply_format_option(config, parsed);
-            Ok(None)
-        }
-        EProverOption::SyntaxOnly
-        | EProverOption::PrintFormulas
-        | EProverOption::PruneOnly
-        | EProverOption::CnfOnly => {
-            apply_input_mode_option(config, parsed);
-            Ok(None)
-        }
-        EProverOption::PrintPid
-        | EProverOption::PrintVersion
-        | EProverOption::RequireNonempty
-        | EProverOption::ResourcesInfo
-        | EProverOption::ConjecturesAreQuestions
-        | EProverOption::DeterministicRewriteSort
-        | EProverOption::DeterministicNewSort => {
-            apply_simple_flag(config, parsed.option().option_code);
-            Ok(None)
-        }
-        EProverOption::Auto
-        | EProverOption::AutoSchedule
-        | EProverOption::SerializeSchedule
-        | EProverOption::ForcePreprocessingSchedule
-        | EProverOption::SatAutoSchedule => {
-            apply_schedule_option(config, parsed)?;
-            Ok(None)
-        }
+    let option_code = parsed.option().option_code;
+    match option_code {
+        EProverOption::Help => return Ok(Some(EProverAction::Help)),
+        EProverOption::Version => return Ok(Some(EProverAction::Version)),
+        _ => {}
     }
+
+    if is_output_option(option_code) {
+        apply_output_option(config, parsed)?;
+    } else if is_proof_option(option_code) {
+        apply_proof_option(config, parsed)?;
+    } else if is_resource_option(option_code) {
+        apply_resource_option(config, parsed)?;
+    } else if is_strategy_option(option_code) {
+        apply_strategy_option(config, parsed);
+    } else if is_limit_option(option_code) {
+        apply_limit_option(config, parsed)?;
+    } else if is_format_option(option_code) {
+        apply_format_option(config, parsed);
+    } else if is_input_mode_option(option_code) {
+        apply_input_mode_option(config, parsed);
+    } else if is_simple_flag(option_code) {
+        apply_simple_flag(config, option_code);
+    } else if is_schedule_option(option_code) {
+        apply_schedule_option(config, parsed)?;
+    } else if is_preprocessing_option(option_code) {
+        apply_preprocessing_option(config, parsed)?;
+    } else {
+        unreachable!("unhandled eprover option");
+    }
+    Ok(None)
+}
+
+const fn is_output_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::Verbose
+            | EProverOption::Output
+            | EProverOption::Silent
+            | EProverOption::OutputLevel
+            | EProverOption::PrintStatistics
+            | EProverOption::PrintDetailedStatistics
+            | EProverOption::PrintSaturated
+            | EProverOption::PrintSatInfo
+            | EProverOption::FilterSaturated
+    )
+}
+
+const fn is_proof_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::ProofObject
+            | EProverOption::ProofGraph
+            | EProverOption::ProofStatistics
+            | EProverOption::FullDerivation
+            | EProverOption::ForceDerivation
+            | EProverOption::RecordGivenClauses
+            | EProverOption::TrainingExamples
+            | EProverOption::PclTermsCompressed
+            | EProverOption::PclCompact
+            | EProverOption::PclShellLevel
+    )
+}
+
+const fn is_resource_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::CpuLimit | EProverOption::SoftCpuLimit | EProverOption::MemoryLimit
+    )
+}
+
+const fn is_strategy_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::SelectStrategy | EProverOption::PrintStrategy | EProverOption::ParseStrategy
+    )
+}
+
+const fn is_limit_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::ProcessedClausesLimit
+            | EProverOption::ProcessedSetLimit
+            | EProverOption::UnprocessedLimit
+            | EProverOption::TotalClauseSetLimit
+            | EProverOption::GeneratedLimit
+            | EProverOption::TermBankInsertLimit
+            | EProverOption::Answers
+    )
+}
+
+const fn is_format_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::EqnNoInfix
+            | EProverOption::FullEquationalRep
+            | EProverOption::PrintOrientedEqLitsAsRules
+            | EProverOption::LopIn
+            | EProverOption::PclOut
+            | EProverOption::TptpIn
+            | EProverOption::TptpOut
+            | EProverOption::TptpFormat
+            | EProverOption::TstpIn
+            | EProverOption::TstpOut
+            | EProverOption::TstpFormat
+    )
+}
+
+const fn is_input_mode_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::SyntaxOnly
+            | EProverOption::PrintFormulas
+            | EProverOption::PruneOnly
+            | EProverOption::CnfOnly
+    )
+}
+
+const fn is_simple_flag(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::PrintPid
+            | EProverOption::PrintVersion
+            | EProverOption::RequireNonempty
+            | EProverOption::ResourcesInfo
+            | EProverOption::ConjecturesAreQuestions
+            | EProverOption::DeterministicRewriteSort
+            | EProverOption::DeterministicNewSort
+    )
+}
+
+const fn is_schedule_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::Auto
+            | EProverOption::AutoSchedule
+            | EProverOption::SerializeSchedule
+            | EProverOption::ForcePreprocessingSchedule
+            | EProverOption::SatAutoSchedule
+    )
+}
+
+const fn is_preprocessing_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::NoPreprocessing
+            | EProverOption::EqUnfoldLimit
+            | EProverOption::EqUnfoldMaxClauses
+            | EProverOption::NoEqUnfolding
+            | EProverOption::GoalDefs
+            | EProverOption::GoalSubtermDefs
+            | EProverOption::Sine
+            | EProverOption::RelPruningLevel
+            | EProverOption::PresatSimplify
+            | EProverOption::AcHandling
+            | EProverOption::AcNonAggressive
+    )
 }
 
 fn apply_output_option(
@@ -658,6 +775,83 @@ fn apply_schedule_option(
     Ok(())
 }
 
+fn apply_preprocessing_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    match parsed.option().option_code {
+        EProverOption::NoPreprocessing => config.preprocessing.no_preprocessing = true,
+        EProverOption::EqUnfoldLimit => {
+            config.preprocessing.eqdef_incrlimit =
+                get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::EqUnfoldMaxClauses => {
+            config.preprocessing.eqdef_maxclauses =
+                get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::NoEqUnfolding => {
+            config.preprocessing.eqdef_incrlimit = i64::MIN;
+        }
+        EProverOption::GoalDefs => apply_goal_defs(config, parsed.arg().unwrap_or(""))?,
+        EProverOption::GoalSubtermDefs => {
+            config.preprocessing.goal_definitions.subterms = true;
+        }
+        EProverOption::Sine => config.sine = Some(parsed.arg().unwrap_or("").to_owned()),
+        EProverOption::RelPruningLevel => {
+            config.preprocessing.relevance_prune_level =
+                get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::PresatSimplify => {
+            config.preprocessing.presat_interreduction =
+                get_bool_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::AcHandling => apply_ac_handling(config, parsed.arg().unwrap_or(""))?,
+        EProverOption::AcNonAggressive => config.preprocessing.ac_res_aggressive = false,
+        _ => unreachable!("non-preprocessing option routed to preprocessing handler"),
+    }
+    Ok(())
+}
+
+fn apply_goal_defs(config: &mut EProverConfig, arg: &str) -> Result<(), Diagnostic> {
+    match arg {
+        "None" => {
+            config.preprocessing.goal_definitions.positive = false;
+            config.preprocessing.goal_definitions.negative = false;
+            Ok(())
+        }
+        "All" => {
+            config.preprocessing.goal_definitions.positive = true;
+            config.preprocessing.goal_definitions.negative = true;
+            Ok(())
+        }
+        "Neg" => {
+            config.preprocessing.goal_definitions.positive = false;
+            config.preprocessing.goal_definitions.negative = true;
+            Ok(())
+        }
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "Option --goal-defs accepts only None, All, or Neg",
+        )),
+    }
+}
+
+fn apply_ac_handling(config: &mut EProverConfig, arg: &str) -> Result<(), Diagnostic> {
+    config.preprocessing.ac_handling = match arg {
+        "None" => AcHandling::None,
+        "DiscardAll" => AcHandling::DiscardAll,
+        "KeepUnits" => AcHandling::KeepUnits,
+        "KeepOrientable" => AcHandling::KeepOrientable,
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                "Option --ac_handling requires None, DiscardAll, KeepUnits, or KeepOrientable as an argument",
+            ));
+        }
+    };
+    Ok(())
+}
+
 fn apply_limit_option(
     config: &mut EProverConfig,
     parsed: &ParsedOpt<'_, EProverOption>,
@@ -799,8 +993,8 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, process_options, run, DocOutputFormat, EProverAction,
-        EProverFlag, MEGA,
+        auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
+        EProverAction, EProverFlag, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -1156,6 +1350,101 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
 
         let error = process_options(["eprover", "--force-preproc-sched=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+    }
+
+    #[test]
+    fn process_options_records_preprocessing_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(!config.preprocessing.no_preprocessing);
+        assert_eq!(config.preprocessing.eqdef_incrlimit, 20);
+        assert_eq!(config.preprocessing.eqdef_maxclauses, 20_000);
+        assert_eq!(config.preprocessing.ac_handling, AcHandling::DiscardAll);
+        assert!(config.preprocessing.ac_res_aggressive);
+        assert!(!config.preprocessing.presat_interreduction);
+        assert_eq!(config.preprocessing.relevance_prune_level, 0);
+
+        let action = process_options([
+            "eprover",
+            "--no-preprocessing",
+            "--eq-unfold-limit=7",
+            "--eq-unfold-maxclauses=11",
+            "--goal-defs",
+            "--goal-subterm-defs",
+            "--sine",
+            "--rel-pruning-level",
+            "--presat-simplify=false",
+            "--ac-handling=KeepOrientable",
+            "--ac-non-aggressive",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.preprocessing.no_preprocessing);
+        assert_eq!(config.preprocessing.eqdef_incrlimit, 7);
+        assert_eq!(config.preprocessing.eqdef_maxclauses, 11);
+        assert!(config.preprocessing.goal_definitions.positive);
+        assert!(config.preprocessing.goal_definitions.negative);
+        assert!(config.preprocessing.goal_definitions.subterms);
+        assert_eq!(config.sine.as_deref(), Some("Auto"));
+        assert_eq!(config.preprocessing.relevance_prune_level, 3);
+        assert!(!config.preprocessing.presat_interreduction);
+        assert_eq!(config.preprocessing.ac_handling, AcHandling::KeepOrientable);
+        assert!(!config.preprocessing.ac_res_aggressive);
+
+        let action = process_options(["eprover", "--no-eq-unfolding", "--ac-handling"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.preprocessing.eqdef_incrlimit, i64::MIN);
+        assert_eq!(config.preprocessing.ac_handling, AcHandling::KeepUnits);
+    }
+
+    #[test]
+    fn process_options_records_goal_defs_modes_like_c() {
+        let action = process_options(["eprover", "--goal-defs=None"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(!config.preprocessing.goal_definitions.positive);
+        assert!(!config.preprocessing.goal_definitions.negative);
+
+        let action = process_options(["eprover", "--goal-defs=Neg"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(!config.preprocessing.goal_definitions.positive);
+        assert!(config.preprocessing.goal_definitions.negative);
+
+        let action = process_options(["eprover", "--goal-defs=All"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.preprocessing.goal_definitions.positive);
+        assert!(config.preprocessing.goal_definitions.negative);
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_preprocessing_modes() {
+        let error = process_options(["eprover", "--goal-defs=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option --goal-defs accepts only None, All, or Neg"
+        );
+
+        let error = process_options(["eprover", "--ac-handling=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option --ac_handling requires None, DiscardAll, KeepUnits, or KeepOrientable as an argument"
+        );
+
+        let error = process_options(["eprover", "--presat-simplify=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
