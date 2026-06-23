@@ -5,4 +5,5 @@ pub mod error;
 pub mod fixdarrays;
 pub mod pdarrays;
 pub mod pdrangearrays;
+pub mod properties;
 pub mod pstacks;
