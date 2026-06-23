@@ -9,6 +9,7 @@ use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState,
 };
 use crate::inout::output::set_output_level;
+use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 
@@ -27,6 +28,8 @@ pub struct EProverConfig {
     pub verbose: i64,
     pub proof_object_level: i64,
     pub cpu_limit: Option<i64>,
+    pub soft_cpu_limit: Option<i64>,
+    pub schedule_time_limit: Option<i64>,
     pub memory_limit: Option<String>,
     pub flags: EProverFlags,
 }
@@ -66,6 +69,8 @@ impl Default for EProverConfig {
             verbose: 0,
             proof_object_level: 0,
             cpu_limit: None,
+            soft_cpu_limit: None,
+            schedule_time_limit: None,
             memory_limit: None,
             flags: EProverFlags::default(),
         }
@@ -159,6 +164,40 @@ fn open_configured_output<'a, W: Write + ?Sized>(
         })
 }
 
+#[allow(clippy::cast_sign_loss)]
+const fn c_rlimit_from_arg(value: i64) -> u64 {
+    // The C path assigns CLStateGetIntArg()'s signed long to rlim_t.
+    value as u64
+}
+
+fn check_hard_soft_limits(
+    hard: i64,
+    soft: i64,
+    hard_option_changed: bool,
+) -> Result<(), Diagnostic> {
+    if c_rlimit_from_arg(hard) > c_rlimit_from_arg(soft) {
+        return Ok(());
+    }
+    let message = if hard_option_changed {
+        "Hard time limit has to be larger than softtime limit"
+    } else {
+        "Soft time limit has to be smaller than hardtime limit"
+    };
+    Err(Diagnostic::new(ErrorCode::USAGE_ERROR, message))
+}
+
+fn apply_time_limit_state(config: &EProverConfig) {
+    if let Some(limit) = config.cpu_limit {
+        let _ = set_hard_time_limit(c_rlimit_from_arg(limit));
+    }
+    if let Some(limit) = config.soft_cpu_limit {
+        let _ = set_soft_time_limit(c_rlimit_from_arg(limit));
+    }
+    if let Some(limit) = config.schedule_time_limit {
+        let _ = set_schedule_time_limit(c_rlimit_from_arg(limit));
+    }
+}
+
 pub fn run<I, S>(
     argv: I,
     stdout: &mut impl Write,
@@ -209,7 +248,20 @@ where
                     get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 0, 3)?;
             }
             EProverOption::CpuLimit => {
-                config.cpu_limit = Some(get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?);
+                let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+                if let Some(soft_limit) = config.soft_cpu_limit {
+                    check_hard_soft_limits(limit, soft_limit, true)?;
+                }
+                config.cpu_limit = Some(limit);
+                config.schedule_time_limit = Some(limit);
+            }
+            EProverOption::SoftCpuLimit => {
+                let limit = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+                if let Some(hard_limit) = config.cpu_limit {
+                    check_hard_soft_limits(hard_limit, limit, false)?;
+                }
+                config.soft_cpu_limit = Some(limit);
+                config.schedule_time_limit = Some(limit);
             }
             EProverOption::MemoryLimit => {
                 config.memory_limit = Some(parsed.arg().unwrap_or("").to_owned());
@@ -266,6 +318,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     })?;
     set_verbose_level(verbose);
     let _ = set_output_level(config.output_level);
+    apply_time_limit_state(config);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -289,6 +342,10 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::inout::output::{output_level, set_output_level};
+    use crate::inout::signals::{
+        hard_time_limit, schedule_time_limit, set_hard_time_limit, set_schedule_time_limit,
+        set_soft_time_limit, soft_time_limit, RLIM_INFINITY_COMPAT,
+    };
     use crate::prover::version::VERSION;
     use std::sync::{Mutex, OnceLock};
 
@@ -324,6 +381,52 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.files, ["-"]);
+    }
+
+    #[test]
+    fn process_options_tracks_cpu_limit_schedule_state_like_c() {
+        let action = process_options(["eprover", "--cpu-limit"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.cpu_limit, Some(300));
+        assert_eq!(config.soft_cpu_limit, None);
+        assert_eq!(config.schedule_time_limit, Some(300));
+
+        let action =
+            process_options(["eprover", "--soft-cpu-limit=25", "--cpu-limit=100"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.cpu_limit, Some(100));
+        assert_eq!(config.soft_cpu_limit, Some(25));
+        assert_eq!(config.schedule_time_limit, Some(100));
+
+        let action =
+            process_options(["eprover", "--cpu-limit=100", "--soft-cpu-limit=25"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.schedule_time_limit, Some(25));
+    }
+
+    #[test]
+    fn process_options_rejects_non_increasing_cpu_limits() {
+        let error =
+            process_options(["eprover", "--cpu-limit=10", "--soft-cpu-limit=10"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Soft time limit has to be smaller than hardtime limit"
+        );
+
+        let error =
+            process_options(["eprover", "--soft-cpu-limit=20", "--cpu-limit=10"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Hard time limit has to be larger than softtime limit"
+        );
     }
 
     #[test]
@@ -381,6 +484,32 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("out of int range"));
         assert_eq!(verbose_level(), 0);
+    }
+
+    #[test]
+    fn run_applies_cpu_limit_options_to_signal_state() {
+        let _guard = global_test_lock();
+        let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
+        let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
+        let _ = set_schedule_time_limit(0);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--soft-cpu-limit=25", "--cpu-limit=100"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(hard_time_limit(), 100);
+        assert_eq!(soft_time_limit(), 25);
+        assert_eq!(schedule_time_limit(), 100);
+
+        let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
+        let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
+        let _ = set_schedule_time_limit(0);
     }
 
     #[test]

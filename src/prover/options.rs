@@ -10,6 +10,7 @@ pub enum EProverOption {
     OutputLevel,
     ProofObject,
     CpuLimit,
+    SoftCpuLimit,
     MemoryLimit,
     SyntaxOnly,
     PrintPid,
@@ -91,6 +92,14 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         OptArgType::OptArg,
         Some("300"),
         "Limit the per-core CPU time the prover should run.",
+    ),
+    OptCell::new(
+        EProverOption::SoftCpuLimit,
+        None,
+        Some("soft-cpu-limit"),
+        OptArgType::OptArg,
+        Some("290"),
+        "Limit the CPU time the prover should spend in the main saturation phase.",
     ),
     OptCell::new(
         EProverOption::SyntaxOnly,
