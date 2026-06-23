@@ -16,6 +16,7 @@ use crate::terms::termtypes::{
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
+use crate::terms::typecheck::type_infer_sort;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -1163,6 +1164,47 @@ pub fn term_is_untyped(term: &Term) -> bool {
     true
 }
 
+/// App-encodes a typed term into binary typed-application symbols.
+///
+/// # Panics
+///
+/// Panics if `orig` or an applied argument is missing its inferred type, if a
+/// traversed argument slot is uninitialized, or if the inherited prefix
+/// invariants from `term_create_prefix` are violated.
+pub fn term_app_encode(orig: &Term, sig: &mut Signature) -> Result<Term, Diagnostic> {
+    if orig.arity() == 0 {
+        return Ok(term_copy_keep_vars(orig, DerefType::Never));
+    }
+
+    let arg_num = orig.arg_num();
+    assert!(arg_num > 0, "app-encoding requires a logical argument");
+    let orig_prefix = term_create_prefix(orig, arg_num - 1);
+    let applied_to = orig
+        .argument(orig.arity() - 1)
+        .expect("app-encoding requires initialized args");
+
+    assert!(
+        orig_prefix.is_free_var() || orig_prefix.type_().is_none(),
+        "non-variable prefixes are inferred during app-encoding"
+    );
+    type_infer_sort(sig, &orig_prefix)?;
+    let prefix_type = orig_prefix
+        .type_()
+        .expect("prefix type is inferred during app-encoding");
+    let applied_type = applied_to
+        .type_()
+        .expect("applied argument type is known before app-encoding");
+    let ret_type = orig
+        .type_()
+        .expect("app-encoded term has a known return type");
+
+    let app_code = sig.get_typed_app(&prefix_type, &applied_type, &ret_type);
+    let encoded = Term::top_alloc(app_code, 2);
+    encoded.set_argument(0, term_app_encode(&orig_prefix, sig)?);
+    encoded.set_argument(1, term_app_encode(&applied_to, sig)?);
+    Ok(encoded)
+}
+
 /// Creates a term prefix with the first `arg_num` logical arguments.
 ///
 /// # Panics
@@ -1396,8 +1438,8 @@ fn create_var_renaming_de_bruijn(vars: &VarBank, term: &Term) -> BTreeMap<FunCod
 mod tests {
     use super::{
         term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
-        term_add_symbol_features, term_add_symbol_features_limited, term_apply_arg,
-        term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
+        term_add_symbol_features, term_add_symbol_features_limited, term_app_encode,
+        term_apply_arg, term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
         term_collect_variables, term_compute_function_ranks, term_compute_order, term_copy,
         term_copy_keep_vars, term_copy_normalize_vars, term_copy_normalize_vars_alpha,
         term_copy_rename_vars, term_copy_unify_vars, term_create_prefix, term_dag_weight,
@@ -1417,8 +1459,8 @@ mod tests {
     use crate::terms::dbvars::{mk_db, DbVarBank};
     use crate::terms::functypes::FuncSymbType;
     use crate::terms::signature::{
-        Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE,
-        SIG_PHONY_APP_CODE,
+        Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, FP_TYPED_APPLICATION,
+        SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_PHONY_APP_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg};
     use crate::terms::termpos::TermPos;
@@ -1428,6 +1470,7 @@ mod tests {
     };
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
+    use crate::terms::typecheck::type_infer_sort;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn typed_var(code: i64, type_: &crate::terms::simpletypes::Type) -> Term {
@@ -2068,6 +2111,50 @@ mod tests {
         applied.set_type(Some(bank.bool_type()));
         assert!(term_is_untyped(&applied));
         assert_eq!(term_compute_order(&sig, &applied), 0);
+    }
+
+    #[test]
+    fn term_app_encode_builds_binary_typed_application_tree() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let f_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                i_type.clone(),
+                i_type.clone(),
+                i_type.clone(),
+            ]));
+        let f_code = sig.insert_id("f", 2, false);
+        sig.declare_final_type(f_code, f_type).unwrap();
+        let a_code = sig.insert_id("a", 0, false);
+        sig.declare_final_type(a_code, i_type.clone()).unwrap();
+        let b_code = sig.insert_id("b", 0, false);
+        sig.declare_final_type(b_code, i_type.clone()).unwrap();
+
+        let a = Term::const_cell_alloc(a_code);
+        a.set_type(Some(i_type.clone()));
+        let b = Term::const_cell_alloc(b_code);
+        b.set_type(Some(i_type.clone()));
+        let root = Term::top_alloc(f_code, 2);
+        root.set_argument(0, a.clone());
+        root.set_argument(1, b.clone());
+        type_infer_sort(&mut sig, &root).unwrap();
+
+        let encoded = term_app_encode(&root, &mut sig).unwrap();
+
+        assert_eq!(encoded.arity(), 2);
+        assert!(sig.query_prop(encoded.f_code(), FP_TYPED_APPLICATION));
+        let left = encoded.argument(0).unwrap();
+        let right = encoded.argument(1).unwrap();
+        assert!(sig.query_prop(left.f_code(), FP_TYPED_APPLICATION));
+        assert_eq!(left.argument(0).unwrap().f_code(), f_code);
+        assert_eq!(left.argument(1).unwrap().f_code(), a_code);
+        assert_eq!(right.f_code(), b_code);
+
+        let encoded_const = term_app_encode(&a, &mut sig).unwrap();
+        assert_ne!(encoded_const, a);
+        assert_eq!(encoded_const.f_code(), a_code);
+        assert_eq!(encoded_const.type_(), Some(i_type));
     }
 
     #[test]

@@ -798,6 +798,34 @@ impl Signature {
         }
     }
 
+    /// Returns the generated binary typed-application symbol for `(arg1, arg2) -> ret`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if declaring the generated type fails. The generated name is
+    /// derived from the three type UIDs, so a fresh declaration is expected to
+    /// be compatible with any existing symbol of the same name.
+    pub fn get_typed_app(&mut self, arg1: &Type, arg2: &Type, ret: &Type) -> FunCode {
+        let name = format!(
+            "app_{}_{}_{}",
+            arg1.type_uid(),
+            arg2.type_uid(),
+            ret.type_uid()
+        );
+        let app_type = self.type_bank.insert_type_shared(alloc_arrow_type(vec![
+            arg1.clone(),
+            arg2.clone(),
+            ret.clone(),
+        ]));
+        let f_code = self.insert_id(&name, 2, false);
+        if self.get_type(f_code).is_none() {
+            self.declare_type(f_code, app_type)
+                .expect("fresh typed-application type declaration succeeds");
+        }
+        self.set_func_prop(f_code, FP_TYPED_APPLICATION);
+        f_code
+    }
+
     pub fn get_new_skolem_code(&mut self, arity: i32) -> FunCode {
         let mut counter = self.skolem_count;
         let code = self.get_new_f_code(arity, "esk", &mut counter, FP_SKOLEM_SYMBOL);
@@ -1420,5 +1448,37 @@ mod tests {
         assert_eq!(sig.find_name(def), Some("edef1_0"));
         assert_eq!(sig.newdef_count(), 1);
         assert!(sig.query_prop(def, FP_DEF_FUN));
+    }
+
+    #[test]
+    fn typed_application_symbols_are_named_by_type_uids_and_reused() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let unary_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let expected_name = format!(
+            "app_{}_{}_{}",
+            unary_type.type_uid(),
+            individual.type_uid(),
+            bool_type.type_uid()
+        );
+
+        let app = sig.get_typed_app(&unary_type, &individual, &bool_type);
+
+        assert_eq!(sig.find_name(app), Some(expected_name.as_str()));
+        assert_eq!(sig.find_arity(app), Some(2));
+        assert!(sig.query_prop(app, FP_TYPED_APPLICATION));
+        assert_eq!(
+            sig.get_type(app)
+                .expect("typed app has declared type")
+                .args(),
+            &[unary_type.clone(), individual.clone(), bool_type.clone()]
+        );
+        assert_eq!(sig.get_typed_app(&unary_type, &individual, &bool_type), app);
     }
 }
