@@ -7,6 +7,7 @@ use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::{Type, TypeUniqueId};
 use crate::terms::termcellstore::TermCellStore;
+use crate::terms::termfunc::{term_is_ground_compute, term_standard_weight};
 use crate::terms::termtypes::{
     term_deref, DerefType, Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_GARBAGE_FLAG,
     TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM, TP_HAS_EQ_NEQ_SYM,
@@ -158,6 +159,209 @@ impl TermBank {
     /// precondition for `TBInsertNoProps`.
     pub fn insert_no_props(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
         self.insert_with_mode(term, deref, InsertMode::NoProperties)
+    }
+
+    /// Inserts a term while reusing shared ground subterms unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a ground term is not shared, or if a free/DB variable has no
+    /// type, matching the C preconditions for `TBInsertOpt`.
+    pub fn insert_opt(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
+        let mut current_deref = deref;
+        let term = term_deref(term, &mut current_deref);
+        if term_is_ground_for_insert(&term) {
+            assert!(
+                term.is_shared(),
+                "optimized ground insertion expects sharing"
+            );
+            return Ok(term);
+        }
+        self.insert_with_mode(&term, current_deref, InsertMode::ShareVariables)
+    }
+
+    /// Inserts a term with one subterm replaced after instantiation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `repl` is not already present in this bank, or if a free/DB
+    /// variable has no type, matching `TBInsertRepl`.
+    pub fn insert_repl(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+        old: &Term,
+        repl: &Term,
+    ) -> Result<Term, Diagnostic> {
+        if term == old {
+            assert!(
+                self.find(repl).is_some(),
+                "replacement must already be in the term bank"
+            );
+            return Ok(repl.clone());
+        }
+
+        let mut current_deref = deref;
+        let term = term_deref(term, &mut current_deref);
+        if term.is_free_var() {
+            let type_ = term.type_().expect("free variable must have a type");
+            return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
+        }
+        if term.is_db_var() {
+            let type_ = term.type_().expect("DB variable must have a type");
+            return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
+        }
+
+        let copy = Term::top_copy_without_args(&term);
+        copy.set_properties(TP_IGNORE_PROPS);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_repl(&arg, current_deref, old, repl)?;
+            copy.set_argument(index, shared);
+        }
+        self.term_top_insert(copy)
+    }
+
+    /// Inserts a plain, non-instantiated replacement when a subterm changes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `repl` is not already present in this bank, matching
+    /// `TBInsertReplPlain`.
+    pub fn insert_repl_plain(
+        &mut self,
+        term: &Term,
+        old: &Term,
+        repl: &Term,
+    ) -> Result<Term, Diagnostic> {
+        if term == old {
+            assert!(
+                self.find(repl).is_some(),
+                "replacement must already be in the term bank"
+            );
+            return Ok(repl.clone());
+        }
+        if term_standard_weight(term) <= term_standard_weight(old) || term.is_any_var() {
+            return Ok(term.clone());
+        }
+
+        let copy = Term::top_copy_without_args(term);
+        copy.set_properties(TP_IGNORE_PROPS);
+        let mut changed = false;
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let replaced = self.insert_repl_plain(&arg, old, repl)?;
+            if replaced != arg {
+                changed = true;
+            }
+            copy.set_argument(index, replaced);
+        }
+
+        if changed {
+            self.term_top_insert(copy)
+        } else {
+            Ok(term.clone())
+        }
+    }
+
+    /// Inserts an instantiated term while preserving already-shared ground terms.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `deref` exposes a free/DB variable without a type, or if an
+    /// inserted parent receives an unshared ground child, matching the C
+    /// caller preconditions for `TBInsertInstantiatedDeref`.
+    pub fn insert_instantiated_deref(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+    ) -> Result<Term, Diagnostic> {
+        if deref == DerefType::Never {
+            return Ok(term.clone());
+        }
+
+        let mut current_deref = deref;
+        let term = term_deref(term, &mut current_deref);
+        if term.is_any_var() || term_is_ground_for_insert(&term) {
+            return Ok(term);
+        }
+
+        let copy = Term::top_copy_without_args(&term);
+        copy.set_properties(TP_IGNORE_PROPS);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_instantiated_deref(&arg, current_deref)?;
+            copy.set_argument(index, shared);
+        }
+        self.term_top_insert(copy)
+    }
+
+    /// Inserts a first-order instantiated term.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a ground or bound term is not already present in the bank, or
+    /// if a free/DB variable has no type, matching `TBInsertInstantiatedFO`.
+    pub fn insert_instantiated_fo(&mut self, term: &Term) -> Result<Term, Diagnostic> {
+        if term_is_ground_for_insert(term) {
+            assert!(
+                self.find(term).is_some(),
+                "ground instantiated terms must already be in the bank"
+            );
+            return Ok(term.clone());
+        }
+        if let Some(binding) = term.binding() {
+            assert!(
+                self.find(&binding).is_some(),
+                "variable binding must already be in the bank"
+            );
+            return Ok(binding);
+        }
+        if term.is_free_var() {
+            let type_ = term.type_().expect("free variable must have a type");
+            return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
+        }
+        if term.is_db_var() {
+            let type_ = term.type_().expect("DB variable must have a type");
+            return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
+        }
+
+        let copy = Term::top_copy_without_args(term);
+        copy.set_properties(TP_IGNORE_PROPS);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_instantiated_fo(&arg)?;
+            copy.set_argument(index, shared);
+        }
+        self.term_top_insert(copy)
+    }
+
+    /// Inserts a copy whose free variables are replaced by alternative vars.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an input free variable is already an alternative variable, or
+    /// if a free/DB variable has no type, matching the C `TBInsertDisjoint`
+    /// preconditions.
+    pub fn insert_disjoint(&mut self, term: &Term) -> Result<Term, Diagnostic> {
+        if term_is_ground_for_insert(term) {
+            return Ok(term.clone());
+        }
+        if term.is_free_var() {
+            return Ok(self.vars.get_alt_var(term));
+        }
+        if term.is_db_var() {
+            let type_ = term.type_().expect("DB variable must have a type");
+            return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
+        }
+
+        let copy = Term::top_copy_without_args(term);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_disjoint(&arg)?;
+            copy.set_argument(index, shared);
+        }
+        self.term_top_insert(copy)
     }
 
     /// Inserts a top cell whose arguments are already shared.
@@ -602,6 +806,15 @@ enum InsertMode {
     NoProperties,
 }
 
+#[must_use]
+fn term_is_ground_for_insert(term: &Term) -> bool {
+    if term.is_shared() {
+        tb_term_is_ground(term)
+    } else {
+        term_is_ground_compute(term)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -706,6 +919,129 @@ mod tests {
         assert_eq!(shared.f_code(), -2);
         assert_eq!(tb_cell_ident(&shared), -2);
         assert_eq!(bank.term_nodes(), 3);
+    }
+
+    #[test]
+    fn optimized_insertion_reuses_shared_ground_terms_and_follows_bindings() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(a_code, i_type.clone())
+            .unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let before = bank.term_nodes();
+
+        assert_eq!(bank.insert_opt(&a, DerefType::Never).unwrap(), a);
+        assert_eq!(bank.term_nodes(), before);
+
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        var.set_binding(Some(a.clone()));
+        assert_eq!(bank.insert_opt(&var, DerefType::Always).unwrap(), a);
+
+        let unshared = Term::top_alloc(f_code, 1);
+        unshared.set_argument(0, var);
+        let inserted = bank.insert_opt(&unshared, DerefType::Always).unwrap();
+        assert_eq!(inserted.argument(0), Some(a));
+        assert!(inserted.is_shared());
+    }
+
+    #[test]
+    fn replacement_insertions_clear_new_top_properties_and_skip_plain_noops() {
+        let (mut bank, f_code) = bank_with_symbol("f", 2);
+        let old_code = bank.signature_mut().insert_id("old", 0, false);
+        let repl_code = bank.signature_mut().insert_id("repl", 0, false);
+        let keep_code = bank.signature_mut().insert_id("keep", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(old_code, i_type.clone())
+            .unwrap();
+        bank.signature_mut()
+            .declare_type(repl_code, i_type.clone())
+            .unwrap();
+        bank.signature_mut()
+            .declare_type(keep_code, i_type)
+            .unwrap();
+        let old = bank.create_const_term(old_code).unwrap();
+        let repl = bank.create_const_term(repl_code).unwrap();
+        let keep = bank.create_const_term(keep_code).unwrap();
+        let root = Term::top_alloc(f_code, 2);
+        root.set_prop(TP_CHECK_FLAG);
+        root.set_argument(0, old.clone());
+        root.set_argument(1, keep.clone());
+
+        let instantiated = bank
+            .insert_repl(&root, DerefType::Never, &old, &repl)
+            .unwrap();
+        assert_eq!(instantiated.argument(0), Some(repl.clone()));
+        assert_eq!(instantiated.argument(1), Some(keep.clone()));
+        assert!(!instantiated.query_prop(TP_CHECK_FLAG));
+
+        let shared_root = bank.insert_no_props(&root, DerefType::Never).unwrap();
+        let plain = bank.insert_repl_plain(&shared_root, &old, &repl).unwrap();
+        assert_eq!(plain.argument(0), Some(repl));
+        assert_eq!(plain.argument(1), Some(keep.clone()));
+        assert!(plain.is_shared());
+
+        let no_change = bank.insert_repl_plain(&keep, &old, &plain).unwrap();
+        assert_eq!(no_change, keep);
+    }
+
+    #[test]
+    fn instantiated_insertions_reuse_bound_and_ground_bank_terms() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(a_code, i_type.clone())
+            .unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        var.set_binding(Some(a.clone()));
+
+        assert_eq!(
+            bank.insert_instantiated_deref(&var, DerefType::Never)
+                .unwrap(),
+            var
+        );
+        assert_eq!(
+            bank.insert_instantiated_deref(&var, DerefType::Once)
+                .unwrap(),
+            a
+        );
+
+        let root = Term::top_alloc(f_code, 1);
+        root.set_prop(TP_CHECK_FLAG);
+        root.set_argument(0, var.clone());
+        let derefed = bank
+            .insert_instantiated_deref(&root, DerefType::Once)
+            .unwrap();
+        assert_eq!(derefed.argument(0), Some(a.clone()));
+        assert!(!derefed.query_prop(TP_CHECK_FLAG));
+
+        let fo = bank.insert_instantiated_fo(&root).unwrap();
+        assert_eq!(fo.argument(0), Some(a.clone()));
+        assert!(!fo.query_prop(TP_CHECK_FLAG));
+        assert_eq!(bank.insert_instantiated_fo(&a).unwrap(), a);
+    }
+
+    #[test]
+    fn disjoint_insertion_maps_normal_variables_to_alternative_variables() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let i_type = bank.signature().type_bank().i_type();
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        let root = Term::top_alloc(f_code, 1);
+        root.set_argument(0, var);
+
+        let disjoint = bank.insert_disjoint(&root).unwrap();
+        let alt = disjoint.argument(0).unwrap();
+
+        assert_eq!(alt.f_code(), -1);
+        assert!(alt.is_free_var());
+        assert!(disjoint.is_shared());
     }
 
     #[test]
