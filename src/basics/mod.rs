@@ -24,3 +24,5 @@ pub mod ptrees;
 pub mod quadtrees;
 pub mod simple_stuff;
 pub mod stringtrees;
+pub mod sysdate;
+pub mod verbose;
