@@ -11,6 +11,7 @@ pub mod numxtrees;
 pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod permastrings;
+pub mod pqueue;
 pub mod properties;
 pub mod pstacks;
 pub mod ptrees;
