@@ -729,6 +729,123 @@ pub fn term_collect_fcodes(term: &Term, fcodes: &mut BTreeSet<FunCode>) -> i64 {
     count
 }
 
+/// Adds occurrences of function symbols with `f_code < limit` to `dist_array`.
+///
+/// # Panics
+///
+/// Panics if `dist_array` cannot address a counted f-code, or if a traversed
+/// non-variable term has a non-positive f-code.
+pub fn term_add_symbol_distribution_limited(term: &Term, dist_array: &mut [i64], limit: usize) {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if !current.is_any_var() {
+            let index = positive_symbol_index(current.f_code());
+            if index < limit {
+                assert!(
+                    index < dist_array.len(),
+                    "distribution array must cover all counted f-codes"
+                );
+                dist_array[index] += 1;
+            }
+            stack.extend(current.argument_clones().into_iter().flatten());
+        }
+    }
+}
+
+/// Adds symbol occurrences and records newly seen non-phony function symbols.
+///
+/// # Panics
+///
+/// Panics if `dist_array` cannot address a traversed non-variable term f-code,
+/// or if such a term has a non-positive f-code.
+pub fn term_add_symbol_dist_exist(term: &Term, dist_array: &mut [i64], exists: &mut Vec<FunCode>) {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if !current.is_any_var() {
+            let index = positive_symbol_index(current.f_code());
+            assert!(
+                index < dist_array.len(),
+                "distribution array must cover all traversed f-codes"
+            );
+            if dist_array[index] == 0 && !current.is_phony_app() && !current.is_lambda() {
+                exists.push(current.f_code());
+            }
+            if !(current.is_phony_app() || current.is_lambda()) {
+                dist_array[index] += 1;
+            }
+            stack.extend(current.argument_clones().into_iter().flatten());
+        }
+    }
+}
+
+/// Adds symbol frequencies and maximum depths, with out-of-limit symbols in slot 0.
+///
+/// # Panics
+///
+/// Panics if `limit` is zero, either array lacks overflow slot 0, either array
+/// cannot address a counted in-limit f-code, or a traversed non-variable term
+/// has a non-positive f-code.
+pub fn term_add_symbol_features_limited(
+    term: &Term,
+    depth: i64,
+    freq_array: &mut [i64],
+    depth_array: &mut [i64],
+    limit: usize,
+) {
+    assert!(limit != 0, "feature arrays need slot 0 for overflow");
+    assert!(
+        !freq_array.is_empty() && !depth_array.is_empty(),
+        "feature arrays need slot 0 for overflow"
+    );
+    if term.is_any_var() {
+        return;
+    }
+
+    let index = positive_symbol_index(term.f_code());
+    if index < limit && !term.is_phony_app() {
+        assert!(
+            index < freq_array.len() && index < depth_array.len(),
+            "feature arrays must cover all counted in-limit f-codes"
+        );
+        freq_array[index] += 1;
+        depth_array[index] = depth_array[index].max(depth);
+    } else {
+        if !term.is_phony_app() {
+            freq_array[0] += 1;
+        }
+        depth_array[0] = depth_array[0].max(depth);
+    }
+    for arg in term.argument_clones().into_iter().flatten() {
+        term_add_symbol_features_limited(&arg, depth + 1, freq_array, depth_array, limit);
+    }
+}
+
+/// Assigns post-order occurrence ranks to first occurrences of function symbols.
+///
+/// # Panics
+///
+/// Panics if `rank_array` cannot address a traversed non-variable term f-code,
+/// or if such a term has a non-positive f-code.
+pub fn term_compute_function_ranks(term: &Term, rank_array: &mut [i64], count: &mut i64) {
+    if term.is_any_var() {
+        return;
+    }
+    for arg in term.argument_clones().into_iter().flatten() {
+        term_compute_function_ranks(&arg, rank_array, count);
+    }
+    if !term.is_phony_app() {
+        let index = positive_symbol_index(term.f_code());
+        assert!(
+            index < rank_array.len(),
+            "rank array must cover all traversed f-codes"
+        );
+        if rank_array[index] == 0 {
+            rank_array[index] = *count;
+            *count += 1;
+        }
+    }
+}
+
 #[must_use]
 pub fn term_array_no_duplicates(args: &[Term]) -> bool {
     if args.len() <= 1 {
@@ -934,10 +1051,17 @@ fn cmp_order(ordering: Ordering) -> i64 {
     }
 }
 
+fn positive_symbol_index(f_code: FunCode) -> usize {
+    assert!(f_code > 0, "function symbol f-code must be positive");
+    usize::try_from(f_code).expect("positive f-code fits in usize")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        term_apply_arg, term_array_no_duplicates, term_collect_fcodes, term_collect_variables,
+        term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
+        term_add_symbol_features_limited, term_apply_arg, term_array_no_duplicates,
+        term_collect_fcodes, term_collect_variables, term_compute_function_ranks,
         term_compute_order, term_create_prefix, term_dag_weight, term_depth,
         term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
         term_is_def_term, term_is_flat, term_is_ground_compute, term_is_subterm,
@@ -1248,6 +1372,58 @@ mod tests {
 
         assert!(term_array_no_duplicates(&[x.clone(), y.clone(), x.clone()]));
         assert!(!term_array_no_duplicates(&[x.clone(), x]));
+    }
+
+    #[test]
+    fn symbol_distribution_features_and_ranks_follow_c_traversals() {
+        let root = Term::top_alloc(10, 2);
+        let nested = Term::top_alloc(20, 1);
+        let leaf = Term::const_cell_alloc(30);
+        let var = Term::const_cell_alloc(-2);
+        nested.set_argument(0, leaf.clone());
+        root.set_argument(0, nested);
+        root.set_argument(1, var.clone());
+
+        let mut limited = vec![0; 25];
+        term_add_symbol_distribution_limited(&root, &mut limited, 25);
+        assert_eq!(limited[10], 1);
+        assert_eq!(limited[20], 1);
+        assert_eq!(limited[0], 0);
+
+        let mut dist = vec![0; 40];
+        let mut exists = Vec::new();
+        term_add_symbol_dist_exist(&root, &mut dist, &mut exists);
+        assert_eq!(exists, vec![10, 20, 30]);
+        assert_eq!(dist[10], 1);
+        assert_eq!(dist[20], 1);
+        assert_eq!(dist[30], 1);
+
+        let mut freq = vec![0; 25];
+        let mut depth = vec![0; 25];
+        term_add_symbol_features_limited(&root, 0, &mut freq, &mut depth, 25);
+        assert_eq!(freq[10], 1);
+        assert_eq!(depth[10], 0);
+        assert_eq!(freq[20], 1);
+        assert_eq!(depth[20], 1);
+        assert_eq!(freq[0], 1);
+        assert_eq!(depth[0], 2);
+
+        let mut ranks = vec![0; 40];
+        let mut count = 1;
+        term_compute_function_ranks(&root, &mut ranks, &mut count);
+        assert_eq!(ranks[30], 1);
+        assert_eq!(ranks[20], 2);
+        assert_eq!(ranks[10], 3);
+        assert_eq!(count, 4);
+
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, var);
+        app.set_argument(1, leaf);
+        let mut dist = vec![0; 40];
+        let mut exists = Vec::new();
+        term_add_symbol_dist_exist(&app, &mut dist, &mut exists);
+        assert_eq!(dist[usize::try_from(SIG_PHONY_APP_CODE).unwrap()], 0);
+        assert_eq!(exists, vec![30]);
     }
 
     #[test]
