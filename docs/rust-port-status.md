@@ -11,6 +11,7 @@ Rust files:
 - `src/basics/dstacks.rs`
 - `src/basics/dstrings.rs`
 - `src/basics/error.rs`
+- `src/basics/fixdarrays.rs`
 - `src/basics/pdarrays.rs`
 - `src/basics/pdrangearrays.rs`
 - `src/basics/pstacks.rs`
@@ -29,6 +30,7 @@ Original C references:
 - [`BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`](c_source_docs/BASICS/clb_dstrings.md)
 - [`BASICS/clb_dstacks.h`, `BASICS/clb_dstacks.c`](c_source_docs/BASICS/clb_dstacks.md)
 - [`BASICS/clb_error.h`, `BASICS/clb_error.c`](c_source_docs/BASICS/clb_error.md)
+- [`BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`](c_source_docs/BASICS/clb_fixdarrays.md)
 - [`BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`](c_source_docs/BASICS/clb_pdarrays.md)
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
 - [`BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`](c_source_docs/BASICS/clb_pstacks.md)
@@ -47,6 +49,7 @@ Implemented behavior:
 - The `PStack` and `DStack` growth/access patterns from `clb_pstacks` and `clb_dstacks`, including explicit logical capacity doubling, reset without shrinking, top/below-top/element access, swap-remove discard, stack copying/pushing, C-shaped binary search and merge behavior, and integer average/deviation computation.
 - Dynamic `PDArray` and `DDArray` storage from `clb_pdarrays` and `clb_ddarrays`, including exponential and fixed-multiple growth, zero/`NULL` initialization, mutating element access that extends arrays like the C macros, delete/store/add/increment helpers, and `DDArraySelectPart` partition selection.
 - `PDRangeArr` signed-index dynamic arrays from `clb_pdrangearrays`, including low/limit key tracking, upward and downward expansion, C-compatible offset shifts, pointer-member counting, deletion, copying, and integer increment helpers.
+- `FixedDArray` fixed-size integer vector helpers from `clb_fixdarrays`, including initialization, component-wise add/subtract/weighted-add/min/max, copying, and C-shaped debug printing.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - Initial stream and scanner support for string sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, and position formatting.
