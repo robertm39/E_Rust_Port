@@ -42,6 +42,7 @@ Rust files:
 - `src/basics/verbose.rs`
 - `src/inout/basicparser.rs`
 - `src/inout/commandline.rs`
+- `src/inout/filevars.rs`
 - `src/inout/fileops.rs`
 - `src/inout/output.rs`
 - `src/inout/scanner.rs`
@@ -90,6 +91,7 @@ Original C references:
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
 - [`INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`](c_source_docs/INOUT/cio_basicparser.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
+- [`INOUT/cio_filevars.h`, `INOUT/cio_filevars.c`](c_source_docs/INOUT/cio_filevars.md)
 - [`INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`](c_source_docs/INOUT/cio_fileops.md)
 - [`INOUT/cio_output.h`, `INOUT/cio_output.c`](c_source_docs/INOUT/cio_output.md)
 - [`INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`](c_source_docs/INOUT/cio_scanner.md)
@@ -135,6 +137,7 @@ Implemented behavior:
 - Initial stream and scanner support for string sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, and position formatting.
 - Shared basic parser helpers from `cio_basicparser`: booleans, signed and unsigned integer parsing, floats, number-string classification, double arrays, filenames, basic include syntax, dotted identifiers, continuous token spans, and balanced delimiter skipping.
 - The core `CLStateGetOpt` command-line parser rules from `cio_commandline`: long options require `--name=value` for required arguments, long optional arguments default when `=` is absent, short required arguments accept attached or following values, short optional arguments use the default, `--` stops option parsing, and processed options are removed from the remaining argument list.
+- File-variable helpers from `cio_filevars`, including identifier/value parsing, overwriting duplicate definitions while counting all parsed definitions, concatenating value token literals without whitespace, borrowed string and identifier lookup, integer semantic errors, and the inherited `FileVarsGetBool` `strcmp` bug.
 - File helpers from `cio_fileops`, including `NULL`/`-` as stdin for input, fail-or-null input-open behavior, regular-file checks, file loading into dynamic strings, concatenation/copy/print/remove helpers, race-prone readability checks, and slash-only directory/base-name/suffix splitting.
 - Output helpers from `cio_output`, including default output level 1, `OUTPRINT` level gating, `-`/`NULL` as stdout, global output target initialization/open/close, file-open diagnostics, and dashed-status formatting.
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
@@ -145,6 +148,7 @@ Known gaps:
 
 - The prover core, parser, clausification, saturation loop, indexing, ordering, heuristics, proof output, resource limits, and most CLI options are not implemented yet.
 - Scanner support is currently limited to string sources and does not yet implement file streams, stacked include handling, or `ScannerSetFormat` format inference.
+- `FileVarsReadFromFile` reads file contents into the current string scanner, so syntax position labels are not yet exact file-stream labels until scanner file-source support lands.
 - `IntMap` preserves the C representation-state decisions but uses safe Rust-owned storage; the C implementation's hidden `PDRangeArr` growth during some read/delete paths and inflated null-slot entry counts should be evaluated later as compatibility risks versus cleanup opportunities.
 - `Memory`/`NewMem` expose safe byte-buffer allocation and accounting rather than raw `malloc` pointers; the freelist and chunk policies are modeled for sizing/reuse behavior, but allocator-address identity and true uninitialized memory are intentionally not exposed.
 - `PList` uses safe arena handles instead of raw self-linked pointers; this preserves cell moves between anchors but does not yet reuse freed cell slots like the C allocator/free-list path.
@@ -197,5 +201,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `SysDatePrint` prints signed `SysDate` with `%5lu`, effectively treating negative dates as unsigned `long` bit patterns on the reference platform. Keep this only for compatibility-sensitive rendering.
 - `clb_verbose` relies on process-global mutable verbosity and direct `stderr` side effects. Rust currently centralizes this behind atomic state and writer-parameterized helpers; later session code should decide whether verbosity belongs in explicit run/session state.
 - Scanner and command-line code intentionally preserve C quirks already covered by tests, while remaining incomplete for file/include stacks, format inference, and the full option table.
+- `FileVarsGetBool` in C appears to misuse `strcmp`, making `true` read as false and nearly any non-`true` value read as true; Rust preserves this for compatibility, but it is a prime cleanup target once callers and reference behavior are audited.
+- `FileVarsParse` has no explicit EOF guard while collecting value tokens before `;`; Rust reports a syntax error for a missing semicolon rather than reproducing the apparent EOF loop risk.
 - `cio_fileops` keeps C's slash-only path splitting and read-open based `FileExists` race; once native Windows drop-in behavior is tested, decide whether these helpers stay compatibility shims or gain explicit platform-aware wrappers.
 - `cio_tempfile` keeps C's process-global temporary-file registry and `TMPDIR`/`/tmp` policy. Later session code should decide whether temp-file ownership should move to scoped run state while preserving signal/atexit cleanup compatibility.

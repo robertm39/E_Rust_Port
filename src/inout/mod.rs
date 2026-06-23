@@ -1,6 +1,7 @@
 pub mod basicparser;
 pub mod commandline;
 pub mod fileops;
+pub mod filevars;
 pub mod output;
 pub mod scanner;
 pub mod simplestuff;
