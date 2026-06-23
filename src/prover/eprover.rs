@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
+use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
@@ -21,6 +22,7 @@ use crate::terms::termtypes::RewriteLevel;
 
 const MEGA: u64 = 1_048_576;
 const C_INT_MAX: i64 = i32::MAX as i64;
+const DEFAULT_CLASSIFICATION_TIMEOUT_PERCENTAGE: i64 = 2;
 const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
@@ -29,9 +31,13 @@ const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const DEFAULT_LAMBDA_WEIGHT: i64 = 20;
 const DEFAULT_DB_WEIGHT: i64 = 10;
 const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
+const DEFAULT_MAX_UNIFIERS: i64 = 4;
+const DEFAULT_MAX_UNIF_STEPS: i64 = 256;
 const DEFAULT_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
+const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+const NO_HIGHER_ORDER_DEPTH: i64 = -1;
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
 
@@ -348,13 +354,78 @@ impl From<bool> for FoolUnroll {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BceConfig {
+    pub enabled: bool,
+    pub max_occs: i64,
+}
+
+impl Default for BceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_occs: DEFAULT_SYMBOL_OCCURRENCES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PredicateEliminationFlags {
+    bits: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum PredicateEliminationFlag {
+    RecognizeGates = 1 << 0,
+    ForceMuDecrease = 1 << 1,
+    IgnoreConjectureSymbols = 1 << 2,
+}
+
+impl PredicateEliminationFlags {
+    pub fn set(&mut self, flag: PredicateEliminationFlag, value: bool) {
+        if value {
+            self.bits |= flag as u8;
+        } else {
+            self.bits &= !(flag as u8);
+        }
+    }
+
+    #[must_use]
+    pub const fn contains(self, flag: PredicateEliminationFlag) -> bool {
+        (self.bits & flag as u8) != 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PredicateEliminationConfig {
+    pub enabled: bool,
+    pub max_occs: i64,
+    pub tolerance: i64,
+    pub flags: PredicateEliminationFlags,
+}
+
+impl Default for PredicateEliminationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_occs: DEFAULT_SYMBOL_OCCURRENCES,
+            tolerance: 0,
+            flags: PredicateEliminationFlags::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreprocessingConfig {
     pub no_preprocessing: bool,
     pub eqdef_maxclauses: i64,
     pub eqdef_incrlimit: i64,
     pub formula_def_limit: i64,
     pub miniscope_limit: i64,
+    pub classification_timeout_percentage: i64,
     pub fool_unroll: FoolUnroll,
+    pub bce: BceConfig,
+    pub predicate_elimination: PredicateEliminationConfig,
     pub goal_definitions: GoalDefinitionConfig,
     pub relevance_prune_level: i64,
     pub presat_interreduction: bool,
@@ -370,7 +441,10 @@ impl Default for PreprocessingConfig {
             eqdef_incrlimit: DEFAULT_EQDEF_INCRLIMIT,
             formula_def_limit: DEFAULT_FORMULA_DEF_LIMIT,
             miniscope_limit: DEFAULT_MINISCOPE_LIMIT,
+            classification_timeout_percentage: DEFAULT_CLASSIFICATION_TIMEOUT_PERCENTAGE,
             fool_unroll: FoolUnroll::Enabled,
+            bce: BceConfig::default(),
+            predicate_elimination: PredicateEliminationConfig::default(),
             goal_definitions: GoalDefinitionConfig::default(),
             relevance_prune_level: 0,
             presat_interreduction: false,
@@ -480,6 +554,7 @@ pub struct TermOrderingConfig {
     pub literal_comparison: LiteralComparison,
     pub lambda_weight: i64,
     pub db_weight: i64,
+    pub ho_order_kind: HoOrderKind,
     pub rewrite_strong_rhs_inst: bool,
 }
 
@@ -497,6 +572,7 @@ impl Default for TermOrderingConfig {
             literal_comparison: LiteralComparison::Normal,
             lambda_weight: DEFAULT_LAMBDA_WEIGHT,
             db_weight: DEFAULT_DB_WEIGHT,
+            ho_order_kind: HoOrderKind::LfhoOrder,
             rewrite_strong_rhs_inst: false,
         }
     }
@@ -623,6 +699,9 @@ pub struct HigherOrderInferenceConfig {
     pub arg_cong: ExtInferenceType,
     pub neg_ext: ExtInferenceType,
     pub pos_ext: ExtInferenceType,
+    pub ext_rules_max_depth: i64,
+    pub inverse_recognition: bool,
+    pub replace_inj_defs: bool,
 }
 
 impl Default for HigherOrderInferenceConfig {
@@ -631,6 +710,111 @@ impl Default for HigherOrderInferenceConfig {
             arg_cong: ExtInferenceType::AllLits,
             neg_ext: ExtInferenceType::NoLits,
             pos_ext: ExtInferenceType::NoLits,
+            ext_rules_max_depth: NO_HIGHER_ORDER_DEPTH,
+            inverse_recognition: false,
+            replace_inj_defs: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EtaNormalization {
+    #[default]
+    Reduce,
+    Expand,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HigherOrderPreprocessingConfig {
+    pub eta_normalization: EtaNormalization,
+    pub lambda_to_forall: bool,
+    pub unroll_only_formulas: bool,
+    pub elim_leibniz_max_depth: i64,
+    pub inst_choice_max_depth: i64,
+    pub preinstantiate_induction: bool,
+}
+
+impl Default for HigherOrderPreprocessingConfig {
+    fn default() -> Self {
+        Self {
+            eta_normalization: EtaNormalization::Reduce,
+            lambda_to_forall: true,
+            unroll_only_formulas: true,
+            elim_leibniz_max_depth: NO_HIGHER_ORDER_DEPTH,
+            inst_choice_max_depth: NO_HIGHER_ORDER_DEPTH,
+            preinstantiate_induction: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum PrimEnumMode {
+    Neg = 0,
+    And = 1,
+    Or = 2,
+    Eq = 3,
+    #[default]
+    Pragmatic = 4,
+    Full = 5,
+    LogSymbol = 6,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrimitiveEnumerationConfig {
+    pub mode: PrimEnumMode,
+    pub max_depth: i64,
+}
+
+impl Default for PrimitiveEnumerationConfig {
+    fn default() -> Self {
+        Self {
+            mode: PrimEnumMode::Pragmatic,
+            max_depth: NO_HIGHER_ORDER_DEPTH,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HigherOrderSearchConfig {
+    pub primitive_enumeration: PrimitiveEnumerationConfig,
+    pub local_rw: bool,
+    pub prune_args: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum UnificationMode {
+    #[default]
+    Single = 0,
+    Multi = 1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HigherOrderUnificationConfig {
+    pub func_proj_limit: i64,
+    pub imit_limit: i64,
+    pub ident_limit: i64,
+    pub elim_limit: i64,
+    pub mode: UnificationMode,
+    pub pattern_oracle: bool,
+    pub fixpoint_oracle: bool,
+    pub max_unifiers: i64,
+    pub max_unif_steps: i64,
+}
+
+impl Default for HigherOrderUnificationConfig {
+    fn default() -> Self {
+        Self {
+            func_proj_limit: 0,
+            imit_limit: 0,
+            ident_limit: 0,
+            elim_limit: 0,
+            mode: UnificationMode::Single,
+            pattern_oracle: true,
+            fixpoint_oracle: true,
+            max_unifiers: DEFAULT_MAX_UNIFIERS,
+            max_unif_steps: DEFAULT_MAX_UNIF_STEPS,
         }
     }
 }
@@ -647,6 +831,9 @@ pub struct InferenceConfig {
     pub equality_resolution: EqualityResolutionConfig,
     pub subsumption: SubsumptionConfig,
     pub higher_order: HigherOrderInferenceConfig,
+    pub higher_order_preprocessing: HigherOrderPreprocessingConfig,
+    pub higher_order_search: HigherOrderSearchConfig,
+    pub higher_order_unification: HigherOrderUnificationConfig,
 }
 
 impl Default for InferenceConfig {
@@ -662,6 +849,9 @@ impl Default for InferenceConfig {
             equality_resolution: EqualityResolutionConfig::default(),
             subsumption: SubsumptionConfig::default(),
             higher_order: HigherOrderInferenceConfig::default(),
+            higher_order_preprocessing: HigherOrderPreprocessingConfig::default(),
+            higher_order_search: HigherOrderSearchConfig::default(),
+            higher_order_unification: HigherOrderUnificationConfig::default(),
         }
     }
 }
@@ -1325,9 +1515,12 @@ const fn is_search_control_option(option: EProverOption) -> bool {
         || is_definition_option(option)
         || is_input_symbol_option(option)
         || is_cnf_control_option(option)
+        || is_preprocessing_elimination_option(option)
         || is_inference_control_option(option)
         || is_inference_processing_option(option)
         || is_extension_inference_option(option)
+        || is_higher_order_control_option(option)
+        || is_unification_option(option)
         || is_watchlist_option(option)
         || is_subsumption_index_option(option)
         || is_fingerprint_index_option(option)
@@ -1408,6 +1601,21 @@ const fn is_cnf_control_option(option: EProverOption) -> bool {
             | EProverOption::MiniscopeLimit
             | EProverOption::PrintTypes
             | EProverOption::AppEncode
+            | EProverOption::ClassificationTimeoutPortion
+    )
+}
+
+const fn is_preprocessing_elimination_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::Bce
+            | EProverOption::BceMaxOccs
+            | EProverOption::PredElim
+            | EProverOption::PredElimRecognizeGates
+            | EProverOption::PredElimForceMuDecrease
+            | EProverOption::PredElimIgnoreConjSyms
+            | EProverOption::PredElimMaxOccs
+            | EProverOption::PredElimTolerance
     )
 }
 
@@ -1458,6 +1666,41 @@ const fn is_extension_inference_option(option: EProverOption) -> bool {
     matches!(
         option,
         EProverOption::ArgCong | EProverOption::NegExt | EProverOption::PosExt
+    )
+}
+
+const fn is_higher_order_control_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::ExtSupMaxDepth
+            | EProverOption::InverseRecognition
+            | EProverOption::ReplaceInjDefs
+            | EProverOption::CnfLambdaToForall
+            | EProverOption::EtaNormalize
+            | EProverOption::HoOrderKind
+            | EProverOption::EliminateLeibnizEq
+            | EProverOption::UnrollFormulasOnly
+            | EProverOption::PrimEnumMode
+            | EProverOption::PrimEnumMaxDepth
+            | EProverOption::InstChoiceMaxDepth
+            | EProverOption::LocalRw
+            | EProverOption::PruneArgs
+            | EProverOption::PreinstantiateInduction
+    )
+}
+
+const fn is_unification_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::FuncProjLimit
+            | EProverOption::ImitLimit
+            | EProverOption::IdentLimit
+            | EProverOption::ElimLimit
+            | EProverOption::UnifMode
+            | EProverOption::PatternOracle
+            | EProverOption::FixpointOracle
+            | EProverOption::MaxUnifiers
+            | EProverOption::MaxUnifSteps
     )
 }
 
@@ -1923,12 +2166,18 @@ fn apply_search_control_option(
         apply_input_symbol_option(config, option_code);
     } else if is_cnf_control_option(option_code) {
         apply_cnf_control_option(config, parsed)?;
+    } else if is_preprocessing_elimination_option(option_code) {
+        apply_preprocessing_elimination_option(config, parsed)?;
     } else if is_inference_control_option(option_code) {
         apply_inference_control_option(config, option_code);
     } else if is_inference_processing_option(option_code) {
         apply_inference_processing_option(config, parsed)?;
     } else if is_extension_inference_option(option_code) {
         apply_extension_inference_option(config, parsed)?;
+    } else if is_higher_order_control_option(option_code) {
+        apply_higher_order_control_option(config, parsed)?;
+    } else if is_unification_option(option_code) {
+        apply_unification_option(config, parsed)?;
     } else if is_watchlist_option(option_code) {
         apply_watchlist_option(config, parsed);
     } else if is_subsumption_index_option(option_code) {
@@ -2101,7 +2350,70 @@ fn apply_cnf_control_option(
         }
         EProverOption::PrintTypes => config.encoding.print_types = true,
         EProverOption::AppEncode => config.encoding.app_encode = true,
+        EProverOption::ClassificationTimeoutPortion => {
+            config.preprocessing.classification_timeout_percentage =
+                get_int_arg_check_range(parsed.option(), value, 1, 99)?;
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .preinstantiate_induction = get_bool_arg(parsed.option(), value)?;
+        }
         _ => unreachable!("non-CNF-control option routed to CNF-control handler"),
+    }
+    Ok(())
+}
+
+fn apply_preprocessing_elimination_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::Bce => {
+            config.preprocessing.bce.enabled = get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::BceMaxOccs => {
+            config.preprocessing.bce.max_occs =
+                get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::PredElim => {
+            config.preprocessing.predicate_elimination.enabled =
+                get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::PredElimRecognizeGates => {
+            let enabled = get_bool_arg(parsed.option(), value)?;
+            config
+                .preprocessing
+                .predicate_elimination
+                .flags
+                .set(PredicateEliminationFlag::RecognizeGates, enabled);
+        }
+        EProverOption::PredElimForceMuDecrease => {
+            let enabled = get_bool_arg(parsed.option(), value)?;
+            config
+                .preprocessing
+                .predicate_elimination
+                .flags
+                .set(PredicateEliminationFlag::ForceMuDecrease, enabled);
+        }
+        EProverOption::PredElimIgnoreConjSyms => {
+            let enabled = get_bool_arg(parsed.option(), value)?;
+            config
+                .preprocessing
+                .predicate_elimination
+                .flags
+                .set(PredicateEliminationFlag::IgnoreConjectureSymbols, enabled);
+        }
+        EProverOption::PredElimMaxOccs => {
+            config.preprocessing.predicate_elimination.max_occs =
+                get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::PredElimTolerance => {
+            config.preprocessing.predicate_elimination.tolerance =
+                get_int_arg_check_range(parsed.option(), value, 0, C_INT_MAX)?;
+        }
+        _ => unreachable!("non-preprocessing-elimination option routed to handler"),
     }
     Ok(())
 }
@@ -2257,6 +2569,187 @@ fn ext_inference_error_message(option: EProverOption) -> &'static str {
         EProverOption::NegExt => "neg-ext excepts either all or max",
         EProverOption::PosExt => "pos-ext excepts either all or max",
         _ => unreachable!("non-extension-inference option routed to extension error helper"),
+    }
+}
+
+fn apply_higher_order_control_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::ExtSupMaxDepth => {
+            config.search.inference.higher_order.ext_rules_max_depth =
+                get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::InverseRecognition => {
+            config.search.inference.higher_order.inverse_recognition = true;
+        }
+        EProverOption::ReplaceInjDefs => {
+            config.search.inference.higher_order.replace_inj_defs = true;
+        }
+        EProverOption::CnfLambdaToForall => {
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .lambda_to_forall = get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::EtaNormalize => {
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .eta_normalization = parse_eta_normalization(value)?;
+        }
+        EProverOption::HoOrderKind => {
+            config.search.ordering.ho_order_kind = parse_ho_order_kind(value)?;
+        }
+        EProverOption::EliminateLeibnizEq => {
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .elim_leibniz_max_depth =
+                get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::UnrollFormulasOnly => {
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .unroll_only_formulas = get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::PrimEnumMode => {
+            config
+                .search
+                .inference
+                .higher_order_search
+                .primitive_enumeration
+                .mode = parse_prim_enum_mode(value)?;
+        }
+        EProverOption::PrimEnumMaxDepth => {
+            config
+                .search
+                .inference
+                .higher_order_search
+                .primitive_enumeration
+                .max_depth = get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::InstChoiceMaxDepth => {
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .inst_choice_max_depth =
+                get_int_arg_check_range(parsed.option(), value, -1, C_INT_MAX)?;
+        }
+        EProverOption::LocalRw => {
+            config.search.inference.higher_order_search.local_rw =
+                get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::PruneArgs => {
+            config.search.inference.higher_order_search.prune_args =
+                get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::PreinstantiateInduction => {
+            config
+                .search
+                .inference
+                .higher_order_preprocessing
+                .preinstantiate_induction = get_bool_arg(parsed.option(), value)?;
+        }
+        _ => unreachable!("non-higher-order-control option routed to handler"),
+    }
+    Ok(())
+}
+
+fn parse_eta_normalization(value: &str) -> Result<EtaNormalization, Diagnostic> {
+    match value {
+        "reduce" => Ok(EtaNormalization::Reduce),
+        "expand" => Ok(EtaNormalization::Expand),
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "Option --eta-normalize requires 'reduce' or 'expand' as an argument",
+        )),
+    }
+}
+
+fn parse_ho_order_kind(value: &str) -> Result<HoOrderKind, Diagnostic> {
+    match value {
+        "lfho" => Ok(HoOrderKind::LfhoOrder),
+        "lambda" => Ok(HoOrderKind::LambdaOrder),
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "Option --ho-order-kind requires 'lfho' or 'lambda' as an argument",
+        )),
+    }
+}
+
+fn parse_prim_enum_mode(value: &str) -> Result<PrimEnumMode, Diagnostic> {
+    match value {
+        "neg" => Ok(PrimEnumMode::Neg),
+        "and" => Ok(PrimEnumMode::And),
+        "or" => Ok(PrimEnumMode::Or),
+        "eq" => Ok(PrimEnumMode::Eq),
+        "pragmatic" => Ok(PrimEnumMode::Pragmatic),
+        "full" => Ok(PrimEnumMode::Full),
+        "logsym" => Ok(PrimEnumMode::LogSymbol),
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "Option --prim-enum-mode excepts neg, and, or, eq, pragmatic, full, or logsym",
+        )),
+    }
+}
+
+fn apply_unification_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    let unification = &mut config.search.inference.higher_order_unification;
+    match parsed.option().option_code {
+        EProverOption::FuncProjLimit => {
+            unification.func_proj_limit = get_int_arg_check_range(parsed.option(), value, 0, 63)?;
+        }
+        EProverOption::ImitLimit => {
+            unification.imit_limit = get_int_arg_check_range(parsed.option(), value, 0, 63)?;
+        }
+        EProverOption::IdentLimit => {
+            unification.ident_limit = get_int_arg_check_range(parsed.option(), value, 0, 63)?;
+        }
+        EProverOption::ElimLimit => {
+            unification.elim_limit = get_int_arg_check_range(parsed.option(), value, 0, 63)?;
+        }
+        EProverOption::UnifMode => {
+            unification.mode = parse_unification_mode(value)?;
+        }
+        EProverOption::PatternOracle => {
+            unification.pattern_oracle = get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::FixpointOracle => {
+            unification.fixpoint_oracle = get_bool_arg(parsed.option(), value)?;
+        }
+        EProverOption::MaxUnifiers => {
+            unification.max_unifiers = get_int_arg_check_range(parsed.option(), value, 0, 1024)?;
+        }
+        EProverOption::MaxUnifSteps => {
+            unification.max_unif_steps =
+                get_int_arg_check_range(parsed.option(), value, 0, 100_000)?;
+        }
+        _ => unreachable!("non-unification option routed to unification handler"),
+    }
+    Ok(())
+}
+
+fn parse_unification_mode(value: &str) -> Result<UnificationMode, Diagnostic> {
+    match value {
+        "single" => Ok(UnificationMode::Single),
+        "multi" => Ok(UnificationMode::Multi),
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            "values of unif mode are eiter single or multi",
+        )),
     }
 }
 
@@ -2621,11 +3114,13 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverFlag, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
-        GroundingStrategy, LiteralComparison, ParamodulationType, TermOrdering, WatchlistSource,
+        EProverAction, EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
+        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
+        PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
         MEGA,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::inout::output::{output_level, set_output_level};
     use crate::inout::scanner::IoFormat;
@@ -2650,6 +3145,17 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("eprover-{name}-{}.out", std::process::id()))
+    }
+
+    fn run_config_from<I, S>(argv: I) -> Box<EProverConfig>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let EProverAction::Run(config) = process_options(argv).unwrap() else {
+            panic!("expected run config");
+        };
+        config
     }
 
     #[test]
@@ -3124,6 +3630,213 @@ mod tests {
         };
         assert_eq!(config.preprocessing.formula_def_limit, 0);
         assert_eq!(config.preprocessing.miniscope_limit, 7);
+    }
+
+    #[test]
+    fn process_options_records_ho_unification_defaults_like_c() {
+        let config = run_config_from(["eprover"]);
+        let preprocessing = &config.preprocessing;
+        let pred_elim = &preprocessing.predicate_elimination;
+        let inference = &config.search.inference;
+        let ho_preprocessing = &inference.higher_order_preprocessing;
+        let ho_search = &inference.higher_order_search;
+        let unification = inference.higher_order_unification;
+
+        assert_eq!(preprocessing.classification_timeout_percentage, 2);
+        assert_eq!(
+            (preprocessing.bce.enabled, preprocessing.bce.max_occs),
+            (false, 512)
+        );
+        assert_eq!(
+            (pred_elim.enabled, pred_elim.max_occs, pred_elim.tolerance),
+            (false, 512, 0)
+        );
+        assert!(!pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::RecognizeGates));
+        assert!(!pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::ForceMuDecrease));
+        assert!(!pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::IgnoreConjectureSymbols));
+        assert_eq!(inference.higher_order.ext_rules_max_depth, -1);
+        assert!(!inference.higher_order.inverse_recognition);
+        assert!(!inference.higher_order.replace_inj_defs);
+        assert_eq!(config.search.ordering.ho_order_kind, HoOrderKind::LfhoOrder);
+        assert_eq!(ho_preprocessing.eta_normalization, EtaNormalization::Reduce);
+        assert!(ho_preprocessing.lambda_to_forall);
+        assert!(ho_preprocessing.unroll_only_formulas);
+        assert_eq!(ho_preprocessing.elim_leibniz_max_depth, -1);
+        assert_eq!(
+            ho_search.primitive_enumeration.mode,
+            PrimEnumMode::Pragmatic
+        );
+        assert_eq!(ho_search.primitive_enumeration.max_depth, -1);
+        assert_eq!(ho_preprocessing.inst_choice_max_depth, -1);
+        assert!(!ho_search.local_rw);
+        assert!(!ho_search.prune_args);
+        assert!(!ho_preprocessing.preinstantiate_induction);
+        assert_eq!(unification.func_proj_limit, 0);
+        assert_eq!(unification.imit_limit, 0);
+        assert_eq!(unification.ident_limit, 0);
+        assert_eq!(unification.elim_limit, 0);
+        assert_eq!(unification.mode, UnificationMode::Single);
+        assert!(unification.pattern_oracle);
+        assert!(unification.fixpoint_oracle);
+        assert_eq!(unification.max_unifiers, 4);
+        assert_eq!(unification.max_unif_steps, 256);
+    }
+
+    #[test]
+    fn process_options_records_ho_unification_overrides_like_c() {
+        let config = run_config_from([
+            "eprover",
+            "--ext-sup-max-depth=5",
+            "--inverse-recognition",
+            "--replace-inj-defs",
+            "--bce=true",
+            "--bce-max-occs=-1",
+            "--pred-elim=true",
+            "--pred-elim-recognize-gates=true",
+            "--pred-elim-force-mu-decrease=true",
+            "--pred-elim-ignore-conj-syms=true",
+            "--pred-elim-max-occs=9",
+            "--pred-elim-tolerance=2",
+            "--cnf-lambda-to-forall=false",
+            "--eta-normalize=expand",
+            "--ho-order-kind=lambda",
+            "--eliminate-leibniz-eq=3",
+            "--unroll-formulas-only=false",
+            "--prim-enum-mode=logsym",
+            "--prim-enum-max-depth=4",
+            "--inst-choice-max-depth=6",
+            "--local-rw=true",
+            "--prune-args=true",
+            "--preinstantiate-induction=true",
+            "--func-proj-limit=1",
+            "--imit-limit=2",
+            "--ident-limit=3",
+            "--elim-limit=4",
+            "--unif-mode=multi",
+            "--pattern-oracle=false",
+            "--fixpoint-oracle=false",
+            "--max-unifiers=8",
+            "--max-unif-steps=9",
+        ]);
+        let preprocessing = &config.preprocessing;
+        let pred_elim = &preprocessing.predicate_elimination;
+        let inference = &config.search.inference;
+        let ho_preprocessing = &inference.higher_order_preprocessing;
+        let ho_search = &inference.higher_order_search;
+        let unification = inference.higher_order_unification;
+
+        assert_eq!(
+            (preprocessing.bce.enabled, preprocessing.bce.max_occs),
+            (true, -1)
+        );
+        assert_eq!(
+            (pred_elim.enabled, pred_elim.max_occs, pred_elim.tolerance),
+            (true, 9, 2)
+        );
+        assert!(pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::RecognizeGates));
+        assert!(pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::ForceMuDecrease));
+        assert!(pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::IgnoreConjectureSymbols));
+        assert_eq!(inference.higher_order.ext_rules_max_depth, 5);
+        assert!(inference.higher_order.inverse_recognition);
+        assert!(inference.higher_order.replace_inj_defs);
+        assert_eq!(ho_preprocessing.eta_normalization, EtaNormalization::Expand);
+        assert_eq!(
+            config.search.ordering.ho_order_kind,
+            HoOrderKind::LambdaOrder
+        );
+        assert!(!ho_preprocessing.lambda_to_forall);
+        assert!(!ho_preprocessing.unroll_only_formulas);
+        assert_eq!(ho_preprocessing.elim_leibniz_max_depth, 3);
+        assert_eq!(
+            ho_search.primitive_enumeration.mode,
+            PrimEnumMode::LogSymbol
+        );
+        assert_eq!(ho_search.primitive_enumeration.max_depth, 4);
+        assert_eq!(ho_preprocessing.inst_choice_max_depth, 6);
+        assert!(ho_search.local_rw);
+        assert!(ho_search.prune_args);
+        assert!(ho_preprocessing.preinstantiate_induction);
+        assert_eq!(unification.func_proj_limit, 1);
+        assert_eq!(unification.imit_limit, 2);
+        assert_eq!(unification.ident_limit, 3);
+        assert_eq!(unification.elim_limit, 4);
+        assert_eq!(unification.mode, UnificationMode::Multi);
+        assert!(!unification.pattern_oracle);
+        assert!(!unification.fixpoint_oracle);
+        assert_eq!(unification.max_unifiers, 8);
+        assert_eq!(unification.max_unif_steps, 9);
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_ho_unification_args() {
+        let error =
+            process_options(["eprover", "--classification-timeout-portion=37"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "--classification-timeout-portion expects 'true' or 'false' instead of '37'"
+        );
+
+        let error = process_options(["eprover", "--ext-sup-max-depth=-2"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--bce=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--bce-max-occs=-2"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--pred-elim-tolerance=-1"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--eta-normalize=both"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option --eta-normalize requires 'reduce' or 'expand' as an argument"
+        );
+
+        let error = process_options(["eprover", "--ho-order-kind=both"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option --ho-order-kind requires 'lfho' or 'lambda' as an argument"
+        );
+
+        let error = process_options(["eprover", "--prim-enum-mode=logsymbol"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option --prim-enum-mode excepts neg, and, or, eq, pragmatic, full, or logsym"
+        );
+
+        let error = process_options(["eprover", "--func-proj-limit=64"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--unif-mode=bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "values of unif mode are eiter single or multi"
+        );
+
+        let error = process_options(["eprover", "--max-unifiers=1025"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--max-unif-steps=100001"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
