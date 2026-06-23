@@ -1,4 +1,5 @@
 use crate::clauses::clause::Clause;
+use crate::clauses::clausesets::ClauseSet;
 use crate::terms::termbanks::TermBank;
 
 pub trait ClauseSetMarker {
@@ -34,6 +35,14 @@ impl<const N: usize> ClauseSetMarker for [Clause; N] {
     }
 }
 
+impl ClauseSetMarker for ClauseSet {
+    fn mark_clause_terms(&self, bank: &TermBank) {
+        for clause in self.iter() {
+            clause.gc_mark_terms(bank);
+        }
+    }
+}
+
 #[must_use]
 pub fn tb_gc_collect<C, F>(bank: &mut TermBank, clause_sets: &[C], formula_sets: &[F]) -> i64
 where
@@ -59,6 +68,7 @@ fn mark_clause_slice_terms(bank: &TermBank, clauses: &[Clause]) {
 mod tests {
     use super::{tb_gc_collect, ClauseSetMarker, EmptyFormulaSet, FormulaSetMarker};
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -169,6 +179,22 @@ mod tests {
         assert!(bank.find(&clause_term).is_some());
         assert!(bank.find(&formula_term).is_some());
         assert!(bank.find(&formula_arg).is_some());
+        assert!(bank.find(&dropped).is_none());
+    }
+
+    #[test]
+    fn collection_accepts_plain_clause_sets() {
+        let mut bank = test_bank();
+        let kept = typed_const(&mut bank, "kept");
+        let right = typed_const(&mut bank, "right");
+        let dropped = typed_const(&mut bank, "dropped");
+        let clause = unit_clause(&mut bank, &kept, &right);
+        let clause_sets = [ClauseSet::from_clauses([clause])];
+        let formula_sets: [EmptyFormulaSet; 0] = [];
+
+        assert_eq!(tb_gc_collect(&mut bank, &clause_sets, &formula_sets), 1);
+        assert!(bank.find(&kept).is_some());
+        assert!(bank.find(&right).is_some());
         assert!(bank.find(&dropped).is_none());
     }
 }

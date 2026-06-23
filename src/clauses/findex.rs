@@ -1,5 +1,6 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clausepos_tree::clause_key;
+use crate::clauses::clausesets::ClauseSet;
 use crate::terms::functypes::FunCode;
 use std::collections::{btree_map::Entry, BTreeMap};
 
@@ -65,6 +66,14 @@ impl FIndex {
             .sum()
     }
 
+    /// Adds every clause from a plain clause set.
+    ///
+    /// Returns the number of new function-code/instance associations.
+    #[must_use]
+    pub fn add_clause_set(&mut self, clauses: &ClauseSet) -> usize {
+        self.add_clauses(clauses.iter())
+    }
+
     fn add_instance(&mut self, f_code: FunCode, clause: &Clause) -> bool {
         match self
             .index
@@ -97,6 +106,7 @@ mod tests {
     use super::FIndex;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausepos_tree::clause_key;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -188,5 +198,19 @@ mod tests {
         assert_eq!(bucket.len(), 2);
         assert_eq!(bucket.get(&clause_key(&left_clause)).unwrap().ident(), 20);
         assert_eq!(bucket.get(&clause_key(&right_clause)).unwrap().ident(), 21);
+    }
+
+    #[test]
+    fn add_clause_set_uses_plain_clause_set_iteration() {
+        let mut bank = test_bank();
+        let shared = typed_const(&mut bank, "a");
+        let set = ClauseSet::from_clauses([
+            unit_clause(&mut bank, &shared, &shared, 30),
+            unit_clause(&mut bank, &shared, &shared, 31),
+        ]);
+        let mut index = FIndex::new();
+
+        assert_eq!(index.add_clause_set(&set), 2);
+        assert_eq!(index.bucket(shared.f_code()).unwrap().len(), 2);
     }
 }

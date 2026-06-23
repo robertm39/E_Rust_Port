@@ -1,4 +1,5 @@
 use crate::clauses::clause::Clause;
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -168,6 +169,19 @@ impl LitHash {
             .sum()
     }
 
+    /// Inserts every literal from every clause in a plain clause set.
+    ///
+    /// Returns the number of newly stored literal descriptors.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::insert_eqn`] for any
+    /// literal in the set.
+    #[must_use]
+    pub fn insert_clause_set(&mut self, clauses: &ClauseSet, bank: &TermBank) -> usize {
+        self.insert_clauses(clauses.iter(), bank)
+    }
+
     fn bucket(&self, f_code: FunCode, positive: bool) -> Option<&BTreeMap<usize, LitDesc>> {
         if f_code <= 0 {
             return None;
@@ -201,6 +215,7 @@ fn fun_code_index(f_code: FunCode) -> usize {
 mod tests {
     use super::{lit_desc_compare, LitDesc, LitHash};
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -356,6 +371,21 @@ mod tests {
                 .ident(),
             31
         );
+    }
+
+    #[test]
+    fn insert_clause_set_uses_plain_clause_set_iteration() {
+        let mut bank = test_bank();
+        let predicate = typed_predicate(&mut bank, "p", None);
+        let set = ClauseSet::from_clauses([
+            unit_clause(&mut bank, &predicate, true, 40),
+            unit_clause(&mut bank, &predicate, false, 41),
+        ]);
+        let mut hash = LitHash::new(bank.signature());
+
+        assert_eq!(hash.insert_clause_set(&set, &bank), 2);
+        assert_eq!(hash.positive_bucket(predicate.f_code()).unwrap().len(), 1);
+        assert_eq!(hash.negative_bucket(predicate.f_code()).unwrap().len(), 1);
     }
 
     #[test]

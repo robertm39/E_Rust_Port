@@ -1,5 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
 use crate::terms::functypes::FunCode;
@@ -198,6 +199,21 @@ pub fn lit_occ_add_clause_slice_alt(
     }
 }
 
+/// Adds constraints induced by every clause in a plain clause set.
+///
+/// # Panics
+///
+/// Panics under the same preconditions as [`lit_occ_add_lit_alt`].
+pub fn lit_occ_add_clause_set_alt(
+    positive_table: &mut LitOccTable,
+    negative_table: &mut LitOccTable,
+    clauses: &ClauseSet,
+) {
+    for clause in clauses.iter() {
+        lit_occ_add_clause_alt(positive_table, negative_table, clause);
+    }
+}
+
 /// Pushes all usable constant terms, or one requested constant, into `stack`.
 ///
 /// # Errors
@@ -316,10 +332,12 @@ fn intersect_identity_sets(alternatives: &mut TermIdentitySet, allowed: &TermIde
 mod tests {
     use super::{
         clause_collect_var_constr, eqn_collect_var_constr, lit_occ_add_clause_alt,
-        lit_occ_add_clause_slice_alt, lit_occ_add_lit_alt, sig_collect_constant_terms,
-        term_identity_set_from_terms, LitOccTable, TermIdentitySet, VarConstraintMap,
+        lit_occ_add_clause_set_alt, lit_occ_add_clause_slice_alt, lit_occ_add_lit_alt,
+        sig_collect_constant_terms, term_identity_set_from_terms, LitOccTable, TermIdentitySet,
+        VarConstraintMap,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::functypes::FunCode;
@@ -459,6 +477,22 @@ mod tests {
             negative_table.constraints(negative_atom.f_code(), 1).len(),
             1
         );
+    }
+
+    #[test]
+    fn clause_set_add_uses_plain_clause_set_iteration() {
+        let mut bank = test_bank();
+        let ground = typed_const(&mut bank, "a");
+        let atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&ground));
+        let set =
+            ClauseSet::from_clauses([clause_from(vec![predicate_literal(&mut bank, &atom, true)])]);
+        let mut positive_table = LitOccTable::alloc(bank.signature());
+        let mut negative_table = LitOccTable::alloc(bank.signature());
+
+        lit_occ_add_clause_set_alt(&mut positive_table, &mut negative_table, &set);
+
+        assert_eq!(positive_table.constraints(atom.f_code(), 0).len(), 1);
+        assert!(negative_table.constraints(atom.f_code(), 0).is_empty());
     }
 
     #[test]
