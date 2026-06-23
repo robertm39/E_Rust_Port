@@ -56,6 +56,7 @@ Rust files:
 - `src/prover/version.rs`
 - `src/prover/options.rs`
 - `src/prover/eprover.rs`
+- `src/terms/functypes.rs`
 - `src/bin/eprover.rs`
 
 Original C references:
@@ -109,6 +110,7 @@ Original C references:
 - [`PROVER/e_version.h`](c_source_docs/PROVER/e_version.md)
 - [`PROVER/e_options.h`](c_source_docs/PROVER/e_options.md)
 - [`PROVER/eprover.c`](c_source_docs/PROVER/eprover.md)
+- [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
 
 Implemented behavior:
 
@@ -155,6 +157,7 @@ Implemented behavior:
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
+- Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
 
 Known gaps:
 
@@ -190,6 +193,7 @@ Known gaps:
 - The JKISS wrapper preserves the exported C module's static-state behavior, including the fact that the `JKISSRand` state argument does not drive the random sequence; call-site-level compatibility should be revisited when random-dependent heuristics are ported.
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
+- `FuncSymbParse` is present for string scanners, but downstream term/signature parsers are not ported yet and scanner file/include handling remains incomplete.
 
 ## C Behaviors To Revisit After Compatibility
 
@@ -225,3 +229,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cio_network` has several cleanup candidates: `TCPMsgRead` prints debug progress directly to stdout, treats an empty-payload message as a closed connection after reading the header, and appends payload data through C-string APIs after partial reads. Rust keeps the wire format and empty-payload status quirk but appends only initialized bytes and omits the debug prints.
 - `cio_multiplexer` has a likely source typo: `TCPChannelSendMsg` stores messages in `channel->out` and callers set write readiness based on `TCPChannelHasOutMsg`, but `TCPChannelWrite` checks and drains `channel->in`. Rust drains the outbound queue to match the comments and caller contract; revisit against the C server/client paths before claiming byte-for-byte compatibility for that subsystem.
 - `cio_signals` mixes async signal-handler work with non-async-signal-safe operations such as cleanup, formatted diagnostics, and resource-limit calls. Rust keeps the state machine testable and side effects explicit; later executable integration should decide which behavior belongs in real signal handlers and which should move to cooperative polling.
+- `cte_functypes` rational normalization uses checked Rust integer parsing instead of C `strtoll`, whose overflow behavior saturates and sets `errno` that this code ignores. If huge numeric TPTP literals are compatibility-relevant, compare against the C reference and decide whether to emulate that overflow quirk.

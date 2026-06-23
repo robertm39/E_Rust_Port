@@ -5,3 +5,4 @@
 pub mod basics;
 pub mod inout;
 pub mod prover;
+pub mod terms;
