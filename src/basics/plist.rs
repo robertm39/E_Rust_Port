@@ -21,6 +21,7 @@ struct PListCell<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PListArena<T> {
     cells: Vec<Option<PListCell<T>>>,
+    free_cells: Vec<usize>,
 }
 
 impl<T> Default for PListArena<T> {
@@ -32,17 +33,20 @@ impl<T> Default for PListArena<T> {
 impl<T> PListArena<T> {
     #[must_use]
     pub const fn new() -> Self {
-        Self { cells: Vec::new() }
+        Self {
+            cells: Vec::new(),
+            free_cells: Vec::new(),
+        }
     }
 
     pub fn alloc_list(&mut self) -> PListHandle {
-        let handle = PListHandle(self.cells.len());
-        self.cells.push(Some(PListCell {
+        let handle = self.alloc_slot();
+        self.cells[handle.index()] = Some(PListCell {
             key: None,
             pred: Some(handle),
             succ: Some(handle),
             is_anchor: true,
-        }));
+        });
         handle
     }
 
@@ -89,12 +93,7 @@ impl<T> PListArena<T> {
         if !self.clear_list(anchor) {
             return false;
         }
-        if let Some(slot) = self.cells.get_mut(anchor.index()) {
-            *slot = None;
-            true
-        } else {
-            false
-        }
+        self.free_cell(anchor).is_some()
     }
 
     pub fn store_after(&mut self, where_handle: PListHandle, value: T) -> Option<PListHandle> {
@@ -161,7 +160,7 @@ impl<T> PListArena<T> {
 
     pub fn delete(&mut self, element: PListHandle) -> Option<T> {
         let extracted = self.extract(element)?;
-        self.cells.get_mut(extracted.index())?.take()?.key
+        self.free_cell(extracted)?.key
     }
 
     #[must_use]
@@ -238,13 +237,13 @@ impl<T> PListArena<T> {
     }
 
     fn alloc_detached(&mut self, value: T) -> PListHandle {
-        let handle = PListHandle(self.cells.len());
-        self.cells.push(Some(PListCell {
+        let handle = self.alloc_slot();
+        self.cells[handle.index()] = Some(PListCell {
             key: Some(value),
             pred: None,
             succ: None,
             is_anchor: false,
-        }));
+        });
         handle
     }
 
@@ -252,7 +251,24 @@ impl<T> PListArena<T> {
         if !self.is_detached(handle) {
             return None;
         }
-        self.cells.get_mut(handle.index())?.take()?.key
+        self.free_cell(handle)?.key
+    }
+
+    fn alloc_slot(&mut self) -> PListHandle {
+        if let Some(index) = self.free_cells.pop() {
+            debug_assert!(self.cells.get(index).is_some_and(Option::is_none));
+            PListHandle(index)
+        } else {
+            let handle = PListHandle(self.cells.len());
+            self.cells.push(None);
+            handle
+        }
+    }
+
+    fn free_cell(&mut self, handle: PListHandle) -> Option<PListCell<T>> {
+        let cell = self.cells.get_mut(handle.index())?.take()?;
+        self.free_cells.push(handle.index());
+        Some(cell)
     }
 
     fn cell(&self, handle: PListHandle) -> Option<&PListCell<T>> {
@@ -355,6 +371,20 @@ mod tests {
     }
 
     #[test]
+    fn deleted_cells_are_reused_by_later_allocations() {
+        let mut arena = PListArena::new();
+        let anchor = arena.alloc_list();
+        let first = arena.store_after(anchor, 10).unwrap();
+        let second = arena.store_after(first, 20).unwrap();
+
+        assert_eq!(arena.delete(first), Some(10));
+        let reused = arena.store_after(anchor, 30).unwrap();
+
+        assert_eq!(reused, first);
+        assert_eq!(arena.entries(anchor), vec![(reused, &30), (second, &20)]);
+    }
+
+    #[test]
     fn clear_and_free_list_preserve_c_anchor_lifetime_shapes() {
         let mut arena = PListArena::new();
         let anchor = arena.alloc_list();
@@ -366,6 +396,19 @@ mod tests {
         assert!(arena.is_anchor(anchor));
         assert!(arena.free_list(anchor));
         assert!(!arena.is_valid(anchor));
+    }
+
+    #[test]
+    fn freed_anchor_slots_are_reused_by_new_lists() {
+        let mut arena = PListArena::new();
+        let anchor = arena.alloc_list();
+        arena.store_after(anchor, "x");
+
+        assert!(arena.free_list(anchor));
+        let reused_anchor = arena.alloc_list();
+
+        assert_eq!(reused_anchor, anchor);
+        assert!(arena.is_empty(reused_anchor));
     }
 
     #[test]
