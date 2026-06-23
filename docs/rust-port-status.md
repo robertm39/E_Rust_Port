@@ -56,6 +56,7 @@ Rust files:
 - `src/prover/version.rs`
 - `src/prover/options.rs`
 - `src/prover/eprover.rs`
+- `src/terms/acterms.rs`
 - `src/terms/dbvars.rs`
 - `src/terms/functypes.rs`
 - `src/terms/signature.rs`
@@ -127,6 +128,7 @@ Original C references:
 - [`PROVER/e_version.h`](c_source_docs/PROVER/e_version.md)
 - [`PROVER/e_options.h`](c_source_docs/PROVER/e_options.md)
 - [`PROVER/eprover.c`](c_source_docs/PROVER/eprover.md)
+- [`TERMS/cte_acterms.h`, `TERMS/cte_acterms.c`](c_source_docs/TERMS/cte_acterms.md)
 - [`TERMS/cte_dbvars.h`, `TERMS/cte_dbvars.c`](c_source_docs/TERMS/cte_dbvars.md)
 - [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
 - [`TERMS/cte_signature.h`, `TERMS/cte_signature.c`](c_source_docs/TERMS/cte_signature.md)
@@ -191,6 +193,7 @@ Implemented behavior:
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
+- AC-normalized temporary term helpers from `cte_acterms`, including AC-term allocation shape, lexicographic comparison, the inherited DB-lambda comparison quirk, associative flattening with sorted arguments, binary commutative argument sorting, flat string rendering, and `TermACEqual`'s standard-weight and phony-application prechecks.
 - Shared De Bruijn-variable bank helpers from `cte_dbvars`, including nested index/type-UID lookup, unique shared DB variable allocation, DB-variable property initialization, arrow-type eta-expandable marking, and bank clearing.
 - Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
 - Initial signature helpers from `cte_signature`, including exact function-property bits and special-code constants, `$true`/`$false` initialization, optional list-symbol initialization, name/code/arity lookup, quoted-name lookup, first-order multi-arity name fixing, property mutation/query helpers, polymorphic and special-symbol flags, type declaration/fixing, predicate/function classification, alpha-rank computation, pop/backtrack behavior, capacity-growth accounting, arity statistics, FOF operator insertion, internal-code insertion, lazy equality/disjunction/list-code helpers, generated symbol counters, and feature-offset computation.
@@ -314,3 +317,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_termweightext` has a misspelled public enum name (`TermWeightExtenstionStyle`) and traverses subterms by pushing children left-to-right onto a LIFO stack, so callbacks see rightmost children first. Rust keeps a compatibility alias for the typo and preserves the traversal order; any future cleanup should happen behind clearer public wrappers.
 - `cte_signature` has several compatibility quirks now mirrored in Rust: `SigSetPolymorphic` ignores its `value` parameter and always sets the bit, first-order duplicate names with different arities are silently renamed with an `_ARITYFIX... ` suffix, and `SigPopId`/`SigBacktrack` do not invalidate cached alpha ranks. These should be revisited only after signature users and reference behavior are covered.
 - The lazy negative branch of C `SigGetEqnCode` appears to set properties on `sig->eqn_code` instead of `sig->neqn_code`, which can assert if `$neq` is requested before `$eq`. Rust's lazy helper sets the properties on the created code to keep the API usable; compare against reference call order before deciding whether this bug needs a stricter compatibility shim.
+- `cte_acterms` uses raw pointer ordering as a tie-breaker when storing structurally equal temporary AC terms in a tree. Rust keeps duplicate normalized arguments in a vector and sorts by AC comparison only; this preserves equality and rendering for indistinguishable duplicates, but revisit if later diagnostics or heuristics observe duplicate tie order.
