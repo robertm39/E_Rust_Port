@@ -1,8 +1,10 @@
-use crate::basics::error::Diagnostic;
+use crate::basics::dstrings::DynamicString;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::dbvars::DbVarBank;
-use crate::terms::functypes::FunCode;
+use crate::terms::functypes::{FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_NAMED_LAMBDA_CODE};
@@ -11,8 +13,8 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
-    term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_standard_weight,
-    var_print_string,
+    term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_parse_operator,
+    term_sig_insert, term_standard_weight, var_print_string,
 };
 use crate::terms::termtypes::{
     term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
@@ -783,6 +785,44 @@ impl TermBank {
         self.insert(&term, DerefType::Never)
     }
 
+    pub fn parse_term_simple(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let mut id = DynamicString::new();
+        let id_type = term_parse_operator(scanner, &mut id)?;
+        let name = id.view().into_owned();
+        if id_type == FuncSymbType::IdentVar {
+            if scanner.test_tok(TokenType::COLON) {
+                scanner.accept_tok(TokenType::COLON)?;
+                let type_ = self
+                    .sig
+                    .type_bank_mut()
+                    .parse_type_from_current_problem(scanner)?;
+                return Ok(self.vars.ext_name_assert_alloc_sort(&name, &type_));
+            }
+            return Ok(self.vars.ext_name_assert_alloc(&name));
+        }
+
+        let args = self.parse_simple_arg_list_opt(scanner)?;
+        let arity = i32::try_from(args.len()).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::RESOURCE_OUT,
+                "Term arity is too large for C-compatible signatures",
+            )
+        })?;
+        let f_code = term_sig_insert(&mut self.sig, &name, arity, false, id_type);
+        if f_code == 0 {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{name} used with incompatible arity {arity}"),
+            ));
+        }
+
+        let term = Term::top_alloc(f_code, args.len());
+        for (index, arg) in args.into_iter().enumerate() {
+            term.set_argument(index, arg);
+        }
+        self.term_top_insert(term)
+    }
+
     /// Creates and inserts a new Skolem term or definition atom.
     ///
     /// The generated symbol type is built from `variables` followed by
@@ -1103,6 +1143,29 @@ impl TermBank {
         self.term_top_insert(copy)
     }
 
+    fn parse_simple_arg_list_opt(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Vec<Term>, Diagnostic> {
+        if !scanner.test_tok(TokenType::OPEN_BRACKET) {
+            return Ok(Vec::new());
+        }
+
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        if scanner.test_tok(TokenType::CLOSE_BRACKET) {
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            return Ok(Vec::new());
+        }
+
+        let mut args = vec![self.parse_term_simple(scanner)?];
+        while scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            args.push(self.parse_term_simple(scanner)?);
+        }
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        Ok(args)
+    }
+
     fn insert_no_props_cached_inner(
         &mut self,
         term: &Term,
@@ -1317,6 +1380,7 @@ mod tests {
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
+    use crate::inout::scanner::Scanner;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{Signature, SIG_FALSE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
@@ -1342,6 +1406,13 @@ mod tests {
         (TermBank::new(sig).unwrap(), f_code)
     }
 
+    fn parse_simple(source: &str) -> (TermBank, Term) {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        let term = bank.parse_term_simple(&mut scanner).unwrap();
+        (bank, term)
+    }
+
     #[test]
     fn allocation_inserts_true_and_false_constants() {
         let bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
@@ -1358,6 +1429,37 @@ mod tests {
             .true_term()
             .query_prop(TP_IS_SHARED | TP_IS_GROUND | TP_PRED_POS));
         assert_eq!(bank.true_term().weight(), DEFAULT_FWEIGHT);
+    }
+
+    #[test]
+    fn simple_parser_inserts_shared_terms_and_variables() {
+        let (bank, parsed) = parse_simple("f(a,X,g(Y))");
+
+        assert_eq!(bank.signature().find_name(parsed.f_code()), Some("f"));
+        assert_eq!(parsed.arity(), 3);
+        assert!(parsed.is_shared());
+        assert!(parsed.query_prop(TP_IS_SHARED));
+        assert_eq!(bank.term_string(&parsed, true), "f(a,X1,g(X2))");
+        assert_eq!(bank.vars().ext_name_find("X").unwrap().f_code(), -2);
+        assert_eq!(bank.vars().ext_name_find("Y").unwrap().f_code(), -4);
+    }
+
+    #[test]
+    fn simple_parser_treats_uppercase_application_as_function_symbol() {
+        let (bank, parsed) = parse_simple("F(a)");
+
+        assert_eq!(bank.signature().find_name(parsed.f_code()), Some("F"));
+        assert_eq!(parsed.arity(), 1);
+        assert!(parsed.argument(0).unwrap().is_shared());
+    }
+
+    #[test]
+    fn simple_parser_accepts_empty_argument_lists_as_constants() {
+        let (bank, parsed) = parse_simple("f()");
+
+        assert_eq!(bank.signature().find_name(parsed.f_code()), Some("f"));
+        assert_eq!(parsed.arity(), 0);
+        assert!(parsed.is_shared());
     }
 
     #[test]

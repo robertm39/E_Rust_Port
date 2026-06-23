@@ -1,5 +1,11 @@
-use crate::terms::functypes::FunCode;
-use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
+use crate::basics::dstrings::DynamicString;
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
+use crate::terms::signature::{
+    Signature, FP_INTERPRETED, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+    SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+};
 use crate::terms::simpletypes::{type_drop_first_arg, types_cmp, var_order};
 use crate::terms::termtypes::{
     term_del_prop_opt, term_deref, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT,
@@ -27,6 +33,55 @@ pub fn var_print_string(var: FunCode) -> String {
     assert!(var < 0, "variable f-code must be negative");
     let prefix = if var % 2 == 0 { 'X' } else { 'Y' };
     format!("{prefix}{}", -((var - 1) / 2))
+}
+
+pub fn term_parse_operator(
+    scanner: &mut Scanner,
+    id: &mut DynamicString,
+) -> Result<FuncSymbType, Diagnostic> {
+    if scanner.test_id("$distinct") {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{} $distinct is only allowed as the sole predicate symbol of an atomic formula",
+                token_pos_rep(scanner.current_token())
+            ),
+        ));
+    }
+
+    let mut result = func_symb_parse(scanner, id)?;
+    if matches!(
+        id.view_bytes().first(),
+        Some(first) if first.is_ascii_uppercase() || *first == b'_'
+    ) && scanner.test_tok(TokenType::OPEN_BRACKET)
+    {
+        result = FuncSymbType::IdentFreeFun;
+    }
+    Ok(result)
+}
+
+#[must_use]
+pub fn term_sig_insert(
+    sig: &mut Signature,
+    name: &str,
+    arity: i32,
+    special_id: bool,
+    ident_type: FuncSymbType,
+) -> FunCode {
+    let result = sig.insert_id(name, arity, special_id);
+    if result == 0 {
+        return result;
+    }
+
+    match ident_type {
+        FuncSymbType::IdentInt => sig.set_func_prop(result, FP_IS_INTEGER),
+        FuncSymbType::IdentFloat => sig.set_func_prop(result, FP_IS_FLOAT),
+        FuncSymbType::IdentRational => sig.set_func_prop(result, FP_IS_RATIONAL),
+        FuncSymbType::IdentObject => sig.set_func_prop(result, FP_IS_OBJECT),
+        FuncSymbType::IdentInterpreted => sig.set_func_prop(result, FP_INTERPRETED),
+        FuncSymbType::None | FuncSymbType::IdentVar | FuncSymbType::IdentFreeFun => {}
+    }
+    result
 }
 
 #[must_use]
@@ -706,11 +761,18 @@ mod tests {
         term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
         term_is_def_term, term_is_flat, term_is_ground_compute, term_is_subterm,
         term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
-        term_non_linear_weight, term_standard_weight, term_struct_equal, term_struct_equal_deref,
-        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
-        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
+        term_non_linear_weight, term_parse_operator, term_sig_insert, term_standard_weight,
+        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
+        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
+        term_weight_compute, var_print_string, VarNormStyle,
     };
-    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
+    use crate::basics::dstrings::DynamicString;
+    use crate::basics::error::ErrorCode;
+    use crate::inout::scanner::Scanner;
+    use crate::terms::functypes::FuncSymbType;
+    use crate::terms::signature::{
+        Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, SIG_PHONY_APP_CODE,
+    };
     use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg};
     use crate::terms::termtypes::{
         DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_OP_FLAG, TP_PRED_POS,
@@ -722,6 +784,46 @@ mod tests {
         let term = Term::const_cell_alloc(code);
         term.set_type(Some(type_.clone()));
         term
+    }
+
+    #[test]
+    fn term_parse_operator_preserves_c_identifier_classification() {
+        let mut scanner = Scanner::from_user_string("F(a)", false).unwrap();
+        let mut id = DynamicString::new();
+        assert_eq!(
+            term_parse_operator(&mut scanner, &mut id).unwrap(),
+            FuncSymbType::IdentFreeFun
+        );
+        assert_eq!(id.view(), "F");
+
+        let mut scanner = Scanner::from_user_string("X", false).unwrap();
+        let mut id = DynamicString::new();
+        assert_eq!(
+            term_parse_operator(&mut scanner, &mut id).unwrap(),
+            FuncSymbType::IdentVar
+        );
+
+        let mut scanner = Scanner::from_user_string("$distinct", false).unwrap();
+        let error = term_parse_operator(&mut scanner, &mut DynamicString::new()).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+    }
+
+    #[test]
+    fn term_sig_insert_sets_identifier_properties() {
+        let mut sig = Signature::new(TypeBank::new());
+        let integer = term_sig_insert(&mut sig, "12", 0, false, FuncSymbType::IdentInt);
+        let object = term_sig_insert(&mut sig, "\"obj\"", 0, false, FuncSymbType::IdentObject);
+        let interpreted = term_sig_insert(
+            &mut sig,
+            "$trueish",
+            0,
+            false,
+            FuncSymbType::IdentInterpreted,
+        );
+
+        assert!(sig.query_prop(integer, FP_IS_INTEGER));
+        assert!(sig.query_prop(object, FP_IS_OBJECT));
+        assert!(sig.query_prop(interpreted, FP_INTERPRETED));
     }
 
     #[test]
