@@ -1,6 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::eqn_props::{
-    EqnProperties, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
+    EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
 };
 use crate::terms::acterms::term_ac_equal;
@@ -10,9 +10,10 @@ use crate::terms::termbanks::{
     tb_term_del_prop_count, tb_term_is_ground, tb_term_is_type_term, tb_term_is_x_type_term,
     TermBank,
 };
-use crate::terms::termfunc::term_is_def_term;
+use crate::terms::termfunc::{term_has_f_code, term_is_def_term};
 use crate::terms::termtypes::{
-    term_del_prop, term_set_prop, DerefType, Term, TermProperties, TP_PRED_POS,
+    term_del_prop, term_set_prop, term_var_del_prop, term_var_search_prop, term_var_set_prop,
+    DerefType, Term, TermProperties, TP_OP_FLAG, TP_PRED_POS,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -547,6 +548,63 @@ impl Eqn {
             && self.lterm.f_code() != self.rterm.f_code()
     }
 
+    #[must_use]
+    pub fn is_true(&self, bank: &TermBank) -> bool {
+        if self.is_positive() {
+            self.is_trivial()
+        } else {
+            self.terms_are_distinct(bank)
+        }
+    }
+
+    #[must_use]
+    pub fn is_false(&self, bank: &TermBank) -> bool {
+        if self.is_negative() {
+            self.is_trivial()
+        } else {
+            self.terms_are_distinct(bank)
+        }
+    }
+
+    #[must_use]
+    pub fn has_unbound_vars(&self, dom_side: EqnSide) -> bool {
+        let (domain, range) = if dom_side == EqnSide::LeftSide {
+            (&self.lterm, &self.rterm)
+        } else {
+            (&self.rterm, &self.lterm)
+        };
+
+        term_var_set_prop(range, DerefType::Never, TP_OP_FLAG);
+        term_var_del_prop(domain, DerefType::Never, TP_OP_FLAG);
+        term_var_search_prop(range, DerefType::Never, TP_OP_FLAG)
+    }
+
+    #[must_use]
+    pub fn is_definition(&self, bank: &TermBank, min_arity: usize) -> EqnSide {
+        if self.is_negative() {
+            return EqnSide::NoSide;
+        }
+        if term_is_def_term(&self.lterm, min_arity)
+            && !bank
+                .signature()
+                .query_prop(self.lterm.f_code(), FP_PSEUDO_PRED)
+            && !term_has_f_code(&self.rterm, self.lterm.f_code())
+            && !self.has_unbound_vars(EqnSide::LeftSide)
+        {
+            return EqnSide::LeftSide;
+        }
+        if term_is_def_term(&self.rterm, min_arity)
+            && !bank
+                .signature()
+                .query_prop(self.rterm.f_code(), FP_PSEUDO_PRED)
+            && !term_has_f_code(&self.lterm, self.rterm.f_code())
+            && !self.has_unbound_vars(EqnSide::RightSide)
+        {
+            return EqnSide::RightSide;
+        }
+        EqnSide::NoSide
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -556,8 +614,8 @@ impl Eqn {
 mod tests {
     use super::Eqn;
     use crate::clauses::eqn_props::{
-        PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL, EP_IS_ORIENTED,
-        EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
+        EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
+        EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
     use crate::terms::signature::{
         FunctionProperties, Signature, FP_CL_SPLIT_DEF, FP_IS_INTEGER, FP_PSEUDO_PRED,
@@ -594,6 +652,19 @@ mod tests {
             .unwrap();
         let term = Term::const_cell_alloc(f_code);
         term.set_type(Some(bool_type));
+        bank.insert(&term, crate::terms::termtypes::DerefType::Never)
+            .unwrap()
+    }
+
+    fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, alloc_arrow_type(vec![type_.clone(), type_.clone()]))
+            .unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(type_));
+        term.set_argument(0, arg.clone());
         bank.insert(&term, crate::terms::termtypes::DerefType::Never)
             .unwrap()
     }
@@ -840,6 +911,100 @@ mod tests {
         let distinct = Eqn::alloc(left, right, &mut bank, true).unwrap();
         assert!(distinct.terms_are_distinct(&bank));
         assert!(!distinct.is_split_lit(&bank));
+    }
+
+    #[test]
+    fn truth_and_falsehood_helpers_match_c_cases() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "a");
+        let right = typed_const(&mut bank, "b");
+
+        let positive_trivial = Eqn::alloc(left.clone(), left.clone(), &mut bank, true).unwrap();
+        assert!(positive_trivial.is_true(&bank));
+        assert!(!positive_trivial.is_false(&bank));
+
+        let negative_trivial = Eqn::alloc(left.clone(), left.clone(), &mut bank, false).unwrap();
+        assert!(!negative_trivial.is_true(&bank));
+        assert!(negative_trivial.is_false(&bank));
+
+        bank.signature_mut()
+            .set_func_prop(left.f_code(), FP_IS_INTEGER);
+        bank.signature_mut()
+            .set_func_prop(right.f_code(), FP_IS_INTEGER);
+        let positive_distinct = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        assert!(!positive_distinct.is_true(&bank));
+        assert!(positive_distinct.is_false(&bank));
+
+        let negative_distinct = Eqn::alloc(left, right, &mut bank, false).unwrap();
+        assert!(negative_distinct.is_true(&bank));
+        assert!(!negative_distinct.is_false(&bank));
+    }
+
+    #[test]
+    fn unbound_variable_check_preserves_c_domain_side_shape() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let y = bank.vars().var_assert_alloc(-4, &type_);
+        let left = typed_unary(&mut bank, "f", &x);
+        let right_with_x = typed_unary(&mut bank, "g", &x);
+        let right_with_y = typed_unary(&mut bank, "h", &y);
+
+        let bound = Eqn::alloc(left.clone(), right_with_x, &mut bank, true).unwrap();
+        assert!(!bound.has_unbound_vars(EqnSide::LeftSide));
+        assert!(!bound.has_unbound_vars(EqnSide::RightSide));
+
+        let unbound = Eqn::alloc(left.clone(), right_with_y, &mut bank, true).unwrap();
+        assert!(unbound.has_unbound_vars(EqnSide::LeftSide));
+
+        let fallback_right_side =
+            Eqn::alloc(typed_unary(&mut bank, "q", &y), left, &mut bank, true).unwrap();
+        assert!(fallback_right_side.has_unbound_vars(EqnSide::RightSide));
+        assert!(fallback_right_side.has_unbound_vars(EqnSide::NoSide));
+        assert!(fallback_right_side.has_unbound_vars(EqnSide::BothSides));
+    }
+
+    #[test]
+    fn definition_detection_matches_positive_def_term_rules() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let y = bank.vars().var_assert_alloc(-4, &type_);
+
+        let def_head = typed_unary(&mut bank, "f", &x);
+        let body = typed_unary(&mut bank, "g", &x);
+        let def = Eqn::alloc(def_head.clone(), body, &mut bank, true).unwrap();
+        assert_eq!(def.is_definition(&bank, 1), EqnSide::LeftSide);
+        assert_eq!(def.is_definition(&bank, 2), EqnSide::NoSide);
+
+        let right_head = typed_unary(&mut bank, "h", &x);
+        let body = typed_const(&mut bank, "body");
+        let right_def = Eqn::alloc(body, right_head, &mut bank, true).unwrap();
+        assert_eq!(right_def.is_definition(&bank, 1), EqnSide::RightSide);
+
+        let negative = Eqn::alloc(
+            def_head.clone(),
+            typed_unary(&mut bank, "m", &x),
+            &mut bank,
+            false,
+        )
+        .unwrap();
+        assert_eq!(negative.is_definition(&bank, 1), EqnSide::NoSide);
+
+        let unbound_body = typed_unary(&mut bank, "n", &y);
+        let unbound = Eqn::alloc(def_head.clone(), unbound_body, &mut bank, true).unwrap();
+        assert_eq!(unbound.is_definition(&bank, 1), EqnSide::NoSide);
+
+        bank.signature_mut()
+            .set_func_prop(def_head.f_code(), FP_PSEUDO_PRED);
+        let pseudo = Eqn::alloc(
+            def_head,
+            typed_const(&mut bank, "pseudo_body"),
+            &mut bank,
+            true,
+        )
+        .unwrap();
+        assert_eq!(pseudo.is_definition(&bank, 1), EqnSide::NoSide);
     }
 
     #[test]
