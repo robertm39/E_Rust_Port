@@ -312,6 +312,10 @@ impl FvPackedClause {
         &self.clause
     }
 
+    pub fn clause_mut(&mut self) -> &mut Clause {
+        &mut self.clause
+    }
+
     #[must_use]
     pub fn into_clause(self) -> Clause {
         self.clause

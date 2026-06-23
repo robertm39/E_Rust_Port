@@ -11,6 +11,7 @@ pub mod diseq_decomp;
 pub mod eqn;
 pub mod eqn_props;
 pub mod eqnlist;
+pub mod fcvindexing;
 pub mod findex;
 pub mod freqvectors;
 pub mod g_lithash;
