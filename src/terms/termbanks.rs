@@ -9,17 +9,19 @@ use crate::terms::simpletypes::{Type, TypeUniqueId};
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
     term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_standard_weight,
+    var_print_string,
 };
 use crate::terms::termtypes::{
     term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
     DEFAULT_VWEIGHT, TP_GARBAGE_FLAG, TP_HAS_APP_VAR, TP_HAS_BOOL_SUBTERM, TP_HAS_DB_SUBTERM,
     TP_HAS_EQ_NEQ_SYM, TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_HAS_LAMBDA_SUBTERM,
     TP_HAS_NON_PATTERN_VAR, TP_IGNORE_PROPS, TP_IS_BETA_REDUCIBLE, TP_IS_GROUND, TP_IS_SHARED,
-    TP_OP_FLAG, TP_PRED_POS,
+    TP_OP_FLAG, TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typecheck::type_infer_sort;
 use std::collections::BTreeMap;
+use std::fmt;
 
 const INSERT_NO_PROPS_CACHE_THRESHOLD: u32 = 8096;
 
@@ -135,6 +137,181 @@ impl TermBank {
     pub fn term_nodes(&self) -> i64 {
         assert_eq!(self.term_store.entries(), self.term_store.count_nodes());
         self.term_store.entries() + self.vars.cardinality()
+    }
+
+    /// Writes the C `TBPrintBankInOrder` DAG view, sorted by ascending
+    /// `entry_no`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a non-constant term has an uninitialized argument.
+    pub fn write_bank_in_order(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        let mut terms = self.term_store.terms();
+        terms.sort_by_key(Term::entry_no);
+        for term in terms {
+            self.write_dag_term(output, &term)?;
+            writeln!(output)?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn bank_in_order_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_bank_in_order(&mut output);
+        output
+    }
+
+    /// Writes a term either in conventional form or C compact bank form.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a non-constant term has an uninitialized argument.
+    pub fn write_term(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        full_terms: bool,
+    ) -> fmt::Result {
+        if full_terms {
+            self.write_plain_term(output, term)
+        } else {
+            self.write_term_compact(output, term)
+        }
+    }
+
+    #[must_use]
+    pub fn term_string(&self, term: &Term, full_terms: bool) -> String {
+        let mut output = String::new();
+        let _ = self.write_term(&mut output, term, full_terms);
+        output
+    }
+
+    /// Writes the C `TBPrintTermCompact` form and sets `TPOutputFlag` on
+    /// printed non-variable bank terms.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a non-constant term has an uninitialized argument.
+    pub fn write_term_compact(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        if term.query_prop(TP_OUTPUT_FLAG) {
+            return write!(output, "*{}", term.entry_no());
+        }
+        if term.is_free_var() {
+            return write!(output, "{}", var_print_string(term.f_code()));
+        }
+
+        write!(output, "*{}:", term.entry_no())?;
+        term.set_prop(TP_OUTPUT_FLAG);
+        self.write_symbol(output, term.f_code())?;
+        if !term.is_const() {
+            self.write_compact_arg_list(output, term)?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn term_compact_string(&self, term: &Term) -> String {
+        let mut output = String::new();
+        let _ = self.write_term_compact(&mut output, term);
+        output
+    }
+
+    /// Writes the C `TBPrintBankTerms` view for terms marked `TPTopPos`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_bank_terms(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        for term in self.term_store.terms() {
+            if term.query_prop(TP_TOP_POS) {
+                self.write_term_compact(output, &term)?;
+                writeln!(output)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn bank_terms_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_bank_terms(&mut output);
+        output
+    }
+
+    fn write_dag_term(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        write!(output, "*{} : ", term.entry_no())?;
+        if term.is_free_var() {
+            return write!(output, "{}", var_print_string(term.f_code()));
+        }
+
+        self.write_symbol(output, term.f_code())?;
+        if !term.is_const() {
+            write!(output, "(")?;
+            for index in 0..term.arity() {
+                if index != 0 {
+                    write!(output, ",")?;
+                }
+                let arg = term
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                write!(output, "*{}", tb_cell_ident(&arg))?;
+            }
+            write!(output, ")")?;
+        }
+        write!(output, "   =   ")?;
+        self.write_plain_term(output, term)
+    }
+
+    fn write_plain_term(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        if term.is_free_var() {
+            return write!(output, "{}", var_print_string(term.f_code()));
+        }
+        if term.is_db_var() {
+            return write!(output, "db({})", term.f_code());
+        }
+
+        self.write_symbol(output, term.f_code())?;
+        if !term.is_const() {
+            self.write_plain_arg_list(output, term)?;
+        }
+        Ok(())
+    }
+
+    fn write_plain_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        write!(output, "(")?;
+        for index in 0..term.arity() {
+            if index != 0 {
+                write!(output, ",")?;
+            }
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            self.write_plain_term(output, &arg)?;
+        }
+        write!(output, ")")
+    }
+
+    fn write_compact_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        write!(output, "(")?;
+        for index in 0..term.arity() {
+            if index != 0 {
+                write!(output, ",")?;
+            }
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            self.write_term_compact(output, &arg)?;
+        }
+        write!(output, ")")
+    }
+
+    fn write_symbol(&self, output: &mut impl fmt::Write, f_code: FunCode) -> fmt::Result {
+        write!(
+            output,
+            "{}",
+            self.sig.find_name(f_code).unwrap_or("<unknown>")
+        )
     }
 
     /// Inserts a term, recursively sharing all non-variable subterms.
@@ -954,7 +1131,7 @@ mod tests {
     use crate::terms::termtypes::{
         DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_GARBAGE_FLAG,
         TP_HAS_APP_VAR, TP_HAS_NON_PATTERN_VAR, TP_IS_GROUND, TP_IS_SHARED, TP_OP_FLAG,
-        TP_PRED_POS,
+        TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
     };
     use crate::terms::typebanks::TypeBank;
 
@@ -1469,5 +1646,58 @@ mod tests {
         assert!(shared.query_prop(TP_OP_FLAG));
         assert!(a.query_prop(TP_OP_FLAG));
         assert_eq!(tb_term_collect_subterms(&shared, &mut collector), 0);
+    }
+
+    #[test]
+    fn bank_in_order_prints_entry_ordered_dag() {
+        let (mut bank, f_code) = bank_with_symbol("f", 2);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let root = Term::top_alloc(f_code, 2);
+        root.set_argument(0, a.clone());
+        root.set_argument(1, a);
+        let shared_root = bank.insert(&root, DerefType::Never).unwrap();
+
+        assert_eq!(shared_root.entry_no(), 4);
+        assert_eq!(
+            bank.bank_in_order_string(),
+            "*1 : $true   =   $true\n*2 : $false   =   $false\n*3 : a   =   a\n*4 : f(*3,*3)   =   f(a,a)\n"
+        );
+        assert_eq!(bank.term_string(&shared_root, true), "f(a,a)");
+    }
+
+    #[test]
+    fn compact_printing_sets_output_flags_and_reuses_abbreviations() {
+        let (mut bank, f_code) = bank_with_symbol("f", 2);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let root = Term::top_alloc(f_code, 2);
+        root.set_argument(0, a.clone());
+        root.set_argument(1, a.clone());
+        let shared_root = bank.insert(&root, DerefType::Never).unwrap();
+
+        assert_eq!(bank.term_compact_string(&shared_root), "*4:f(*3:a,*3)");
+        assert!(shared_root.query_prop(TP_OUTPUT_FLAG));
+        assert!(a.query_prop(TP_OUTPUT_FLAG));
+        assert_eq!(bank.term_compact_string(&shared_root), "*4");
+    }
+
+    #[test]
+    fn bank_terms_prints_only_top_position_terms() {
+        let (mut bank, f_code) = bank_with_symbol("f", 1);
+        let a_code = bank.signature_mut().insert_id("a", 0, false);
+        let i_type = bank.signature().type_bank().i_type();
+        bank.signature_mut().declare_type(a_code, i_type).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let root = Term::top_alloc(f_code, 1);
+        root.set_argument(0, a);
+        let shared_root = bank.insert(&root, DerefType::Never).unwrap();
+        shared_root.set_prop(TP_TOP_POS);
+
+        assert_eq!(bank.bank_terms_string(), "*4:f(*3:a)\n");
     }
 }

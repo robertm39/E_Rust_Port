@@ -123,6 +123,11 @@ impl TermCellStore {
     }
 
     #[must_use]
+    pub fn terms(&self) -> Vec<Term> {
+        self.store.iter().flat_map(TermTree::terms).collect()
+    }
+
+    #[must_use]
     pub fn count_nodes(&self) -> i64 {
         self.store.iter().map(TermTree::nodes).sum()
     }
@@ -230,6 +235,7 @@ mod tests {
         assert_eq!(store.entries(), 2);
         assert_eq!(store.arg_count(), 1);
         assert_eq!(store.count_nodes(), 2);
+        assert_eq!(store.terms().len(), 2);
         assert_eq!(store.find(&one), Some(one.clone()));
 
         let duplicate = typed_const(1, &types.i_type());
