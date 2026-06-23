@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
@@ -13,11 +13,14 @@ use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_so
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 
+const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
+const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EProverAction {
     Help,
     Version,
-    Run(EProverConfig),
+    Run(Box<EProverConfig>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +33,18 @@ pub struct EProverConfig {
     pub proof_output: i64,
     pub force_derivation_output: i64,
     pub training_examples: Option<i64>,
+    pub saturated_output_descriptor: String,
+    pub filter_saturated_descriptor: String,
+    pub select_strategy: Option<String>,
+    pub print_strategy: Option<String>,
+    pub parse_strategy_file: Option<String>,
+    pub step_limit: i64,
+    pub answer_limit: i64,
+    pub processed_set_limit: i64,
+    pub unprocessed_limit: i64,
+    pub total_clause_set_limit: i64,
+    pub generated_limit: i64,
+    pub term_bank_insert_limit: i64,
     pub cpu_limit: Option<i64>,
     pub soft_cpu_limit: Option<i64>,
     pub schedule_time_limit: Option<i64>,
@@ -39,7 +54,7 @@ pub struct EProverConfig {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EProverFlags {
-    bits: u16,
+    bits: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,16 +72,23 @@ pub enum EProverFlag {
     ProofStatistics = 1 << 10,
     FullDerivation = 1 << 11,
     RecordGivenClauses = 1 << 12,
+    PrintStatistics = 1 << 13,
+    PrintDetailedStatistics = 1 << 14,
+    PrintSaturated = 1 << 15,
+    PrintSaturatedInfo = 1 << 16,
+    FilterSaturated = 1 << 17,
+    ResourceInfo = 1 << 18,
+    ConjecturesAreQuestions = 1 << 19,
 }
 
 impl EProverFlags {
     pub fn set(&mut self, flag: EProverFlag) {
-        self.bits |= flag as u16;
+        self.bits |= flag as u32;
     }
 
     #[must_use]
     pub const fn contains(self, flag: EProverFlag) -> bool {
-        (self.bits & flag as u16) != 0
+        (self.bits & flag as u32) != 0
     }
 }
 
@@ -81,6 +103,18 @@ impl Default for EProverConfig {
             proof_output: 0,
             force_derivation_output: 0,
             training_examples: None,
+            saturated_output_descriptor: DEFAULT_OUTPUT_DESCRIPTOR.to_owned(),
+            filter_saturated_descriptor: DEFAULT_FILTER_DESCRIPTOR.to_owned(),
+            select_strategy: None,
+            print_strategy: None,
+            parse_strategy_file: None,
+            step_limit: i64::MAX,
+            answer_limit: 1,
+            processed_set_limit: i64::MAX,
+            unprocessed_limit: i64::MAX,
+            total_clause_set_limit: i64::MAX,
+            generated_limit: i64::MAX,
+            term_bank_insert_limit: i64::MAX,
             cpu_limit: None,
             soft_cpu_limit: None,
             schedule_time_limit: None,
@@ -250,7 +284,7 @@ where
     if config.files.is_empty() {
         config.files.push("-".to_owned());
     }
-    Ok(EProverAction::Run(config))
+    Ok(EProverAction::Run(Box::new(config)))
 }
 
 fn apply_parsed_option(
@@ -263,7 +297,12 @@ fn apply_parsed_option(
         EProverOption::Verbose
         | EProverOption::Output
         | EProverOption::Silent
-        | EProverOption::OutputLevel => {
+        | EProverOption::OutputLevel
+        | EProverOption::PrintStatistics
+        | EProverOption::PrintDetailedStatistics
+        | EProverOption::PrintSaturated
+        | EProverOption::PrintSatInfo
+        | EProverOption::FilterSaturated => {
             apply_output_option(config, parsed)?;
             Ok(None)
         }
@@ -281,6 +320,22 @@ fn apply_parsed_option(
             apply_resource_option(config, parsed)?;
             Ok(None)
         }
+        EProverOption::SelectStrategy
+        | EProverOption::PrintStrategy
+        | EProverOption::ParseStrategy => {
+            apply_strategy_option(config, parsed);
+            Ok(None)
+        }
+        EProverOption::ProcessedClausesLimit
+        | EProverOption::ProcessedSetLimit
+        | EProverOption::UnprocessedLimit
+        | EProverOption::TotalClauseSetLimit
+        | EProverOption::GeneratedLimit
+        | EProverOption::TermBankInsertLimit
+        | EProverOption::Answers => {
+            apply_limit_option(config, parsed)?;
+            Ok(None)
+        }
         EProverOption::SyntaxOnly
         | EProverOption::PrintFormulas
         | EProverOption::PruneOnly
@@ -291,6 +346,8 @@ fn apply_parsed_option(
         EProverOption::PrintPid
         | EProverOption::PrintVersion
         | EProverOption::RequireNonempty
+        | EProverOption::ResourcesInfo
+        | EProverOption::ConjecturesAreQuestions
         | EProverOption::Auto
         | EProverOption::DeterministicRewriteSort
         | EProverOption::DeterministicNewSort => {
@@ -316,6 +373,24 @@ fn apply_output_option(
         }
         EProverOption::OutputLevel => {
             config.output_level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::PrintStatistics => config.flags.set(EProverFlag::PrintStatistics),
+        EProverOption::PrintDetailedStatistics => {
+            config.flags.set(EProverFlag::PrintDetailedStatistics);
+            config.flags.set(EProverFlag::PrintStatistics);
+        }
+        EProverOption::PrintSaturated => {
+            let descriptor = parsed.arg().unwrap_or("").to_owned();
+            check_option_letter_string(&descriptor, "teigEIGaA", "-S (--print-saturated)")?;
+            config.saturated_output_descriptor = descriptor;
+            config.flags.set(EProverFlag::PrintSaturated);
+        }
+        EProverOption::PrintSatInfo => config.flags.set(EProverFlag::PrintSaturatedInfo),
+        EProverOption::FilterSaturated => {
+            let descriptor = parsed.arg().unwrap_or("").to_owned();
+            check_option_letter_string(&descriptor, "eigEIGaA", "--filter-saturated")?;
+            config.filter_saturated_descriptor = descriptor;
+            config.flags.set(EProverFlag::FilterSaturated);
         }
         _ => unreachable!("non-output option routed to output handler"),
     }
@@ -388,6 +463,39 @@ fn apply_resource_option(
     Ok(())
 }
 
+fn apply_strategy_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
+    match parsed.option().option_code {
+        EProverOption::SelectStrategy => {
+            config.select_strategy = Some(parsed.arg().unwrap_or("").to_owned());
+        }
+        EProverOption::PrintStrategy => {
+            config.print_strategy = Some(parsed.arg().unwrap_or("").to_owned());
+        }
+        EProverOption::ParseStrategy => {
+            config.parse_strategy_file = Some(parsed.arg().unwrap_or("").to_owned());
+        }
+        _ => unreachable!("non-strategy option routed to strategy handler"),
+    }
+}
+
+fn apply_limit_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+    match parsed.option().option_code {
+        EProverOption::ProcessedClausesLimit => config.step_limit = value,
+        EProverOption::ProcessedSetLimit => config.processed_set_limit = value,
+        EProverOption::UnprocessedLimit => config.unprocessed_limit = value,
+        EProverOption::TotalClauseSetLimit => config.total_clause_set_limit = value,
+        EProverOption::GeneratedLimit => config.generated_limit = value,
+        EProverOption::TermBankInsertLimit => config.term_bank_insert_limit = value,
+        EProverOption::Answers => config.answer_limit = value,
+        _ => unreachable!("non-limit option routed to limit handler"),
+    }
+    Ok(())
+}
+
 fn apply_input_mode_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
     match parsed.option().option_code {
         EProverOption::SyntaxOnly => config.flags.set(EProverFlag::SyntaxOnly),
@@ -399,7 +507,12 @@ fn apply_input_mode_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EP
             config.output_level = 4;
             config.flags.set(EProverFlag::PruneOnly);
         }
-        EProverOption::CnfOnly => config.flags.set(EProverFlag::CnfOnly),
+        EProverOption::CnfOnly => {
+            "teigEIG".clone_into(&mut config.saturated_output_descriptor);
+            config.step_limit = 0;
+            config.flags.set(EProverFlag::PrintSaturated);
+            config.flags.set(EProverFlag::CnfOnly);
+        }
         _ => unreachable!("non-input-mode option routed to input-mode handler"),
     }
 }
@@ -409,6 +522,10 @@ fn apply_simple_flag(config: &mut EProverConfig, option: EProverOption) {
         EProverOption::PrintPid => config.flags.set(EProverFlag::PrintPid),
         EProverOption::PrintVersion => config.flags.set(EProverFlag::PrintVersion),
         EProverOption::RequireNonempty => config.flags.set(EProverFlag::RequireNonempty),
+        EProverOption::ResourcesInfo => config.flags.set(EProverFlag::ResourceInfo),
+        EProverOption::ConjecturesAreQuestions => {
+            config.flags.set(EProverFlag::ConjecturesAreQuestions);
+        }
         EProverOption::Auto => config.flags.set(EProverFlag::Auto),
         EProverOption::DeterministicRewriteSort => {
             config.flags.set(EProverFlag::DeterministicRewriteSort);
@@ -557,7 +674,112 @@ mod tests {
             panic!("expected run config");
         };
         assert!(config.flags.contains(EProverFlag::CnfOnly));
+        assert!(config.flags.contains(EProverFlag::PrintSaturated));
         assert!(config.flags.contains(EProverFlag::RequireNonempty));
+        assert_eq!(config.saturated_output_descriptor, "teigEIG");
+        assert_eq!(config.step_limit, 0);
+    }
+
+    #[test]
+    fn process_options_records_reporting_descriptors_like_c() {
+        let action = process_options([
+            "eprover",
+            "--print-statistics",
+            "--print-detailed-statistics",
+            "-S",
+            "--filter-saturated=eig",
+            "--print-sat-info",
+            "-R",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.flags.contains(EProverFlag::PrintStatistics));
+        assert!(config.flags.contains(EProverFlag::PrintDetailedStatistics));
+        assert!(config.flags.contains(EProverFlag::PrintSaturated));
+        assert!(config.flags.contains(EProverFlag::FilterSaturated));
+        assert!(config.flags.contains(EProverFlag::PrintSaturatedInfo));
+        assert!(config.flags.contains(EProverFlag::ResourceInfo));
+        assert_eq!(config.saturated_output_descriptor, "eigEIG");
+        assert_eq!(config.filter_saturated_descriptor, "eig");
+
+        let action =
+            process_options(["eprover", "--print-saturated=teA", "--filter-saturated=eig"])
+                .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.saturated_output_descriptor, "teA");
+        assert_eq!(config.filter_saturated_descriptor, "eig");
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_reporting_descriptors() {
+        let error = process_options(["eprover", "--print-saturated=tx"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Illegal argument to option -S (--print-saturated)"
+        );
+
+        let error = process_options(["eprover", "--filter-saturated"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Illegal argument to option --filter-saturated"
+        );
+
+        let error = process_options(["eprover", "--filter-saturated=Fx"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Illegal argument to option --filter-saturated"
+        );
+    }
+
+    #[test]
+    fn process_options_records_strategy_and_limit_state_like_c() {
+        let action = process_options([
+            "eprover",
+            "--select-strategy=AutoSched",
+            "--print-strategy",
+            "--parse-strategy=strategy.txt",
+            "-C",
+            "10",
+            "-P",
+            "20",
+            "-U",
+            "30",
+            "-T",
+            "40",
+            "--generated-limit=50",
+            "--tb-insert-limit=60",
+            "--answers",
+            "--conjectures-are-questions",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.select_strategy.as_deref(), Some("AutoSched"));
+        assert_eq!(config.print_strategy.as_deref(), Some(">current-strategy<"));
+        assert_eq!(config.parse_strategy_file.as_deref(), Some("strategy.txt"));
+        assert_eq!(config.step_limit, 10);
+        assert_eq!(config.processed_set_limit, 20);
+        assert_eq!(config.unprocessed_limit, 30);
+        assert_eq!(config.total_clause_set_limit, 40);
+        assert_eq!(config.generated_limit, 50);
+        assert_eq!(config.term_bank_insert_limit, 60);
+        assert_eq!(config.answer_limit, 2_147_483_647);
+        assert!(config.flags.contains(EProverFlag::ConjecturesAreQuestions));
+
+        let action = process_options(["eprover", "--answers=7", "--print-strategy=Named"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.answer_limit, 7);
+        assert_eq!(config.print_strategy.as_deref(), Some("Named"));
     }
 
     #[test]
