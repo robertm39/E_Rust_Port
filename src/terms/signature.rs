@@ -465,6 +465,57 @@ impl Signature {
         Ok(())
     }
 
+    /// Marks a symbol as occurring in function position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the symbol has no declared type, matching the C assertion
+    /// precondition. It can also panic through `TypeBank::change_return_type`
+    /// for the inherited `$o` ambiguity case documented in `DOCS.md`.
+    pub fn declare_is_function(&mut self, f_code: FunCode) -> Result<(), Diagnostic> {
+        if self.is_polymorphic(f_code) {
+            return Ok(());
+        }
+
+        let type_ = self
+            .get_type(f_code)
+            .cloned()
+            .expect("function symbol must have a type before declaration");
+        if type_.is_bool() {
+            let default_sort = self.type_bank.default_type();
+            let new_type = self.type_bank.change_return_type(&type_, &default_sort);
+            self.declare_final_type(f_code, new_type)
+        } else {
+            self.fix_type(f_code);
+            Ok(())
+        }
+    }
+
+    /// Marks a symbol as occurring in predicate position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the symbol has no declared type, matching the C assertion
+    /// precondition.
+    pub fn declare_is_predicate(&mut self, f_code: FunCode) -> Result<(), Diagnostic> {
+        if self.is_polymorphic(f_code) {
+            return Ok(());
+        }
+
+        let type_ = self
+            .get_type(f_code)
+            .cloned()
+            .expect("predicate symbol must have a type before declaration");
+        if type_.is_bool() {
+            self.fix_type(f_code);
+            Ok(())
+        } else {
+            let bool_type = self.type_bank.bool_type();
+            let new_type = self.type_bank.change_return_type(&type_, &bool_type);
+            self.declare_final_type(f_code, new_type)
+        }
+    }
+
     /// Inserts the fixed block of internal FOF and higher-order helper symbols.
     ///
     /// # Panics

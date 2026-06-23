@@ -10,5 +10,6 @@ pub mod termtypes;
 pub mod termvars;
 pub mod termweightext;
 pub mod typebanks;
+pub mod typecheck;
 pub mod varhash;
 pub mod varsets;
