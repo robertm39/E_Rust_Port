@@ -3,6 +3,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod basics;
+pub mod clauses;
 pub mod inout;
 pub mod prover;
 pub mod terms;

@@ -40,6 +40,8 @@ Rust files:
 - `src/basics/stringtrees.rs`
 - `src/basics/sysdate.rs`
 - `src/basics/verbose.rs`
+- `src/clauses/clauseinfo.rs`
+- `src/clauses/mod.rs`
 - `src/inout/basicparser.rs`
 - `src/inout/commandline.rs`
 - `src/inout/filevars.rs`
@@ -118,6 +120,7 @@ Original C references:
 - [`BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`](c_source_docs/BASICS/clb_stringtrees.md)
 - [`BASICS/clb_sysdate.h`, `BASICS/clb_sysdate.c`](c_source_docs/BASICS/clb_sysdate.md)
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
+- [`CLAUSES/ccl_clauseinfo.h`, `CLAUSES/ccl_clauseinfo.c`](c_source_docs/CLAUSES/ccl_clauseinfo.md)
 - [`INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`](c_source_docs/INOUT/cio_basicparser.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
 - [`INOUT/cio_filevars.h`, `INOUT/cio_filevars.c`](c_source_docs/INOUT/cio_filevars.md)
@@ -190,6 +193,7 @@ Implemented behavior:
 - Registered persistent-memory helpers from `clb_regmem`, including process-global registration, allocation/reallocation/freeing, cleanup of all registered areas, `RegMemProvide` doubling behavior, and zero-filled newly provided tails.
 - `SysDate` logical-time helpers from `clb_sysdate`, including creation/invalid sentinels, ordering/equality/maximum macros, increment mutation order, overflow reporting instead of undefined signed overflow, and C-shaped unsigned-long printing.
 - Verbose-level helpers from `clb_verbose`, including the global `Verbose` default, nonzero level-1 gate, `>= 2` and `>= 10` gates, closure helpers for macro-like conditional execution, and `VERBOUT`/`VERBOUTARG` formatting with explicit flushes.
+- Clause source-info metadata from `ccl_clauseinfo`, including optional copied name/source fields, empty `-1` line/column allocation, TSTP/PCL source rendering with unknown and line/column fallbacks, null-info no-op rendering, and C-shaped generated identifier namespace/counter extraction.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - Initial stream and scanner support for string and explicit file sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, position formatting, `ScannerSetFormat`-style explicit/auto format state, automatic `include_key` file splicing, C-style file `default_dir` composition with `TPTP` fallback, and explicit `ScannerParseInclude`-style include parsing with selector and skip-name trees.
@@ -415,6 +419,8 @@ These notes are not permission to diverge during porting. They identify inherite
 - `IndexFPfpCreate` stores the first positive function and predicate symbols it sees in process-static representatives, making later fingerprints order-dependent. Rust preserves this with explicit global state; later indexing code should decide whether reproducible representative selection is worth a compatibility switch.
 - `FPTreeDelete` only checks `payload == NULL` at the exact key leaf; recursive parent pruning returns `count == 0` without checking a prefix node's payload. Rust keeps this delete shape for valid same-length fingerprint indexes, but variable-length discrimination-tree callers should be audited before relying on prefix payload retention.
 - `FPIndexFindUnifiable` and `FPIndexFindMatchable` push the leaf payload pointer even when it is `NULL`, so the returned count can include empty leaves. Rust preserves that by collecting optional payload references; later public APIs may want a payload-only wrapper for ergonomic callers.
+- `ClauseInfoGetIdNameSpace` checks that the first namespace byte after `c_`/`i_` is a digit, but then calls `strtol(info->name+3, ...)`, skipping that digit. Rust preserves the resulting namespace values, such as `c_12_34 -> 2`; generated-name code should decide later whether this bug must stay externally visible.
+- `ClauseInfoGetIdCounter` inherits C `strtol` acceptance for counters, including an empty counter becoming `0`, signs being accepted, and overflow saturating while `errno` is ignored. Rust mirrors those edge cases for compatibility with stored proof identifiers.
 - `SubstComputeMatch` checks repeated matcher-variable bindings with raw pointer identity, so unshared but structurally equal target subterms do not satisfy a repeated variable. Rust preserves this with handle identity; revisit only after parser and term-bank sharing make the observable caller surface clear.
 - `SubstComputeMgu` documents that its two inputs must be variable-disjoint and has assert-only sort consistency checks for non-variable terms with matching function codes. Rust keeps those as internal preconditions; a later public API may want structured errors at untrusted boundaries.
 - The initial `cte_termbanks` slice does not store a back-pointer from each term to its owning bank. The C field is only active under LFHO; add a typed owner handle when global applied-variable dereferencing and lambda normalization are ported.
