@@ -4,6 +4,7 @@ pub mod clausecpos;
 pub mod clauseinfo;
 pub mod clausepos;
 pub mod clausepos_tree;
+pub mod diseq_decomp;
 pub mod eqn;
 pub mod eqn_props;
 pub mod eqnlist;
