@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
+use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
@@ -13,6 +14,8 @@ use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_so
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 
+const MEGA: u64 = 1_048_576;
+const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 
@@ -48,7 +51,8 @@ pub struct EProverConfig {
     pub cpu_limit: Option<i64>,
     pub soft_cpu_limit: Option<i64>,
     pub schedule_time_limit: Option<i64>,
-    pub memory_limit: Option<String>,
+    pub memory_limit: u64,
+    pub delete_bad_limit: i64,
     pub flags: EProverFlags,
 }
 
@@ -118,7 +122,8 @@ impl Default for EProverConfig {
             cpu_limit: None,
             soft_cpu_limit: None,
             schedule_time_limit: None,
-            memory_limit: None,
+            memory_limit: 0,
+            delete_bad_limit: DEFAULT_DELETE_BAD_LIMIT,
             flags: EProverFlags::default(),
         }
     }
@@ -243,6 +248,30 @@ fn apply_time_limit_state(config: &EProverConfig) {
     if let Some(limit) = config.schedule_time_limit {
         let _ = set_schedule_time_limit(c_rlimit_from_arg(limit));
     }
+}
+
+const fn memory_limit_bytes_from_mb(memory_mb: i64) -> u64 {
+    c_rlimit_from_arg(memory_mb).wrapping_mul(MEGA)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn auto_memory_limit_from_system_mb(system_memory_mb: i64) -> Result<(u64, i64), Diagnostic> {
+    if system_memory_mb == -1 {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "Cannot find physical memory automatically. Give explicit value to --memory-limit",
+        ));
+    }
+
+    let memory_mb = (system_memory_mb as f64 * 0.8) as i64;
+    let delete_bad_limit = (f64::from((c_rlimit_from_arg(memory_mb).wrapping_sub(2)) as f32)
+        * 0.7
+        * MEGA as f64) as i64;
+    Ok((memory_limit_bytes_from_mb(memory_mb), delete_bad_limit))
 }
 
 pub fn run<I, S>(
@@ -456,7 +485,16 @@ fn apply_resource_option(
             config.schedule_time_limit = Some(limit);
         }
         EProverOption::MemoryLimit => {
-            config.memory_limit = Some(parsed.arg().unwrap_or("").to_owned());
+            let arg = parsed.arg().unwrap_or("");
+            if arg == "Auto" {
+                let (memory_limit, delete_bad_limit) =
+                    auto_memory_limit_from_system_mb(get_system_phys_memory())?;
+                config.memory_limit = memory_limit;
+                config.delete_bad_limit = delete_bad_limit;
+            } else {
+                let memory_mb = get_int_arg(parsed.option(), arg)?;
+                config.memory_limit = memory_limit_bytes_from_mb(memory_mb);
+            }
         }
         _ => unreachable!("non-resource option routed to resource handler"),
     }
@@ -562,6 +600,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     set_verbose_level(verbose);
     let _ = set_output_level(config.output_level);
     apply_time_limit_state(config);
+    let _ = set_memory_limit(config.memory_limit);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -581,7 +620,9 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 
 #[cfg(test)]
 mod tests {
-    use super::{process_options, run, EProverAction, EProverFlag};
+    use super::{
+        auto_memory_limit_from_system_mb, process_options, run, EProverAction, EProverFlag, MEGA,
+    };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::inout::output::{output_level, set_output_level};
@@ -651,6 +692,37 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.schedule_time_limit, Some(25));
+    }
+
+    #[test]
+    fn process_options_records_memory_limit_state_like_c() {
+        let action = process_options(["eprover", "-m", "128"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.memory_limit, 128 * MEGA);
+        assert_eq!(config.delete_bad_limit, i64::MAX);
+
+        let action = process_options(["eprover", "--memory-limit=-1"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.memory_limit, u64::MAX.wrapping_mul(MEGA));
+    }
+
+    #[test]
+    fn auto_memory_limit_derives_search_limits_like_c() {
+        let (memory_limit, delete_bad_limit) = auto_memory_limit_from_system_mb(1_000).unwrap();
+
+        assert_eq!(memory_limit, 800 * MEGA);
+        assert_eq!(delete_bad_limit, 585_734_553);
+
+        let error = auto_memory_limit_from_system_mb(-1).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(
+            error.message(),
+            "Cannot find physical memory automatically. Give explicit value to --memory-limit"
+        );
     }
 
     #[test]
