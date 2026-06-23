@@ -17,6 +17,7 @@ Rust files:
 - `src/basics/pdrangearrays.rs`
 - `src/basics/properties.rs`
 - `src/basics/pstacks.rs`
+- `src/basics/ptrees.rs`
 - `src/basics/stringtrees.rs`
 - `src/inout/basicparser.rs`
 - `src/inout/commandline.rs`
@@ -39,6 +40,7 @@ Original C references:
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
 - [`BASICS/clb_properties.h`](c_source_docs/BASICS/clb_properties.md)
 - [`BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`](c_source_docs/BASICS/clb_pstacks.md)
+- [`BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`](c_source_docs/BASICS/clb_ptrees.md)
 - [`BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`](c_source_docs/BASICS/clb_stringtrees.md)
 - [`INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`](c_source_docs/INOUT/cio_basicparser.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
@@ -59,6 +61,7 @@ Implemented behavior:
 - Property-bit helpers from `clb_properties`, including set/delete/flip/assign, all-bit and any-bit queries, masked property extraction, and masked equivalence checks.
 - `StrTree` string-keyed map behavior from `clb_stringtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction, deletion, and deterministic sorted traversal.
 - `NumTree` numeric-keyed map behavior from `clb_numtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction/deletion, root-like draining, node/max-key queries, debug printing, deterministic sorted traversal, and limited traversal starting at the first key greater than or equal to the limit.
+- `PTree` pointer/identity-set behavior from `clb_ptrees`, including duplicate-preserving store semantics, lookup, binary lookup alias, extraction/deletion/root-like draining, destructive and non-destructive merge helpers, stack/vector conversion, copying, shared-element and intersection helpers, equivalence/subset checks, in-order visits, and debug printing.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - Initial stream and scanner support for string sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, and position formatting.
@@ -72,5 +75,6 @@ Known gaps:
 - Scanner support is currently limited to string sources and does not yet implement file streams, stacked include handling, or `ScannerSetFormat` format inference.
 - `StrTree` currently uses Rust `BTreeMap` to preserve sorted traversal and lookup semantics; the C implementation's splay-tree locality optimization should be revisited if profiling shows this index on hot paths.
 - `NumTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
+- `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
