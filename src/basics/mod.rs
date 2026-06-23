@@ -7,3 +7,4 @@ pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod properties;
 pub mod pstacks;
+pub mod stringtrees;
