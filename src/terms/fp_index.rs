@@ -1,0 +1,729 @@
+use crate::basics::objtrees::ObjTree;
+use crate::basics::pstacks::{PStack, PStackInt};
+use crate::terms::functypes::FunCode;
+use crate::terms::idx_fp::{
+    index_dt_create, FingerprintIndexFunction, IndexFingerprint, ANY_VAR, BELOW_VAR, NOT_IN_TERM,
+};
+use crate::terms::signature::Signature;
+use crate::terms::termtypes::Term;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Default)]
+pub struct FPTree<T>
+where
+    T: Ord + Clone,
+{
+    alternatives: BTreeMap<FunCode, Self>,
+    count: usize,
+    payload: Option<ObjTree<T>>,
+}
+
+impl<T> FPTree<T>
+where
+    T: Ord + Clone,
+{
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            alternatives: BTreeMap::new(),
+            count: 0,
+            payload: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn child_count(&self) -> usize {
+        self.count
+    }
+
+    #[must_use]
+    pub const fn payload(&self) -> Option<&ObjTree<T>> {
+        self.payload.as_ref()
+    }
+
+    pub fn payload_mut(&mut self) -> Option<&mut ObjTree<T>> {
+        self.payload.as_mut()
+    }
+
+    pub fn ensure_payload(&mut self) -> &mut ObjTree<T> {
+        self.payload.get_or_insert_with(ObjTree::new)
+    }
+
+    pub fn store_payload(&mut self, object: T) -> Option<&T> {
+        self.ensure_payload().store(object)
+    }
+
+    pub fn clear_payload(&mut self) -> Option<ObjTree<T>> {
+        self.payload.take()
+    }
+
+    #[must_use]
+    pub fn payload_nodes(&self) -> usize {
+        self.payload.as_ref().map_or(0, ObjTree::nodes)
+    }
+
+    #[must_use]
+    pub fn find(&self, key: &IndexFingerprint) -> Option<&Self> {
+        let mut current = self;
+        for sample in key.samples() {
+            current = current.alternative(*sample)?;
+        }
+        Some(current)
+    }
+
+    pub fn find_mut(&mut self, key: &IndexFingerprint) -> Option<&mut Self> {
+        let mut current = self;
+        for sample in key.samples() {
+            current = current.alternative_mut(*sample)?;
+        }
+        Some(current)
+    }
+
+    pub fn insert(&mut self, key: &IndexFingerprint) -> &mut Self {
+        let mut current = self;
+        for sample in key.samples() {
+            current = current.alternative_ref(*sample);
+        }
+        current
+    }
+
+    pub fn delete(&mut self, key: &IndexFingerprint) {
+        let _ = self.delete_rek(key.samples(), 0);
+    }
+
+    pub fn find_unifiable<'a>(
+        &'a self,
+        key: &IndexFingerprint,
+        sig: &Signature,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        self.find_unifiable_rek(key.samples(), sig, 0, collect)
+    }
+
+    pub fn find_matchable<'a>(
+        &'a self,
+        key: &IndexFingerprint,
+        sig: &Signature,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        self.find_matchable_rek(key.samples(), sig, 0, collect)
+    }
+
+    pub fn find_dt_unifiable<'a>(
+        &'a self,
+        key: &IndexFingerprint,
+        sig: &Signature,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        self.dt_find_unifiable_rek(key.samples(), sig, 0, 0, 0, collect)
+    }
+
+    pub fn find_dt_matchable<'a>(
+        &'a self,
+        key: &IndexFingerprint,
+        sig: &Signature,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        self.dt_find_matchable_rek(key.samples(), sig, 0, 0, collect)
+    }
+
+    pub fn collect_leaves<'a>(&'a self, result: &mut Vec<&'a Self>) -> usize {
+        let start = result.len();
+        self.collect_leaves_rek(result);
+        result.len() - start
+    }
+
+    #[must_use]
+    pub fn collect_distrib(&self) -> FPIndexDistrib {
+        let mut payload_sizes = PStack::<PStackInt>::new();
+        let nodes = self.collect_distrib_rek(&mut payload_sizes);
+        let (average, stddev) = payload_sizes.compute_average();
+        FPIndexDistrib {
+            nodes,
+            leaves: payload_sizes.len(),
+            average,
+            stddev,
+        }
+    }
+
+    fn alternative(&self, f_code: FunCode) -> Option<&Self> {
+        self.alternatives.get(&f_code)
+    }
+
+    fn alternative_mut(&mut self, f_code: FunCode) -> Option<&mut Self> {
+        self.alternatives.get_mut(&f_code)
+    }
+
+    fn alternative_ref(&mut self, f_code: FunCode) -> &mut Self {
+        match self.alternatives.entry(f_code) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                self.count += 1;
+                entry.insert(Self::new())
+            }
+        }
+    }
+
+    fn delete_rek(&mut self, samples: &[FunCode], current: usize) -> bool {
+        if current == samples.len() {
+            return self.payload.is_none();
+        }
+
+        let sample = samples[current];
+        let delete = self
+            .alternatives
+            .get_mut(&sample)
+            .is_some_and(|child| child.delete_rek(samples, current + 1));
+        if delete && self.alternatives.remove(&sample).is_some() {
+            self.count = self.count.saturating_sub(1);
+        }
+        self.count == 0
+    }
+
+    fn find_unifiable_rek<'a>(
+        &'a self,
+        samples: &[FunCode],
+        sig: &Signature,
+        current: usize,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        if current == samples.len() {
+            collect.push(self.payload.as_ref());
+            return 1;
+        }
+
+        let sample = samples[current];
+        let mut result = 0;
+        if sample > 0 {
+            result += self.alternative(sample).map_or(0, |child| {
+                child.find_unifiable_rek(samples, sig, current + 1, collect)
+            });
+            if sig.symbol_unifies_with_var(sample) {
+                result += self.alternative(ANY_VAR).map_or(0, |child| {
+                    child.find_unifiable_rek(samples, sig, current + 1, collect)
+                });
+                result += self.alternative(BELOW_VAR).map_or(0, |child| {
+                    child.find_unifiable_rek(samples, sig, current + 1, collect)
+                });
+            }
+        } else if sample == NOT_IN_TERM {
+            result += self.alternative(NOT_IN_TERM).map_or(0, |child| {
+                child.find_unifiable_rek(samples, sig, current + 1, collect)
+            });
+            result += self.alternative(BELOW_VAR).map_or(0, |child| {
+                child.find_unifiable_rek(samples, sig, current + 1, collect)
+            });
+        } else if sample == BELOW_VAR || sample == ANY_VAR {
+            result += self.alternative(ANY_VAR).map_or(0, |child| {
+                child.find_unifiable_rek(samples, sig, current + 1, collect)
+            });
+            result += self.alternative(BELOW_VAR).map_or(0, |child| {
+                child.find_unifiable_rek(samples, sig, current + 1, collect)
+            });
+
+            let iter_start = if sample == BELOW_VAR { NOT_IN_TERM } else { 1 };
+            for (f_code, child) in self.alternatives.range(iter_start..) {
+                if *f_code <= 0 || sig.symbol_unifies_with_var(*f_code) {
+                    result += child.find_unifiable_rek(samples, sig, current + 1, collect);
+                }
+            }
+        }
+        result
+    }
+
+    fn find_matchable_rek<'a>(
+        &'a self,
+        samples: &[FunCode],
+        sig: &Signature,
+        current: usize,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        if current == samples.len() {
+            collect.push(self.payload.as_ref());
+            return 1;
+        }
+
+        let sample = samples[current];
+        let mut result = 0;
+        if sample > 0 {
+            result += self.alternative(sample).map_or(0, |child| {
+                child.find_matchable_rek(samples, sig, current + 1, collect)
+            });
+        } else if sample == NOT_IN_TERM {
+            result += self.alternative(NOT_IN_TERM).map_or(0, |child| {
+                child.find_matchable_rek(samples, sig, current + 1, collect)
+            });
+        } else if sample == BELOW_VAR || sample == ANY_VAR {
+            result += self.alternative(ANY_VAR).map_or(0, |child| {
+                child.find_matchable_rek(samples, sig, current + 1, collect)
+            });
+            if sample == BELOW_VAR {
+                result += self.alternative(BELOW_VAR).map_or(0, |child| {
+                    child.find_matchable_rek(samples, sig, current + 1, collect)
+                });
+            }
+
+            let iter_start = if sample == BELOW_VAR { NOT_IN_TERM } else { 1 };
+            for (f_code, child) in self.alternatives.range(iter_start..) {
+                if *f_code <= 0 || sig.symbol_unifies_with_var(*f_code) {
+                    result += child.find_matchable_rek(samples, sig, current + 1, collect);
+                }
+            }
+        }
+        result
+    }
+
+    fn dt_find_matchable_rek<'a>(
+        &'a self,
+        samples: &[FunCode],
+        sig: &Signature,
+        current: usize,
+        skip_term: i32,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        if skip_term > 0 {
+            let mut result = 0;
+            for (f_code, child) in self.alternatives.range(BELOW_VAR..) {
+                result += child.dt_find_matchable_rek(
+                    samples,
+                    sig,
+                    current,
+                    skip_term - 1 + symbol_arity(sig, *f_code),
+                    collect,
+                );
+            }
+            return result;
+        }
+        if current == samples.len() {
+            collect.push(self.payload.as_ref());
+            return 1;
+        }
+
+        let sample = samples[current];
+        if sample == ANY_VAR {
+            let mut result = 0;
+            for (f_code, child) in self.alternatives.range(BELOW_VAR..) {
+                if *f_code <= 0 || sig.symbol_unifies_with_var(*f_code) {
+                    result += child.dt_find_matchable_rek(
+                        samples,
+                        sig,
+                        current + 1,
+                        symbol_arity(sig, *f_code),
+                        collect,
+                    );
+                }
+            }
+            result
+        } else {
+            self.alternative(sample).map_or(0, |child| {
+                child.dt_find_matchable_rek(samples, sig, current + 1, 0, collect)
+            })
+        }
+    }
+
+    fn dt_find_unifiable_rek<'a>(
+        &'a self,
+        samples: &[FunCode],
+        sig: &Signature,
+        current: usize,
+        skip_term: i32,
+        skip_key: i32,
+        collect: &mut Vec<Option<&'a ObjTree<T>>>,
+    ) -> usize {
+        if skip_term > 0 {
+            let mut result = 0;
+            for (f_code, child) in self.alternatives.range(BELOW_VAR..) {
+                result += child.dt_find_unifiable_rek(
+                    samples,
+                    sig,
+                    current,
+                    skip_term - 1 + symbol_arity(sig, *f_code),
+                    0,
+                    collect,
+                );
+            }
+            return result;
+        }
+        if skip_key > 0 {
+            let Some(sample) = samples.get(current).copied() else {
+                return 0;
+            };
+            return self.dt_find_unifiable_rek(
+                samples,
+                sig,
+                current + 1,
+                0,
+                skip_key - 1 + symbol_arity(sig, sample),
+                collect,
+            );
+        }
+        if current == samples.len() {
+            collect.push(self.payload.as_ref());
+            return 1;
+        }
+
+        let sample = samples[current];
+        if sample == ANY_VAR {
+            let mut result = 0;
+            for (f_code, child) in self.alternatives.range(BELOW_VAR..) {
+                if *f_code <= 0 || sig.symbol_unifies_with_var(*f_code) {
+                    result += child.dt_find_unifiable_rek(
+                        samples,
+                        sig,
+                        current + 1,
+                        symbol_arity(sig, *f_code),
+                        0,
+                        collect,
+                    );
+                }
+            }
+            result
+        } else {
+            let mut result = self.alternative(sample).map_or(0, |child| {
+                child.dt_find_unifiable_rek(samples, sig, current + 1, 0, 0, collect)
+            });
+            if sample <= 0 || sig.symbol_unifies_with_var(sample) {
+                result += self.alternative(ANY_VAR).map_or(0, |child| {
+                    child.dt_find_unifiable_rek(
+                        samples,
+                        sig,
+                        current + 1,
+                        0,
+                        symbol_arity(sig, sample),
+                        collect,
+                    )
+                });
+            }
+            result
+        }
+    }
+
+    fn collect_leaves_rek<'a>(&'a self, result: &mut Vec<&'a Self>) {
+        if self.alternatives.is_empty() {
+            result.push(self);
+        } else {
+            for child in self.alternatives.values() {
+                child.collect_leaves_rek(result);
+            }
+        }
+    }
+
+    fn collect_distrib_rek(&self, payload_sizes: &mut PStack<PStackInt>) -> usize {
+        if let Some(payload) = &self.payload {
+            let payload_nodes = PStackInt::try_from(payload.nodes()).unwrap_or(PStackInt::MAX);
+            payload_sizes.push(payload_nodes);
+        }
+
+        1 + self
+            .alternatives
+            .values()
+            .map(|child| child.collect_distrib_rek(payload_sizes))
+            .sum::<usize>()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FPIndexDistrib {
+    pub nodes: usize,
+    pub leaves: usize,
+    pub average: f64,
+    pub stddev: f64,
+}
+
+impl FPIndexDistrib {
+    #[must_use]
+    pub fn data_string(self) -> String {
+        format!(
+            "{:5} nodes, {:5} leaves, {:6.2}+/-{:4.3} terms/leaf",
+            self.nodes, self.leaves, self.average, self.stddev
+        )
+    }
+}
+
+pub struct FPIndex<'a, T>
+where
+    T: Ord + Clone,
+{
+    index: FPTree<T>,
+    fp_fun: FingerprintIndexFunction,
+    sig: &'a Signature,
+    discrimination_tree: bool,
+}
+
+impl<'a, T> FPIndex<'a, T>
+where
+    T: Ord + Clone,
+{
+    #[must_use]
+    pub fn new(fp_fun: FingerprintIndexFunction, sig: &'a Signature) -> Self {
+        Self {
+            index: FPTree::new(),
+            fp_fun,
+            sig,
+            discrimination_tree: std::ptr::fn_addr_eq(
+                fp_fun,
+                index_dt_create as FingerprintIndexFunction,
+            ),
+        }
+    }
+
+    #[must_use]
+    pub const fn root(&self) -> &FPTree<T> {
+        &self.index
+    }
+
+    pub fn root_mut(&mut self) -> &mut FPTree<T> {
+        &mut self.index
+    }
+
+    #[must_use]
+    pub fn find(&self, term: &Term) -> Option<&FPTree<T>> {
+        let key = (self.fp_fun)(term);
+        self.index.find(&key)
+    }
+
+    pub fn insert(&mut self, term: &Term) -> &mut FPTree<T> {
+        let key = (self.fp_fun)(term);
+        self.index.insert(&key)
+    }
+
+    pub fn delete(&mut self, term: &Term) {
+        let key = (self.fp_fun)(term);
+        self.index.delete(&key);
+    }
+
+    pub fn find_unifiable<'b>(
+        &'b self,
+        term: &Term,
+        collect: &mut Vec<Option<&'b ObjTree<T>>>,
+    ) -> usize {
+        let key = (self.fp_fun)(term);
+        if self.discrimination_tree {
+            self.index.find_dt_unifiable(&key, self.sig, collect)
+        } else {
+            self.index.find_unifiable(&key, self.sig, collect)
+        }
+    }
+
+    pub fn find_matchable<'b>(
+        &'b self,
+        term: &Term,
+        collect: &mut Vec<Option<&'b ObjTree<T>>>,
+    ) -> usize {
+        let key = (self.fp_fun)(term);
+        if self.discrimination_tree {
+            self.index.find_dt_matchable(&key, self.sig, collect)
+        } else {
+            self.index.find_matchable(&key, self.sig, collect)
+        }
+    }
+
+    pub fn collect_leaves<'b>(&'b self, result: &mut Vec<&'b FPTree<T>>) -> usize {
+        self.index.collect_leaves(result)
+    }
+
+    #[must_use]
+    pub fn collect_distrib(&self) -> FPIndexDistrib {
+        self.index.collect_distrib()
+    }
+}
+
+fn symbol_arity(sig: &Signature, f_code: FunCode) -> i32 {
+    if f_code > 0 {
+        sig.find_arity(f_code)
+            .expect("discrimination-tree index requires known positive f-code")
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FPIndex, FPTree};
+    use crate::basics::objtrees::ObjTree;
+    use crate::basics::simple_stuff::ProblemType;
+    use crate::terms::idx_fp::{
+        index_dt_create, index_fp1_create, index_fp2_create, IndexFingerprint, ANY_VAR, BELOW_VAR,
+        NOT_IN_TERM,
+    };
+    use crate::terms::signature::Signature;
+    use crate::terms::termtypes::Term;
+    use crate::terms::typebanks::TypeBank;
+
+    struct TestSignature {
+        sig: Signature,
+        f: i64,
+        g: i64,
+        a: i64,
+        b: i64,
+    }
+
+    fn test_signature() -> TestSignature {
+        let mut sig = Signature::new(TypeBank::new());
+        let f = sig.insert_id_for_problem("f", 2, false, ProblemType::FirstOrder);
+        let g = sig.insert_id_for_problem("g", 1, false, ProblemType::FirstOrder);
+        let a = sig.insert_id_for_problem("a", 0, false, ProblemType::FirstOrder);
+        let b = sig.insert_id_for_problem("b", 0, false, ProblemType::FirstOrder);
+        TestSignature { sig, f, g, a, b }
+    }
+
+    fn leaf(code: i64) -> Term {
+        Term::const_cell_alloc(code)
+    }
+
+    fn var(code: i64) -> Term {
+        Term::const_cell_alloc(code)
+    }
+
+    fn term(code: i64, args: &[Term]) -> Term {
+        let term = Term::top_alloc(code, args.len());
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index, arg.clone());
+        }
+        term
+    }
+
+    fn payload_values(stack: &[Option<&ObjTree<i32>>]) -> Vec<i32> {
+        stack
+            .iter()
+            .filter_map(|payload| *payload)
+            .flat_map(ObjTree::to_vec)
+            .collect()
+    }
+
+    #[test]
+    fn fingerprint_constructor_accepts_raw_sample_vectors() {
+        let fp = IndexFingerprint::from_samples(vec![10, ANY_VAR, NOT_IN_TERM]);
+
+        assert_eq!(fp.raw(), &[4, 10, ANY_VAR, NOT_IN_TERM]);
+        assert_eq!(fp.samples(), &[10, ANY_VAR, NOT_IN_TERM]);
+    }
+
+    #[test]
+    fn tree_insert_find_and_delete_preserve_payload_guard() {
+        let mut tree = FPTree::<i32>::new();
+        let key = IndexFingerprint::from_samples(vec![10]);
+
+        assert_eq!(tree.insert(&key).store_payload(7), None);
+        assert_eq!(tree.child_count(), 1);
+        assert_eq!(tree.find(&key).map(FPTree::payload_nodes), Some(1));
+
+        tree.delete(&key);
+        assert_eq!(tree.find(&key).map(FPTree::payload_nodes), Some(1));
+
+        tree.find_mut(&key).unwrap().clear_payload();
+        tree.delete(&key);
+        assert!(tree.find(&key).is_none());
+        assert_eq!(tree.child_count(), 0);
+    }
+
+    #[test]
+    fn ordinary_fingerprint_search_keeps_c_match_and_unify_alternatives() {
+        let data = test_signature();
+        let query = term(data.f, &[leaf(data.a), leaf(data.b)]);
+        let variable = var(-1);
+        let other = term(data.g, &[leaf(data.a)]);
+        let mut index = FPIndex::new(index_fp2_create, &data.sig);
+
+        index.insert(&query).store_payload(1);
+        index.insert(&variable).store_payload(2);
+        index.insert(&other).store_payload(3);
+
+        let mut unifiable = Vec::new();
+        assert_eq!(index.find_unifiable(&query, &mut unifiable), 2);
+        assert_eq!(payload_values(&unifiable), vec![1, 2]);
+
+        let mut matchable = Vec::new();
+        assert_eq!(index.find_matchable(&query, &mut matchable), 1);
+        assert_eq!(payload_values(&matchable), vec![1]);
+    }
+
+    #[test]
+    fn not_in_term_and_below_var_follow_different_match_and_unify_rules() {
+        let data = test_signature();
+        let mut tree = FPTree::<i32>::new();
+        let not_in_term = IndexFingerprint::from_samples(vec![data.f, NOT_IN_TERM]);
+        let below_var = IndexFingerprint::from_samples(vec![data.f, BELOW_VAR]);
+
+        tree.insert(&not_in_term).store_payload(1);
+        tree.insert(&below_var).store_payload(2);
+
+        let mut unifiable = Vec::new();
+        assert_eq!(
+            tree.find_unifiable(&not_in_term, &data.sig, &mut unifiable),
+            2
+        );
+        assert_eq!(payload_values(&unifiable), vec![1, 2]);
+
+        let mut matchable = Vec::new();
+        assert_eq!(
+            tree.find_matchable(&not_in_term, &data.sig, &mut matchable),
+            1
+        );
+        assert_eq!(payload_values(&matchable), vec![1]);
+    }
+
+    #[test]
+    fn discrimination_tree_search_skips_indexed_and_query_subterms() {
+        let data = test_signature();
+        let exact = term(data.f, &[leaf(data.a), leaf(data.b)]);
+        let other = term(data.g, &[leaf(data.a)]);
+        let variable = var(-1);
+        let mut index = FPIndex::new(index_dt_create, &data.sig);
+
+        index.insert(&exact).store_payload(1);
+        index.insert(&other).store_payload(2);
+        index.insert(&variable).store_payload(3);
+
+        let mut variable_query = Vec::new();
+        assert_eq!(index.find_matchable(&variable, &mut variable_query), 3);
+        assert_eq!(payload_values(&variable_query), vec![3, 1, 2]);
+
+        let mut concrete_query = Vec::new();
+        assert_eq!(index.find_unifiable(&exact, &mut concrete_query), 2);
+        assert_eq!(payload_values(&concrete_query), vec![1, 3]);
+
+        let mut concrete_match = Vec::new();
+        assert_eq!(index.find_matchable(&exact, &mut concrete_match), 1);
+        assert_eq!(payload_values(&concrete_match), vec![1]);
+    }
+
+    #[test]
+    fn wrapper_find_delete_leaves_and_distribution_match_c_shapes() {
+        let data = test_signature();
+        let f = leaf(data.f);
+        let g = leaf(data.g);
+        let variable = var(-1);
+        let mut index = FPIndex::new(index_fp1_create, &data.sig);
+
+        index.insert(&f).store_payload(1);
+        index.insert(&g).store_payload(2);
+        index.insert(&variable).store_payload(3);
+        assert_eq!(index.find(&f).map(FPTree::payload_nodes), Some(1));
+
+        let mut leaves = Vec::new();
+        assert_eq!(index.collect_leaves(&mut leaves), 3);
+
+        let distrib = index.collect_distrib();
+        assert_eq!(distrib.nodes, 4);
+        assert_eq!(distrib.leaves, 3);
+        assert!((distrib.average - 1.0).abs() < f64::EPSILON);
+        assert!(distrib.stddev.abs() < f64::EPSILON);
+        assert_eq!(
+            distrib.data_string(),
+            "    4 nodes,     3 leaves,   1.00+/-0.000 terms/leaf"
+        );
+
+        index.delete(&g);
+        assert!(index.find(&g).is_some());
+        index.find(&g).unwrap().payload().unwrap();
+        index
+            .root_mut()
+            .find_mut(&index_fp1_create(&g))
+            .unwrap()
+            .clear_payload();
+        index.delete(&g);
+        assert!(index.find(&g).is_none());
+    }
+}

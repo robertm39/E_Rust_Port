@@ -21,6 +21,11 @@ pub struct IndexFingerprint {
 
 impl IndexFingerprint {
     #[must_use]
+    pub fn from_samples(samples: Vec<FunCode>) -> Self {
+        fingerprint_from_sample_vec(samples)
+    }
+
+    #[must_use]
     pub fn raw(&self) -> &[FunCode] {
         &self.raw
     }

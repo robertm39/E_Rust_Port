@@ -1,5 +1,6 @@
 pub mod acterms;
 pub mod dbvars;
+pub mod fp_index;
 pub mod functypes;
 pub mod garbage_coll;
 pub mod idx_fp;
