@@ -62,6 +62,7 @@ Rust files:
 - `src/terms/simpletypes.rs`
 - `src/terms/termcellstore.rs`
 - `src/terms/termcpos.rs`
+- `src/terms/termfunc.rs`
 - `src/terms/termpos.rs`
 - `src/terms/termtrees.rs`
 - `src/terms/termtypes.rs`
@@ -130,6 +131,7 @@ Original C references:
 - [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
 - [`TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`](c_source_docs/TERMS/cte_termcellstore.md)
 - [`TERMS/cte_termcpos.h`, `TERMS/cte_termcpos.c`](c_source_docs/TERMS/cte_termcpos.md)
+- [`TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`](c_source_docs/TERMS/cte_termfunc.md)
 - [`TERMS/cte_termpos.h`, `TERMS/cte_termpos.c`](c_source_docs/TERMS/cte_termpos.md)
 - [`TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`](c_source_docs/TERMS/cte_termtrees.md)
 - [`TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`](c_source_docs/TERMS/cte_termtypes.md)
@@ -191,6 +193,7 @@ Implemented behavior:
 - Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
 - Term-cell store helpers from `cte_termcellstore`, including exact hash size/mask constants, C-shaped f-code and argument-pointer hashing, hashed splay-tree buckets, insert/find/extract/delete accounting for entries and argument counts, property mutation across all buckets, node counting, GC sweep by `TPGarbageFlag` state, distribution printing, and explicit store exit.
 - Compact term-position helpers from `cte_termcpos`, including `TermCPos` root-position semantics, left-to-right preorder subterm lookup, missing-position handling, and Rust-side conversions between explicit and compact positions for future callers.
+- Initial unshared term-function helpers from `cte_termfunc`, including variable-code printing, variable-normalization discriminants, flatness tests, structural equality with and without dereferencing, prefix structural equality, structural-weight and lexicographic comparisons, subterm checks, default/function-sum/nonlinear/symbol-type/DAG weights, depth, definition-term recognition, f-code and variable/ground queries, max variable-code search, variable/f-code collection, left-to-right linearization, the inherited adjacent-only duplicate check, prefix creation, simple argument application, untyped checks, DB-closed checks, and order computation.
 - Explicit term-position helpers from `cte_termpos`, including the two-stack-slot component shape, top-position detection, subterm lookup via the last stored superterm/index pair, leftmost-innermost first/next traversal order, C-shaped dotted position printing, and address-oriented debug printing.
 - Term-tree helpers from `cte_termtrees`, including top-level comparison by f-code, higher-order type identity, arity, and argument handle identity; splay-tree insert/find/extract/delete behavior; root movement on lookup; tree property mutation; node counting; and traversal collection for store sweeps.
 - Foundational term-cell helpers from `cte_termtypes`, including exact term-property bits and default weights, safe shared term handles, top/constant allocation, shallow top copying, mutable bindings/types/arguments/rewrite fields, C-shaped free-variable/phony-application/lambda predicates, dereference-limited traversal for ordinary free-variable bindings, recursive term and variable property walkers, interpreted-symbol search, stack property helpers, and prefix checks based on handle identity.
@@ -288,6 +291,8 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_termcpos.h` declares `TermCPosFromTermPos` and `TermPosFromTermCPos`, but the paired C source does not define them. Rust provides explicit conversion helpers for internal use; compare linker/caller expectations before treating them as C-compatible exported surface.
 - `cte_termtypes` mixes semantic term fields with allocation/tree-link fields in one flexible-array struct and mutates shared-term properties during traversals. Rust keeps the observable mutability but separates storage through safe handles; once term banks are complete, revisit whether property mutation should be scoped to explicit traversal contexts.
 - `cte_termtypes` applied-variable dereference allocates and inserts normalized cache terms through the owning term bank. Rust currently panics on that path until term-bank ownership and lambda normalization are available; preserve this as a clear integration boundary rather than silently returning stale applied variables.
+- `TermArrayNoDuplicates` in `cte_termfunc` copies and sorts the input array, but then compares adjacent entries in the original array rather than the sorted copy. Rust preserves the observable adjacent-only check for now; revisit when callers that depend on true duplicate detection are ported.
+- Several `cte_termfunc` higher-order paths call normalization, beta/lambda, formula-printing, term-bank application encoding, or parser routines that are not ported yet. Rust's initial `termfunc` slice covers the tree-local helpers and keeps applied-variable normalization conservative until term banks and lambda support land.
 - `cte_termvars` fresh variables are only guaranteed fresh if direct f-code allocation is not mixed with fresh allocation. Rust mirrors the counter/stack behavior; parser and clausification callers should avoid depending on stronger freshness than the C comments promise.
 - `VarBankCollectVars` in C prints progress directly to stdout and loops with `i < max_var`, which misses a variable stored exactly at `max_var`. Rust preserves the loop-bound quirk but omits the debug prints; compare reference call sites before deciding whether collection should be corrected.
 - `cte_typebanks` hashes and orders shared compound types partly through raw argument pointer addresses, so traversal order for `TypeBankAppEncodeTypes` can depend on allocator layout. Rust prints application-encoding declarations in type UID order for deterministic output; compare against reference tests before deciding whether allocator-shaped order needs to be emulated.

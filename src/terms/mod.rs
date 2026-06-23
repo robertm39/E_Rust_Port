@@ -4,6 +4,7 @@ pub mod simplesorts;
 pub mod simpletypes;
 pub mod termcellstore;
 pub mod termcpos;
+pub mod termfunc;
 pub mod termpos;
 pub mod termtrees;
 pub mod termtypes;
