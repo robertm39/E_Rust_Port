@@ -13,6 +13,7 @@ pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod permastrings;
 pub mod plist;
+pub mod plocalstacks;
 pub mod pqueue;
 pub mod properties;
 pub mod pstacks;
