@@ -16,7 +16,9 @@ Rust files:
 - `src/basics/fixdarrays.rs`
 - `src/basics/floattrees.rs`
 - `src/basics/intmap.rs`
+- `src/basics/memory.rs`
 - `src/basics/min_heap.rs`
+- `src/basics/newmem.rs`
 - `src/basics/numtrees.rs`
 - `src/basics/numxtrees.rs`
 - `src/basics/objmaps.rs`
@@ -58,7 +60,9 @@ Original C references:
 - [`BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`](c_source_docs/BASICS/clb_fixdarrays.md)
 - [`BASICS/clb_floattrees.h`, `BASICS/clb_floattrees.c`](c_source_docs/BASICS/clb_floattrees.md)
 - [`BASICS/clb_intmap.h`, `BASICS/clb_intmap.c`](c_source_docs/BASICS/clb_intmap.md)
+- [`BASICS/clb_memory.h`, `BASICS/clb_memory.c`](c_source_docs/BASICS/clb_memory.md)
 - [`BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`](c_source_docs/BASICS/clb_min_heap.md)
+- [`BASICS/clb_newmem.h`, `BASICS/clb_newmem.c`](c_source_docs/BASICS/clb_newmem.md)
 - [`BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`](c_source_docs/BASICS/clb_numtrees.md)
 - [`BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`](c_source_docs/BASICS/clb_numxtrees.md)
 - [`BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`](c_source_docs/BASICS/clb_objmaps.md)
@@ -99,6 +103,7 @@ Implemented behavior:
 - `FixedDArray` fixed-size integer vector helpers from `clb_fixdarrays`, including initialization, component-wise add/subtract/weighted-add/min/max, copying, and C-shaped debug printing.
 - Shared `IntOrP` integer/pointer payload shape from `clb_defines`, represented as a checked Rust enum for containers that mix long integer tags and pointer-like handles.
 - `IntMap` multi-representation integer map behavior from `clb_intmap`, including empty/single/array/tree states, density-triggered representation switching, `get_ref` slot creation with null values, assignment and deletion return behavior, entry-count inflation for repeated null array references, inclusive sorted range iteration over non-null values, and debug printing.
+- Memory allocation facade behavior from `clb_memory` and `clb_newmem`, including secure allocation/reallocation counters, exact-size and 16-byte aligned free-list policies, newmem chunk population, secure string duplication with trailing NUL bytes, zero-initialized integer arrays, free-list flushing, and debug/free-list stats rendering.
 - `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
 - Object tree/map behavior from `clb_objtrees` and `clb_objmaps`, including comparison-based object storage, duplicate-preserving object insertions, mutable root-like lookups, object extraction/root extraction, unique merges, map store/get-ref/find/extract semantics, null-value map slots, sorted traversal, and explicit free-with-deleter hooks.
 - Partial-ordering helpers from `clb_partial_orderings`, including exact `CompareResult` and `HoOrderKind` discriminants, quasi-order conversion, inverse relation handling, and the C comparison-symbol table.
@@ -129,6 +134,7 @@ Known gaps:
 - The prover core, parser, clausification, saturation loop, indexing, ordering, heuristics, proof output, resource limits, and most CLI options are not implemented yet.
 - Scanner support is currently limited to string sources and does not yet implement file streams, stacked include handling, or `ScannerSetFormat` format inference.
 - `IntMap` preserves the C representation-state decisions but uses safe Rust-owned storage; the C implementation's hidden `PDRangeArr` growth during some read/delete paths and inflated null-slot entry counts should be evaluated later as compatibility risks versus cleanup opportunities.
+- `Memory`/`NewMem` expose safe byte-buffer allocation and accounting rather than raw `malloc` pointers; the freelist and chunk policies are modeled for sizing/reuse behavior, but allocator-address identity and true uninitialized memory are intentionally not exposed.
 - `PList` uses safe arena handles instead of raw self-linked pointers; this preserves cell moves between anchors but does not yet reuse freed cell slots like the C allocator/free-list path.
 - `PLocalTaggedStack` models the portable non-`TAGGED_POINTERS` two-slot representation; raw low-bit pointer tagging is intentionally not used in safe Rust and should be reconsidered only if profiling proves the extra slot accounting matters.
 - `PQueue` preserves the observable circular-buffer behavior, but the C implementation exposes `PQueueGrow` even though its copy logic is only valid after a store/bury creates a full ring; the Rust port keeps growth internal until a real direct caller appears.
@@ -166,6 +172,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, `PTree`, and `QuadTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
 - `RegMem` in C stores raw allocation pointers in a global `PTree` and frees them at process shutdown; the Rust handle registry preserves cleanup semantics, but later code should prefer explicit owner structs where persistent scratch memory can be scoped.
 - `IntMap` keeps C density transitions and null-slot quirks, but its hidden read/delete-time array growth in C is a likely cleanup target if compatibility tests show no observable dependency.
+- `clb_memory` and `clb_newmem` rely on exact-size frees, debug poisoning words, and raw reuse of uninitialized blocks; Rust keeps initialized buffers and explicit policies, so term/clause arena work should decide whether a specialized typed allocator is needed for comparable performance.
 - Permanent strings use `Arc<str>` to keep Rust handles valid after registry clearing; later term/signature ownership should decide whether stable arena handles are a better identity model.
 - `clb_simple_stuff` includes historical global-state behavior in `ProblemType` and JKISS random generation; the Rust port should centralize these states before parallel parsing or solving is introduced.
 - Error handling is currently represented with structured `Diagnostic` values in many Rust paths; final executable compatibility still needs exact fatal-error stream, wording, and exit-status behavior.
