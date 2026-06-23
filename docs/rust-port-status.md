@@ -42,6 +42,7 @@ Rust files:
 - `src/basics/verbose.rs`
 - `src/clauses/clause_props.rs`
 - `src/clauses/clauseinfo.rs`
+- `src/clauses/eqn_props.rs`
 - `src/clauses/mod.rs`
 - `src/inout/basicparser.rs`
 - `src/inout/commandline.rs`
@@ -123,6 +124,7 @@ Original C references:
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
 - [`CLAUSES/ccl_clauseinfo.h`, `CLAUSES/ccl_clauseinfo.c`](c_source_docs/CLAUSES/ccl_clauseinfo.md)
 - [`CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`](c_source_docs/CLAUSES/ccl_clauses.md)
+- [`CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`](c_source_docs/CLAUSES/ccl_eqn.md)
 - [`INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`](c_source_docs/INOUT/cio_basicparser.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
 - [`INOUT/cio_filevars.h`, `INOUT/cio_filevars.c`](c_source_docs/INOUT/cio_filevars.md)
@@ -197,6 +199,7 @@ Implemented behavior:
 - Verbose-level helpers from `clb_verbose`, including the global `Verbose` default, nonzero level-1 gate, `>= 2` and `>= 10` gates, closure helpers for macro-like conditional execution, and `VERBOUT`/`VERBOUTARG` formatting with explicit flushes.
 - Clause source-info metadata from `ccl_clauseinfo`, including optional copied name/source fields, empty `-1` line/column allocation, TSTP/PCL source rendering with unknown and line/column fallbacks, null-info no-op rendering, and C-shaped generated identifier namespace/counter extraction.
 - Initial clause/formula property helpers from `ccl_clauses`, including exact `FormulaProperties` bit values, property set/delete/give/query/any-set operations, TPTP type masking and setting, TPTP type combination precedence, CSSCPA source bit encoding, and clause-type identifier mapping including higher-order `definition` lambda-definition marking.
+- Initial equation/literal property helpers from `ccl_eqn`, including exact `EqnProperties` values, property set/delete/flip/give/query/any-set operations, polarity/orientation/maximality/equational/dominated/selected query helpers, property-equivalence checks, `EqnSide` and pattern-equation direction discriminants, and the `equal` predicate spelling.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - Initial stream and scanner support for string and explicit file sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, position formatting, `ScannerSetFormat`-style explicit/auto format state, automatic `include_key` file splicing, C-style file `default_dir` composition with `TPTP` fallback, and explicit `ScannerParseInclude`-style include parsing with selector and skip-name trees.
@@ -426,6 +429,8 @@ These notes are not permission to diverge during porting. They identify inherite
 - `ClauseInfoGetIdCounter` inherits C `strtol` acceptance for counters, including an empty counter becoming `0`, signs being accepted, and overflow saturating while `errno` is ignored. Rust mirrors those edge cases for compatibility with stored proof identifiers.
 - `TPTPTypesCombine` only treats an exact `CPTypeAxiom` value as replaceable; an axiom value carrying other bits, such as `CPIsLambdaDef`, follows the later conjecture override or otherwise remains unchanged. Rust preserves the macro precedence and should revisit it when formula role merging is integrated.
 - `ClauseSetCSSCPASource` clears only the four CSSCPA bits and then sets `prop*CP_CSSCPA_1` without range checking, so values outside `0..=15` can set unrelated clause flags. Rust keeps the unchecked encoding for now; callers should be audited before exposing a public source enum.
+- `EPIsSplitLit` in `ccl_eqn.h` is `65636`, not the next clean power-of-two bit. That overlaps `EPIsStrictlyMaximal`, `EPMaxIsUpToDate`, and `EPHasEquiv`; Rust preserves the literal value, but split-literal callers should be audited before relying on independent bit semantics.
+- `EPDominates` is an alias for `EPIsDominated`, with comments saying the bit is double-used in potentially maximal/minimal clauses. Rust keeps the alias; later literal-ordering code should make the contextual meaning explicit at call sites.
 - `SubstComputeMatch` checks repeated matcher-variable bindings with raw pointer identity, so unshared but structurally equal target subterms do not satisfy a repeated variable. Rust preserves this with handle identity; revisit only after parser and term-bank sharing make the observable caller surface clear.
 - `SubstComputeMgu` documents that its two inputs must be variable-disjoint and has assert-only sort consistency checks for non-variable terms with matching function codes. Rust keeps those as internal preconditions; a later public API may want structured errors at untrusted boundaries.
 - The initial `cte_termbanks` slice does not store a back-pointer from each term to its owning bank. The C field is only active under LFHO; add a typed owner handle when global applied-variable dereferencing and lambda normalization are ported.
