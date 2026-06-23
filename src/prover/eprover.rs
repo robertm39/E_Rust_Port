@@ -2,6 +2,7 @@ use std::fmt;
 use std::io::{self, Write};
 
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState,
 };
@@ -211,6 +212,14 @@ or show the set unsatisfiable.\n\n"
 }
 
 fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EProverError> {
+    let verbose = i32::try_from(config.verbose).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!("--verbose argument {} is out of int range", config.verbose),
+        )
+    })?;
+    set_verbose_level(verbose);
+
     if config.flags.contains(EProverFlag::PrintPid) {
         writeln!(stdout, "# Pid: {}", std::process::id())?;
     }
@@ -229,6 +238,13 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{process_options, run, EProverAction};
     use crate::basics::error::ErrorCode;
+    use crate::basics::verbose::{set_verbose_level, verbose_level};
+    use std::sync::{Mutex, OnceLock};
+
+    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn process_options_recognizes_version_action() {
@@ -274,5 +290,38 @@ mod tests {
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("Usage: eprover [options] [files]"));
         assert!(output.contains("--version"));
+    }
+
+    #[test]
+    fn run_applies_verbose_option_to_global_gate() {
+        let _guard = global_test_lock();
+        set_verbose_level(0);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(["eprover", "--verbose=2"], &mut stdout, &mut stderr).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(verbose_level(), 2);
+        set_verbose_level(0);
+    }
+
+    #[test]
+    fn run_rejects_verbose_values_outside_c_int_range() {
+        let _guard = global_test_lock();
+        set_verbose_level(0);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--verbose=2147483648"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error.message().contains("out of int range"));
+        assert_eq!(verbose_level(), 0);
     }
 }
