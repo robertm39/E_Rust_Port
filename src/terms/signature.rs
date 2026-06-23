@@ -179,6 +179,12 @@ impl FuncCell {
 }
 
 #[derive(Clone, Debug)]
+struct LetScopeEntry {
+    name: String,
+    old_id: Option<FunCode>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Signature {
     alpha_ranks_valid: bool,
     size: usize,
@@ -209,6 +215,7 @@ pub struct Signature {
     newpred_count: i64,
     newdef_count: i64,
     distinct_props: FunctionProperties,
+    let_scopes: Vec<Vec<LetScopeEntry>>,
 }
 
 impl Signature {
@@ -249,6 +256,7 @@ impl Signature {
             newpred_count: 0,
             newdef_count: 0,
             distinct_props: FP_DISTINCT_PROP,
+            let_scopes: Vec::new(),
         };
 
         let true_code = signature.insert_id_for_problem("$true", 0, true, ProblemType::FirstOrder);
@@ -750,6 +758,29 @@ impl Signature {
         code
     }
 
+    /// Inserts a let-local symbol without adding it to the signature name index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the type's maximum function arity does not fit in `i32`,
+    /// matching the C helper's fixed-width arity field.
+    pub fn insert_let_id(&mut self, name: &str, type_: Type) -> FunCode {
+        if usize::try_from(self.f_count).is_ok_and(|count| count == self.size - 1) {
+            self.size *= DEFAULT_SIGNATURE_GROW;
+        }
+
+        let arity = i32::try_from(type_get_max_arity(&type_))
+            .expect("let-local symbol arity fits signature arity");
+        self.f_count += 1;
+        let code = self.f_count;
+        let mut cell = FuncCell::new(name, name, arity);
+        cell.type_ = Some(type_);
+        cell.properties.insert(FP_TYPE_FIXED);
+        self.f_info.push(cell);
+        self.alpha_ranks_valid = false;
+        code
+    }
+
     pub fn insert_fof_op(&mut self, name: &str, arity: i32) -> FunCode {
         let f_code = self.insert_id(name, arity, true);
         self.set_func_prop(f_code, FP_FOF_OP);
@@ -1054,6 +1085,49 @@ impl Signature {
             self.pop_id();
         }
         removed
+    }
+
+    /// Enters a let scope whose local declarations override indexed symbols.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any declaration code is not present in the signature, matching
+    /// the C helper's valid-f-code precondition.
+    pub fn enter_let_scope(&mut self, type_decl_codes: &[FunCode]) {
+        let mut scope = Vec::new();
+        for &id in type_decl_codes {
+            let name = self
+                .find_name(id)
+                .expect("let-local function code has a printable name")
+                .to_owned();
+            let old_id = match self.find_f_code(&name) {
+                0 => None,
+                old_id => Some(old_id),
+            };
+            self.f_index.insert(name.clone(), id);
+            scope.push(LetScopeEntry { name, old_id });
+        }
+        self.let_scopes.push(scope);
+    }
+
+    /// Exits the innermost let scope.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no active let scope, matching the C helper's stack
+    /// pop precondition.
+    pub fn exit_let_scope(&mut self) {
+        let scope = self
+            .let_scopes
+            .pop()
+            .expect("cannot exit let scope when no scope is active");
+        for entry in scope.into_iter().rev() {
+            if let Some(old_id) = entry.old_id {
+                self.f_index.insert(entry.name, old_id);
+            } else {
+                self.f_index.remove(&entry.name);
+            }
+        }
     }
 
     #[must_use]
@@ -1502,6 +1576,43 @@ mod tests {
         assert_eq!(sig.f_count(), 0);
         assert_eq!(sig.pop_id(), 0);
         assert_eq!(sig.size(), DEFAULT_SIGNATURE_SIZE);
+    }
+
+    #[test]
+    fn let_ids_are_unindexed_until_scope_and_restore_shadowed_names() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let global_x = sig.insert_id_for_problem("x", 0, false, ProblemType::FirstOrder);
+        sig.declare_final_type(global_x, individual.clone())
+            .unwrap();
+        let local_x = sig.insert_let_id("x", bool_type.clone());
+        let local_y = sig.insert_let_id(
+            "y",
+            alloc_arrow_type(vec![individual.clone(), bool_type.clone()]),
+        );
+
+        assert_eq!(sig.find_f_code("x"), global_x);
+        assert_eq!(sig.find_f_code("y"), 0);
+        assert_eq!(sig.find_arity(local_y), Some(1));
+        assert!(sig.query_prop(local_x, FP_TYPE_FIXED));
+        assert_eq!(sig.get_type(local_x), Some(&bool_type));
+
+        sig.enter_let_scope(&[local_x, local_y]);
+        assert_eq!(sig.find_f_code("x"), local_x);
+        assert_eq!(sig.find_f_code("y"), local_y);
+
+        let nested_x = sig.insert_let_id("x", individual);
+        sig.enter_let_scope(&[nested_x]);
+        assert_eq!(sig.find_f_code("x"), nested_x);
+
+        sig.exit_let_scope();
+        assert_eq!(sig.find_f_code("x"), local_x);
+        assert_eq!(sig.find_f_code("y"), local_y);
+
+        sig.exit_let_scope();
+        assert_eq!(sig.find_f_code("x"), global_x);
+        assert_eq!(sig.find_f_code("y"), 0);
     }
 
     #[test]
