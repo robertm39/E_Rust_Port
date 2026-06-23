@@ -6,7 +6,9 @@ use crate::terms::functypes::FunCode;
 use crate::terms::garbage_coll::GcAdmin;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_NAMED_LAMBDA_CODE};
-use crate::terms::simpletypes::{Type, TypeUniqueId};
+use crate::terms::simpletypes::{
+    alloc_arrow_type, flatten_type, type_is_predicate, Type, TypeUniqueId,
+};
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
     term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_standard_weight,
@@ -778,6 +780,56 @@ impl TermBank {
 
     pub fn create_const_term(&mut self, f_code: FunCode) -> Result<Term, Diagnostic> {
         let term = Term::const_cell_alloc(f_code);
+        self.insert(&term, DerefType::Never)
+    }
+
+    /// Creates and inserts a new Skolem term or definition atom.
+    ///
+    /// The generated symbol type is built from `variables` followed by
+    /// `ret_type`, flattened, shared in the signature type bank, and declared
+    /// on the generated `esk`/`epred` symbol like C `TermAllocNewSkolem`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the variable count does not fit in a C `int`, or if any
+    /// variable lacks a type.
+    pub fn alloc_new_skolem(
+        &mut self,
+        variables: &[Term],
+        ret_type: Option<&Type>,
+    ) -> Result<Term, Diagnostic> {
+        let ret_type = ret_type
+            .cloned()
+            .unwrap_or_else(|| self.sig.type_bank().i_type());
+        let arity = i32::try_from(variables.len()).expect("skolem arity fits in i32");
+        let type_ = if variables.is_empty() {
+            flatten_type(&ret_type)
+        } else {
+            let mut args = Vec::with_capacity(variables.len() + 1);
+            for variable in variables {
+                args.push(variable.type_().expect("skolem variable has a type"));
+            }
+            args.push(ret_type.clone());
+            flatten_type(&alloc_arrow_type(args))
+        };
+        let shared_type = self.sig.type_bank_mut().insert_type_shared(type_);
+        let f_code = if type_is_predicate(&shared_type) {
+            self.sig.get_new_predicate_code(arity)
+        } else {
+            self.sig.get_new_skolem_code(arity)
+        };
+        self.sig.declare_type(f_code, shared_type)?;
+
+        let term = if variables.is_empty() {
+            Term::const_cell_alloc(f_code)
+        } else {
+            let term = Term::top_alloc(f_code, variables.len());
+            for (index, variable) in variables.iter().enumerate() {
+                term.set_argument(index, variable.clone());
+            }
+            term
+        };
+        term.set_type(Some(ret_type));
         self.insert(&term, DerefType::Never)
     }
 
@@ -1641,6 +1693,49 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.f_code(), a);
+    }
+
+    #[test]
+    fn alloc_new_skolem_creates_typed_function_terms_from_variables() {
+        let sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let mut bank = TermBank::new(sig).unwrap();
+        let x = Term::const_cell_alloc(-2);
+        x.set_type(Some(i_type.clone()));
+        let y = Term::const_cell_alloc(-4);
+        y.set_type(Some(i_type.clone()));
+
+        let skolem = bank
+            .alloc_new_skolem(&[x.clone(), y.clone()], Some(&i_type))
+            .unwrap();
+
+        assert_eq!(bank.signature().find_name(skolem.f_code()), Some("esk1_2"));
+        assert_eq!(skolem.type_(), Some(i_type.clone()));
+        assert!(skolem.is_shared());
+        assert_eq!(skolem.argument(0).unwrap().f_code(), x.f_code());
+        assert_eq!(skolem.argument(1).unwrap().f_code(), y.f_code());
+        let declared = bank.signature().get_type(skolem.f_code()).unwrap();
+        assert_eq!(declared.arity(), 3);
+        assert_eq!(declared.args()[0], i_type);
+    }
+
+    #[test]
+    fn alloc_new_skolem_uses_predicate_codes_for_bool_return_type() {
+        let sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let mut bank = TermBank::new(sig).unwrap();
+        let x = Term::const_cell_alloc(-2);
+        x.set_type(Some(i_type));
+
+        let predicate = bank.alloc_new_skolem(&[x], Some(&bool_type)).unwrap();
+
+        assert_eq!(
+            bank.signature().find_name(predicate.f_code()),
+            Some("epred1_1")
+        );
+        assert!(bank.signature().is_predicate(predicate.f_code()));
+        assert_eq!(predicate.type_(), Some(bool_type));
     }
 
     #[test]
