@@ -115,7 +115,7 @@ pub fn alloc_arrow_type_copy_args(args: &[Type]) -> Type {
     alloc_arrow_type(args.to_vec())
 }
 
-fn type_alloc(f_code: TypeConsCode, args: Vec<Type>) -> Type {
+pub(crate) fn type_alloc(f_code: TypeConsCode, args: Vec<Type>) -> Type {
     Type(Rc::new(TypeCell {
         f_code,
         args,
