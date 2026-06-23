@@ -2,6 +2,7 @@ pub mod axiomsorter;
 pub mod clause;
 pub mod clause_props;
 pub mod clausecpos;
+pub mod clausefunc;
 pub mod clauseinfo;
 pub mod clausepos;
 pub mod clausepos_tree;

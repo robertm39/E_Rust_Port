@@ -42,6 +42,7 @@ Rust files:
 - `src/basics/verbose.rs`
 - `src/clauses/clause.rs`
 - `src/clauses/clausecpos.rs`
+- `src/clauses/clausefunc.rs`
 - `src/clauses/clausepos.rs`
 - `src/clauses/clausepos_tree.rs`
 - `src/clauses/clause_props.rs`
@@ -135,6 +136,7 @@ Original C references:
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
 - [`CLAUSES/ccl_axiomsorter.h`, `CLAUSES/ccl_axiomsorter.c`](c_source_docs/CLAUSES/ccl_axiomsorter.md)
 - [`CLAUSES/ccl_clausecpos.h`, `CLAUSES/ccl_clausecpos.c`](c_source_docs/CLAUSES/ccl_clausecpos.md)
+- [`CLAUSES/ccl_clausefunc.h`, `CLAUSES/ccl_clausefunc.c`](c_source_docs/CLAUSES/ccl_clausefunc.md)
 - [`CLAUSES/ccl_clauseinfo.h`, `CLAUSES/ccl_clauseinfo.c`](c_source_docs/CLAUSES/ccl_clauseinfo.md)
 - [`CLAUSES/ccl_clausepos_tree.h`, `CLAUSES/ccl_clausepos_tree.c`](c_source_docs/CLAUSES/ccl_clausepos_tree.md)
 - [`CLAUSES/ccl_clausepos.h`, `CLAUSES/ccl_clausepos.c`](c_source_docs/CLAUSES/ccl_clausepos.md)
@@ -222,6 +224,7 @@ Implemented behavior:
 - `SysDate` logical-time helpers from `clb_sysdate`, including creation/invalid sentinels, ordering/equality/maximum macros, increment mutation order, overflow reporting instead of undefined signed overflow, and C-shaped unsigned-long printing.
 - Verbose-level helpers from `clb_verbose`, including the global `Verbose` default, nonzero level-1 gate, `>= 2` and `>= 10` gates, closure helpers for macro-like conditional execution, and `VERBOUT`/`VERBOUTARG` formatting with explicit flushes.
 - Compact clause-position helpers from `ccl_clausecpos`, including weighted term-position packing, weighted clause-position packing over literal standard weights and right-side offsets, unpacking into full `ClausePos` cursors, compact-position subterm lookup, first/next literal compact-position iteration, and relative literal-position splitting.
+- Clause-local helpers from `ccl_clausefunc`, including index-based literal removal with cached count/weight updates, literal sign flipping with cached polarity counts, duplicate and trivially false literal cleanup, AC-resolved negative literal cleanup, non-orientable unit simplify-reflect tests, and canonical clause comparison by structural weight.
 - Clause source-info metadata from `ccl_clauseinfo`, including optional copied name/source fields, empty `-1` line/column allocation, TSTP/PCL source rendering with unknown and line/column fallbacks, null-info no-op rendering, and C-shaped generated identifier namespace/counter extraction.
 - Clause-position cursors from `ccl_clausepos`, including semi-initialized allocation, clause-backed and standalone literal positions, designated/other side lookup, subterm lookup through `TermPos`, C-shaped clause-position printing, positive/maximal literal cursor search, maximal-side traversal with unoriented right-side visits, leftmost-innermost maximal-subterm traversal, and rewrite-chain sequence extraction over term rewrite links.
 - Clause-position trees from `ccl_clausepos_tree`, including clause-to-compact-position association cells, pointer-identity-style clause comparison, duplicate-collapsing position insertion, single-position deletion with empty-cell removal, whole-clause deletion, sorted compact-position storage, and debug rendering of stored clause identifiers and positions.
@@ -331,6 +334,7 @@ Known gaps:
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
 - `FuncSymbParse`, `TermParseOperator`, term-symbol signature insertion, unshared term parsing, and simple term-bank parsing are present for string scanners, but full `TBTermParseReal`/formula/list/`let`/`ite` parser integration and scanner file/include handling remain incomplete.
 - `ccl_clauses` parser/printer/PCL/TSTP rendering, OCB-based maximal-term and multiset comparison helpers, evaluation lists, clause-set linkage, HO definition extraction, skolemization, and choice-recognition helpers are still deferred until formula printing/parsing, ordering control, new-evaluation, clause-set, lambda/HO-CSU, and choice-symbol infrastructure are available.
+- `ccl_clausefunc` clause-set canonization, archive copies, orphan deletion, naked Boolean-variable elimination, injectivity recognition/replacement, stack printing, derivation updates, and proof-documentation side effects are still deferred until clause sets, formula wrappers, derivations, full printing, and injectivity-definition ownership are ported.
 - `ccl_condensation` derivation-stack and proof-documentation side effects are still deferred until `ccl_derivation` and inference documentation are ported.
 - `ccl_eqn` orientation/comparison helpers that require `OCB`/ordering control, app-encoding printing, type-distribution wrappers, term-weight-extension literal wrappers, and split-mod standard weights are still deferred until the ordering, printing, and signature special-weight layers are available.
 - `ccl_eqnlist` orientation/maximal-literal helpers that require `OCB`, print/parse/TSTP rendering, type-distribution wrappers, lambda normalization, and exact no-copy pointer-stack conversions are still deferred until ordering, printing/parsing, type-distribution, and lambda-normalization layers are available.
@@ -480,6 +484,8 @@ These notes are not permission to diverge during porting. They identify inherite
 - `ClauseCollectSubterms` differs from `EqnListCollectSubterms` by clearing `TPOpFlag` on all newly collected terms before returning. Rust preserves the cleanup in the clause wrapper; callers should prefer the clause helper when they need temporary collection without leaving visited flags set.
 - `ClauseIsSemFalse` and `ClauseIsSemEmpty` return true for an empty clause because their C loops have no failing literal. Rust preserves the vacuous truth result; caller-level semantics should decide whether empty clauses deserve a separate explicit test in user-facing code.
 - `ClauseStructWeightCompare` asserts that the cached `weight` field equals `ClauseStandardWeight` before comparing. Rust exposes the cached weight and comparison but does not force recomputation; callers that mutate literals should update `weight` or use a comparison path that recomputes it.
+- `ClauseRemoveSuperfluousLiterals` and `ClauseRemoveACResolved` recompute literal counts but do not update the cached `weight` field in C, unlike `ClauseRemoveLiteralRef`. Rust recomputes weight after those cleanup helpers to preserve the local cached-weight invariant used by existing comparison/subsumption assertions; revisit this if reference call paths depend on stale weights.
+- `ClauseRemoveLiteral` removes by raw literal pointer in C. Rust currently offers value/index-based removal because literals are owned in a vector; replace this with stable literal handles if indexes or cloned literals become ambiguous in shared clause structures.
 - `try_condensation` accepts a `swap` flag and `CondenseOnce` calls it for the swapped retry, but the C implementation always passes `false` into `LiteralUnifyOneWay`, making the swapped retry a duplicate directed attempt. Rust preserves this ignored parameter; revisit it only behind reference tests because enabling swapped condensation changes proof search.
 - `ccl_clausecpos` encodes positions as accumulated `TermStandardWeight`/`EqnStandardWeight` offsets rather than as tree child indices or preorder ranks. Rust preserves that compact encoding; any later weight-function change must not be reused for persisted compact positions without a compatibility boundary.
 - `PackTermPos` asserts that path superterms are not free variables or lambdas, but still carries phony-application/lambda special cases in the offset calculation. Rust keeps the assertions and phony-application branch; revisit the lambda branch only with LFHO position tests.
