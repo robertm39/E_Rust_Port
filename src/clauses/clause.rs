@@ -103,6 +103,16 @@ impl Clause {
     }
 
     #[must_use]
+    pub fn into_literals(self) -> EqnList {
+        self.literals
+    }
+
+    pub fn replace_literals(&mut self, literals: EqnList) {
+        self.literals = literals;
+        self.recompute_lit_counts();
+    }
+
+    #[must_use]
     pub const fn positive_literal_count(&self) -> usize {
         self.pos_lit_no
     }
@@ -214,7 +224,7 @@ impl Clause {
             .iter()
             .filter(|literal| literal.is_positive())
             .count();
-        self.neg_lit_no = self.literal_number() - self.pos_lit_no;
+        self.neg_lit_no = self.literals.len() - self.pos_lit_no;
     }
 
     pub fn gc_mark_terms(&self, bank: &TermBank) {

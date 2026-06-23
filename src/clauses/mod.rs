@@ -5,6 +5,7 @@ pub mod clausecpos;
 pub mod clauseinfo;
 pub mod clausepos;
 pub mod clausepos_tree;
+pub mod condensation;
 pub mod diseq_decomp;
 pub mod eqn;
 pub mod eqn_props;
