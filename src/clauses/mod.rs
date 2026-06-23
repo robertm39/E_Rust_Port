@@ -1,3 +1,4 @@
+pub mod axiomsorter;
 pub mod clause;
 pub mod clause_props;
 pub mod clausecpos;
