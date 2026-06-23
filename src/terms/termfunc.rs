@@ -11,6 +11,7 @@ use crate::terms::termtypes::{
     term_del_prop_opt, term_deref, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT,
     DEFAULT_VWEIGHT, TP_OP_FLAG, TP_PRED_POS,
 };
+use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,6 +83,93 @@ pub fn term_sig_insert(
         FuncSymbType::None | FuncSymbType::IdentVar | FuncSymbType::IdentFreeFun => {}
     }
     result
+}
+
+pub fn term_parse(
+    scanner: &mut Scanner,
+    sig: &mut Signature,
+    vars: &VarBank,
+) -> Result<Term, Diagnostic> {
+    let mut id = DynamicString::new();
+    let id_type = term_parse_operator(scanner, &mut id)?;
+    let name = id.view().into_owned();
+    if id_type == FuncSymbType::IdentVar {
+        if scanner.test_tok(TokenType::COLON) {
+            scanner.accept_tok(TokenType::COLON)?;
+            let type_ = sig
+                .type_bank_mut()
+                .parse_type_from_current_problem(scanner)?;
+            return Ok(vars.ext_name_assert_alloc_sort(&name, &type_));
+        }
+        return Ok(vars.ext_name_assert_alloc(&name));
+    }
+
+    let handle = if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        reject_distinct_argument_list(sig, id_type)?;
+        term_parse_arg_list(scanner, sig, vars)?
+    } else {
+        Term::default_cell_alloc()
+    };
+    let arity = c_arity(handle.arity())?;
+    let f_code = term_sig_insert(sig, &name, arity, false, id_type);
+    if f_code == 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!("{name} used with incompatible arity {arity}"),
+        ));
+    }
+    handle.set_f_code(f_code);
+    Ok(handle)
+}
+
+pub fn term_parse_arg_list(
+    scanner: &mut Scanner,
+    sig: &mut Signature,
+    vars: &VarBank,
+) -> Result<Term, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    if scanner.test_tok(TokenType::CLOSE_BRACKET) {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        return Ok(Term::default_cell_alloc());
+    }
+
+    let mut args = vec![term_parse(scanner, sig, vars)?];
+    while scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        args.push(term_parse(scanner, sig, vars)?);
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    let result = Term::default_cell_arity_alloc(args.len());
+    for (index, arg) in args.into_iter().enumerate() {
+        result.set_argument(index, arg);
+    }
+    Ok(result)
+}
+
+fn reject_distinct_argument_list(sig: &Signature, id_type: FuncSymbType) -> Result<(), Diagnostic> {
+    if id_type == FuncSymbType::IdentInt && sig.distinct_props().intersects(FP_IS_INTEGER) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Number cannot have argument list (consider --free-numbers)",
+        ));
+    }
+    if id_type == FuncSymbType::IdentObject && sig.distinct_props().intersects(FP_IS_OBJECT) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Object cannot have argument list (consider --free-objects)",
+        ));
+    }
+    Ok(())
+}
+
+fn c_arity(arity: usize) -> Result<i32, Diagnostic> {
+    i32::try_from(arity).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::RESOURCE_OUT,
+            "Term arity is too large for C-compatible signatures",
+        )
+    })
 }
 
 #[must_use]
@@ -761,10 +849,10 @@ mod tests {
         term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
         term_is_def_term, term_is_flat, term_is_ground_compute, term_is_subterm,
         term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
-        term_non_linear_weight, term_parse_operator, term_sig_insert, term_standard_weight,
-        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
-        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
-        term_weight_compute, var_print_string, VarNormStyle,
+        term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
+        term_sig_insert, term_standard_weight, term_struct_equal, term_struct_equal_deref,
+        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
+        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -777,6 +865,7 @@ mod tests {
     use crate::terms::termtypes::{
         DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_OP_FLAG, TP_PRED_POS,
     };
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -784,6 +873,14 @@ mod tests {
         let term = Term::const_cell_alloc(code);
         term.set_type(Some(type_.clone()));
         term
+    }
+
+    fn parse_unshared(source: &str) -> (Signature, VarBank, Term) {
+        let mut sig = Signature::new(TypeBank::new());
+        let vars = VarBank::new(sig.type_bank());
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        let term = term_parse(&mut scanner, &mut sig, &vars).unwrap();
+        (sig, vars, term)
     }
 
     #[test]
@@ -824,6 +921,65 @@ mod tests {
         assert!(sig.query_prop(integer, FP_IS_INTEGER));
         assert!(sig.query_prop(object, FP_IS_OBJECT));
         assert!(sig.query_prop(interpreted, FP_INTERPRETED));
+    }
+
+    #[test]
+    fn term_parse_builds_unshared_recursive_terms_and_bank_variables() {
+        let (sig, vars, term) = parse_unshared("f(a,X,g(Y))");
+
+        assert_eq!(sig.find_name(term.f_code()), Some("f"));
+        assert_eq!(term.arity(), 3);
+        assert!(!term.is_shared());
+        assert_eq!(sig.find_name(term.argument(0).unwrap().f_code()), Some("a"));
+        assert!(!term.argument(0).unwrap().is_shared());
+        assert_eq!(term.argument(1).unwrap().f_code(), -2);
+        assert_eq!(term.argument(2).unwrap().arity(), 1);
+        assert_eq!(term.argument(2).unwrap().argument(0).unwrap().f_code(), -4);
+        assert_eq!(vars.ext_name_find("X").unwrap().f_code(), -2);
+        assert_eq!(vars.ext_name_find("Y").unwrap().f_code(), -4);
+    }
+
+    #[test]
+    fn term_parse_treats_uppercase_application_as_function_symbol() {
+        let (sig, _vars, term) = parse_unshared("F(a)");
+
+        assert_eq!(sig.find_name(term.f_code()), Some("F"));
+        assert_eq!(term.arity(), 1);
+        assert!(term.f_code() > 0);
+    }
+
+    #[test]
+    fn term_parse_arg_list_accepts_empty_and_nested_lists() {
+        let mut sig = Signature::new(TypeBank::new());
+        let vars = VarBank::new(sig.type_bank());
+        let mut empty = Scanner::from_user_string("()", false).unwrap();
+        assert_eq!(
+            term_parse_arg_list(&mut empty, &mut sig, &vars)
+                .unwrap()
+                .arity(),
+            0
+        );
+
+        let mut nested = Scanner::from_user_string("(a,f(X))", false).unwrap();
+        let args = term_parse_arg_list(&mut nested, &mut sig, &vars).unwrap();
+        assert_eq!(args.arity(), 2);
+        assert_eq!(sig.find_name(args.argument(0).unwrap().f_code()), Some("a"));
+        assert_eq!(args.argument(1).unwrap().arity(), 1);
+    }
+
+    #[test]
+    fn term_parse_rejects_distinct_number_and_object_argument_lists() {
+        let mut sig = Signature::new(TypeBank::new());
+        let vars = VarBank::new(sig.type_bank());
+        let mut number = Scanner::from_user_string("12(a)", false).unwrap();
+        let error = term_parse(&mut number, &mut sig, &vars).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+
+        let mut object = Scanner::from_user_string("\"obj\"(a)", false).unwrap();
+        let error = term_parse(&mut object, &mut sig, &vars).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Object cannot have argument list"));
     }
 
     #[test]
