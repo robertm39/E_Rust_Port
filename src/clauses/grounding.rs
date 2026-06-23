@@ -5,6 +5,7 @@ use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
 use crate::clauses::groundconstr::{
     clause_collect_var_constr, LitOccTable, TermIdentitySet, VarConstraintMap,
 };
+use crate::clauses::propclauses::{PropClause, PropClauseSet};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 use std::collections::BTreeMap;
@@ -28,8 +29,192 @@ pub enum GcuEncoding {
     Both = 3,
 }
 
+impl GcuEncoding {
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Pos => 1,
+            Self::Neg => 2,
+            Self::Both => 3,
+        }
+    }
+
+    #[must_use]
+    pub const fn contains(self, flag: Self) -> bool {
+        self.bits() & flag.bits() != 0
+    }
+
+    #[must_use]
+    pub const fn union(self, flag: Self) -> Self {
+        match self.bits() | flag.bits() {
+            0 => Self::None,
+            1 => Self::Pos,
+            2 => Self::Neg,
+            _ => Self::Both,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_positive(positive: bool) -> Self {
+        if positive {
+            Self::Pos
+        } else {
+            Self::Neg
+        }
+    }
+}
+
 pub const DEFAULT_LIT_NO: usize = 4096;
 pub const DEFAULT_LIT_GROW: usize = 8192;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroundSet {
+    max_literal: i64,
+    unit_no: i64,
+    complete: GroundSetState,
+    units: BTreeMap<i64, GcuEncoding>,
+    unit_terms: BTreeMap<i64, Term>,
+    non_units: PropClauseSet,
+}
+
+impl GroundSet {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            max_literal: 0,
+            unit_no: 0,
+            complete: GroundSetState::Unknown,
+            units: BTreeMap::new(),
+            unit_terms: BTreeMap::new(),
+            non_units: PropClauseSet::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn max_literal(&self) -> i64 {
+        self.max_literal
+    }
+
+    #[must_use]
+    pub const fn unit_no(&self) -> i64 {
+        self.unit_no
+    }
+
+    #[must_use]
+    pub const fn complete(&self) -> GroundSetState {
+        self.complete
+    }
+
+    pub const fn set_complete(&mut self, complete: GroundSetState) {
+        self.complete = complete;
+    }
+
+    #[must_use]
+    pub const fn units(&self) -> &BTreeMap<i64, GcuEncoding> {
+        &self.units
+    }
+
+    #[must_use]
+    pub const fn unit_terms(&self) -> &BTreeMap<i64, Term> {
+        &self.unit_terms
+    }
+
+    #[must_use]
+    pub const fn non_units(&self) -> &PropClauseSet {
+        &self.non_units
+    }
+
+    #[must_use]
+    pub const fn members(&self) -> i64 {
+        self.unit_no + self.non_units.members()
+    }
+
+    #[must_use]
+    pub const fn dimacs_print_members(&self) -> i64 {
+        self.members() + self.non_units.empty_clause_count()
+    }
+
+    #[must_use]
+    pub const fn literal_count(&self) -> i64 {
+        self.unit_no + self.non_units.literal_count()
+    }
+
+    #[must_use]
+    pub fn max_var(&self) -> i64 {
+        self.units
+            .keys()
+            .copied()
+            .rev()
+            .find(|lit_no| *lit_no > 0)
+            .unwrap_or(0)
+            .max(self.non_units.max_var())
+    }
+
+    /// Inserts a ground clause into the set.
+    ///
+    /// Returns `false` only for duplicate unit clauses with the same literal
+    /// number and sign, matching `GroundSetInsert`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an inconsistent unit clause has no literal or if a non-unit
+    /// clause is not already recoded into propositional predicate-literal form.
+    pub fn insert(&mut self, clause: Clause) -> bool {
+        if !clause.is_unit() {
+            self.max_literal = self.max_literal.max(clause_get_max_lit(&clause));
+            self.non_units.insert_clause(clause);
+            return true;
+        }
+
+        let literal = clause
+            .literals()
+            .as_slice()
+            .first()
+            .expect("unit clauses must contain one literal");
+        let lit_no = literal.left().entry_no();
+        let sign = GcuEncoding::from_positive(literal.is_positive());
+        let status = self
+            .units
+            .get(&lit_no)
+            .copied()
+            .unwrap_or(GcuEncoding::None);
+        if status.contains(sign) {
+            drop(clause);
+            return false;
+        }
+
+        self.max_literal = self.max_literal.max(lit_no);
+        self.units.insert(lit_no, status.union(sign));
+        self.unit_terms.insert(lit_no, literal.left().clone());
+        self.unit_no += 1;
+        drop(clause);
+        true
+    }
+
+    #[must_use]
+    pub fn dimacs_string(&self) -> String {
+        let mut result = String::new();
+        for (&lit_no, &status) in &self.units {
+            if status.contains(GcuEncoding::Pos) {
+                let _ = writeln!(&mut result, "  {lit_no} 0");
+            }
+            if status.contains(GcuEncoding::Neg) {
+                let _ = writeln!(&mut result, " -{lit_no} 0");
+            }
+        }
+        for clause in self.non_units.clauses() {
+            result.push_str(&prop_clause_print_dimacs_string(clause));
+        }
+        result
+    }
+}
+
+impl Default for GroundSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VarInst {
@@ -339,6 +524,23 @@ pub fn clause_get_max_lit(clause: &Clause) -> i64 {
         .unwrap_or(0)
 }
 
+fn prop_clause_print_dimacs_string(clause: &PropClause) -> String {
+    if clause.is_empty() {
+        return " -1 0\n  1 0\n".to_owned();
+    }
+
+    let mut result = String::new();
+    for literal in clause.literals() {
+        if literal.properties().is_positive() {
+            let _ = write!(&mut result, "  {}", literal.literal().entry_no());
+        } else {
+            let _ = write!(&mut result, " -{}", literal.literal().entry_no());
+        }
+    }
+    result.push_str(" 0\n");
+    result
+}
+
 fn variable_constraint_key(variable: &Term) -> i64 {
     -variable.f_code()
 }
@@ -360,8 +562,8 @@ fn usize_diff_as_i32(left: usize, right: usize) -> i32 {
 mod tests {
     use super::{
         clause_cmp_by_len, clause_eqlit_recode, clause_get_max_lit, clause_print_dimacs_string,
-        eqn_eqlit_recode, print_dimacs_header_string, GcuEncoding, GroundSetState, VarSetInst,
-        DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        eqn_eqlit_recode, print_dimacs_header_string, GcuEncoding, GroundSet, GroundSetState,
+        VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
@@ -447,6 +649,13 @@ mod tests {
         assert_eq!(GcuEncoding::Pos as i32, 1);
         assert_eq!(GcuEncoding::Neg as i32, 2);
         assert_eq!(GcuEncoding::Both as i32, 3);
+        assert_eq!(GcuEncoding::Pos.bits(), 1);
+        assert!(GcuEncoding::Both.contains(GcuEncoding::Pos));
+        assert!(GcuEncoding::Both.contains(GcuEncoding::Neg));
+        assert!(!GcuEncoding::Pos.contains(GcuEncoding::Neg));
+        assert_eq!(GcuEncoding::Pos.union(GcuEncoding::Neg), GcuEncoding::Both);
+        assert_eq!(GcuEncoding::from_positive(true), GcuEncoding::Pos);
+        assert_eq!(GcuEncoding::from_positive(false), GcuEncoding::Neg);
         assert_eq!(DEFAULT_LIT_NO, 4096);
         assert_eq!(DEFAULT_LIT_GROW, 8192);
     }
@@ -648,5 +857,95 @@ mod tests {
             " -1 0\n  1 0\n"
         );
         assert_eq!(clause_get_max_lit(&clause), pos_entry.max(neg_entry));
+    }
+
+    #[test]
+    fn ground_set_insert_units_deduplicates_by_literal_code_and_sign() {
+        let mut bank = test_bank();
+        let atom = predicate_atom(&mut bank, "p", &[]);
+        let lit_no = atom.entry_no();
+        let mut set = GroundSet::new();
+
+        assert_eq!(set.complete(), GroundSetState::Unknown);
+        assert!(set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &atom, true,)
+        ])));
+        assert!(!set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &atom, true,)
+        ])));
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &atom, false,
+        )])));
+
+        assert_eq!(set.unit_no(), 2);
+        assert_eq!(set.members(), 2);
+        assert_eq!(set.dimacs_print_members(), 2);
+        assert_eq!(set.literal_count(), 2);
+        assert_eq!(set.max_literal(), lit_no);
+        assert_eq!(set.max_var(), lit_no);
+        assert_eq!(set.units().get(&lit_no), Some(&GcuEncoding::Both));
+        assert_eq!(
+            set.unit_terms().get(&lit_no).map(Term::entry_no),
+            Some(lit_no)
+        );
+        assert_eq!(set.non_units().members(), 0);
+
+        set.set_complete(GroundSetState::Complete);
+        assert_eq!(set.complete(), GroundSetState::Complete);
+    }
+
+    #[test]
+    fn ground_set_insert_non_units_and_empty_clause_update_stats() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p", &[]);
+        let second = predicate_atom(&mut bank, "q", &[]);
+        let first_entry = first.entry_no();
+        let second_entry = second.entry_no();
+        let mut set = GroundSet::new();
+
+        assert!(set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ])));
+        assert!(set.insert(Clause::empty()));
+
+        assert_eq!(set.unit_no(), 0);
+        assert_eq!(set.members(), 2);
+        assert_eq!(set.literal_count(), 2);
+        assert_eq!(set.dimacs_print_members(), 3);
+        assert_eq!(set.non_units().members(), 2);
+        assert_eq!(set.non_units().literal_count(), 2);
+        assert_eq!(set.non_units().empty_clause_count(), 1);
+        assert_eq!(set.max_literal(), first_entry.max(second_entry));
+        assert_eq!(set.max_var(), first_entry.max(second_entry));
+    }
+
+    #[test]
+    fn ground_set_dimacs_string_renders_units_non_units_and_empty_workaround() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p", &[]);
+        let second = predicate_atom(&mut bank, "q", &[]);
+        let first_entry = first.entry_no();
+        let second_entry = second.entry_no();
+        let mut set = GroundSet::new();
+
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+        assert!(set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ])));
+        assert!(set.insert(Clause::empty()));
+
+        assert_eq!(
+            set.dimacs_string(),
+            format!(
+                "  {first_entry} 0\n -{second_entry} 0\n  {first_entry} -{second_entry} 0\n -1 0\n  1 0\n"
+            )
+        );
     }
 }
