@@ -12,6 +12,7 @@ pub mod numtrees;
 pub mod numxtrees;
 pub mod objmaps;
 pub mod objtrees;
+pub mod os_wrapper;
 pub mod partial_orderings;
 pub mod pdarrays;
 pub mod pdrangearrays;

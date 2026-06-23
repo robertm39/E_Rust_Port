@@ -21,6 +21,7 @@ Rust files:
 - `src/basics/numxtrees.rs`
 - `src/basics/objmaps.rs`
 - `src/basics/objtrees.rs`
+- `src/basics/os_wrapper.rs`
 - `src/basics/partial_orderings.rs`
 - `src/basics/pdarrays.rs`
 - `src/basics/pdrangearrays.rs`
@@ -62,6 +63,7 @@ Original C references:
 - [`BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`](c_source_docs/BASICS/clb_numxtrees.md)
 - [`BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`](c_source_docs/BASICS/clb_objmaps.md)
 - [`BASICS/clb_objtrees.h`, `BASICS/clb_objtrees.c`](c_source_docs/BASICS/clb_objtrees.md)
+- [`BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`](c_source_docs/BASICS/clb_os_wrapper.md)
 - [`BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_orderings.c`](c_source_docs/BASICS/clb_partial_orderings.md)
 - [`BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`](c_source_docs/BASICS/clb_pdarrays.md)
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
@@ -136,6 +138,7 @@ Known gaps:
 - `NumTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `NumXTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `ObjTree` and `ObjMap` model comparison-function behavior with `Ord` keys and safe owned values; exact C splay-root locality, raw pointer ownership transfer, and allocator reuse are not modeled.
+- OS wrapper helpers from `clb_os_wrapper`, including resource-limit result discriminants, wall-clock microsecond/millisecond/second helpers, monotonic process-relative clock fallback, core-count fallback, page-size fallback, memory striding, C `fopen` mode mapping, and secure open/close diagnostics.
 - `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
 - `QuadTree` currently uses Rust `BTreeMap` and caller-provided ordered pointer identities; exact C splay-root locality and raw pointer-address ordering should be revisited when comparison caches are integrated with term storage.
 - `RegMem` uses explicit opaque handles and initialized byte buffers instead of raw registered pointers and uninitialized `SecureMalloc` memory; call sites that need typed static scratch space should wrap those handles at the ownership boundary.
@@ -159,6 +162,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `FixedDArray` currently mirrors C assertion-style size contracts; callers fed by user input may eventually need recoverable error paths instead of invariant panics.
 - `MinHeap` preserves the C helper directions where `decr_key` drops down and `incr_key` bubbles up, despite those names appearing reversed for a conventional min-heap. Rename or wrap only after all heap users are audited.
 - `ObjTree` and `ObjMap` replace comparison-function/raw-pointer storage with ordered Rust keys and explicit ownership; revisit this once term, clause, and substitution arenas define stable handle identity and deleter responsibilities.
+- `clb_os_wrapper` uses POSIX `getrlimit`/`setrlimit`, `clock`, `sysconf`, and `gettimeofday`; Rust currently avoids unsafe platform FFI, so resource limits are explicit unsupported results on native Windows and CPU time is a monotonic elapsed-time fallback until a safe platform abstraction is chosen.
 - `StrTree`, `FloatTree`, `NumTree`, `NumXTree`, `PTree`, and `QuadTree` model ordered semantics with safe Rust containers while documenting splay-locality gaps; hot indexing paths should be benchmarked before deciding whether to recreate splay behavior.
 - `RegMem` in C stores raw allocation pointers in a global `PTree` and frees them at process shutdown; the Rust handle registry preserves cleanup semantics, but later code should prefer explicit owner structs where persistent scratch memory can be scoped.
 - `IntMap` keeps C density transitions and null-slot quirks, but its hidden read/delete-time array growth in C is a likely cleanup target if compatibility tests show no observable dependency.
