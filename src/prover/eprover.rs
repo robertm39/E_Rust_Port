@@ -20,8 +20,72 @@ const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
 const DEFAULT_HEURISTIC_NAME: &str = "Default";
+const DEFAULT_LAMBDA_WEIGHT: i64 = 20;
+const DEFAULT_DB_WEIGHT: i64 = 10;
+const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+
+const PRECEDENCE_GENERATION_METHODS: &[&str] = &[
+    "none",
+    "unary_first",
+    "unary_freq",
+    "arity",
+    "invarity",
+    "const_max",
+    "const_min",
+    "freq",
+    "invfreq",
+    "invconjfreq",
+    "invfreqconjmax",
+    "invfreqconjmin",
+    "invfreqconstmin",
+    "invfreqhack",
+    "typefreq",
+    "invtypefreq",
+    "combfreq",
+    "invcombfreq",
+    "arrayopt",
+    "orient_axioms",
+];
+
+const WEIGHT_GENERATION_METHODS: &[&str] = &[
+    "none",
+    "firstmaximal0",
+    "arity",
+    "aritymax0",
+    "modarity",
+    "modaritymax0",
+    "aritysquared",
+    "aritysquaredmax0",
+    "invarity",
+    "invaritymax0",
+    "invaritysquared",
+    "invaritysquaredmax0",
+    "precedence",
+    "invprecedence",
+    "precrank5",
+    "precrank10",
+    "precrank20",
+    "freqcount",
+    "invfreqcount",
+    "freqrank",
+    "invfreqrank",
+    "invconjfreqrank",
+    "freqranksquare",
+    "invfreqranksquare",
+    "invmodfreqrank",
+    "invmodfreqrankmax0",
+    "typefreqrank",
+    "typefreqcount",
+    "invtypefreqrank",
+    "invtypefreqcount",
+    "combfreqrank",
+    "combfreqcount",
+    "invcombfreqrank",
+    "invcombfreqcount",
+    "constant",
+];
 
 const LITERAL_SELECTION_STRATEGIES: &[&str] = &[
     "NoSelection",
@@ -280,6 +344,74 @@ pub enum ParamodulationType {
     SizeDecreasingSim = 6,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum TermOrdering {
+    NoOrdering = 0,
+    Optimize = 1,
+    Kbo = 2,
+    #[default]
+    Kbo6 = 3,
+    Lpo = 4,
+    LpoCopy = 5,
+    Lpo4 = 6,
+    Lpo4Copy = 7,
+    Rpo = 8,
+    Empty = 9,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum LiteralComparison {
+    None = 0,
+    #[default]
+    Normal = 1,
+    TfoEqMax = 2,
+    TfoEqMin = 3,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PrecedenceModifierConfig {
+    pub conjecture_only: i64,
+    pub conjecture_axiom: i64,
+    pub axiom_only: i64,
+    pub skolem: i64,
+    pub defpred: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TermOrderingConfig {
+    pub ordering: TermOrdering,
+    pub weight_generation: String,
+    pub precedence_generation: String,
+    pub precedence_modifiers: PrecedenceModifierConfig,
+    pub weight_overrides: Option<String>,
+    pub constant_weight: i64,
+    pub precedence: Option<String>,
+    pub lpo_recursion_limit: i64,
+    pub literal_comparison: LiteralComparison,
+    pub lambda_weight: i64,
+    pub db_weight: i64,
+}
+
+impl Default for TermOrderingConfig {
+    fn default() -> Self {
+        Self {
+            ordering: TermOrdering::Kbo6,
+            weight_generation: "none".to_owned(),
+            precedence_generation: "none".to_owned(),
+            precedence_modifiers: PrecedenceModifierConfig::default(),
+            weight_overrides: None,
+            constant_weight: 0,
+            precedence: None,
+            lpo_recursion_limit: DEFAULT_LPO_RECURSION_LIMIT,
+            literal_comparison: LiteralComparison::Normal,
+            lambda_weight: DEFAULT_LAMBDA_WEIGHT,
+            db_weight: DEFAULT_DB_WEIGHT,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HeuristicConfig {
     pub name: String,
@@ -419,6 +551,7 @@ impl Default for SplittingConfig {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SearchControlConfig {
+    pub ordering: TermOrderingConfig,
     pub heuristic: HeuristicConfig,
     pub literal_selection: LiteralSelectionConfig,
     pub inference: InferenceConfig,
@@ -771,6 +904,8 @@ fn apply_parsed_option(
         apply_schedule_option(config, parsed)?;
     } else if is_preprocessing_option(option_code) {
         apply_preprocessing_option(config, parsed)?;
+    } else if is_term_ordering_option(option_code) {
+        apply_term_ordering_option(config, parsed)?;
     } else if is_search_control_option(option_code) {
         apply_search_control_option(config, parsed)?;
     } else {
@@ -910,6 +1045,28 @@ const fn is_search_control_option(option: EProverOption) -> bool {
         || is_heuristic_control_option(option)
         || is_inference_control_option(option)
         || is_splitting_option(option)
+}
+
+const fn is_term_ordering_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::TermOrdering
+            | EProverOption::OrderWeightGeneration
+            | EProverOption::OrderWeights
+            | EProverOption::OrderPrecedenceGeneration
+            | EProverOption::PrecPureConj
+            | EProverOption::PrecConjAxiom
+            | EProverOption::PrecPureAxiom
+            | EProverOption::PrecSkolem
+            | EProverOption::PrecDefPred
+            | EProverOption::OrderConstantWeight
+            | EProverOption::Precedence
+            | EProverOption::LpoRecursionLimit
+            | EProverOption::RestrictLiteralComparisons
+            | EProverOption::LiteralComparison
+            | EProverOption::KboLambdaWeight
+            | EProverOption::KboDbWeight
+    )
 }
 
 const fn is_literal_selection_option(option: EProverOption) -> bool {
@@ -1223,6 +1380,149 @@ fn apply_ac_handling(config: &mut EProverConfig, arg: &str) -> Result<(), Diagno
             return Err(Diagnostic::new(
                 ErrorCode::USAGE_ERROR,
                 "Option --ac_handling requires None, DiscardAll, KeepUnits, or KeepOrientable as an argument",
+            ));
+        }
+    };
+    Ok(())
+}
+
+fn apply_term_ordering_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::TermOrdering => set_term_ordering(config, value)?,
+        EProverOption::OrderWeightGeneration => set_weight_generation(config, value)?,
+        EProverOption::OrderWeights => {
+            config.search.ordering.weight_overrides = Some(value.to_owned());
+        }
+        EProverOption::OrderPrecedenceGeneration => set_precedence_generation(config, value)?,
+        EProverOption::PrecPureConj => {
+            config.search.ordering.precedence_modifiers.conjecture_only =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::PrecConjAxiom => {
+            config.search.ordering.precedence_modifiers.conjecture_axiom =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::PrecPureAxiom => {
+            config.search.ordering.precedence_modifiers.axiom_only =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::PrecSkolem => {
+            config.search.ordering.precedence_modifiers.skolem =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::PrecDefPred => {
+            config.search.ordering.precedence_modifiers.defpred =
+                get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::OrderConstantWeight => {
+            let constant_weight = get_int_arg(parsed.option(), value)?;
+            if constant_weight <= 0 {
+                return Err(Diagnostic::new(
+                    ErrorCode::USAGE_ERROR,
+                    "Argument to option -c (--order-constant-weight) has to be > 0",
+                ));
+            }
+            config.search.ordering.constant_weight = constant_weight;
+        }
+        EProverOption::Precedence => {
+            config.search.ordering.precedence = Some(value.to_owned());
+        }
+        EProverOption::LpoRecursionLimit => {
+            let recursion_limit = get_int_arg(parsed.option(), value)?;
+            if recursion_limit <= 0 {
+                return Err(Diagnostic::new(
+                    ErrorCode::USAGE_ERROR,
+                    "Argument to option --lpo-recursion-limit has to be > 0",
+                ));
+            }
+            config.search.ordering.lpo_recursion_limit = recursion_limit;
+            config.search.ordering.literal_comparison = LiteralComparison::None;
+        }
+        EProverOption::RestrictLiteralComparisons => {
+            config.search.ordering.literal_comparison = LiteralComparison::None;
+        }
+        EProverOption::LiteralComparison => set_literal_comparison(config, value)?,
+        EProverOption::KboLambdaWeight => {
+            config.search.ordering.lambda_weight = get_int_arg(parsed.option(), value)?;
+        }
+        EProverOption::KboDbWeight => {
+            config.search.ordering.db_weight = get_int_arg(parsed.option(), value)?;
+        }
+        _ => unreachable!("non-term-ordering option routed to term-ordering handler"),
+    }
+    Ok(())
+}
+
+fn set_term_ordering(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    config.search.ordering.ordering = match value {
+        "LPO" => TermOrdering::Lpo,
+        "LPOCopy" => TermOrdering::LpoCopy,
+        "LPO4" => TermOrdering::Lpo4,
+        "LPO4Copy" => TermOrdering::Lpo4Copy,
+        "KBO" => TermOrdering::Kbo,
+        "KBO6" => TermOrdering::Kbo6,
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument",
+            ));
+        }
+    };
+    Ok(())
+}
+
+fn set_weight_generation(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    if WEIGHT_GENERATION_METHODS
+        .iter()
+        .position(|method| *method == value)
+        .is_some_and(|index| index > 0)
+    {
+        value.clone_into(&mut config.search.ordering.weight_generation);
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Wrong argument to option -w (--order-weight-generation). Possible values: {}",
+                WEIGHT_GENERATION_METHODS.join(", ")
+            ),
+        ))
+    }
+}
+
+fn set_precedence_generation(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    if PRECEDENCE_GENERATION_METHODS
+        .iter()
+        .position(|method| *method == value)
+        .is_some_and(|index| index > 0)
+    {
+        value.clone_into(&mut config.search.ordering.precedence_generation);
+        Ok(())
+    } else {
+        Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Wrong argument to option -G (--order-precedence-generation). Possible values: {}",
+                PRECEDENCE_GENERATION_METHODS.join(", ")
+            ),
+        ))
+    }
+}
+
+fn set_literal_comparison(config: &mut EProverConfig, value: &str) -> Result<(), Diagnostic> {
+    config.search.ordering.literal_comparison = match value {
+        "None" => LiteralComparison::None,
+        "Normal" => LiteralComparison::Normal,
+        "TFOEqMax" => LiteralComparison::TfoEqMax,
+        "TFOEqMin" => LiteralComparison::TfoEqMin,
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                "Wrong argument to --literal-comparison (valid: None, Normal, TFOEqMax, TFOEqMin).",
             ));
         }
     };
@@ -1564,7 +1864,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverFlag, ParamodulationType, MEGA,
+        EProverAction, EProverFlag, LiteralComparison, ParamodulationType, TermOrdering, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -2181,6 +2481,152 @@ mod tests {
 
         let error = process_options(["eprover", "--split-method=3"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+    }
+
+    #[test]
+    fn process_options_records_term_ordering_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let ordering = &config.search.ordering;
+        assert_eq!(ordering.ordering, TermOrdering::Kbo6);
+        assert_eq!(ordering.weight_generation, "none");
+        assert_eq!(ordering.precedence_generation, "none");
+        assert_eq!(ordering.constant_weight, 0);
+        assert_eq!(ordering.precedence, None);
+        assert_eq!(ordering.weight_overrides, None);
+        assert_eq!(ordering.lpo_recursion_limit, 1_000);
+        assert_eq!(ordering.literal_comparison, LiteralComparison::Normal);
+        assert_eq!(ordering.lambda_weight, 20);
+        assert_eq!(ordering.db_weight, 10);
+
+        let action = process_options([
+            "eprover",
+            "-t",
+            "LPO4Copy",
+            "-w",
+            "invfreqrank",
+            "--order-weights=f:2,g:3",
+            "-G",
+            "invfreq",
+            "--prec-pure-conj",
+            "--prec-conj-axiom=6",
+            "--prec-pure-axiom",
+            "--prec-skolem=4",
+            "--prec-defpred",
+            "-c",
+            "3",
+            "--precedence=f>g",
+            "--kbo-lam-weight=30",
+            "--kbo-db-weight=12",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        let ordering = &config.search.ordering;
+        assert_eq!(ordering.ordering, TermOrdering::Lpo4Copy);
+        assert_eq!(ordering.weight_generation, "invfreqrank");
+        assert_eq!(ordering.weight_overrides.as_deref(), Some("f:2,g:3"));
+        assert_eq!(ordering.precedence_generation, "invfreq");
+        assert_eq!(ordering.precedence_modifiers.conjecture_only, 10);
+        assert_eq!(ordering.precedence_modifiers.conjecture_axiom, 6);
+        assert_eq!(ordering.precedence_modifiers.axiom_only, 2);
+        assert_eq!(ordering.precedence_modifiers.skolem, 4);
+        assert_eq!(ordering.precedence_modifiers.defpred, 2);
+        assert_eq!(ordering.constant_weight, 3);
+        assert_eq!(ordering.precedence.as_deref(), Some("f>g"));
+        assert_eq!(ordering.lambda_weight, 30);
+        assert_eq!(ordering.db_weight, 12);
+
+        let action = process_options(["eprover", "--precedence"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.ordering.precedence.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn process_options_records_lpo_literal_comparison_fallthrough_like_c() {
+        let action = process_options(["eprover", "--lpo-recursion-limit"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.ordering.lpo_recursion_limit, 100);
+        assert_eq!(
+            config.search.ordering.literal_comparison,
+            LiteralComparison::None
+        );
+
+        let action = process_options([
+            "eprover",
+            "--lpo-recursion-limit=25",
+            "--literal-comparison=TFOEqMin",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.ordering.lpo_recursion_limit, 25);
+        assert_eq!(
+            config.search.ordering.literal_comparison,
+            LiteralComparison::TfoEqMin
+        );
+
+        let action = process_options(["eprover", "--restrict-literal-comparisons"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.ordering.literal_comparison,
+            LiteralComparison::None
+        );
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_term_ordering_args() {
+        let error = process_options(["eprover", "-t", "Auto"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
+        );
+
+        let error = process_options(["eprover", "-w", "none"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error.message().starts_with(
+            "Wrong argument to option -w (--order-weight-generation). Possible values: "
+        ));
+        assert!(error.message().contains("invfreqrank"));
+
+        let error = process_options(["eprover", "-G", "none"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error.message().starts_with(
+            "Wrong argument to option -G (--order-precedence-generation). Possible values: "
+        ));
+        assert!(error.message().contains("invfreq"));
+
+        let error = process_options(["eprover", "-c", "0"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Argument to option -c (--order-constant-weight) has to be > 0"
+        );
+
+        let error = process_options(["eprover", "--lpo-recursion-limit=0"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Argument to option --lpo-recursion-limit has to be > 0"
+        );
+
+        let error = process_options(["eprover", "--literal-comparison=Bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Wrong argument to --literal-comparison (valid: None, Normal, TFOEqMax, TFOEqMin)."
+        );
     }
 
     #[test]
