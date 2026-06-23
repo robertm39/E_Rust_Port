@@ -1,4 +1,5 @@
 pub mod ddarrays;
+pub mod defines;
 pub mod dstacks;
 pub mod dstrings;
 pub mod error;
@@ -11,6 +12,7 @@ pub mod numxtrees;
 pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod permastrings;
+pub mod plist;
 pub mod pqueue;
 pub mod properties;
 pub mod pstacks;

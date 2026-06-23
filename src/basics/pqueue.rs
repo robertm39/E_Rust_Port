@@ -1,55 +1,8 @@
+pub use crate::basics::defines::{IntOrP, IntOrPInt as PQueueInt};
+
 pub const PQUEUE_DEFAULT_SIZE: usize = 128;
 
-pub type PQueueInt = i64;
 pub type PQueueIndex = isize;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum IntOrP<P> {
-    Int(PQueueInt),
-    Pointer(P),
-}
-
-impl<P> IntOrP<P> {
-    #[must_use]
-    pub const fn int(value: PQueueInt) -> Self {
-        Self::Int(value)
-    }
-
-    #[must_use]
-    pub const fn pointer(value: P) -> Self {
-        Self::Pointer(value)
-    }
-
-    #[must_use]
-    pub const fn as_int(&self) -> Option<PQueueInt> {
-        match self {
-            Self::Int(value) => Some(*value),
-            Self::Pointer(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn as_pointer(&self) -> Option<&P> {
-        match self {
-            Self::Int(_) => None,
-            Self::Pointer(value) => Some(value),
-        }
-    }
-
-    pub fn into_int(self) -> Option<PQueueInt> {
-        match self {
-            Self::Int(value) => Some(value),
-            Self::Pointer(_) => None,
-        }
-    }
-
-    pub fn into_pointer(self) -> Option<P> {
-        match self {
-            Self::Int(_) => None,
-            Self::Pointer(value) => Some(value),
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PQueue<T> {

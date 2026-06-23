@@ -8,6 +8,7 @@ Rust files:
 
 - `Cargo.toml`
 - `src/basics/ddarrays.rs`
+- `src/basics/defines.rs`
 - `src/basics/dstacks.rs`
 - `src/basics/dstrings.rs`
 - `src/basics/error.rs`
@@ -20,6 +21,7 @@ Rust files:
 - `src/basics/pdarrays.rs`
 - `src/basics/pdrangearrays.rs`
 - `src/basics/permastrings.rs`
+- `src/basics/plist.rs`
 - `src/basics/pqueue.rs`
 - `src/basics/properties.rs`
 - `src/basics/simple_stuff.rs`
@@ -38,6 +40,7 @@ Rust files:
 Original C references:
 
 - [`BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`](c_source_docs/BASICS/clb_ddarrays.md)
+- [`BASICS/clb_defines.h`](c_source_docs/BASICS/clb_defines.md)
 - [`BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`](c_source_docs/BASICS/clb_dstrings.md)
 - [`BASICS/clb_dstacks.h`, `BASICS/clb_dstacks.c`](c_source_docs/BASICS/clb_dstacks.md)
 - [`BASICS/clb_error.h`, `BASICS/clb_error.c`](c_source_docs/BASICS/clb_error.md)
@@ -50,6 +53,7 @@ Original C references:
 - [`BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`](c_source_docs/BASICS/clb_pdarrays.md)
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
 - [`BASICS/clb_permastrings.h`, `BASICS/clb_permastrings.c`](c_source_docs/BASICS/clb_permastrings.md)
+- [`BASICS/clb_plist.h`, `BASICS/clb_plist.c`](c_source_docs/BASICS/clb_plist.md)
 - [`BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`](c_source_docs/BASICS/clb_pqueue.md)
 - [`BASICS/clb_properties.h`](c_source_docs/BASICS/clb_properties.md)
 - [`BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`](c_source_docs/BASICS/clb_simple_stuff.md)
@@ -72,9 +76,11 @@ Implemented behavior:
 - Dynamic `PDArray` and `DDArray` storage from `clb_pdarrays` and `clb_ddarrays`, including exponential and fixed-multiple growth, zero/`NULL` initialization, mutating element access that extends arrays like the C macros, delete/store/add/increment helpers, and `DDArraySelectPart` partition selection.
 - `PDRangeArr` signed-index dynamic arrays from `clb_pdrangearrays`, including low/limit key tracking, upward and downward expansion, C-compatible offset shifts, pointer-member counting, deletion, copying, and integer increment helpers.
 - `FixedDArray` fixed-size integer vector helpers from `clb_fixdarrays`, including initialization, component-wise add/subtract/weighted-add/min/max, copying, and C-shaped debug printing.
+- Shared `IntOrP` integer/pointer payload shape from `clb_defines`, represented as a checked Rust enum for containers that mix long integer tags and pointer-like handles.
 - `IntMap` multi-representation integer map behavior from `clb_intmap`, including empty/single/array/tree states, density-triggered representation switching, `get_ref` slot creation with null values, assignment and deletion return behavior, entry-count inflation for repeated null array references, inclusive sorted range iteration over non-null values, and debug printing.
 - `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
 - Permanent string registry behavior from `clb_permastrings`, including duplicate interning, owned-string store, null-shaped optional lookup, explicit global registry clearing, and returned shared strings that remain valid for Rust holders after the registry is cleared.
+- `PList` doubly linked list behavior from `clb_plist`, including explicit anchor cells, insertion after arbitrary list cells, extraction and reinsertion across anchors, deletion, clearing/freeing anchors, forward/backward navigation, and mixed integer/pointer payload helpers.
 - `PQueue` circular pointer/integer queue behavior from `clb_pqueue`, including head/tail indexing, FIFO extraction, stack-view last extraction, bury-at-front insertion, C-shaped full-ring growth layout, reset without shrinking, absolute tail/index iteration, and mixed integer/pointer helper values.
 - Property-bit helpers from `clb_properties`, including set/delete/flip/assign, all-bit and any-bit queries, masked property extraction, and masked equivalence checks.
 - Shared simple helpers from `clb_simple_stuff`, including bytewise string distance, weighted-object comparison/sorting, C-shaped JKISS random state and static-state wrapper behavior, bounded indentation strings, prefix tests, null-terminated string-index/cardinality helpers, positive-only GCD, `ProverResult`, `ProblemType`, and first-order/higher-order syntax conflict checks.
@@ -95,6 +101,7 @@ Known gaps:
 - The prover core, parser, clausification, saturation loop, indexing, ordering, heuristics, proof output, resource limits, and most CLI options are not implemented yet.
 - Scanner support is currently limited to string sources and does not yet implement file streams, stacked include handling, or `ScannerSetFormat` format inference.
 - `IntMap` preserves the C representation-state decisions but uses safe Rust-owned storage; the C implementation's hidden `PDRangeArr` growth during some read/delete paths and inflated null-slot entry counts should be evaluated later as compatibility risks versus cleanup opportunities.
+- `PList` uses safe arena handles instead of raw self-linked pointers; this preserves cell moves between anchors but does not yet reuse freed cell slots like the C allocator/free-list path.
 - `PQueue` preserves the observable circular-buffer behavior, but the C implementation exposes `PQueueGrow` even though its copy logic is only valid after a store/bury creates a full ring; the Rust port keeps growth internal until a real direct caller appears.
 - `StrTree` currently uses Rust `BTreeMap` to preserve sorted traversal and lookup semantics; the C implementation's splay-tree locality optimization should be revisited if profiling shows this index on hot paths.
 - `FloatTree` currently uses Rust `BTreeMap` with an internal total-order float key; exact C splay-root locality and C's accidental behavior for NaN keys are not modeled beyond deterministic handling.
@@ -112,6 +119,7 @@ These notes are not permission to diverge during porting. They identify inherite
 
 - `DStr`, `PStack`, `DStack`, `PDArray`, `DDArray`, and `PDRangeArr` preserve C growth and mutating-access patterns; later APIs may want clearer separation between read-only access and access that allocates or extends storage.
 - `PStack`/`DStack` discard helpers intentionally use swap-remove behavior, which is efficient but order-destroying; keep auditing callers before exposing order-preserving variants.
+- `PList` raw-pointer anchors and extracted-cell ownership are represented with checked arena handles; after list-heavy clause/formula code is ported, revisit whether a generational freelist or typed owner should replace the current simple slot model.
 - `PQueue` exposes absolute internal ring indices for iteration and C has a public grow routine that is only coherent for the full-ring state; later callers should keep those details encapsulated behind safer traversal APIs.
 - `FixedDArray` currently mirrors C assertion-style size contracts; callers fed by user input may eventually need recoverable error paths instead of invariant panics.
 - `MinHeap` preserves the C helper directions where `decr_key` drops down and `incr_key` bubbles up, despite those names appearing reversed for a conventional min-heap. Rename or wrap only after all heap users are audited.
