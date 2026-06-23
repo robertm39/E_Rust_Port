@@ -1,3 +1,4 @@
+pub mod avlgeneric;
 pub mod ddarrays;
 pub mod defines;
 pub mod dstacks;

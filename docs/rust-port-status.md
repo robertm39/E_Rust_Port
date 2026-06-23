@@ -7,6 +7,7 @@ This document tracks Rust implementation slices and the original C source units 
 Rust files:
 
 - `Cargo.toml`
+- `src/basics/avlgeneric.rs`
 - `src/basics/ddarrays.rs`
 - `src/basics/defines.rs`
 - `src/basics/dstacks.rs`
@@ -47,6 +48,7 @@ Rust files:
 
 Original C references:
 
+- [`BASICS/clb_avlgeneric.h`](c_source_docs/BASICS/clb_avlgeneric.md)
 - [`BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`](c_source_docs/BASICS/clb_ddarrays.md)
 - [`BASICS/clb_defines.h`](c_source_docs/BASICS/clb_defines.md)
 - [`BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`](c_source_docs/BASICS/clb_dstrings.md)
@@ -87,6 +89,7 @@ Original C references:
 Implemented behavior:
 
 - A root Rust package with library and `eprover` binary targets.
+- Generic binary-tree traversal support from `clb_avlgeneric`, including left-spine initialization, iterative in-order next-node traversal, empty-root handling, and a function-shaped API matching the generated C traversal pair.
 - The `DStr` byte-buffer behavior from `clb_dstrings`, including append, byte-buffer append, integer append, string-array append, last-character deletion, reset, minimize, line reading, and the distinct C growth rules for string and byte appends.
 - The `PStack` and `DStack` growth/access patterns from `clb_pstacks` and `clb_dstacks`, including explicit logical capacity doubling, reset without shrinking, top/below-top/element access, swap-remove discard, stack copying/pushing, C-shaped binary search and merge behavior, and integer average/deviation computation.
 - Dynamic `PDArray` and `DDArray` storage from `clb_pdarrays` and `clb_ddarrays`, including exponential and fixed-multiple growth, zero/`NULL` initialization, mutating element access that extends arrays like the C macros, delete/store/add/increment helpers, and `DDArraySelectPart` partition selection.
@@ -148,6 +151,7 @@ Known gaps:
 These notes are not permission to diverge during porting. They identify inherited C behaviors that may be good cleanup candidates after the Rust executable is demonstrably drop-in compatible.
 
 - `DStr`, `PStack`, `DStack`, `PDArray`, `DDArray`, and `PDRangeArr` preserve C growth and mutating-access patterns; later APIs may want clearer separation between read-only access and access that allocates or extends storage.
+- `clb_avlgeneric` is an obsolete name for generic binary-search-tree traversal; Rust keeps that naming only at the module boundary and uses handle-based traversal internally.
 - `PStack`/`DStack` discard helpers intentionally use swap-remove behavior, which is efficient but order-destroying; keep auditing callers before exposing order-preserving variants.
 - `PList` raw-pointer anchors and extracted-cell ownership are represented with checked arena handles; after list-heavy clause/formula code is ported, revisit whether a generational freelist or typed owner should replace the current simple slot model.
 - `PLocalStack` intentionally keeps the C split between `ensure_space` and push; later term traversal code may want scoped helper APIs that make missing ensures impossible without losing the C growth profile.
