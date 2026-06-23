@@ -42,6 +42,7 @@ Rust files:
 - `src/basics/verbose.rs`
 - `src/inout/basicparser.rs`
 - `src/inout/commandline.rs`
+- `src/inout/output.rs`
 - `src/inout/scanner.rs`
 - `src/inout/simplestuff.rs`
 - `src/inout/streams.rs`
@@ -87,6 +88,7 @@ Original C references:
 - [`BASICS/clb_verbose.h`, `BASICS/clb_verbose.c`](c_source_docs/BASICS/clb_verbose.md)
 - [`INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`](c_source_docs/INOUT/cio_basicparser.md)
 - [`INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`](c_source_docs/INOUT/cio_commandline.md)
+- [`INOUT/cio_output.h`, `INOUT/cio_output.c`](c_source_docs/INOUT/cio_output.md)
 - [`INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`](c_source_docs/INOUT/cio_scanner.md)
 - [`INOUT/cio_simplestuff.h`, `INOUT/cio_simplestuff.c`](c_source_docs/INOUT/cio_simplestuff.md)
 - [`INOUT/cio_streams.h`, `INOUT/cio_streams.c`](c_source_docs/INOUT/cio_streams.md)
@@ -129,6 +131,7 @@ Implemented behavior:
 - Initial stream and scanner support for string sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, and position formatting.
 - Shared basic parser helpers from `cio_basicparser`: booleans, signed and unsigned integer parsing, floats, number-string classification, double arrays, filenames, basic include syntax, dotted identifiers, continuous token spans, and balanced delimiter skipping.
 - The core `CLStateGetOpt` command-line parser rules from `cio_commandline`: long options require `--name=value` for required arguments, long optional arguments default when `=` is absent, short required arguments accept attached or following values, short optional arguments use the default, `--` stops option parsing, and processed options are removed from the remaining argument list.
+- Output helpers from `cio_output`, including default output level 1, `OUTPRINT` level gating, `-`/`NULL` as stdout, global output target initialization/open/close, file-open diagnostics, and dashed-status formatting.
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
 
@@ -154,6 +157,7 @@ Known gaps:
 - `SysDate` uses an LP64-shaped `i64` raw value to match the WSL/Linux C reference build; if a native Windows C reference becomes relevant, C `long` width and `SysDatePrint` output need a target-specific audit.
 - Verbose output helpers are not yet wired into the executable's parsed `--verbose` option or all future progress-reporting call sites.
 - `TCPReadTextBlock` is represented as a received-string iterator rather than an actual socket read until `cio_network` is ported.
+- `GlobalOutFD` is exact for stdout and Unix file targets, but native Windows file targets use an explicit unknown descriptor sentinel until signal/network output paths choose a safe platform abstraction.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
 - The JKISS wrapper preserves the exported C module's static-state behavior, including the fact that the `JKISSRand` state argument does not drive the random sequence; call-site-level compatibility should be revisited when random-dependent heuristics are ported.
 - The help option table is intentionally partial until the full option table is ported.
