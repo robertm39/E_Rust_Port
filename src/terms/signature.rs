@@ -1,7 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::functypes::FunCode;
-use crate::terms::simpletypes::{type_is_predicate, Type};
+use crate::terms::simpletypes::{alloc_arrow_type, type_is_predicate, Type};
 use crate::terms::typebanks::TypeBank;
 use std::collections::BTreeMap;
 use std::ops::{BitOr, BitOrAssign};
@@ -186,7 +186,18 @@ pub struct Signature {
     eqn_code: FunCode,
     neqn_code: FunCode,
     cnil_code: FunCode,
+    orn_codes: BTreeMap<i32, FunCode>,
+    not_code: FunCode,
+    qex_code: FunCode,
+    qall_code: FunCode,
+    and_code: FunCode,
     or_code: FunCode,
+    impl_code: FunCode,
+    equiv_code: FunCode,
+    nand_code: FunCode,
+    nor_code: FunCode,
+    bimpl_code: FunCode,
+    xor_code: FunCode,
     answer_code: FunCode,
     distinct_code: FunCode,
     skolem_count: i64,
@@ -215,7 +226,18 @@ impl Signature {
             eqn_code: 0,
             neqn_code: 0,
             cnil_code: 0,
+            orn_codes: BTreeMap::new(),
+            not_code: 0,
+            qex_code: 0,
+            qall_code: 0,
+            and_code: 0,
             or_code: 0,
+            impl_code: 0,
+            equiv_code: 0,
+            nand_code: 0,
+            nor_code: 0,
+            bimpl_code: 0,
+            xor_code: 0,
             answer_code: 0,
             distinct_code: 0,
             skolem_count: 0,
@@ -318,8 +340,58 @@ impl Signature {
     }
 
     #[must_use]
+    pub const fn not_code(&self) -> FunCode {
+        self.not_code
+    }
+
+    #[must_use]
+    pub const fn qex_code(&self) -> FunCode {
+        self.qex_code
+    }
+
+    #[must_use]
+    pub const fn qall_code(&self) -> FunCode {
+        self.qall_code
+    }
+
+    #[must_use]
+    pub const fn and_code(&self) -> FunCode {
+        self.and_code
+    }
+
+    #[must_use]
     pub const fn or_code(&self) -> FunCode {
         self.or_code
+    }
+
+    #[must_use]
+    pub const fn impl_code(&self) -> FunCode {
+        self.impl_code
+    }
+
+    #[must_use]
+    pub const fn equiv_code(&self) -> FunCode {
+        self.equiv_code
+    }
+
+    #[must_use]
+    pub const fn nand_code(&self) -> FunCode {
+        self.nand_code
+    }
+
+    #[must_use]
+    pub const fn nor_code(&self) -> FunCode {
+        self.nor_code
+    }
+
+    #[must_use]
+    pub const fn bimpl_code(&self) -> FunCode {
+        self.bimpl_code
+    }
+
+    #[must_use]
+    pub const fn xor_code(&self) -> FunCode {
+        self.xor_code
     }
 
     #[must_use]
@@ -390,6 +462,83 @@ impl Signature {
             self.declare_type(f_code, type_)?;
             self.fix_type(f_code);
         }
+        Ok(())
+    }
+
+    /// Inserts the fixed block of internal FOF and higher-order helper symbols.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the signature was initialized with list support. The C source
+    /// has fixed-code assertions in this path that are only coherent for the
+    /// default no-list-support initialization.
+    pub fn insert_internal_codes(&mut self) -> Result<(), Diagnostic> {
+        assert_eq!(
+            self.internal_symbols, SIG_FALSE_CODE,
+            "C fixed-code assertions only hold for signatures without list support"
+        );
+
+        let bool_type = self.type_bank.bool_type();
+        let unary_log_op_type = self
+            .type_bank
+            .insert_type_shared(alloc_arrow_type(vec![bool_type.clone(), bool_type.clone()]));
+        let binary_log_op_type = self.type_bank.insert_type_shared(alloc_arrow_type(vec![
+            bool_type.clone(),
+            bool_type.clone(),
+            bool_type.clone(),
+        ]));
+
+        self.eqn_code = self.insert_id("$eq", 2, true);
+        self.set_polymorphic(self.eqn_code, true);
+        self.neqn_code = self.insert_id("$neq", 2, true);
+        self.set_polymorphic(self.neqn_code, true);
+        self.qex_code = self.insert_id("$qex", 2, true);
+        self.qall_code = self.insert_id("$qall", 2, true);
+        self.set_polymorphic(self.qex_code, true);
+        self.set_polymorphic(self.qall_code, true);
+
+        self.not_code = self.insert_fof_op("$not", 1);
+        self.declare_final_type(self.not_code, unary_log_op_type)?;
+        self.and_code = self.insert_fof_op("$and", 2);
+        self.declare_final_type(self.and_code, binary_log_op_type.clone())?;
+        self.or_code = self.insert_fof_op("$or", 2);
+        self.declare_final_type(self.or_code, binary_log_op_type.clone())?;
+        self.impl_code = self.insert_fof_op("$impl", 2);
+        self.declare_final_type(self.impl_code, binary_log_op_type.clone())?;
+        self.equiv_code = self.insert_fof_op("$equiv", 2);
+        self.declare_final_type(self.equiv_code, binary_log_op_type.clone())?;
+        self.nand_code = self.insert_fof_op("$nand", 2);
+        self.declare_final_type(self.nand_code, binary_log_op_type.clone())?;
+        self.nor_code = self.insert_fof_op("$nor", 2);
+        self.declare_final_type(self.nor_code, binary_log_op_type.clone())?;
+        self.bimpl_code = self.insert_fof_op("$bimpl", 2);
+        self.declare_final_type(self.bimpl_code, binary_log_op_type.clone())?;
+        self.xor_code = self.insert_fof_op("$xor", 2);
+        self.declare_final_type(self.xor_code, binary_log_op_type)?;
+
+        self.answer_code = self.insert_id("$answer", 1, true);
+        self.set_func_prop(self.answer_code, FP_INTERPRETED | FP_PSEUDO_PRED);
+
+        let phony = self.insert_id("$@_var", 1, true);
+        debug_assert_eq!(phony, SIG_PHONY_APP_CODE);
+        let named_lambda = self.insert_id("$named_lam", 2, true);
+        debug_assert_eq!(named_lambda, SIG_NAMED_LAMBDA_CODE);
+        let db_lambda = self.insert_id("$db_lam", 2, true);
+        debug_assert_eq!(db_lambda, SIG_DB_LAMBDA_CODE);
+        let ite = self.insert_id("$ite", 3, true);
+        debug_assert_eq!(ite, SIG_ITE_CODE);
+        let let_code = self.insert_id("$let", 3, true);
+        debug_assert_eq!(let_code, SIG_LET_CODE);
+
+        let answer_type = self.type_bank.insert_type_shared(alloc_arrow_type(vec![
+            self.type_bank.i_type(),
+            self.type_bank.bool_type(),
+        ]));
+        self.declare_final_type(self.answer_code, answer_type)?;
+
+        self.distinct_code = self.insert_id("$distinct", -1, true);
+        self.set_polymorphic(self.distinct_code, true);
+        self.internal_symbols = self.f_count;
         Ok(())
     }
 
@@ -523,6 +672,100 @@ impl Signature {
         let f_code = self.insert_id(name, arity, true);
         self.set_func_prop(f_code, FP_FOF_OP);
         f_code
+    }
+
+    pub fn get_eqn_code(&mut self, positive: bool) -> FunCode {
+        if positive {
+            if self.eqn_code == 0 {
+                self.eqn_code = self.insert_id("$eq", 2, true);
+                self.set_func_prop(self.eqn_code, FP_FOF_OP | FP_TYPE_POLY);
+            }
+            self.eqn_code
+        } else {
+            if self.neqn_code == 0 {
+                self.neqn_code = self.insert_id("$neq", 2, true);
+                self.set_func_prop(self.neqn_code, FP_FOF_OP | FP_TYPE_POLY);
+            }
+            self.neqn_code
+        }
+    }
+
+    /// Returns the opposite equality/inequality code.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `f_code` is neither the stored equality code nor the stored
+    /// inequality code, matching the C assertion.
+    #[must_use]
+    pub fn get_other_eqn_code(&self, f_code: FunCode) -> FunCode {
+        if f_code == self.eqn_code {
+            self.neqn_code
+        } else {
+            assert_eq!(f_code, self.neqn_code, "expected equality code");
+            self.eqn_code
+        }
+    }
+
+    pub fn get_or_code(&mut self) -> FunCode {
+        if self.or_code == 0 {
+            self.or_code = self.insert_id("$or", 2, true);
+        }
+        self.or_code
+    }
+
+    pub fn get_cnil_code(&mut self) -> FunCode {
+        if self.cnil_code == 0 {
+            self.cnil_code = self.insert_id("$cnil", 0, true);
+        }
+        self.cnil_code
+    }
+
+    pub fn get_or_n_code(&mut self, arity: i32) -> FunCode {
+        if let Some(code) = self.orn_codes.get(&arity) {
+            return *code;
+        }
+        let code = self.insert_id(&format!("$or{arity}"), arity, true);
+        self.orn_codes.insert(arity, code);
+        code
+    }
+
+    pub fn get_new_f_code(
+        &mut self,
+        arity: i32,
+        prefix: &str,
+        counter: &mut i64,
+        props: FunctionProperties,
+    ) -> FunCode {
+        loop {
+            *counter += 1;
+            let name = format!("{prefix}{counter}_{arity}");
+            if self.find_f_code(&name) == 0 {
+                let code = self.insert_id(&name, arity, false);
+                self.set_func_prop(code, props);
+                return code;
+            }
+        }
+    }
+
+    pub fn get_new_skolem_code(&mut self, arity: i32) -> FunCode {
+        let mut counter = self.skolem_count;
+        let code = self.get_new_f_code(arity, "esk", &mut counter, FP_SKOLEM_SYMBOL);
+        self.skolem_count = counter;
+        code
+    }
+
+    pub fn get_new_predicate_code(&mut self, arity: i32) -> FunCode {
+        let mut counter = self.newpred_count;
+        let code = self.get_new_f_code(arity, "epred", &mut counter, FP_DEF_PRED);
+        self.newpred_count = counter;
+        code
+    }
+
+    pub fn get_new_def_code(&mut self, arity: i32) -> FunCode {
+        let mut counter = self.newdef_count;
+        let code = self.get_new_f_code(arity, "edef", &mut counter, FP_DEF_FUN);
+        self.newdef_count = counter;
+        code
     }
 
     pub fn pop_id(&mut self) -> FunCode {
@@ -990,5 +1233,94 @@ mod tests {
         assert_eq!(sig.get_feature_offset(f), 5);
         assert_eq!(sig.get_feature_offset(p), 11);
         assert_eq!(sig.get_depth_feature_offset(p), 23);
+    }
+
+    #[test]
+    fn insert_internal_codes_adds_fof_symbols_and_fixed_code_block() {
+        let mut sig = signature();
+
+        sig.insert_internal_codes().unwrap();
+
+        assert_eq!(sig.eqn_code(), 3);
+        assert_eq!(sig.neqn_code(), 4);
+        assert_eq!(sig.qex_code(), 5);
+        assert_eq!(sig.qall_code(), 6);
+        assert_eq!(sig.not_code(), 7);
+        assert_eq!(sig.and_code(), 8);
+        assert_eq!(sig.or_code(), 9);
+        assert_eq!(sig.impl_code(), 10);
+        assert_eq!(sig.equiv_code(), 11);
+        assert_eq!(sig.nand_code(), 12);
+        assert_eq!(sig.nor_code(), 13);
+        assert_eq!(sig.bimpl_code(), 14);
+        assert_eq!(sig.xor_code(), 15);
+        assert_eq!(sig.answer_code(), 16);
+        assert_eq!(sig.find_f_code("$@_var"), SIG_PHONY_APP_CODE);
+        assert_eq!(sig.find_f_code("$named_lam"), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(sig.find_f_code("$db_lam"), SIG_DB_LAMBDA_CODE);
+        assert_eq!(sig.find_f_code("$ite"), SIG_ITE_CODE);
+        assert_eq!(sig.find_f_code("$let"), SIG_LET_CODE);
+        assert_eq!(sig.distinct_code(), 22);
+        assert_eq!(sig.internal_symbols(), sig.f_count());
+
+        assert!(sig.is_polymorphic(sig.eqn_code()));
+        assert!(sig.is_polymorphic(sig.neqn_code()));
+        assert!(sig.is_polymorphic(sig.qex_code()));
+        assert!(sig.is_polymorphic(sig.qall_code()));
+        assert!(sig.is_polymorphic(sig.distinct_code()));
+        assert!(sig.query_prop(sig.not_code(), FP_FOF_OP | FP_SPECIAL | FP_TYPE_FIXED));
+        assert!(sig.query_prop(
+            sig.answer_code(),
+            FP_INTERPRETED | FP_PSEUDO_PRED | FP_TYPE_FIXED | FP_SPECIAL
+        ));
+        assert!(sig.get_type(sig.answer_code()).is_some());
+    }
+
+    #[test]
+    fn lazy_special_code_helpers_create_and_reuse_symbols() {
+        let mut sig = signature();
+
+        let eq = sig.get_eqn_code(true);
+        let neq = sig.get_eqn_code(false);
+        assert_eq!(sig.get_eqn_code(true), eq);
+        assert_eq!(sig.get_eqn_code(false), neq);
+        assert_eq!(sig.get_other_eqn_code(eq), neq);
+        assert_eq!(sig.get_other_eqn_code(neq), eq);
+        assert!(sig.query_prop(eq, FP_FOF_OP | FP_TYPE_POLY));
+        assert!(sig.query_prop(neq, FP_FOF_OP | FP_TYPE_POLY));
+
+        let or = sig.get_or_code();
+        assert_eq!(sig.get_or_code(), or);
+        assert_eq!(sig.find_f_code("$or"), or);
+
+        let cnil = sig.get_cnil_code();
+        assert_eq!(sig.get_cnil_code(), cnil);
+        assert_eq!(sig.find_f_code("$cnil"), cnil);
+
+        let or3 = sig.get_or_n_code(3);
+        assert_eq!(sig.get_or_n_code(3), or3);
+        assert_eq!(sig.find_f_code("$or3"), or3);
+        assert_eq!(sig.find_arity(or3), Some(3));
+    }
+
+    #[test]
+    fn generated_symbol_helpers_increment_counters_and_skip_existing_names() {
+        let mut sig = signature();
+        sig.insert_id_for_problem("esk1_2", 2, false, ProblemType::FirstOrder);
+
+        let skolem = sig.get_new_skolem_code(2);
+        assert_eq!(sig.find_name(skolem), Some("esk2_2"));
+        assert_eq!(sig.skolem_count(), 2);
+        assert!(sig.query_prop(skolem, FP_SKOLEM_SYMBOL));
+
+        let predicate = sig.get_new_predicate_code(1);
+        assert_eq!(sig.find_name(predicate), Some("epred1_1"));
+        assert_eq!(sig.newpred_count(), 1);
+        assert!(sig.query_prop(predicate, FP_DEF_PRED));
+
+        let def = sig.get_new_def_code(0);
+        assert_eq!(sig.find_name(def), Some("edef1_0"));
+        assert_eq!(sig.newdef_count(), 1);
+        assert!(sig.query_prop(def, FP_DEF_FUN));
     }
 }
