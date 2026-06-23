@@ -1,5 +1,6 @@
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::signature::{
@@ -9,7 +10,7 @@ use crate::terms::signature::{
 use crate::terms::simpletypes::{type_drop_first_arg, types_cmp, var_order};
 use crate::terms::termtypes::{
     term_del_prop_opt, term_deref, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT,
-    DEFAULT_VWEIGHT, TP_OP_FLAG, TP_PRED_POS,
+    DEFAULT_VWEIGHT, TP_IS_GROUND, TP_OP_FLAG, TP_PRED_POS,
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
@@ -666,11 +667,20 @@ pub fn term_is_ground_compute(term: &Term) -> bool {
 }
 
 #[must_use]
+pub fn term_is_ground(term: &Term) -> bool {
+    if term.is_shared() {
+        term.query_prop(TP_IS_GROUND)
+    } else {
+        term_is_ground_compute(term)
+    }
+}
+
+#[must_use]
 pub fn term_find_max_var_code(term: &Term) -> FunCode {
     if term.is_free_var() {
         return term.f_code();
     }
-    if term_is_ground_compute(term) {
+    if term_is_ground(term) {
         return 0;
     }
     term.argument_clones()
@@ -711,7 +721,13 @@ pub fn term_collect_variables(term: &Term, vars: &mut BTreeMap<usize, Term>) -> 
                 count += 1;
             }
         } else {
-            stack.extend(current.argument_clones().into_iter().flatten());
+            stack.extend(
+                current
+                    .argument_clones()
+                    .into_iter()
+                    .flatten()
+                    .filter(|arg| !term_is_ground(arg)),
+            );
         }
     }
     count
@@ -820,6 +836,47 @@ pub fn term_add_symbol_features_limited(
     }
 }
 
+/// Adds four-slot symbol features and records first-touched frequency slots.
+///
+/// The `offset` convention follows C: `0` for positive literals and `2` for
+/// negative literals. Each symbol uses slots `4*f_code + offset` for frequency
+/// and `4*f_code + offset + 1` for maximum depth.
+///
+/// # Panics
+///
+/// Panics if `feature_array` cannot address a touched feature slot, if feature
+/// index arithmetic overflows, or if a traversed non-variable, non-phony term
+/// has a non-positive f-code.
+pub fn term_add_symbol_features(
+    term: &Term,
+    mod_stack: &mut Vec<usize>,
+    depth: i64,
+    feature_array: &mut [i64],
+    offset: usize,
+) {
+    if term.is_any_var() {
+        return;
+    }
+    if !term.is_phony_app() {
+        let freq_index = symbol_feature_index(term.f_code(), offset);
+        let depth_index = freq_index
+            .checked_add(1)
+            .expect("symbol feature depth index fits in usize");
+        assert!(
+            depth_index < feature_array.len(),
+            "feature array must cover touched symbol slots"
+        );
+        if feature_array[freq_index] == 0 {
+            mod_stack.push(freq_index);
+        }
+        feature_array[freq_index] += 1;
+        feature_array[depth_index] = feature_array[depth_index].max(depth);
+    }
+    for arg in term.argument_clones().into_iter().flatten() {
+        term_add_symbol_features(&arg, mod_stack, depth + 1, feature_array, offset);
+    }
+}
+
 /// Assigns post-order occurrence ranks to first occurrences of function symbols.
 ///
 /// # Panics
@@ -844,6 +901,68 @@ pub fn term_compute_function_ranks(term: &Term, rank_array: &mut [i64], count: &
             *count += 1;
         }
     }
+}
+
+pub fn term_collect_ground_terms(
+    term: &Term,
+    result: &mut BTreeMap<usize, Term>,
+    all_subterms: bool,
+) -> i64 {
+    let mut count = 0;
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if !current.is_free_var() {
+            let is_ground = term_is_ground(&current);
+            if is_ground
+                && !current.is_const()
+                && !current.query_prop(TP_PRED_POS)
+                && result
+                    .insert(term_identity_id(&current), current.clone())
+                    .is_none()
+            {
+                count += 1;
+            }
+            if !is_ground || all_subterms {
+                stack.extend(current.argument_clones().into_iter().flatten());
+            }
+        }
+    }
+    count
+}
+
+/// Adds newly encountered non-phony function symbols to `res_stack`.
+///
+/// The dynamic occurrence array is addressed by f-code and grows like C's
+/// `PDArray`.
+///
+/// # Panics
+///
+/// Panics if a traversed non-variable, non-phony term has a non-positive f-code
+/// or one that cannot be represented as a `PDArrayIndex`.
+pub fn term_add_fun_occ(
+    term: &Term,
+    f_occur: &mut PDIntArray,
+    res_stack: &mut Vec<FunCode>,
+) -> i64 {
+    let mut count = 0;
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if !current.is_any_var() {
+            if !current.is_phony_app() {
+                let index = positive_symbol_pd_index(current.f_code());
+                if f_occur.element_int(index) == 0 {
+                    count += 1;
+                    res_stack.push(current.f_code());
+                    assert!(
+                        f_occur.assign(index, 1),
+                        "function-occurrence array must cover positive f-codes"
+                    );
+                }
+            }
+            stack.extend(current.argument_clones().into_iter().flatten());
+        }
+    }
+    count
 }
 
 #[must_use]
@@ -1056,24 +1175,37 @@ fn positive_symbol_index(f_code: FunCode) -> usize {
     usize::try_from(f_code).expect("positive f-code fits in usize")
 }
 
+fn positive_symbol_pd_index(f_code: FunCode) -> PDArrayIndex {
+    assert!(f_code > 0, "function symbol f-code must be positive");
+    PDArrayIndex::try_from(f_code).expect("positive f-code fits in PDArrayIndex")
+}
+
+fn symbol_feature_index(f_code: FunCode, offset: usize) -> usize {
+    positive_symbol_index(f_code)
+        .checked_mul(4)
+        .and_then(|index| index.checked_add(offset))
+        .expect("symbol feature index fits in usize")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
-        term_add_symbol_features_limited, term_apply_arg, term_array_no_duplicates,
-        term_collect_fcodes, term_collect_variables, term_compute_function_ranks,
-        term_compute_order, term_create_prefix, term_dag_weight, term_depth,
-        term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
-        term_is_def_term, term_is_flat, term_is_ground_compute, term_is_subterm,
-        term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
-        term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
-        term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
-        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
-        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
-        term_weight_compute, var_print_string, VarNormStyle,
+        term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
+        term_add_symbol_features, term_add_symbol_features_limited, term_apply_arg,
+        term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
+        term_collect_variables, term_compute_function_ranks, term_compute_order,
+        term_create_prefix, term_dag_weight, term_depth, term_find_max_var_code, term_has_f_code,
+        term_has_unbound_variables, term_is_db_closed, term_is_def_term, term_is_flat,
+        term_is_ground, term_is_ground_compute, term_is_subterm, term_is_subterm_deref,
+        term_is_untyped, term_lex_compare, term_linearize, term_non_linear_weight, term_parse,
+        term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
+        term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
+        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
+        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
+    use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::inout::scanner::Scanner;
     use crate::terms::functypes::FuncSymbType;
     use crate::terms::signature::{
@@ -1081,7 +1213,8 @@ mod tests {
     };
     use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg};
     use crate::terms::termtypes::{
-        DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_OP_FLAG, TP_PRED_POS,
+        term_identity_id, DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_IS_GROUND,
+        TP_IS_SHARED, TP_OP_FLAG, TP_PRED_POS,
     };
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
@@ -1424,6 +1557,102 @@ mod tests {
         term_add_symbol_dist_exist(&app, &mut dist, &mut exists);
         assert_eq!(dist[usize::try_from(SIG_PHONY_APP_CODE).unwrap()], 0);
         assert_eq!(exists, vec![30]);
+    }
+
+    #[test]
+    fn symbol_feature_and_fun_occ_helpers_preserve_c_stack_shapes() {
+        let root = Term::top_alloc(10, 2);
+        let nested = Term::top_alloc(20, 1);
+        let leaf = Term::const_cell_alloc(30);
+        nested.set_argument(0, leaf.clone());
+        root.set_argument(0, nested);
+        root.set_argument(1, leaf);
+
+        let mut feature_array = vec![0; 128];
+        let mut mod_stack = Vec::new();
+        term_add_symbol_features(&root, &mut mod_stack, 0, &mut feature_array, 2);
+        assert_eq!(mod_stack, vec![42, 82, 122]);
+        assert_eq!(feature_array[42], 1);
+        assert_eq!(feature_array[43], 0);
+        assert_eq!(feature_array[82], 1);
+        assert_eq!(feature_array[83], 1);
+        assert_eq!(feature_array[122], 2);
+        assert_eq!(feature_array[123], 2);
+
+        term_add_symbol_features(&root, &mut mod_stack, 0, &mut feature_array, 2);
+        assert_eq!(mod_stack, vec![42, 82, 122]);
+        assert_eq!(feature_array[42], 2);
+        assert_eq!(feature_array[122], 4);
+
+        let mut f_occur = PDIntArray::new_int(1, GROW_EXPONENTIAL);
+        let mut occ_stack = Vec::new();
+        assert_eq!(term_add_fun_occ(&root, &mut f_occur, &mut occ_stack), 3);
+        assert_eq!(occ_stack, vec![10, 30, 20]);
+        assert_eq!(f_occur.element_int(10), 1);
+        assert_eq!(f_occur.element_int(20), 1);
+        assert_eq!(f_occur.element_int(30), 1);
+
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, Term::const_cell_alloc(-2));
+        app.set_argument(1, Term::const_cell_alloc(30));
+        let mut f_occur = PDIntArray::new_int(1, GROW_EXPONENTIAL);
+        let mut occ_stack = Vec::new();
+        assert_eq!(term_add_fun_occ(&app, &mut f_occur, &mut occ_stack), 1);
+        assert_eq!(occ_stack, vec![30]);
+        assert_eq!(
+            f_occur.element_int(isize::try_from(SIG_PHONY_APP_CODE).unwrap()),
+            0
+        );
+    }
+
+    #[test]
+    fn ground_collection_uses_cached_ground_and_predicate_filter() {
+        let root = Term::top_alloc(10, 2);
+        let nested = Term::top_alloc(20, 1);
+        let leaf = Term::const_cell_alloc(30);
+        nested.set_argument(0, leaf.clone());
+        root.set_argument(0, nested.clone());
+        root.set_argument(1, Term::const_cell_alloc(31));
+
+        let mut maximal = BTreeMap::new();
+        assert_eq!(term_collect_ground_terms(&root, &mut maximal, false), 1);
+        assert!(maximal.contains_key(&term_identity_id(&root)));
+        assert!(!maximal.contains_key(&term_identity_id(&nested)));
+
+        let mut all = BTreeMap::new();
+        assert_eq!(term_collect_ground_terms(&root, &mut all, true), 2);
+        assert!(all.contains_key(&term_identity_id(&root)));
+        assert!(all.contains_key(&term_identity_id(&nested)));
+        assert!(!all.contains_key(&term_identity_id(&leaf)));
+
+        nested.set_prop(TP_PRED_POS);
+        let mut filtered = BTreeMap::new();
+        assert_eq!(term_collect_ground_terms(&root, &mut filtered, true), 1);
+        assert!(filtered.contains_key(&term_identity_id(&root)));
+        assert!(!filtered.contains_key(&term_identity_id(&nested)));
+
+        let cached = Term::top_alloc(40, 1);
+        let hidden_var = Term::const_cell_alloc(-4);
+        cached.set_argument(0, hidden_var);
+        cached.set_prop(TP_IS_SHARED | TP_IS_GROUND);
+        assert!(!term_is_ground_compute(&cached));
+        assert!(term_is_ground(&cached));
+        assert_eq!(term_find_max_var_code(&cached), 0);
+
+        let mut vars = BTreeMap::new();
+        assert_eq!(term_collect_variables(&cached, &mut vars), 1);
+
+        let parent = Term::top_alloc(50, 1);
+        parent.set_argument(0, cached.clone());
+        let mut vars = BTreeMap::new();
+        assert_eq!(term_collect_variables(&parent, &mut vars), 0);
+
+        let mut cached_terms = BTreeMap::new();
+        assert_eq!(
+            term_collect_ground_terms(&cached, &mut cached_terms, false),
+            1
+        );
+        assert!(cached_terms.contains_key(&term_identity_id(&cached)));
     }
 
     #[test]
