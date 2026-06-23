@@ -8,6 +8,7 @@ pub mod diseq_decomp;
 pub mod eqn;
 pub mod eqn_props;
 pub mod eqnlist;
+pub mod g_lithash;
 pub mod garbage_coll;
 pub mod subterm_index;
 pub mod subterm_tree;
