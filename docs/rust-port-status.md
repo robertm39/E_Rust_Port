@@ -13,6 +13,7 @@ Rust files:
 - `src/basics/error.rs`
 - `src/basics/fixdarrays.rs`
 - `src/basics/floattrees.rs`
+- `src/basics/min_heap.rs`
 - `src/basics/numtrees.rs`
 - `src/basics/numxtrees.rs`
 - `src/basics/pdarrays.rs`
@@ -38,6 +39,7 @@ Original C references:
 - [`BASICS/clb_error.h`, `BASICS/clb_error.c`](c_source_docs/BASICS/clb_error.md)
 - [`BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`](c_source_docs/BASICS/clb_fixdarrays.md)
 - [`BASICS/clb_floattrees.h`, `BASICS/clb_floattrees.c`](c_source_docs/BASICS/clb_floattrees.md)
+- [`BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`](c_source_docs/BASICS/clb_min_heap.md)
 - [`BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`](c_source_docs/BASICS/clb_numtrees.md)
 - [`BASICS/clb_numxtrees.h`, `BASICS/clb_numxtrees.c`](c_source_docs/BASICS/clb_numxtrees.md)
 - [`BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`](c_source_docs/BASICS/clb_pdarrays.md)
@@ -62,6 +64,7 @@ Implemented behavior:
 - Dynamic `PDArray` and `DDArray` storage from `clb_pdarrays` and `clb_ddarrays`, including exponential and fixed-multiple growth, zero/`NULL` initialization, mutating element access that extends arrays like the C macros, delete/store/add/increment helpers, and `DDArraySelectPart` partition selection.
 - `PDRangeArr` signed-index dynamic arrays from `clb_pdrangearrays`, including low/limit key tracking, upward and downward expansion, C-compatible offset shifts, pointer-member counting, deletion, copying, and integer increment helpers.
 - `FixedDArray` fixed-size integer vector helpers from `clb_fixdarrays`, including initialization, component-wise add/subtract/weighted-add/min/max, copying, and C-shaped debug printing.
+- `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
 - Property-bit helpers from `clb_properties`, including set/delete/flip/assign, all-bit and any-bit queries, masked property extraction, and masked equivalence checks.
 - `StrTree` string-keyed map behavior from `clb_stringtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction, deletion, and deterministic sorted traversal.
 - `FloatTree` floating-point-keyed map behavior from `clb_floattrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction/deletion, node queries, deterministic sorted traversal for ordered float keys, signed-zero equivalence, infinities, and deterministic NaN bucketing.
