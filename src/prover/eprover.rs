@@ -14,6 +14,9 @@ use crate::inout::scanner::IoFormat;
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
+use crate::terms::signature::{
+    FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+};
 use crate::terms::termtypes::RewriteLevel;
 
 const MEGA: u64 = 1_048_576;
@@ -21,10 +24,12 @@ const C_INT_MAX: i64 = i32::MAX as i64;
 const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;
 const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
+const DEFAULT_FORMULA_DEF_LIMIT: i64 = 24;
 const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const DEFAULT_LAMBDA_WEIGHT: i64 = 20;
 const DEFAULT_DB_WEIGHT: i64 = 10;
 const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
+const DEFAULT_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
@@ -325,11 +330,31 @@ pub struct GoalDefinitionConfig {
     pub subterms: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FoolUnroll {
+    #[default]
+    Enabled,
+    Disabled,
+}
+
+impl From<bool> for FoolUnroll {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreprocessingConfig {
     pub no_preprocessing: bool,
     pub eqdef_maxclauses: i64,
     pub eqdef_incrlimit: i64,
+    pub formula_def_limit: i64,
+    pub miniscope_limit: i64,
+    pub fool_unroll: FoolUnroll,
     pub goal_definitions: GoalDefinitionConfig,
     pub relevance_prune_level: i64,
     pub presat_interreduction: bool,
@@ -343,6 +368,9 @@ impl Default for PreprocessingConfig {
             no_preprocessing: false,
             eqdef_maxclauses: DEFAULT_EQDEF_MAXCLAUSES,
             eqdef_incrlimit: DEFAULT_EQDEF_INCRLIMIT,
+            formula_def_limit: DEFAULT_FORMULA_DEF_LIMIT,
+            miniscope_limit: DEFAULT_MINISCOPE_LIMIT,
+            fool_unroll: FoolUnroll::Enabled,
             goal_definitions: GoalDefinitionConfig::default(),
             relevance_prune_level: 0,
             presat_interreduction: false,
@@ -393,6 +421,15 @@ pub enum FvIndexFeatureType {
     AcFold = 6,
     AcStagger = 7,
     CollectFeatures = 8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum ExtInferenceType {
+    AllLits = 0,
+    MaxLits = 1,
+    #[default]
+    NoLits = 2,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -468,6 +505,8 @@ impl Default for TermOrderingConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HeuristicConfig {
     pub name: String,
+    pub weight_function_definitions: Vec<String>,
+    pub heuristic_definitions: Vec<String>,
     pub prefer_initial_clauses: bool,
     pub filter_orphans_limit: i64,
     pub forward_contract_limit: i64,
@@ -477,6 +516,8 @@ impl Default for HeuristicConfig {
     fn default() -> Self {
         Self {
             name: DEFAULT_HEURISTIC_NAME.to_owned(),
+            weight_function_definitions: Vec::new(),
+            heuristic_definitions: Vec::new(),
             prefer_initial_clauses: false,
             filter_orphans_limit: i64::MAX,
             forward_contract_limit: i64::MAX,
@@ -578,6 +619,23 @@ pub struct SubsumptionConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HigherOrderInferenceConfig {
+    pub arg_cong: ExtInferenceType,
+    pub neg_ext: ExtInferenceType,
+    pub pos_ext: ExtInferenceType,
+}
+
+impl Default for HigherOrderInferenceConfig {
+    fn default() -> Self {
+        Self {
+            arg_cong: ExtInferenceType::AllLits,
+            neg_ext: ExtInferenceType::NoLits,
+            pos_ext: ExtInferenceType::NoLits,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InferenceConfig {
     pub enable_eq_factoring: bool,
     pub enable_neg_unit_paramod: bool,
@@ -588,6 +646,7 @@ pub struct InferenceConfig {
     pub context_simplification: ContextSimplificationConfig,
     pub equality_resolution: EqualityResolutionConfig,
     pub subsumption: SubsumptionConfig,
+    pub higher_order: HigherOrderInferenceConfig,
 }
 
 impl Default for InferenceConfig {
@@ -602,6 +661,7 @@ impl Default for InferenceConfig {
             context_simplification: ContextSimplificationConfig::default(),
             equality_resolution: EqualityResolutionConfig::default(),
             subsumption: SubsumptionConfig::default(),
+            higher_order: HigherOrderInferenceConfig::default(),
         }
     }
 }
@@ -753,6 +813,12 @@ impl Default for FingerprintIndexConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EncodingConfig {
+    pub print_types: bool,
+    pub app_encode: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SearchControlConfig {
     pub ordering: TermOrderingConfig,
@@ -783,6 +849,8 @@ pub struct EProverConfig {
     pub doc_output_format: DocOutputFormat,
     pub equation_print: EquationPrintConfig,
     pub pcl_output: PclOutputConfig,
+    pub free_symbol_properties: FunctionProperties,
+    pub encoding: EncodingConfig,
     pub saturated_output_descriptor: String,
     pub filter_saturated_descriptor: String,
     pub select_strategy: Option<String>,
@@ -866,6 +934,8 @@ impl Default for EProverConfig {
             doc_output_format: DocOutputFormat::NoFormat,
             equation_print: EquationPrintConfig::default(),
             pcl_output: PclOutputConfig::default(),
+            free_symbol_properties: FP_IGNORE_PROPS,
+            encoding: EncodingConfig::default(),
             saturated_output_descriptor: DEFAULT_OUTPUT_DESCRIPTOR.to_owned(),
             filter_saturated_descriptor: DEFAULT_FILTER_DESCRIPTOR.to_owned(),
             select_strategy: None,
@@ -1252,8 +1322,12 @@ const fn is_preprocessing_option(option: EProverOption) -> bool {
 const fn is_search_control_option(option: EProverOption) -> bool {
     is_literal_selection_option(option)
         || is_heuristic_control_option(option)
+        || is_definition_option(option)
+        || is_input_symbol_option(option)
+        || is_cnf_control_option(option)
         || is_inference_control_option(option)
         || is_inference_processing_option(option)
+        || is_extension_inference_option(option)
         || is_watchlist_option(option)
         || is_subsumption_index_option(option)
         || is_fingerprint_index_option(option)
@@ -1312,6 +1386,31 @@ const fn is_heuristic_control_option(option: EProverOption) -> bool {
     )
 }
 
+const fn is_definition_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::DefineWeightFunction | EProverOption::DefineHeuristic
+    )
+}
+
+const fn is_input_symbol_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::FreeNumbers | EProverOption::FreeObjects
+    )
+}
+
+const fn is_cnf_control_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::DefinitionalCnf
+            | EProverOption::FoolUnroll
+            | EProverOption::MiniscopeLimit
+            | EProverOption::PrintTypes
+            | EProverOption::AppEncode
+    )
+}
+
 const fn is_inference_control_option(option: EProverOption) -> bool {
     matches!(
         option,
@@ -1352,6 +1451,13 @@ const fn is_inference_processing_option(option: EProverOption) -> bool {
             | EProverOption::SatCheckNormalizeConst
             | EProverOption::SatCheckNormalizeUnproc
             | EProverOption::LiftLambdas
+    )
+}
+
+const fn is_extension_inference_option(option: EProverOption) -> bool {
+    matches!(
+        option,
+        EProverOption::ArgCong | EProverOption::NegExt | EProverOption::PosExt
     )
 }
 
@@ -1811,10 +1917,18 @@ fn apply_search_control_option(
         apply_literal_selection_option(config, parsed)?;
     } else if is_heuristic_control_option(option_code) {
         apply_heuristic_control_option(config, parsed)?;
+    } else if is_definition_option(option_code) {
+        apply_definition_option(config, parsed);
+    } else if is_input_symbol_option(option_code) {
+        apply_input_symbol_option(config, option_code);
+    } else if is_cnf_control_option(option_code) {
+        apply_cnf_control_option(config, parsed)?;
     } else if is_inference_control_option(option_code) {
         apply_inference_control_option(config, option_code);
     } else if is_inference_processing_option(option_code) {
         apply_inference_processing_option(config, parsed)?;
+    } else if is_extension_inference_option(option_code) {
+        apply_extension_inference_option(config, parsed)?;
     } else if is_watchlist_option(option_code) {
         apply_watchlist_option(config, parsed);
     } else if is_subsumption_index_option(option_code) {
@@ -1938,6 +2052,60 @@ fn apply_heuristic_control_option(
     Ok(())
 }
 
+fn apply_definition_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EProverOption>) {
+    let value = parsed.arg().unwrap_or("").to_owned();
+    match parsed.option().option_code {
+        EProverOption::DefineWeightFunction => {
+            config
+                .search
+                .heuristic
+                .weight_function_definitions
+                .push(value);
+        }
+        EProverOption::DefineHeuristic => {
+            config.search.heuristic.heuristic_definitions.push(value);
+        }
+        _ => unreachable!("non-definition option routed to definition handler"),
+    }
+}
+
+fn apply_input_symbol_option(config: &mut EProverConfig, option: EProverOption) {
+    match option {
+        EProverOption::FreeNumbers => {
+            config.free_symbol_properties |= FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT;
+        }
+        EProverOption::FreeObjects => {
+            config.free_symbol_properties |= FP_IS_OBJECT;
+        }
+        _ => unreachable!("non-input-symbol option routed to input-symbol handler"),
+    }
+}
+
+fn apply_cnf_control_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let value = parsed.arg().unwrap_or("");
+    match parsed.option().option_code {
+        EProverOption::DefinitionalCnf => {
+            config.preprocessing.formula_def_limit =
+                get_int_arg_check_range(parsed.option(), value, 0, i64::MAX)?;
+        }
+        EProverOption::FoolUnroll => {
+            config.preprocessing.fool_unroll =
+                FoolUnroll::from(get_bool_arg(parsed.option(), value)?);
+        }
+        EProverOption::MiniscopeLimit => {
+            config.preprocessing.miniscope_limit =
+                get_int_arg_check_range(parsed.option(), value, 0, i64::MAX)?;
+        }
+        EProverOption::PrintTypes => config.encoding.print_types = true,
+        EProverOption::AppEncode => config.encoding.app_encode = true,
+        _ => unreachable!("non-CNF-control option routed to CNF-control handler"),
+    }
+    Ok(())
+}
+
 fn apply_inference_control_option(config: &mut EProverConfig, option: EProverOption) {
     match option {
         EProverOption::AssumeCompleteness => {
@@ -2052,6 +2220,44 @@ fn apply_inference_processing_option(
         _ => unreachable!("non-inference-processing option routed to handler"),
     }
     Ok(())
+}
+
+fn apply_extension_inference_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    let mode = parse_ext_inference_mode(parsed.option().option_code, parsed.arg().unwrap_or(""))?;
+    match parsed.option().option_code {
+        EProverOption::ArgCong => config.search.inference.higher_order.arg_cong = mode,
+        EProverOption::NegExt => config.search.inference.higher_order.neg_ext = mode,
+        EProverOption::PosExt => config.search.inference.higher_order.pos_ext = mode,
+        _ => unreachable!("non-extension-inference option routed to extension handler"),
+    }
+    Ok(())
+}
+
+fn parse_ext_inference_mode(
+    option: EProverOption,
+    value: &str,
+) -> Result<ExtInferenceType, Diagnostic> {
+    match value {
+        "all" => Ok(ExtInferenceType::AllLits),
+        "max" => Ok(ExtInferenceType::MaxLits),
+        "off" => Ok(ExtInferenceType::NoLits),
+        _ => Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            ext_inference_error_message(option),
+        )),
+    }
+}
+
+fn ext_inference_error_message(option: EProverOption) -> &'static str {
+    match option {
+        EProverOption::ArgCong => "neg-ext excepts either all, max or off",
+        EProverOption::NegExt => "neg-ext excepts either all or max",
+        EProverOption::PosExt => "pos-ext excepts either all or max",
+        _ => unreachable!("non-extension-inference option routed to extension error helper"),
+    }
 }
 
 fn set_forward_demod_level(
@@ -2415,8 +2621,9 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverFlag, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
-        ParamodulationType, TermOrdering, WatchlistSource, MEGA,
+        EProverAction, EProverFlag, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
+        GroundingStrategy, LiteralComparison, ParamodulationType, TermOrdering, WatchlistSource,
+        MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -2427,6 +2634,9 @@ mod tests {
         set_soft_time_limit, soft_time_limit, RLIM_INFINITY_COMPAT,
     };
     use crate::prover::version::VERSION;
+    use crate::terms::signature::{
+        FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+    };
     use crate::terms::termtypes::RewriteLevel;
     use std::sync::{Mutex, OnceLock};
 
@@ -2825,6 +3035,95 @@ mod tests {
         };
         assert_eq!(config.preprocessing.eqdef_incrlimit, i64::MIN);
         assert_eq!(config.preprocessing.ac_handling, AcHandling::KeepUnits);
+    }
+
+    #[test]
+    fn process_options_records_definition_and_cnf_state_like_c() {
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config
+            .search
+            .heuristic
+            .weight_function_definitions
+            .is_empty());
+        assert!(config.search.heuristic.heuristic_definitions.is_empty());
+        assert_eq!(config.free_symbol_properties, FP_IGNORE_PROPS);
+        assert_eq!(config.preprocessing.formula_def_limit, 24);
+        assert_eq!(config.preprocessing.miniscope_limit, 1_048_576);
+        assert_eq!(config.preprocessing.fool_unroll, FoolUnroll::Enabled);
+        assert!(!config.encoding.print_types);
+        assert!(!config.encoding.app_encode);
+        assert_eq!(
+            config.search.inference.higher_order.arg_cong,
+            ExtInferenceType::AllLits
+        );
+        assert_eq!(
+            config.search.inference.higher_order.neg_ext,
+            ExtInferenceType::NoLits
+        );
+        assert_eq!(
+            config.search.inference.higher_order.pos_ext,
+            ExtInferenceType::NoLits
+        );
+
+        let action = process_options([
+            "eprover",
+            "-D",
+            "wf1",
+            "--define-weight-function=wf2",
+            "-H",
+            "h1",
+            "--define-heuristic=h2",
+            "--free-numbers",
+            "--free-objects",
+            "--definitional-cnf",
+            "--miniscope-limit",
+            "--fool-unroll=false",
+            "--print-types",
+            "--app-encode",
+            "--arg-cong=max",
+            "--neg-ext=all",
+            "--pos-ext=off",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(
+            config.search.heuristic.weight_function_definitions,
+            ["wf1", "wf2"]
+        );
+        assert_eq!(config.search.heuristic.heuristic_definitions, ["h1", "h2"]);
+        assert!(config
+            .free_symbol_properties
+            .contains_all(FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT | FP_IS_OBJECT));
+        assert_eq!(config.preprocessing.formula_def_limit, 24);
+        assert_eq!(config.preprocessing.miniscope_limit, 2_147_483_648);
+        assert_eq!(config.preprocessing.fool_unroll, FoolUnroll::Disabled);
+        assert!(config.encoding.print_types);
+        assert!(config.encoding.app_encode);
+        assert_eq!(
+            config.search.inference.higher_order.arg_cong,
+            ExtInferenceType::MaxLits
+        );
+        assert_eq!(
+            config.search.inference.higher_order.neg_ext,
+            ExtInferenceType::AllLits
+        );
+        assert_eq!(
+            config.search.inference.higher_order.pos_ext,
+            ExtInferenceType::NoLits
+        );
+
+        let action =
+            process_options(["eprover", "--definitional-cnf=0", "--miniscope-limit=7"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.preprocessing.formula_def_limit, 0);
+        assert_eq!(config.preprocessing.miniscope_limit, 7);
     }
 
     #[test]
@@ -3317,6 +3616,27 @@ mod tests {
 
         let error = process_options(["eprover", "--lift-lambdas=maybe"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--definitional-cnf=-1"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--miniscope-limit=-1"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--fool-unroll=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--arg-cong=bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.message(), "neg-ext excepts either all, max or off");
+
+        let error = process_options(["eprover", "--neg-ext=bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.message(), "neg-ext excepts either all or max");
+
+        let error = process_options(["eprover", "--pos-ext=bad"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.message(), "pos-ext excepts either all or max");
 
         let error = process_options(["eprover", "--satcheck-proc-interval=0"]).unwrap_err();
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
