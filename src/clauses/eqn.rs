@@ -5,7 +5,7 @@ use crate::clauses::eqn_props::{
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
 };
 use crate::terms::acterms::term_ac_equal;
-use crate::terms::match_mgu::subst_match_complete;
+use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
 use crate::terms::signature::{FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::subst::Substitution;
@@ -57,6 +57,22 @@ fn subsume_term_pair_directed(
     let mut result = subst_match_complete(pattern_left, target_left, subst);
     if result {
         result = subst_match_complete(pattern_right, target_right, subst);
+    }
+    if !result {
+        subst.backtrack_to_pos(backtrack);
+    }
+    result
+}
+
+fn unify_term_pair_directed(
+    source_terms: [&Term; 2],
+    target_terms: [&Term; 2],
+    subst: &mut Substitution,
+) -> bool {
+    let backtrack = subst.len();
+    let mut result = subst_mgu_complete(source_terms[0], target_terms[0], subst);
+    if result {
+        result = subst_mgu_complete(source_terms[1], target_terms[1], subst);
     }
     if !result {
         subst.backtrack_to_pos(backtrack);
@@ -850,6 +866,53 @@ impl Eqn {
             && self.subsume_p(subsumed)
     }
 
+    pub fn unify_directed(&self, other: &Self, subst: &mut Substitution) -> bool {
+        unify_term_pair_directed(
+            [&self.lterm, &self.rterm],
+            [&other.lterm, &other.rterm],
+            subst,
+        )
+    }
+
+    pub fn unify(&self, other: &Self, subst: &mut Substitution) -> bool {
+        let result = self.unify_directed(other, subst);
+        if result || (self.is_oriented() && other.is_oriented()) {
+            return result;
+        }
+        unify_term_pair_directed(
+            [&self.rterm, &self.lterm],
+            [&other.lterm, &other.rterm],
+            subst,
+        )
+    }
+
+    #[must_use]
+    pub fn unify_p(&self, other: &Self) -> bool {
+        let mut subst = Substitution::new();
+        let result = self.unify(other, &mut subst);
+        subst.backtrack();
+        result
+    }
+
+    pub fn literal_unify_one_way(
+        &self,
+        other: &mut Self,
+        subst: &mut Substitution,
+        swapped: bool,
+    ) -> bool {
+        if self.is_positive() != other.is_positive() {
+            return false;
+        }
+        if swapped {
+            other.swap_sides();
+        }
+        let result = self.unify_directed(other, subst);
+        if swapped {
+            other.swap_sides();
+        }
+        result
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -1429,6 +1492,59 @@ mod tests {
 
         let negative = Eqn::alloc(a, b, &mut bank, false).unwrap();
         assert!(!pattern.literal_subsume_p(&negative));
+    }
+
+    #[test]
+    fn unification_helpers_backtrack_and_preserve_literal_side_effects() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let y = bank.vars().var_assert_alloc(-4, &type_);
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+
+        let first = Eqn::alloc(x.clone(), b.clone(), &mut bank, true).unwrap();
+        let second = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+        let mut subst = Substitution::new();
+        assert!(first.unify_directed(&second, &mut subst));
+        assert_eq!(subst.len(), 1);
+        assert_eq!(x.binding(), Some(a.clone()));
+        subst.backtrack();
+
+        let failing = Eqn::alloc(y.clone(), y.clone(), &mut bank, true).unwrap();
+        assert!(!failing.unify_directed(&second, &mut subst));
+        assert!(subst.is_empty());
+        assert!(y.binding().is_none());
+
+        let swapped_second = Eqn::alloc(b.clone(), a.clone(), &mut bank, true).unwrap();
+        assert!(first.unify(&swapped_second, &mut subst));
+        assert_eq!(x.binding(), Some(a.clone()));
+        subst.backtrack();
+
+        let mut oriented_first = first.clone();
+        let mut oriented_second = swapped_second.clone();
+        oriented_first.set_prop(EP_IS_ORIENTED);
+        oriented_second.set_prop(EP_IS_ORIENTED);
+        assert!(!oriented_first.unify(&oriented_second, &mut subst));
+        assert!(subst.is_empty());
+        assert!(x.binding().is_none());
+
+        assert!(first.unify_p(&second));
+        assert!(x.binding().is_none());
+
+        let mut literal = Eqn::alloc(b.clone(), a, &mut bank, true).unwrap();
+        literal.set_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        assert!(first.literal_unify_one_way(&mut literal, &mut subst, true));
+        assert_eq!(literal.left(), &b);
+        assert!(!literal.is_oriented());
+        assert!(!literal.query_prop(EP_MAX_IS_UP_TO_DATE));
+        assert!(x.binding().is_some());
+        subst.backtrack();
+
+        let mut negative = Eqn::alloc(b, second.left().clone(), &mut bank, false).unwrap();
+        negative.set_prop(EP_IS_ORIENTED);
+        assert!(!first.literal_unify_one_way(&mut negative, &mut subst, true));
+        assert!(negative.is_oriented());
     }
 
     #[test]
