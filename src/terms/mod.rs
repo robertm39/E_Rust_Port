@@ -2,6 +2,8 @@ pub mod functypes;
 pub mod signature;
 pub mod simplesorts;
 pub mod simpletypes;
+pub mod termcellstore;
+pub mod termtrees;
 pub mod termtypes;
 pub mod termvars;
 pub mod termweightext;

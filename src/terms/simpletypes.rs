@@ -210,6 +210,11 @@ pub fn types_cmp(left: &Type, right: &Type) -> i32 {
 }
 
 #[must_use]
+pub fn type_identity_cmp(left: &Type, right: &Type) -> i32 {
+    pointer_cmp(left, right)
+}
+
+#[must_use]
 pub fn flatten_type(type_: &Type) -> Type {
     debug_assert!(arguments_flattened(type_));
     if !type_.is_arrow() {
@@ -513,6 +518,15 @@ mod tests {
         let left = alloc_arrow_type(vec![left_arg, bool.clone()]);
         let right = alloc_arrow_type(vec![right_arg, bool]);
         assert_ne!(types_cmp(&left, &right), 0);
+    }
+
+    #[test]
+    fn type_identity_cmp_uses_pointer_identity() {
+        let left = individual_sort();
+        let right = individual_sort();
+
+        assert_eq!(super::type_identity_cmp(&left, &left), 0);
+        assert_ne!(super::type_identity_cmp(&left, &right), 0);
     }
 
     #[test]

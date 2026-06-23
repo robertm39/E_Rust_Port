@@ -60,6 +60,8 @@ Rust files:
 - `src/terms/signature.rs`
 - `src/terms/simplesorts.rs`
 - `src/terms/simpletypes.rs`
+- `src/terms/termcellstore.rs`
+- `src/terms/termtrees.rs`
 - `src/terms/termtypes.rs`
 - `src/terms/termvars.rs`
 - `src/terms/termweightext.rs`
@@ -121,6 +123,8 @@ Original C references:
 - [`TERMS/cte_signature.h`, `TERMS/cte_signature.c`](c_source_docs/TERMS/cte_signature.md)
 - [`TERMS/cte_simplesorts.h`, `TERMS/cte_simplesorts.c`](c_source_docs/TERMS/cte_simplesorts.md)
 - [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
+- [`TERMS/cte_termcellstore.h`, `TERMS/cte_termcellstore.c`](c_source_docs/TERMS/cte_termcellstore.md)
+- [`TERMS/cte_termtrees.h`, `TERMS/cte_termtrees.c`](c_source_docs/TERMS/cte_termtrees.md)
 - [`TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`](c_source_docs/TERMS/cte_termtypes.md)
 - [`TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`](c_source_docs/TERMS/cte_termvars.md)
 - [`TERMS/cte_termweightext.h`, `TERMS/cte_termweightext.c`](c_source_docs/TERMS/cte_termweightext.md)
@@ -175,6 +179,8 @@ Implemented behavior:
 - Initial signature helpers from `cte_signature`, including exact function-property bits and special-code constants, `$true`/`$false` initialization, optional list-symbol initialization, name/code/arity lookup, quoted-name lookup, first-order multi-arity name fixing, property mutation/query helpers, polymorphic and special-symbol flags, type declaration/fixing, predicate/function classification, alpha-rank computation, pop/backtrack behavior, capacity-growth accounting, arity statistics, FOF operator insertion, internal-code insertion, lazy equality/disjunction/list-code helpers, generated symbol counters, and feature-offset computation.
 - Simple-sort table helpers from `cte_simplesorts`, including predefined sort constants, default-sort state, insertion-order sort IDs, duplicate-preserving lookup, reserved default table initialization order, TSTP sort parsing through `FuncSymbParse`, TSTP sort printing, and C-shaped debug table rendering.
 - Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
+- Term-cell store helpers from `cte_termcellstore`, including exact hash size/mask constants, C-shaped f-code and argument-pointer hashing, hashed splay-tree buckets, insert/find/extract/delete accounting for entries and argument counts, property mutation across all buckets, node counting, GC sweep by `TPGarbageFlag` state, distribution printing, and explicit store exit.
+- Term-tree helpers from `cte_termtrees`, including top-level comparison by f-code, higher-order type identity, arity, and argument handle identity; splay-tree insert/find/extract/delete behavior; root movement on lookup; tree property mutation; node counting; and traversal collection for store sweeps.
 - Foundational term-cell helpers from `cte_termtypes`, including exact term-property bits and default weights, safe shared term handles, top/constant allocation, shallow top copying, mutable bindings/types/arguments/rewrite fields, C-shaped free-variable/phony-application/lambda predicates, dereference-limited traversal for ordinary free-variable bindings, recursive term and variable property walkers, interpreted-symbol search, stack property helpers, and prefix checks based on handle identity.
 - Shared variable-bank helpers from `cte_termvars`, including default bank initialization, sort-indexed normal-variable stacks, even fresh-variable f-codes, odd alternative-variable f-codes, explicit f-code allocation, default-sort and typed external-name allocation, scoped external-name restoration, v-count reset/set-to-used behavior, property mutation across bank variables, shadow-bank pairing/copying, cardinality, and the C loop-bound quirk in variable collection.
 - Term-weight extension helpers from `cte_termweightext`, including exact extension-style discriminants, stored multiplier/data fields, simple root weighting, subterm sum weighting, subterm max weighting, free-variable descent suppression, and C stack traversal order for subterms.
@@ -257,6 +263,10 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_functypes` rational normalization uses checked Rust integer parsing instead of C `strtoll`, whose overflow behavior saturates and sets `errno` that this code ignores. If huge numeric TPTP literals are compatibility-relevant, compare against the C reference and decide whether to emulate that overflow quirk.
 - `cte_simpletypes` uses pointer-address ordering in `TypesCmp`, and the C source notes this causes clause-sorting differences. Rust preserves handle identity comparisons where needed, but later term/type-bank integration should avoid making proof search depend on allocator-address order unless reference compatibility requires it.
 - `cte_simplesorts.c` includes `cte_functypes.c` directly rather than the header; Rust uses the normal module boundary. Keep an eye on duplicate-definition assumptions if build/link behavior is ever compared at C object-file granularity.
+- `cte_termtrees` orders both higher-order types and term arguments by raw pointer address, so ordering can vary with allocator layout. Rust mirrors handle-identity ordering for sharing behavior, but later proof-search tests should identify whether any user-visible output depends on this order.
+- `cte_termcellstore` hashes terms by f-code and shifted raw argument pointers, and its bucket distribution is therefore allocator-shaped. Rust uses the same handle identity inputs; benchmark term-bank hot paths before replacing this with a more deterministic structural hash.
+- `TermCellStoreGCSweep` deletes terms whose `TPGarbageFlag` bits equal the requested state, so passing the empty state recovers unmarked cells. Rust preserves that behavior; future GC integration should make the mark-state contract explicit at call sites.
+- `TermCellStorePrintDistrib` in C prints all 32768 buckets, including empty buckets. Rust keeps that exhaustive output; callers may eventually need a summarized diagnostic wrapper for routine debugging.
 - `cte_termtypes` mixes semantic term fields with allocation/tree-link fields in one flexible-array struct and mutates shared-term properties during traversals. Rust keeps the observable mutability but separates storage through safe handles; once term banks are complete, revisit whether property mutation should be scoped to explicit traversal contexts.
 - `cte_termtypes` applied-variable dereference allocates and inserts normalized cache terms through the owning term bank. Rust currently panics on that path until term-bank ownership and lambda normalization are available; preserve this as a clear integration boundary rather than silently returning stale applied variables.
 - `cte_termvars` fresh variables are only guaranteed fresh if direct f-code allocation is not mixed with fresh allocation. Rust mirrors the counter/stack behavior; parser and clausification callers should avoid depending on stronger freshness than the C comments promise.

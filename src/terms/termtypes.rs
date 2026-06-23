@@ -172,6 +172,8 @@ struct TermCell {
     nf_date: [Cell<SysDate>; 2],
     rw_replace: RefCell<Option<Term>>,
     type_: RefCell<Option<Type>>,
+    left: RefCell<Option<Term>>,
+    right: RefCell<Option<Term>>,
 }
 
 impl PartialEq for Term {
@@ -335,6 +337,39 @@ impl Term {
 
     pub fn set_type(&self, type_: Option<Type>) {
         *self.0.type_.borrow_mut() = type_;
+    }
+
+    #[must_use]
+    pub fn left_son(&self) -> Option<Term> {
+        self.0.left.borrow().clone()
+    }
+
+    pub fn set_left_son(&self, term: Option<Term>) {
+        *self.0.left.borrow_mut() = term;
+    }
+
+    #[must_use]
+    pub fn right_son(&self) -> Option<Term> {
+        self.0.right.borrow().clone()
+    }
+
+    pub fn set_right_son(&self, term: Option<Term>) {
+        *self.0.right.borrow_mut() = term;
+    }
+
+    #[must_use]
+    pub fn take_left_son(&self) -> Option<Term> {
+        self.0.left.borrow_mut().take()
+    }
+
+    #[must_use]
+    pub fn take_right_son(&self) -> Option<Term> {
+        self.0.right.borrow_mut().take()
+    }
+
+    pub fn clear_tree_links(&self) {
+        self.set_left_son(None);
+        self.set_right_son(None);
     }
 
     #[must_use]
@@ -552,8 +587,20 @@ impl Term {
             ],
             rw_replace: RefCell::new(None),
             type_: RefCell::new(None),
+            left: RefCell::new(None),
+            right: RefCell::new(None),
         }))
     }
+}
+
+#[must_use]
+pub fn term_identity_id(term: &Term) -> usize {
+    Rc::as_ptr(&term.0).cast::<()>() as usize
+}
+
+#[must_use]
+pub fn term_identity_cmp(left: &Term, right: &Term) -> i32 {
+    cmp_usize(term_identity_id(left), term_identity_id(right))
 }
 
 /// Dereferences a term according to the requested limit.
@@ -747,6 +794,10 @@ fn rewrite_index(level: RewriteLevel) -> usize {
     }
 }
 
+fn cmp_usize(left: usize, right: usize) -> i32 {
+    i32::from(left > right) - i32::from(left < right)
+}
+
 fn walk_terms(term: &Term, mut visit: impl FnMut(&Term)) {
     let mut stack = vec![term.clone()];
     while let Some(current) = stack.pop() {
@@ -846,6 +897,8 @@ mod tests {
         let copy = Term::top_copy(&source);
         assert_eq!(copy.argument(0), Some(left));
         assert_eq!(copy.argument(1), Some(right));
+        assert!(copy.left_son().is_none());
+        assert!(copy.right_son().is_none());
     }
 
     #[test]
@@ -981,5 +1034,24 @@ mod tests {
         assert!(app.is_phony_app());
         assert!(app.is_applied_free_var());
         assert_eq!(app.arg_num(), 0);
+    }
+
+    #[test]
+    fn tree_links_and_identity_comparison_are_handle_based() {
+        let parent = Term::const_cell_alloc(1);
+        let left = Term::const_cell_alloc(2);
+        let right = Term::const_cell_alloc(3);
+
+        parent.set_left_son(Some(left.clone()));
+        parent.set_right_son(Some(right.clone()));
+        assert_eq!(parent.left_son(), Some(left.clone()));
+        assert_eq!(parent.right_son(), Some(right.clone()));
+        assert_eq!(super::term_identity_cmp(&left, &left), 0);
+        assert_ne!(super::term_identity_cmp(&left, &right), 0);
+
+        assert_eq!(parent.take_left_son(), Some(left));
+        parent.clear_tree_links();
+        assert!(parent.left_son().is_none());
+        assert!(parent.right_son().is_none());
     }
 }
