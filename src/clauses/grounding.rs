@@ -223,6 +223,12 @@ impl GroundSet {
         false
     }
 
+    fn reset_after_empty_ground_clause(&mut self) {
+        self.unit_no = 0;
+        self.units.clear();
+        self.non_units = PropClauseSet::new();
+    }
+
     #[must_use]
     pub fn dimacs_string(&self) -> String {
         let mut result = String::new();
@@ -520,6 +526,67 @@ pub fn clause_eqlit_recode(clause: &mut Clause, bank: &mut TermBank) -> Result<b
     Ok(recoded)
 }
 
+/// Creates all ground instances represented by `inst` and inserts them into `groundset`.
+///
+/// Returns `false` when an empty ground clause is created, matching
+/// `ClauseCreateGroundInstances`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if copying an instantiated literal into the term bank fails.
+///
+/// # Panics
+///
+/// Panics if `inst` has no alternatives for a variable, if the current
+/// alternative is invalid, or if a generated non-unit clause is not already in
+/// propositional predicate-literal form.
+pub fn clause_create_ground_instances(
+    bank: &mut TermBank,
+    clause: &Clause,
+    inst: &mut VarSetInst,
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+) -> Result<bool, Diagnostic> {
+    if !inst.initialize() {
+        return Ok(true);
+    }
+
+    let mut res = true;
+    let mut next = true;
+    let mut error = None;
+    while next && res {
+        inst.apply();
+        let mut literals = match clause.literals().copy_to_bank(bank) {
+            Ok(literals) => literals,
+            Err(diagnostic) => {
+                error = Some(diagnostic);
+                break;
+            }
+        };
+        let _ = literals.remove_duplicates(bank);
+        if !(taut_check && literals.is_trivial()) {
+            let mut new_clause = Clause::alloc(literals);
+            if !groundset.unit_simplify_clause(&mut new_clause, subsume, resolve) {
+                if new_clause.is_empty() {
+                    res = false;
+                    groundset.reset_after_empty_ground_clause();
+                }
+                groundset.insert(new_clause);
+            }
+        }
+        next = inst.advance();
+    }
+    inst.clear();
+
+    if let Some(diagnostic) = error {
+        Err(diagnostic)
+    } else {
+        Ok(res)
+    }
+}
+
 #[must_use]
 pub fn print_dimacs_header_string(max_lit: i64, members: i64) -> String {
     let max_lit = if max_lit <= 0 { 1 } else { max_lit };
@@ -592,9 +659,9 @@ fn usize_diff_as_i32(left: usize, right: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_cmp_by_len, clause_eqlit_recode, clause_get_max_lit, clause_print_dimacs_string,
-        eqn_eqlit_recode, print_dimacs_header_string, GcuEncoding, GroundSet, GroundSetState,
-        VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        clause_cmp_by_len, clause_create_ground_instances, clause_eqlit_recode, clause_get_max_lit,
+        clause_print_dimacs_string, eqn_eqlit_recode, print_dimacs_header_string, GcuEncoding,
+        GroundSet, GroundSetState, VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
@@ -1031,5 +1098,113 @@ mod tests {
         );
         assert_eq!(clause.weight(), original_weight);
         assert_ne!(clause.weight(), clause.standard_weight());
+    }
+
+    #[test]
+    fn clause_create_ground_instances_enumerates_substitutions_and_clears_bindings() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let second = typed_const(&mut bank, "b");
+        let x = typed_var(&bank, -2);
+        let atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let clause = clause_from(vec![predicate_literal(&mut bank, &atom, true)]);
+        let mut inst = VarSetInst::alloc(&clause);
+        inst.set_all_alternatives(&[first.clone(), second.clone()]);
+        let mut groundset = GroundSet::new();
+
+        assert!(clause_create_ground_instances(
+            &mut bank,
+            &clause,
+            &mut inst,
+            &mut groundset,
+            false,
+            false,
+            false,
+        )
+        .unwrap());
+
+        let first_ground = predicate_atom(&mut bank, "p", &[first]);
+        let second_ground = predicate_atom(&mut bank, "p", &[second]);
+        assert_eq!(groundset.unit_no(), 2);
+        assert_eq!(
+            groundset.units().get(&first_ground.entry_no()),
+            Some(&GcuEncoding::Pos)
+        );
+        assert_eq!(
+            groundset.units().get(&second_ground.entry_no()),
+            Some(&GcuEncoding::Pos)
+        );
+        assert_eq!(x.binding(), None);
+    }
+
+    #[test]
+    fn clause_create_ground_instances_skips_tautologies_when_requested() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let x = typed_var(&bank, -2);
+        let atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let clause = clause_from(vec![
+            predicate_literal(&mut bank, &atom, true),
+            predicate_literal(&mut bank, &atom, false),
+        ]);
+        let mut inst = VarSetInst::alloc(&clause);
+        inst.set_all_alternatives(&[first]);
+        let mut groundset = GroundSet::new();
+
+        assert!(clause_create_ground_instances(
+            &mut bank,
+            &clause,
+            &mut inst,
+            &mut groundset,
+            false,
+            false,
+            true,
+        )
+        .unwrap());
+
+        assert_eq!(groundset.members(), 0);
+        assert_eq!(x.binding(), None);
+    }
+
+    #[test]
+    fn clause_create_ground_instances_resets_active_set_after_empty_clause_like_c() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p", &[]);
+        let second = predicate_atom(&mut bank, "q", &[]);
+        let mut groundset = GroundSet::new();
+        assert!(groundset.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        assert!(groundset.insert(clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, true),
+        ])));
+        let stale_unit_entry = first.entry_no();
+        let max_literal = groundset.max_literal();
+        let mut inst = VarSetInst::alloc(&Clause::empty());
+
+        assert!(!clause_create_ground_instances(
+            &mut bank,
+            &Clause::empty(),
+            &mut inst,
+            &mut groundset,
+            false,
+            false,
+            false,
+        )
+        .unwrap());
+
+        assert_eq!(groundset.unit_no(), 0);
+        assert!(groundset.units().is_empty());
+        assert_eq!(
+            groundset
+                .unit_terms()
+                .get(&stale_unit_entry)
+                .map(Term::entry_no),
+            Some(stale_unit_entry)
+        );
+        assert_eq!(groundset.members(), 1);
+        assert_eq!(groundset.dimacs_print_members(), 2);
+        assert_eq!(groundset.max_literal(), max_literal);
     }
 }
