@@ -3,6 +3,7 @@ pub mod functypes;
 pub mod signature;
 pub mod simplesorts;
 pub mod simpletypes;
+pub mod subst;
 pub mod termcellstore;
 pub mod termcpos;
 pub mod termfunc;
