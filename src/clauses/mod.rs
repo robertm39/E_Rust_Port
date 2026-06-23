@@ -17,6 +17,7 @@ pub mod freqvectors;
 pub mod g_lithash;
 pub mod garbage_coll;
 pub mod grounding;
+pub mod propclauses;
 pub mod subsumption;
 pub mod subterm_index;
 pub mod subterm_tree;
