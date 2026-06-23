@@ -5,6 +5,7 @@ pub mod error;
 pub mod fixdarrays;
 pub mod floattrees;
 pub mod numtrees;
+pub mod numxtrees;
 pub mod pdarrays;
 pub mod pdrangearrays;
 pub mod properties;
