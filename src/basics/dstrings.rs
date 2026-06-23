@@ -35,6 +35,11 @@ impl DynamicString {
         }
     }
 
+    pub fn append_bytes_with_str_growth(&mut self, buffer: &[u8]) {
+        self.ensure_for_str_append(buffer.len());
+        self.bytes.extend_from_slice(buffer);
+    }
+
     pub fn append_int(&mut self, new_part: i64) {
         self.append_str(&new_part.to_string());
     }
@@ -214,9 +219,10 @@ mod tests {
         string.append_str("a");
         string.append_byte(b'b');
         string.append_buffer(b"cd");
+        string.append_bytes_with_str_growth(b"ef");
         string.append_int(-12);
         string.append_str_array(["x", "y", "z"], ",");
-        assert_eq!(string.view_bytes(), b"abcd-12x,y,z");
+        assert_eq!(string.view_bytes(), b"abcdef-12x,y,z");
         assert_eq!(string.last_char(), b'z');
         assert_eq!(string.address(2), Some(b'c'));
         assert_eq!(string.address(99), None);
