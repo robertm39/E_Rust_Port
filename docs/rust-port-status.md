@@ -45,6 +45,7 @@ Rust files:
 - `src/inout/filevars.rs`
 - `src/inout/fileops.rs`
 - `src/inout/initio.rs`
+- `src/inout/network.rs`
 - `src/inout/output.rs`
 - `src/inout/scanner.rs`
 - `src/inout/simplestuff.rs`
@@ -95,6 +96,7 @@ Original C references:
 - [`INOUT/cio_filevars.h`, `INOUT/cio_filevars.c`](c_source_docs/INOUT/cio_filevars.md)
 - [`INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`](c_source_docs/INOUT/cio_fileops.md)
 - [`INOUT/cio_initio.h`, `INOUT/cio_initio.c`](c_source_docs/INOUT/cio_initio.md)
+- [`INOUT/cio_network.h`, `INOUT/cio_network.c`](c_source_docs/INOUT/cio_network.md)
 - [`INOUT/cio_output.h`, `INOUT/cio_output.c`](c_source_docs/INOUT/cio_output.md)
 - [`INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`](c_source_docs/INOUT/cio_scanner.md)
 - [`INOUT/cio_simplestuff.h`, `INOUT/cio_simplestuff.c`](c_source_docs/INOUT/cio_simplestuff.md)
@@ -142,6 +144,7 @@ Implemented behavior:
 - File-variable helpers from `cio_filevars`, including identifier/value parsing, overwriting duplicate definitions while counting all parsed definitions, concatenating value token literals without whitespace, borrowed string and identifier lookup, integer semantic errors, and the inherited `FileVarsGetBool` `strcmp` bug.
 - File helpers from `cio_fileops`, including `NULL`/`-` as stdin for input, fail-or-null input-open behavior, regular-file checks, file loading into dynamic strings, concatenation/copy/print/remove helpers, race-prone readability checks, and slash-only directory/base-name/suffix splitting.
 - I/O initialization from `cio_initio`, including bundled output initialization, stored program name for future error rendering, `TPTP` environment capture, slash appending with `/`, empty `TPTP` preservation, and `ExitIO` clearing only `TPTP_dir`.
+- TCP message helpers from `cio_network`, including exact `MsgStatus` discriminants, four-byte network-order total-length headers, transmission counts, partial single-read/write status behavior, blocking send/receive loops, C-string pack/unpack truncation at NUL bytes, and safe `TcpListener`/`TcpStream` socket wrappers.
 - Output helpers from `cio_output`, including default output level 1, `OUTPRINT` level gating, `-`/`NULL` as stdout, global output target initialization/open/close, file-open diagnostics, and dashed-status formatting.
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
 - Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
@@ -170,8 +173,9 @@ Known gaps:
 - `RegMem` uses explicit opaque handles and initialized byte buffers instead of raw registered pointers and uninitialized `SecureMalloc` memory; call sites that need typed static scratch space should wrap those handles at the ownership boundary.
 - `SysDate` uses an LP64-shaped `i64` raw value to match the WSL/Linux C reference build; if a native Windows C reference becomes relevant, C `long` width and `SysDatePrint` output need a target-specific audit.
 - Verbose output helpers are not yet wired into the executable's parsed `--verbose` option or all future progress-reporting call sites.
-- `TCPReadTextBlock` is represented as a received-string iterator rather than an actual socket read until `cio_network` is ported.
+- `TCPReadTextBlock` is represented as a received-string iterator and is not yet wired directly to the new `cio_network` receive helpers.
 - `GlobalOutFD` is exact for stdout and Unix file targets, but native Windows file targets use an explicit unknown descriptor sentinel until signal/network output paths choose a safe platform abstraction.
+- `CreateServerSock`/`Listen`/`CreateClientSock` are represented by safe `TcpListener`/`TcpStream` wrappers rather than raw integer socket descriptors; `listen` is a no-op because `TcpListener::bind` already creates a listening socket, and exact `SO_REUSEADDR`, backlog, descriptor-number, and `gai_strerror` diagnostics still need a platform abstraction if server/client programs require byte-identical behavior.
 - `InputClose` relies on Rust file drop for input handles, so rare C `fclose` diagnostics on read streams are not surfaced yet.
 - `TempFileName` uses a safe `create_new` retry loop instead of libc `mkstemp`; it preserves directory choice, prefix, registration, and empty-file creation, but not exact libc suffix distribution or file-mode details.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
@@ -210,3 +214,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cio_initio` leaves an existing `TPTP_dir` in place when `InitIO` is called again with no `TPTP` environment variable and `ExitIO` clears only that directory, not the program name. Rust mirrors this global-state shape for now.
 - `cio_fileops` keeps C's slash-only path splitting and read-open based `FileExists` race; once native Windows drop-in behavior is tested, decide whether these helpers stay compatibility shims or gain explicit platform-aware wrappers.
 - `cio_tempfile` keeps C's process-global temporary-file registry and `TMPDIR`/`/tmp` policy. Later session code should decide whether temp-file ownership should move to scoped run state while preserving signal/atexit cleanup compatibility.
+- `cio_network` has several cleanup candidates: `TCPMsgRead` prints debug progress directly to stdout, treats an empty-payload message as a closed connection after reading the header, and appends payload data through C-string APIs after partial reads. Rust keeps the wire format and empty-payload status quirk but appends only initialized bytes and omits the debug prints.

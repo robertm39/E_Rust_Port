@@ -3,6 +3,7 @@ pub mod commandline;
 pub mod fileops;
 pub mod filevars;
 pub mod initio;
+pub mod network;
 pub mod output;
 pub mod scanner;
 pub mod simplestuff;
