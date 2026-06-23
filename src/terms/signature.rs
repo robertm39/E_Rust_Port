@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::pdarrays::PDIntArray;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::functypes::FunCode;
 use crate::terms::simpletypes::{
@@ -6,7 +7,7 @@ use crate::terms::simpletypes::{
     Type,
 };
 use crate::terms::typebanks::TypeBank;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{BitOr, BitOrAssign};
 
 pub const DEFAULT_SIGNATURE_SIZE: usize = 20;
@@ -1037,6 +1038,42 @@ impl Signature {
         result
     }
 
+    /// Adds selected symbol arities into `distrib` and returns the maximum.
+    ///
+    /// This mirrors C `SigAddSymbolArities`: unlike most signature statistics,
+    /// it scans all f-codes, including internal symbols, and relies on the
+    /// caller-provided `selection` array to choose the relevant symbols.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a selected symbol has a negative arity or an arity that cannot
+    /// be represented as a dynamic-array index.
+    pub fn add_symbol_arities(
+        &self,
+        distrib: &mut PDIntArray,
+        predicates: bool,
+        selection: &[i64],
+    ) -> i32 {
+        let mut max_arity = -1;
+        for f_code in 1..=self.f_count {
+            let selection_index =
+                usize::try_from(f_code).expect("positive f-code fits selection index");
+            if self.is_predicate(f_code) == predicates
+                && selection.get(selection_index).copied().unwrap_or(0) != 0
+            {
+                let arity = self.find_arity(f_code).expect("valid f-code has arity");
+                max_arity = max_arity.max(arity);
+                let arity_index =
+                    isize::try_from(arity).expect("selected arity fits dynamic-array index");
+                assert!(
+                    distrib.inc_int(arity_index, 1).is_some(),
+                    "arity distribution accepts selected arity"
+                );
+            }
+        }
+        max_arity
+    }
+
     #[must_use]
     pub fn has_unimplemented_interpreted_symbols(&self) -> bool {
         self.external_f_codes()
@@ -1079,6 +1116,25 @@ impl Signature {
             || f_code != SIG_DB_LAMBDA_CODE
             || f_code <= 0
             || !self.is_predicate(f_code)
+    }
+
+    pub fn fcodes_collect_types(&self, fcodes: &BTreeSet<FunCode>, types: &mut Vec<Type>) -> i64 {
+        let mut count = 0;
+        let mut to_process = Vec::new();
+        for f_code in fcodes {
+            if let Some(type_) = self.get_type(*f_code) {
+                to_process.push(type_.clone());
+            }
+        }
+
+        while let Some(type_) = to_process.pop() {
+            if !types.iter().any(|existing| existing == &type_) {
+                count += 1;
+                types.push(type_.clone());
+                to_process.extend(type_.args().iter().cloned());
+            }
+        }
+        count
     }
 
     #[must_use]
@@ -1175,11 +1231,13 @@ mod tests {
         SIG_NAMED_LAMBDA_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::simple_stuff::ProblemType;
     use crate::terms::simpletypes::{
         alloc_arrow_type, alloc_simple_sort, Type, ST_BOOL, ST_INDIVIDUALS, ST_INTEGER,
     };
     use crate::terms::typebanks::TypeBank;
+    use std::collections::BTreeSet;
 
     fn signature() -> Signature {
         Signature::new(TypeBank::new())
@@ -1433,6 +1491,91 @@ mod tests {
         assert_eq!(sig.count_arity_symbols(1, true), 1);
         assert_eq!(sig.count_symbols(false), 2);
         assert_eq!(sig.count_symbols(true), 1);
+    }
+
+    #[test]
+    fn add_symbol_arities_scans_selected_internal_and_external_symbols() {
+        let mut sig = signature();
+        let f = sig.insert_id_for_problem("f", 2, false, ProblemType::FirstOrder);
+        let p = sig.insert_id_for_problem("p", 1, false, ProblemType::FirstOrder);
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        sig.declare_final_type(
+            f,
+            alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                individual.clone(),
+            ]),
+        )
+        .unwrap();
+        sig.declare_final_type(p, alloc_arrow_type(vec![individual, bool_type]))
+            .unwrap();
+        let mut selection = vec![0; usize::try_from(sig.f_count() + 1).unwrap()];
+        selection[usize::try_from(SIG_TRUE_CODE).unwrap()] = 1;
+        selection[usize::try_from(f).unwrap()] = 1;
+        selection[usize::try_from(p).unwrap()] = 1;
+
+        let mut predicate_dist = PDIntArray::new_int(1, GROW_EXPONENTIAL);
+        assert_eq!(
+            sig.add_symbol_arities(&mut predicate_dist, true, &selection),
+            1
+        );
+        assert_eq!(predicate_dist.element_int(0), 1);
+        assert_eq!(predicate_dist.element_int(1), 1);
+
+        let mut function_dist = PDIntArray::new_int(1, GROW_EXPONENTIAL);
+        assert_eq!(
+            sig.add_symbol_arities(&mut function_dist, false, &selection),
+            2
+        );
+        assert_eq!(function_dist.element_int(2), 1);
+        assert_eq!(function_dist.element_int(0), 0);
+    }
+
+    #[test]
+    fn fcodes_collect_types_collects_declared_types_and_subtypes_once() {
+        let mut sig = signature();
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let animal_code = sig.type_bank_mut().define_simple_sort("$animal").unwrap();
+        let animal = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(animal_code));
+        let f_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                animal.clone(),
+                bool_type.clone(),
+            ]));
+        let p_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![animal.clone(), bool_type.clone()]));
+        let f = sig.insert_id_for_problem("f", 2, false, ProblemType::FirstOrder);
+        sig.declare_final_type(f, f_type.clone()).unwrap();
+        let p = sig.insert_id_for_problem("p", 1, false, ProblemType::FirstOrder);
+        sig.declare_final_type(p, p_type.clone()).unwrap();
+        let untyped = sig.insert_id_for_problem("untyped", 0, false, ProblemType::FirstOrder);
+
+        let mut fcodes = BTreeSet::new();
+        fcodes.insert(f);
+        fcodes.insert(p);
+        fcodes.insert(untyped);
+        let mut types = Vec::new();
+
+        assert_eq!(sig.fcodes_collect_types(&fcodes, &mut types), 5);
+        assert_eq!(
+            types,
+            vec![
+                p_type,
+                bool_type.clone(),
+                animal.clone(),
+                f_type,
+                individual
+            ]
+        );
+        assert_eq!(sig.fcodes_collect_types(&fcodes, &mut types), 0);
     }
 
     #[test]
