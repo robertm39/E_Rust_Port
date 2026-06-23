@@ -7,7 +7,7 @@ use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::verbose::set_verbose_level;
 use crate::inout::commandline::{
-    get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
+    get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::IoFormat;
@@ -93,6 +93,11 @@ pub struct EProverConfig {
     pub select_strategy: Option<String>,
     pub print_strategy: Option<String>,
     pub parse_strategy_file: Option<String>,
+    pub sine: Option<String>,
+    pub strategy_scheduling: bool,
+    pub schedule_cores: i64,
+    pub serialize_schedule: bool,
+    pub force_preprocessing_schedule: bool,
     pub step_limit: i64,
     pub answer_limit: i64,
     pub processed_set_limit: i64,
@@ -169,6 +174,11 @@ impl Default for EProverConfig {
             select_strategy: None,
             print_strategy: None,
             parse_strategy_file: None,
+            sine: None,
+            strategy_scheduling: false,
+            schedule_cores: 1,
+            serialize_schedule: false,
+            force_preprocessing_schedule: true,
             step_limit: i64::MAX,
             answer_limit: 1,
             processed_set_limit: i64::MAX,
@@ -451,10 +461,17 @@ fn apply_parsed_option(
         | EProverOption::RequireNonempty
         | EProverOption::ResourcesInfo
         | EProverOption::ConjecturesAreQuestions
-        | EProverOption::Auto
         | EProverOption::DeterministicRewriteSort
         | EProverOption::DeterministicNewSort => {
             apply_simple_flag(config, parsed.option().option_code);
+            Ok(None)
+        }
+        EProverOption::Auto
+        | EProverOption::AutoSchedule
+        | EProverOption::SerializeSchedule
+        | EProverOption::ForcePreprocessingSchedule
+        | EProverOption::SatAutoSchedule => {
+            apply_schedule_option(config, parsed)?;
             Ok(None)
         }
     }
@@ -596,6 +613,51 @@ fn apply_strategy_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EPro
     }
 }
 
+fn schedule_core_arg(parsed: &ParsedOpt<'_, EProverOption>) -> Result<i64, Diagnostic> {
+    let arg = parsed.arg().unwrap_or("");
+    if arg == "Auto" {
+        Ok(-1)
+    } else {
+        get_int_arg(parsed.option(), arg)
+    }
+}
+
+fn apply_schedule_option(
+    config: &mut EProverConfig,
+    parsed: &ParsedOpt<'_, EProverOption>,
+) -> Result<(), Diagnostic> {
+    match parsed.option().option_code {
+        EProverOption::Auto => {
+            if !config.flags.contains(EProverFlag::Auto) {
+                config.sine = Some("Auto".to_owned());
+                config.flags.set(EProverFlag::Auto);
+            }
+        }
+        EProverOption::AutoSchedule => {
+            if !config.strategy_scheduling {
+                config.schedule_cores = schedule_core_arg(parsed)?;
+                config.sine = Some("Auto".to_owned());
+                config.strategy_scheduling = true;
+            }
+        }
+        EProverOption::SerializeSchedule => {
+            config.serialize_schedule = get_bool_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::ForcePreprocessingSchedule => {
+            config.force_preprocessing_schedule =
+                get_bool_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
+        }
+        EProverOption::SatAutoSchedule => {
+            if !config.strategy_scheduling {
+                config.schedule_cores = schedule_core_arg(parsed)?;
+                config.strategy_scheduling = true;
+            }
+        }
+        _ => unreachable!("non-schedule option routed to schedule handler"),
+    }
+    Ok(())
+}
+
 fn apply_limit_option(
     config: &mut EProverConfig,
     parsed: &ParsedOpt<'_, EProverOption>,
@@ -681,7 +743,6 @@ fn apply_simple_flag(config: &mut EProverConfig, option: EProverOption) {
         EProverOption::ConjecturesAreQuestions => {
             config.flags.set(EProverFlag::ConjecturesAreQuestions);
         }
-        EProverOption::Auto => config.flags.set(EProverFlag::Auto),
         EProverOption::DeterministicRewriteSort => {
             config.flags.set(EProverFlag::DeterministicRewriteSort);
         }
@@ -1043,6 +1104,59 @@ mod tests {
         assert_eq!(config.parse_format, IoFormat::Tstp);
         assert_eq!(config.output_format, IoFormat::Tstp);
         assert_eq!(config.doc_output_format, DocOutputFormat::Tstp);
+    }
+
+    #[test]
+    fn process_options_records_auto_schedule_state_like_c() {
+        let action = process_options(["eprover", "--auto"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.flags.contains(EProverFlag::Auto));
+        assert_eq!(config.sine.as_deref(), Some("Auto"));
+        assert!(!config.strategy_scheduling);
+
+        let action = process_options([
+            "eprover",
+            "--auto-schedule=Auto",
+            "--serialize-schedule=true",
+            "--force-preproc-sched=false",
+        ])
+        .unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.strategy_scheduling);
+        assert_eq!(config.schedule_cores, -1);
+        assert_eq!(config.sine.as_deref(), Some("Auto"));
+        assert!(config.serialize_schedule);
+        assert!(!config.force_preprocessing_schedule);
+
+        let action =
+            process_options(["eprover", "--satauto-schedule", "--auto-schedule=4"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert!(config.strategy_scheduling);
+        assert_eq!(config.schedule_cores, 1);
+        assert_eq!(config.sine, None);
+
+        let action =
+            process_options(["eprover", "--auto-schedule=4", "--satauto-schedule=8"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.schedule_cores, 4);
+        assert_eq!(config.sine.as_deref(), Some("Auto"));
+    }
+
+    #[test]
+    fn process_options_rejects_invalid_schedule_bool_args() {
+        let error = process_options(["eprover", "--serialize-schedule=yes"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+
+        let error = process_options(["eprover", "--force-preproc-sched=maybe"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
     }
 
     #[test]
