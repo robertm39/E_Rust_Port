@@ -42,6 +42,7 @@ Rust files:
 - `src/basics/verbose.rs`
 - `src/clauses/clause_props.rs`
 - `src/clauses/clauseinfo.rs`
+- `src/clauses/eqn.rs`
 - `src/clauses/eqn_props.rs`
 - `src/clauses/mod.rs`
 - `src/inout/basicparser.rs`
@@ -200,6 +201,7 @@ Implemented behavior:
 - Clause source-info metadata from `ccl_clauseinfo`, including optional copied name/source fields, empty `-1` line/column allocation, TSTP/PCL source rendering with unknown and line/column fallbacks, null-info no-op rendering, and C-shaped generated identifier namespace/counter extraction.
 - Initial clause/formula property helpers from `ccl_clauses`, including exact `FormulaProperties` bit values, property set/delete/give/query/any-set operations, TPTP type masking and setting, TPTP type combination precedence, CSSCPA source bit encoding, and clause-type identifier mapping including higher-order `definition` lambda-definition marking.
 - Initial equation/literal property helpers from `ccl_eqn`, including exact `EqnProperties` values, property set/delete/flip/give/query/any-set operations, polarity/orientation/maximality/equational/dominated/selected query helpers, property-equivalence checks, `EqnSide` and pattern-equation direction discriminants, and the `equal` predicate spelling.
+- Core equation/literal cell helpers from `ccl_eqn`, including `$false`/`$true` literal normalization, equational and pseudo-literal property assignment, flattened `$eq`/`$neq` allocation, true-literal construction, term-pair property/query forwarding, predicate-code and split-literal helpers, simple literal classification helpers, term property propagation/deletion, GC marking, side swapping, copy/replacement/optimized/disjoint-copy paths through `TermBank`, trivial/AC-trivial checks, and distinct interpreted-constant detection.
 - C-compatible numeric exit-code constants, including the duplicate `NO_ERROR`/`PROOF_FOUND` value.
 - The `TestLetterString`/`CheckOptionLetterString` behavior from `clb_error`.
 - Initial stream and scanner support for string and explicit file sources, including C-compatible lookahead windows, line/column updates, token bit layout, whitespace/comment skipping, comment accumulation, identifiers and trailing-number identifiers, unsigned integer tokens, quoted strings, semantic `$` identifiers, common TPTP/FOF punctuation and operators, token tests, token descriptions, position formatting, `ScannerSetFormat`-style explicit/auto format state, automatic `include_key` file splicing, C-style file `default_dir` composition with `TPTP` fallback, and explicit `ScannerParseInclude`-style include parsing with selector and skip-name trees.
@@ -431,6 +433,7 @@ These notes are not permission to diverge during porting. They identify inherite
 - `ClauseSetCSSCPASource` clears only the four CSSCPA bits and then sets `prop*CP_CSSCPA_1` without range checking, so values outside `0..=15` can set unrelated clause flags. Rust keeps the unchecked encoding for now; callers should be audited before exposing a public source enum.
 - `EPIsSplitLit` in `ccl_eqn.h` is `65636`, not the next clean power-of-two bit. That overlaps `EPIsStrictlyMaximal`, `EPMaxIsUpToDate`, and `EPHasEquiv`; Rust preserves the literal value, but split-literal callers should be audited before relying on independent bit semantics.
 - `EPDominates` is an alias for `EPIsDominated`, with comments saying the bit is double-used in potentially maximal/minimal clauses. Rust keeps the alias; later literal-ordering code should make the contextual meaning explicit at call sites.
+- `EqnAlloc` does not initialize the `pos` field after `EqnCellAlloc`, leaving callers dependent on setting it before any read. Rust initializes `Eqn::position()` to `0`; later clause-list ownership should decide whether a sentinel such as `-1` would make unset positions easier to audit.
 - `SubstComputeMatch` checks repeated matcher-variable bindings with raw pointer identity, so unshared but structurally equal target subterms do not satisfy a repeated variable. Rust preserves this with handle identity; revisit only after parser and term-bank sharing make the observable caller surface clear.
 - `SubstComputeMgu` documents that its two inputs must be variable-disjoint and has assert-only sort consistency checks for non-variable terms with matching function codes. Rust keeps those as internal preconditions; a later public API may want structured errors at untrusted boundaries.
 - The initial `cte_termbanks` slice does not store a back-pointer from each term to its owning bank. The C field is only active under LFHO; add a typed owner handle when global applied-variable dereferencing and lambda normalization are ported.
