@@ -47,6 +47,7 @@ Rust files:
 - `src/inout/scanner.rs`
 - `src/inout/simplestuff.rs`
 - `src/inout/streams.rs`
+- `src/inout/tempfile.rs`
 - `src/prover/version.rs`
 - `src/prover/options.rs`
 - `src/prover/eprover.rs`
@@ -94,6 +95,7 @@ Original C references:
 - [`INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`](c_source_docs/INOUT/cio_scanner.md)
 - [`INOUT/cio_simplestuff.h`, `INOUT/cio_simplestuff.c`](c_source_docs/INOUT/cio_simplestuff.md)
 - [`INOUT/cio_streams.h`, `INOUT/cio_streams.c`](c_source_docs/INOUT/cio_streams.md)
+- [`INOUT/cio_tempfile.h`, `INOUT/cio_tempfile.c`](c_source_docs/INOUT/cio_tempfile.md)
 - [`PROVER/e_version.h`](c_source_docs/PROVER/e_version.md)
 - [`PROVER/e_options.h`](c_source_docs/PROVER/e_options.md)
 - [`PROVER/eprover.c`](c_source_docs/PROVER/eprover.md)
@@ -136,6 +138,7 @@ Implemented behavior:
 - File helpers from `cio_fileops`, including `NULL`/`-` as stdin for input, fail-or-null input-open behavior, regular-file checks, file loading into dynamic strings, concatenation/copy/print/remove helpers, race-prone readability checks, and slash-only directory/base-name/suffix splitting.
 - Output helpers from `cio_output`, including default output level 1, `OUTPRINT` level gating, `-`/`NULL` as stdout, global output target initialization/open/close, file-open diagnostics, and dashed-status formatting.
 - Text-block reading helpers from `cio_simplestuff`, including C `fgets`-sized 255-byte chunks, terminator comparison on each chunk/string, appending without clearing the target dynamic string, and EOF-before-terminator failure.
+- Temporary-file helpers from `cio_tempfile`, including process-global registration, `TMPDIR`/`/tmp` directory selection, `epr_` file-name prefixing, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup that warns but clears registrations for failed removals.
 - Initial `eprover` handling for `--help`, `--version`, and a small option subset used by the compatibility harness setup path.
 
 Known gaps:
@@ -162,6 +165,7 @@ Known gaps:
 - `TCPReadTextBlock` is represented as a received-string iterator rather than an actual socket read until `cio_network` is ported.
 - `GlobalOutFD` is exact for stdout and Unix file targets, but native Windows file targets use an explicit unknown descriptor sentinel until signal/network output paths choose a safe platform abstraction.
 - `InputClose` relies on Rust file drop for input handles, so rare C `fclose` diagnostics on read streams are not surfaced yet.
+- `TempFileName` uses a safe `create_new` retry loop instead of libc `mkstemp`; it preserves directory choice, prefix, registration, and empty-file creation, but not exact libc suffix distribution or file-mode details.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
 - The JKISS wrapper preserves the exported C module's static-state behavior, including the fact that the `JKISSRand` state argument does not drive the random sequence; call-site-level compatibility should be revisited when random-dependent heuristics are ported.
 - The help option table is intentionally partial until the full option table is ported.
@@ -194,3 +198,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `clb_verbose` relies on process-global mutable verbosity and direct `stderr` side effects. Rust currently centralizes this behind atomic state and writer-parameterized helpers; later session code should decide whether verbosity belongs in explicit run/session state.
 - Scanner and command-line code intentionally preserve C quirks already covered by tests, while remaining incomplete for file/include stacks, format inference, and the full option table.
 - `cio_fileops` keeps C's slash-only path splitting and read-open based `FileExists` race; once native Windows drop-in behavior is tested, decide whether these helpers stay compatibility shims or gain explicit platform-aware wrappers.
+- `cio_tempfile` keeps C's process-global temporary-file registry and `TMPDIR`/`/tmp` policy. Later session code should decide whether temp-file ownership should move to scoped run state while preserving signal/atexit cleanup compatibility.
