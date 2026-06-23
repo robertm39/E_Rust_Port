@@ -1,10 +1,12 @@
+use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::terms::functypes::FunCode;
+use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::simpletypes::{
     alloc_arrow_type, arrow_type_flattened, is_choice_type, type_app_encoded_name,
-    type_get_max_arity, type_is_predicate, Type,
+    type_get_max_arity, type_is_predicate, type_is_type_constructor, Type,
 };
 use crate::terms::typebanks::TypeBank;
 use std::collections::{BTreeMap, BTreeSet};
@@ -993,6 +995,68 @@ impl Signature {
         Ok(())
     }
 
+    /// Parses one TFF type declaration and updates symbols or type constructors.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the parsed symbol type arity does not fit in `i32`, matching
+    /// the C signature arity field.
+    pub fn parse_tff_type_declaration(
+        &mut self,
+        scanner: &mut Scanner,
+        problem_type: ProblemType,
+    ) -> Result<(), Diagnostic> {
+        let mut id = DynamicString::new();
+        let within_paren = if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.next_token()?;
+            true
+        } else {
+            false
+        };
+
+        let symbol_type = func_symb_parse(scanner, &mut id)?;
+        if !matches!(
+            symbol_type,
+            FuncSymbType::IdentFreeFun | FuncSymbType::IdentInterpreted | FuncSymbType::IdentObject
+        ) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "Type name expected in type declaration, but got {}",
+                    id.view()
+                ),
+            ));
+        }
+
+        scanner.accept_tok(TokenType::COLON)?;
+        let type_ = self.type_bank.parse_type(scanner, problem_type)?;
+        if within_paren {
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        }
+
+        let name = id.view().into_owned();
+        if type_is_type_constructor(&type_) {
+            if type_.is_arrow() {
+                self.type_bank
+                    .define_type_constructor(&name, type_.arity() - 1)?;
+            } else {
+                self.type_bank.define_simple_sort(&name)?;
+            }
+        } else {
+            let arity = if type_.is_arrow() {
+                type_.arity() - 1
+            } else {
+                0
+            };
+            let arity =
+                i32::try_from(arity).expect("parsed type arity fits signature function arity");
+            let f_code = self.insert_id_for_problem(&name, arity, false, problem_type);
+            self.declare_type(f_code, type_)?;
+            self.fix_type(f_code);
+        }
+        Ok(())
+    }
+
     pub fn get_new_skolem_code(&mut self, arity: i32) -> FunCode {
         let mut counter = self.skolem_count;
         let code = self.get_new_f_code(arity, "esk", &mut counter, FP_SKOLEM_SYMBOL);
@@ -1425,6 +1489,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::simple_stuff::ProblemType;
+    use crate::inout::scanner::{Scanner, TokenType};
     use crate::terms::simpletypes::{
         alloc_arrow_type, alloc_simple_sort, Type, ST_BOOL, ST_INDIVIDUALS, ST_INTEGER,
     };
@@ -1437,6 +1502,10 @@ mod tests {
 
     fn string_from(bytes: Vec<u8>) -> String {
         String::from_utf8(bytes).unwrap()
+    }
+
+    fn scanner(source: &str) -> Scanner {
+        Scanner::from_user_string(source, false).unwrap()
     }
 
     #[test]
@@ -2084,6 +2153,58 @@ mod tests {
             string_from(output),
             "thf(decl_3, type, 'quoted': $i > $o).\n"
         );
+    }
+
+    #[test]
+    fn parse_tff_type_declarations_update_signature_and_type_bank() {
+        let mut sig = signature();
+        let mut input = scanner("p: $i > $o. (a: $i). person: $tType. list: $tType > $tType.");
+
+        sig.parse_tff_type_declaration(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        let p = sig.find_f_code("p");
+        assert_ne!(p, 0);
+        assert_eq!(sig.find_arity(p), Some(1));
+        assert!(sig.is_fixed_type(p));
+        assert!(sig.is_predicate(p));
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        sig.parse_tff_type_declaration(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        let a = sig.find_f_code("a");
+        assert_ne!(a, 0);
+        assert_eq!(sig.find_arity(a), Some(0));
+        assert_eq!(sig.get_type(a), Some(&sig.type_bank().i_type()));
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        sig.parse_tff_type_declaration(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        let person = sig.type_bank().find_tc_code("person");
+        assert_eq!(sig.type_bank().find_tc_arity(person), Some(0));
+        assert_eq!(sig.find_f_code("person"), 0);
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+
+        sig.parse_tff_type_declaration(&mut input, ProblemType::FirstOrder)
+            .unwrap();
+        let list = sig.type_bank().find_tc_code("list");
+        assert_eq!(sig.type_bank().find_tc_arity(list), Some(1));
+        assert_eq!(sig.find_f_code("list"), 0);
+        input.accept_tok(TokenType::FULLSTOP).unwrap();
+    }
+
+    #[test]
+    fn parse_tff_type_declaration_rejects_variable_symbol_names() {
+        let mut sig = signature();
+        let mut input = scanner("X: $i.");
+
+        let error = sig
+            .parse_tff_type_declaration(&mut input, ProblemType::FirstOrder)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Type name expected in type declaration"));
     }
 
     #[test]
