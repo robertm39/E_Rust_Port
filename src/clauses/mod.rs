@@ -12,6 +12,7 @@ pub mod eqn;
 pub mod eqn_props;
 pub mod eqnlist;
 pub mod findex;
+pub mod freqvectors;
 pub mod g_lithash;
 pub mod garbage_coll;
 pub mod subsumption;
