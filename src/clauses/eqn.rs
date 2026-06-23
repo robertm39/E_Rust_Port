@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
@@ -11,19 +12,24 @@ use crate::terms::signature::{FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::{
-    tb_term_del_prop_count, tb_term_is_ground, tb_term_is_type_term, tb_term_is_x_type_term,
-    TermBank,
+    tb_term_collect_subterms, tb_term_del_prop_count, tb_term_is_ground, tb_term_is_type_term,
+    tb_term_is_x_type_term, TermBank,
 };
 use crate::terms::termfunc::{
-    term_dag_weight, term_fsum_weight, term_has_f_code, term_is_def_term, term_lex_compare,
-    term_non_linear_weight, term_standard_weight, term_struct_equal_deref,
-    term_struct_weight_compare, term_sym_type_weight, term_weight_compute,
+    term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
+    term_add_symbol_features, term_add_symbol_features_limited, term_collect_fcodes,
+    term_collect_ground_terms, term_collect_prop_variables, term_collect_variables,
+    term_compute_function_ranks, term_dag_weight, term_depth, term_fsum_weight, term_has_f_code,
+    term_is_def_term, term_is_untyped, term_lex_compare, term_non_linear_weight,
+    term_standard_weight, term_struct_equal_deref, term_struct_weight_compare,
+    term_sym_type_weight, term_weight_compute,
 };
 use crate::terms::termtypes::{
-    term_del_prop, term_del_prop_opt, term_set_prop, term_var_del_prop, term_var_search_prop,
-    term_var_set_prop, DerefType, Term, TermProperties, TP_OP_FLAG, TP_PRED_POS,
+    term_del_prop, term_del_prop_opt, term_identity_cmp, term_set_prop, term_var_del_prop,
+    term_var_search_prop, term_var_set_prop, DerefType, Term, TermProperties, TP_OP_FLAG,
+    TP_PRED_POS,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
     match (left, right) {
@@ -93,6 +99,17 @@ fn apply_app_var_mult(weight: f64, term: &Term, app_var_mult: f64) -> f64 {
         weight * app_var_mult
     } else {
         weight
+    }
+}
+
+fn identity_ordered_terms<'term>(
+    left: &'term Term,
+    right: &'term Term,
+) -> (&'term Term, &'term Term) {
+    if term_identity_cmp(left, right) >= 0 {
+        (left, right)
+    } else {
+        (right, left)
     }
 }
 
@@ -1393,6 +1410,148 @@ impl Eqn {
         self.syntax_compare(other, bank)
     }
 
+    #[must_use]
+    pub fn literal_compare_fun(&self, other: &Self) -> i32 {
+        if self.is_positive() && !other.is_positive() {
+            return 1;
+        }
+        if other.is_positive() && !self.is_positive() {
+            return -1;
+        }
+
+        let (self_max, self_min) = identity_ordered_terms(&self.lterm, &self.rterm);
+        let (other_max, other_min) = identity_ordered_terms(&other.lterm, &other.rterm);
+        let max_cmp = term_identity_cmp(self_max, other_max);
+        if max_cmp != 0 {
+            return max_cmp;
+        }
+        term_identity_cmp(self_min, other_min)
+    }
+
+    #[must_use]
+    pub fn depth(&self) -> i64 {
+        term_depth(&self.lterm).max(term_depth(&self.rterm))
+    }
+
+    pub fn add_symbol_distribution(&self, dist_array: &mut [i64]) {
+        term_add_symbol_distribution_limited(&self.lterm, dist_array, usize::MAX);
+        term_add_symbol_distribution_limited(&self.rterm, dist_array, usize::MAX);
+    }
+
+    pub fn add_symbol_dist_exist(&self, dist_array: &mut [i64], exists: &mut Vec<FunCode>) {
+        term_add_symbol_dist_exist(&self.lterm, dist_array, exists);
+        term_add_symbol_dist_exist(&self.rterm, dist_array, exists);
+    }
+
+    pub fn add_symbol_distribution_limited(&self, dist_array: &mut [i64], limit: usize) {
+        term_add_symbol_distribution_limited(&self.lterm, dist_array, limit);
+        term_add_symbol_distribution_limited(&self.rterm, dist_array, limit);
+    }
+
+    pub fn add_symbol_features_limited(
+        &self,
+        freq_array: &mut [i64],
+        depth_array: &mut [i64],
+        limit: usize,
+    ) {
+        term_add_symbol_features_limited(&self.lterm, 0, freq_array, depth_array, limit);
+        term_add_symbol_features_limited(&self.rterm, 0, freq_array, depth_array, limit);
+    }
+
+    pub fn add_symbol_features(&self, mod_stack: &mut Vec<usize>, feature_array: &mut [i64]) {
+        let offset = if self.is_negative() { 2 } else { 0 };
+        term_add_symbol_features(&self.lterm, mod_stack, 0, feature_array, offset);
+        term_add_symbol_features(&self.rterm, mod_stack, 0, feature_array, offset);
+    }
+
+    pub fn compute_function_ranks(&self, rank_array: &mut [i64], count: &mut i64) {
+        term_compute_function_ranks(&self.lterm, rank_array, count);
+        term_compute_function_ranks(&self.rterm, rank_array, count);
+    }
+
+    pub fn collect_variables(&self, vars: &mut BTreeMap<usize, Term>) -> i64 {
+        term_collect_variables(&self.lterm, vars) + term_collect_variables(&self.rterm, vars)
+    }
+
+    pub fn collect_fcodes(&self, fcodes: &mut BTreeSet<FunCode>) -> i64 {
+        term_collect_fcodes(&self.lterm, fcodes) + term_collect_fcodes(&self.rterm, fcodes)
+    }
+
+    pub fn collect_prop_variables(
+        &self,
+        vars: &mut BTreeMap<usize, Term>,
+        prop: TermProperties,
+    ) -> i64 {
+        term_collect_prop_variables(&self.lterm, vars, prop)
+            + term_collect_prop_variables(&self.rterm, vars, prop)
+    }
+
+    pub fn add_fun_occs(&self, f_occur: &mut PDIntArray, res_stack: &mut Vec<FunCode>) -> i64 {
+        term_add_fun_occ(&self.lterm, f_occur, res_stack)
+            + term_add_fun_occ(&self.rterm, f_occur, res_stack)
+    }
+
+    pub fn collect_subterms(&self, collector: &mut PStack<Term>) -> i64 {
+        tb_term_collect_subterms(&self.lterm, collector)
+            + tb_term_collect_subterms(&self.rterm, collector)
+    }
+
+    pub fn collect_ground_terms(
+        &self,
+        result: &mut BTreeMap<usize, Term>,
+        all_subterms: bool,
+    ) -> i64 {
+        term_collect_ground_terms(&self.lterm, result, all_subterms)
+            + term_collect_ground_terms(&self.rterm, result, all_subterms)
+    }
+
+    #[must_use]
+    pub fn has_app_var(&self) -> bool {
+        self.lterm.is_applied_free_var() || self.rterm.is_applied_free_var()
+    }
+
+    #[must_use]
+    pub fn is_untyped(&self) -> bool {
+        term_is_untyped(&self.lterm) && term_is_untyped(&self.rterm)
+    }
+
+    pub fn map_terms<F>(&mut self, bank: &TermBank, mut mapper: F)
+    where
+        F: FnMut(&Term) -> Term,
+    {
+        let old_left = self.lterm.clone();
+        let mut lterm = mapper(&self.lterm);
+        let mut rterm = mapper(&self.rterm);
+        let mut negate = false;
+
+        if lterm == *bank.false_term() {
+            lterm = bank.true_term().clone();
+            negate = !negate;
+        }
+        if rterm == *bank.false_term() {
+            rterm = bank.true_term().clone();
+            negate = !negate;
+        }
+        if lterm == *bank.true_term() {
+            std::mem::swap(&mut lterm, &mut rterm);
+        }
+        if rterm == *bank.true_term() {
+            self.del_prop(EP_IS_EQU_LITERAL);
+        } else {
+            self.set_prop(EP_IS_EQU_LITERAL);
+        }
+        if negate {
+            self.flip_prop(EP_IS_POSITIVE);
+        }
+        if lterm != old_left {
+            self.del_prop(EP_MAX_IS_UP_TO_DATE);
+            self.del_prop(EP_IS_ORIENTED);
+        }
+
+        self.lterm = lterm;
+        self.rterm = rterm;
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -1401,6 +1560,8 @@ impl Eqn {
 #[cfg(test)]
 mod tests {
     use super::Eqn;
+    use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
+    use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn_props::{
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
@@ -1416,6 +1577,7 @@ mod tests {
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS};
     use crate::terms::typebanks::TypeBank;
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -1997,6 +2159,152 @@ mod tests {
         eq.set_prop(EP_IS_ORIENTED);
         assert_eq!(eq.max_term_positions(), 2);
         assert_eq!(eq.inference_positions(), 4);
+    }
+
+    #[test]
+    fn technical_compare_depth_app_var_untyped_and_map_helpers_match_c_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let fa = typed_unary(&mut bank, "f", &a);
+        let mut eq = Eqn::alloc(fa, b.clone(), &mut bank, true).unwrap();
+        let reversed = Eqn::alloc(b.clone(), eq.left().clone(), &mut bank, true).unwrap();
+        let negative = Eqn::alloc(eq.left().clone(), b.clone(), &mut bank, false).unwrap();
+
+        assert_eq!(eq.literal_compare_fun(&reversed), 0);
+        assert_eq!(eq.literal_compare_fun(&negative), 1);
+        assert_eq!(negative.literal_compare_fun(&eq), -1);
+        assert_eq!(eq.depth(), 2);
+        assert!(eq.is_untyped());
+
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let app = applied_free_var(&mut bank, &x, &a);
+        let app_eq = Eqn::alloc(app, b.clone(), &mut bank, true).unwrap();
+        assert!(app_eq.has_app_var());
+
+        let c = typed_const(&mut bank, "c");
+        eq.set_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        eq.map_terms(
+            &bank,
+            |term| {
+                if term == &b {
+                    c.clone()
+                } else {
+                    term.clone()
+                }
+            },
+        );
+        assert_eq!(eq.left(), reversed.right());
+        assert_eq!(eq.right(), &c);
+        assert!(eq.is_oriented());
+        assert!(eq.query_prop(EP_MAX_IS_UP_TO_DATE));
+
+        let old_left = eq.left().clone();
+        let false_term = bank.false_term().clone();
+        eq.map_terms(&bank, |term| {
+            if term == &old_left {
+                false_term.clone()
+            } else {
+                term.clone()
+            }
+        });
+        assert_eq!(eq.left(), &c);
+        assert_eq!(eq.right(), bank.true_term());
+        assert!(eq.is_negative());
+        assert!(!eq.is_oriented());
+        assert!(!eq.query_prop(EP_MAX_IS_UP_TO_DATE));
+        assert!(!eq.query_prop(EP_IS_EQU_LITERAL));
+    }
+
+    #[test]
+    fn collection_and_symbol_feature_wrappers_apply_both_equation_sides() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        x.set_prop(TP_CHECK_FLAG);
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let left = typed_binary(&mut bank, "f", &x, &a);
+        let right = typed_unary(&mut bank, "g", &b);
+        let eq = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+        let max_code = [left.f_code(), right.f_code(), a.f_code(), b.f_code()]
+            .into_iter()
+            .max()
+            .unwrap();
+        let array_len = usize::try_from(max_code + 1).unwrap();
+
+        let mut vars = BTreeMap::new();
+        assert_eq!(eq.collect_variables(&mut vars), 1);
+        assert_eq!(vars.values().next(), Some(&x));
+
+        let mut prop_vars = BTreeMap::new();
+        assert_eq!(eq.collect_prop_variables(&mut prop_vars, TP_CHECK_FLAG), 1);
+        assert_eq!(prop_vars.values().next(), Some(&x));
+
+        let mut fcodes = BTreeSet::new();
+        assert_eq!(eq.collect_fcodes(&mut fcodes), 4);
+        assert!(fcodes.contains(&left.f_code()));
+        assert!(fcodes.contains(&right.f_code()));
+        assert!(fcodes.contains(&a.f_code()));
+        assert!(fcodes.contains(&b.f_code()));
+
+        let mut dist = vec![0; array_len];
+        eq.add_symbol_distribution(&mut dist);
+        assert_eq!(dist[usize::try_from(left.f_code()).unwrap()], 1);
+        assert_eq!(dist[usize::try_from(a.f_code()).unwrap()], 1);
+        assert_eq!(dist[usize::try_from(right.f_code()).unwrap()], 1);
+        assert_eq!(dist[usize::try_from(b.f_code()).unwrap()], 1);
+
+        let mut limited = vec![0; array_len];
+        eq.add_symbol_distribution_limited(&mut limited, usize::try_from(right.f_code()).unwrap());
+        assert_eq!(limited[usize::try_from(left.f_code()).unwrap()], 1);
+        assert_eq!(limited[usize::try_from(right.f_code()).unwrap()], 0);
+
+        let mut exists_dist = vec![0; array_len];
+        let mut exists = Vec::new();
+        eq.add_symbol_dist_exist(&mut exists_dist, &mut exists);
+        let exists_set = exists.into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(exists_set, fcodes);
+
+        let mut freq = vec![0; array_len];
+        let mut depth = vec![0; array_len];
+        eq.add_symbol_features_limited(&mut freq, &mut depth, array_len);
+        assert_eq!(freq[usize::try_from(left.f_code()).unwrap()], 1);
+        assert_eq!(depth[usize::try_from(left.f_code()).unwrap()], 0);
+        assert_eq!(freq[usize::try_from(a.f_code()).unwrap()], 1);
+        assert_eq!(depth[usize::try_from(a.f_code()).unwrap()], 1);
+
+        let mut feature_array = vec![0; 4 * array_len + 4];
+        let mut mod_stack = Vec::new();
+        eq.add_symbol_features(&mut mod_stack, &mut feature_array);
+        let left_feature = usize::try_from(4 * left.f_code()).unwrap();
+        assert!(mod_stack.contains(&left_feature));
+        assert_eq!(feature_array[left_feature], 1);
+        assert_eq!(feature_array[left_feature + 1], 0);
+
+        let mut ranks = vec![0; array_len];
+        let mut count = 1;
+        eq.compute_function_ranks(&mut ranks, &mut count);
+        assert_eq!(count, 5);
+        assert_ne!(ranks[usize::try_from(left.f_code()).unwrap()], 0);
+        assert_ne!(ranks[usize::try_from(right.f_code()).unwrap()], 0);
+
+        let mut f_occur = PDIntArray::new_int(1, GROW_EXPONENTIAL);
+        let mut occ_stack = Vec::new();
+        assert_eq!(eq.add_fun_occs(&mut f_occur, &mut occ_stack), 4);
+        assert!(occ_stack.contains(&left.f_code()));
+        assert!(occ_stack.contains(&right.f_code()));
+
+        let mut ground = BTreeMap::new();
+        assert_eq!(eq.collect_ground_terms(&mut ground, false), 1);
+        assert_eq!(ground.values().next(), Some(&right));
+
+        let ground_left = typed_unary(&mut bank, "h", &a);
+        let ground_eq = Eqn::alloc(ground_left, right, &mut bank, true).unwrap();
+        let mut collector = PStack::new();
+        assert_eq!(ground_eq.collect_subterms(&mut collector), 4);
+        assert_eq!(ground_eq.collect_subterms(&mut collector), 0);
     }
 
     #[test]
