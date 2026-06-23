@@ -913,6 +913,38 @@ impl Eqn {
         result
     }
 
+    #[must_use]
+    pub fn syntax_compare(&self, other: &Self, bank: &TermBank) -> i32 {
+        if self.is_equ_lit(bank) && !other.is_equ_lit(bank) {
+            return -1;
+        }
+        if other.is_equ_lit(bank) && !self.is_equ_lit(bank) {
+            return 1;
+        }
+
+        let self_max = self.lterm.entry_no().max(self.rterm.entry_no());
+        let other_max = other.lterm.entry_no().max(other.rterm.entry_no());
+        let max_cmp = cmp_i64(self_max, other_max);
+        if max_cmp != 0 {
+            return max_cmp;
+        }
+
+        let self_min = self.lterm.entry_no().min(self.rterm.entry_no());
+        let other_min = other.lterm.entry_no().min(other.rterm.entry_no());
+        cmp_i64(self_min, other_min)
+    }
+
+    #[must_use]
+    pub fn literal_syntax_compare(&self, other: &Self, bank: &TermBank) -> i32 {
+        if self.is_positive() && !other.is_positive() {
+            return -1;
+        }
+        if other.is_positive() && !self.is_positive() {
+            return 1;
+        }
+        self.syntax_compare(other, bank)
+    }
+
     fn copy_properties_from(&mut self, source: &Self) {
         self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
     }
@@ -1545,6 +1577,31 @@ mod tests {
         negative.set_prop(EP_IS_ORIENTED);
         assert!(!first.literal_unify_one_way(&mut negative, &mut subst, true));
         assert!(negative.is_oriented());
+    }
+
+    #[test]
+    fn syntax_comparison_uses_equational_class_and_entry_numbers() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+
+        let base_literal = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+        let reversed_literal = Eqn::alloc(b.clone(), a.clone(), &mut bank, false).unwrap();
+        assert_eq!(base_literal.syntax_compare(&reversed_literal, &bank), 0);
+        assert_eq!(
+            base_literal.literal_syntax_compare(&reversed_literal, &bank),
+            -1
+        );
+
+        let larger_literal = Eqn::alloc(a, c, &mut bank, true).unwrap();
+        assert!(base_literal.syntax_compare(&larger_literal, &bank) < 0);
+        assert!(larger_literal.syntax_compare(&base_literal, &bank) > 0);
+
+        let atom = typed_pred_const(&mut bank, "p");
+        let predicate = Eqn::alloc(atom, bank.true_term().clone(), &mut bank, true).unwrap();
+        assert!(base_literal.syntax_compare(&predicate, &bank) < 0);
+        assert!(predicate.syntax_compare(&base_literal, &bank) > 0);
     }
 
     #[test]
