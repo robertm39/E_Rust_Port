@@ -59,6 +59,7 @@ Rust files:
 - `src/terms/functypes.rs`
 - `src/terms/simplesorts.rs`
 - `src/terms/simpletypes.rs`
+- `src/terms/termweightext.rs`
 - `src/terms/typebanks.rs`
 - `src/bin/eprover.rs`
 
@@ -116,6 +117,7 @@ Original C references:
 - [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
 - [`TERMS/cte_simplesorts.h`, `TERMS/cte_simplesorts.c`](c_source_docs/TERMS/cte_simplesorts.md)
 - [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
+- [`TERMS/cte_termweightext.h`, `TERMS/cte_termweightext.c`](c_source_docs/TERMS/cte_termweightext.md)
 - [`TERMS/cte_typebanks.h`, `TERMS/cte_typebanks.c`](c_source_docs/TERMS/cte_typebanks.md)
 
 Implemented behavior:
@@ -166,6 +168,7 @@ Implemented behavior:
 - Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
 - Simple-sort table helpers from `cte_simplesorts`, including predefined sort constants, default-sort state, insertion-order sort IDs, duplicate-preserving lookup, reserved default table initialization order, TSTP sort parsing through `FuncSymbParse`, TSTP sort printing, and C-shaped debug table rendering.
 - Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
+- Term-weight extension helpers from `cte_termweightext`, including exact extension-style discriminants, stored multiplier/data fields, simple root weighting, subterm sum weighting, subterm max weighting, free-variable descent suppression, and C stack traversal order for subterms.
 - Type-bank helpers from `cte_typebanks`, including predefined constructor registration order, cached built-in shared types, name/code/arity lookups, simple-sort and type-constructor definition, recursive argument sharing, type UID assignment, structural type reuse, TSTP type parsing and printing for first-order and higher-order syntax, selected user-sort declarations, return-type rewriting, and application-encoded type declarations.
 
 Known gaps:
@@ -245,3 +248,4 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_typebanks` hashes and orders shared compound types partly through raw argument pointer addresses, so traversal order for `TypeBankAppEncodeTypes` can depend on allocator layout. Rust prints application-encoding declarations in type UID order for deterministic output; compare against reference tests before deciding whether allocator-shaped order needs to be emulated.
 - `cte_typebanks` mutates incoming compound type objects in `force_arg_sharing` and frees duplicates after tree insertion. Rust keeps `Type` handles immutable and creates a normalized shared-argument replacement when needed, which avoids in-place ownership surprises while preserving shared-type identity for returned handles.
 - `TypeBankParseType` depends on the global C `problemType` and has a few permissive first-order edge cases, including accepting a parenthesized product without a following return type as an arrow. Rust exposes an explicit-problem-type parser plus a global-state wrapper; revisit whether odd accepted shapes need exact reference tests before tightening syntax.
+- `cte_termweightext` has a misspelled public enum name (`TermWeightExtenstionStyle`) and traverses subterms by pushing children left-to-right onto a LIFO stack, so callbacks see rightmost children first. Rust keeps a compatibility alias for the typo and preserves the traversal order; any future cleanup should happen behind clearer public wrappers.
