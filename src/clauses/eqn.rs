@@ -5,6 +5,7 @@ use crate::clauses::eqn_props::{
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
 };
 use crate::terms::acterms::term_ac_equal;
+use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
 use crate::terms::signature::{FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::type_is_predicate;
@@ -14,13 +15,15 @@ use crate::terms::termbanks::{
     TermBank,
 };
 use crate::terms::termfunc::{
-    term_has_f_code, term_is_def_term, term_lex_compare, term_standard_weight,
-    term_struct_equal_deref, term_struct_weight_compare,
+    term_dag_weight, term_fsum_weight, term_has_f_code, term_is_def_term, term_lex_compare,
+    term_non_linear_weight, term_standard_weight, term_struct_equal_deref,
+    term_struct_weight_compare, term_sym_type_weight, term_weight_compute,
 };
 use crate::terms::termtypes::{
-    term_del_prop, term_set_prop, term_var_del_prop, term_var_search_prop, term_var_set_prop,
-    DerefType, Term, TermProperties, TP_OP_FLAG, TP_PRED_POS,
+    term_del_prop, term_del_prop_opt, term_set_prop, term_var_del_prop, term_var_search_prop,
+    term_var_set_prop, DerefType, Term, TermProperties, TP_OP_FLAG, TP_PRED_POS,
 };
+use std::collections::BTreeMap;
 
 fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
     match (left, right) {
@@ -78,6 +81,19 @@ fn unify_term_pair_directed(
         subst.backtrack_to_pos(backtrack);
     }
     result
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn i64_to_f64(value: i64) -> f64 {
+    value as f64
+}
+
+fn apply_app_var_mult(weight: f64, term: &Term, app_var_mult: f64) -> f64 {
+    if term.is_applied_free_var() {
+        weight * app_var_mult
+    } else {
+        weight
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -674,6 +690,438 @@ impl Eqn {
         term_standard_weight(&self.lterm) + term_standard_weight(&self.rterm)
     }
 
+    #[must_use]
+    pub fn standard_diff(&self) -> i64 {
+        let left = term_standard_weight(&self.lterm);
+        let right = term_standard_weight(&self.rterm);
+        left.max(right) - left.min(right)
+    }
+
+    #[must_use]
+    pub const fn count_maximal_literals(&self) -> i64 {
+        if self.is_oriented() {
+            1
+        } else {
+            2
+        }
+    }
+
+    #[must_use]
+    pub fn weight(
+        &self,
+        max_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        app_var_mult: f64,
+    ) -> f64 {
+        let mut result = i64_to_f64(term_weight_compute(&self.rterm, vweight, fweight));
+        if !self.is_oriented() {
+            result *= max_multiplier;
+        }
+        result = apply_app_var_mult(result, &self.rterm, app_var_mult);
+        result += apply_app_var_mult(
+            i64_to_f64(term_weight_compute(&self.lterm, vweight, fweight)) * max_multiplier,
+            &self.lterm,
+            app_var_mult,
+        );
+        result
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible helper mirrors ccl_eqn argument list"
+    )]
+    pub fn dag_weight(
+        &self,
+        uniqmax_multiplier: f64,
+        max_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        dup_weight: i64,
+        new_eqn: bool,
+        new_terms: bool,
+    ) -> f64 {
+        if new_eqn {
+            self.term_del_prop(TP_OP_FLAG);
+        } else if new_terms {
+            term_del_prop_opt(&self.lterm, TP_OP_FLAG);
+        }
+
+        let lweight = term_dag_weight(&self.lterm, fweight, vweight, dup_weight, false);
+        let rweight = term_dag_weight(&self.rterm, fweight, vweight, dup_weight, new_terms);
+
+        if self.is_oriented() {
+            uniqmax_multiplier * max_multiplier * i64_to_f64(lweight) + i64_to_f64(rweight)
+        } else {
+            max_multiplier * i64_to_f64(lweight) + max_multiplier * i64_to_f64(rweight)
+        }
+    }
+
+    #[must_use]
+    pub fn dag_weight2(
+        &self,
+        maxw_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        dup_weight: i64,
+    ) -> f64 {
+        let mut lweight = term_dag_weight(&self.lterm, fweight, vweight, dup_weight, true);
+        let mut rweight = term_dag_weight(&self.rterm, fweight, vweight, dup_weight, true);
+        if rweight > lweight {
+            std::mem::swap(&mut lweight, &mut rweight);
+        }
+        maxw_multiplier * i64_to_f64(lweight) + i64_to_f64(rweight)
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible helper mirrors ccl_eqn argument list"
+    )]
+    pub fn fun_weight(
+        &self,
+        max_multiplier: f64,
+        vweight: i64,
+        flimit: FunCode,
+        fweights: &[i64],
+        default_fweight: i64,
+        app_var_mult: f64,
+        typefreqs: Option<&BTreeMap<i64, i64>>,
+    ) -> f64 {
+        let mut result = i64_to_f64(term_fsum_weight(
+            &self.rterm,
+            vweight,
+            flimit,
+            fweights,
+            default_fweight,
+            typefreqs,
+        ));
+        result = apply_app_var_mult(result, &self.rterm, app_var_mult);
+        if !self.is_oriented() {
+            result *= max_multiplier;
+        }
+        result += apply_app_var_mult(
+            i64_to_f64(term_fsum_weight(
+                &self.lterm,
+                vweight,
+                flimit,
+                fweights,
+                default_fweight,
+                typefreqs,
+            )) * max_multiplier,
+            &self.lterm,
+            app_var_mult,
+        );
+        result
+    }
+
+    #[must_use]
+    pub fn non_linear_weight(
+        &self,
+        max_multiplier: f64,
+        first_var_weight: i64,
+        repeat_var_weight: i64,
+        fweight: i64,
+        app_var_mult: f64,
+    ) -> f64 {
+        let mut result = i64_to_f64(term_non_linear_weight(
+            &self.rterm,
+            first_var_weight,
+            repeat_var_weight,
+            fweight,
+        ));
+        if !self.is_oriented() {
+            result *= max_multiplier;
+        }
+        result = apply_app_var_mult(result, &self.rterm, app_var_mult);
+        result += apply_app_var_mult(
+            i64_to_f64(term_non_linear_weight(
+                &self.lterm,
+                first_var_weight,
+                repeat_var_weight,
+                fweight,
+            )) * max_multiplier,
+            &self.lterm,
+            app_var_mult,
+        );
+        result
+    }
+
+    #[must_use]
+    pub fn sym_type_weight(
+        &self,
+        max_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        cweight: i64,
+        pweight: i64,
+        app_var_mult: f64,
+    ) -> f64 {
+        let mut result = i64_to_f64(term_sym_type_weight(
+            &self.rterm,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+        ));
+        if !self.is_oriented() {
+            result *= max_multiplier;
+        }
+        result = apply_app_var_mult(result, &self.rterm, app_var_mult);
+        result += apply_app_var_mult(
+            i64_to_f64(term_sym_type_weight(
+                &self.lterm,
+                vweight,
+                fweight,
+                cweight,
+                pweight,
+            )) * max_multiplier,
+            &self.lterm,
+            app_var_mult,
+        );
+        result
+    }
+
+    #[must_use]
+    pub fn max_weight(&self, vweight: i64, fweight: i64, app_var_mult: f64) -> f64 {
+        let left = apply_app_var_mult(
+            i64_to_f64(term_weight_compute(&self.lterm, vweight, fweight)),
+            &self.lterm,
+            app_var_mult,
+        );
+        let right = apply_app_var_mult(
+            i64_to_f64(term_weight_compute(&self.rterm, vweight, fweight)),
+            &self.rterm,
+            app_var_mult,
+        );
+        left.max(right)
+    }
+
+    #[must_use]
+    pub fn corrected_weight(
+        &self,
+        bank: &TermBank,
+        max_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        app_var_mult: f64,
+    ) -> f64 {
+        let mut result = if self.is_equ_lit(bank) {
+            let mut right = i64_to_f64(term_weight_compute(&self.rterm, vweight, fweight));
+            if !self.is_oriented() {
+                right *= max_multiplier;
+            }
+            right += i64_to_f64(fweight);
+            apply_app_var_mult(right, &self.rterm, app_var_mult)
+        } else {
+            0.0
+        };
+        result += apply_app_var_mult(
+            i64_to_f64(term_weight_compute(&self.lterm, vweight, fweight)) * max_multiplier,
+            &self.lterm,
+            app_var_mult,
+        );
+        result
+    }
+
+    #[must_use]
+    pub fn corrected_non_linear_weight(
+        &self,
+        bank: &TermBank,
+        max_multiplier: f64,
+        first_var_weight: i64,
+        repeat_var_weight: i64,
+        fweight: i64,
+        app_var_mult: f64,
+    ) -> f64 {
+        let mut result = if self.is_equ_lit(bank) {
+            let mut right = i64_to_f64(term_non_linear_weight(
+                &self.rterm,
+                first_var_weight,
+                repeat_var_weight,
+                fweight,
+            ));
+            if !self.is_oriented() {
+                right *= max_multiplier;
+            }
+            apply_app_var_mult(right, &self.rterm, app_var_mult) + i64_to_f64(fweight)
+        } else {
+            0.0
+        };
+        result += apply_app_var_mult(
+            i64_to_f64(term_non_linear_weight(
+                &self.lterm,
+                first_var_weight,
+                repeat_var_weight,
+                fweight,
+            )) * max_multiplier,
+            &self.lterm,
+            app_var_mult,
+        );
+        result
+    }
+
+    #[must_use]
+    pub fn max_term_positions(&self) -> i64 {
+        let mut result = term_weight_compute(&self.lterm, 1, 1);
+        if !self.is_oriented() {
+            result += term_weight_compute(&self.rterm, 1, 1);
+        }
+        result
+    }
+
+    #[must_use]
+    pub fn inference_positions(&self) -> i64 {
+        let mut result = term_weight_compute(&self.lterm, 0, 1);
+        if self.is_oriented() {
+            result += term_weight_compute(&self.rterm, 0, 1);
+        }
+        result
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible helper mirrors ccl_eqn argument list"
+    )]
+    pub fn literal_weight(
+        &self,
+        bank: &TermBank,
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        app_var_mult: f64,
+        count_eq_encoding: bool,
+    ) -> f64 {
+        let mut result = if count_eq_encoding {
+            self.weight(max_term_multiplier, vweight, fweight, app_var_mult)
+        } else {
+            self.corrected_weight(bank, max_term_multiplier, vweight, fweight, app_var_mult)
+        };
+        if self.is_maximal() {
+            result *= max_literal_multiplier;
+        }
+        if self.is_positive() {
+            result *= pos_multiplier;
+        }
+        result
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible helper mirrors ccl_eqn argument list"
+    )]
+    pub fn literal_fun_weight(
+        &self,
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        vweight: i64,
+        flimit: FunCode,
+        fweights: &[i64],
+        default_fweight: i64,
+        app_var_mult: f64,
+        typefreqs: Option<&BTreeMap<i64, i64>>,
+    ) -> f64 {
+        let mut result = self.fun_weight(
+            max_term_multiplier,
+            vweight,
+            flimit,
+            fweights,
+            default_fweight,
+            app_var_mult,
+            typefreqs,
+        );
+        if self.is_maximal() {
+            result *= max_literal_multiplier;
+        }
+        if self.is_positive() {
+            result *= pos_multiplier;
+        }
+        result
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible helper mirrors ccl_eqn argument list"
+    )]
+    pub fn literal_non_linear_weight(
+        &self,
+        bank: &TermBank,
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        first_var_weight: i64,
+        repeat_var_weight: i64,
+        fweight: i64,
+        app_var_mult: f64,
+        count_eq_encoding: bool,
+    ) -> f64 {
+        let mut result = if count_eq_encoding {
+            self.non_linear_weight(
+                max_term_multiplier,
+                first_var_weight,
+                repeat_var_weight,
+                fweight,
+                app_var_mult,
+            )
+        } else {
+            self.corrected_non_linear_weight(
+                bank,
+                max_term_multiplier,
+                first_var_weight,
+                repeat_var_weight,
+                fweight,
+                app_var_mult,
+            )
+        };
+        if self.is_maximal() {
+            result *= max_literal_multiplier;
+        }
+        if self.is_positive() {
+            result *= pos_multiplier;
+        }
+        result
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible helper mirrors ccl_eqn argument list"
+    )]
+    pub fn literal_sym_type_weight(
+        &self,
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        cweight: i64,
+        pweight: i64,
+        app_var_mult: f64,
+    ) -> f64 {
+        let mut result = self.sym_type_weight(
+            max_term_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            app_var_mult,
+        );
+        if self.is_maximal() {
+            result *= max_literal_multiplier;
+        }
+        if self.is_positive() {
+            result *= pos_multiplier;
+        }
+        result
+    }
+
     pub fn canonize(&mut self) {
         if term_struct_weight_compare(&self.lterm, &self.rterm) == 0
             && term_lex_compare(&self.lterm, &self.rterm) < 0
@@ -958,6 +1406,7 @@ mod tests {
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
         EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
+    use crate::terms::signature::SIG_PHONY_APP_CODE;
     use crate::terms::signature::{
         FunctionProperties, Signature, FP_CL_SPLIT_DEF, FP_IS_INTEGER, FP_PSEUDO_PRED,
     };
@@ -965,7 +1414,7 @@ mod tests {
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
-    use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_PRED_POS};
+    use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -1009,6 +1458,35 @@ mod tests {
         term.set_argument(0, arg.clone());
         bank.insert(&term, crate::terms::termtypes::DerefType::Never)
             .unwrap()
+    }
+
+    fn typed_binary(bank: &mut TermBank, name: &str, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        bank.signature_mut()
+            .declare_final_type(
+                f_code,
+                alloc_arrow_type(vec![type_.clone(), type_.clone(), type_.clone()]),
+            )
+            .unwrap();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.insert(&term, crate::terms::termtypes::DerefType::Never)
+            .unwrap()
+    }
+
+    fn applied_free_var(bank: &mut TermBank, variable: &Term, arg: &Term) -> Term {
+        let term = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        term.set_type(Some(bank.signature().type_bank().default_type()));
+        term.set_argument(0, variable.clone());
+        term.set_argument(1, arg.clone());
+        term
+    }
+
+    fn assert_f64_bits_eq(actual: f64, expected: f64) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
     }
 
     #[test]
@@ -1383,6 +1861,142 @@ mod tests {
         let lex_a = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
         let lex_b = Eqn::alloc(right, left, &mut bank, true).unwrap();
         assert!(lex_a.struct_weight_lex_compare(&lex_b, &bank) < 0);
+    }
+
+    #[test]
+    fn ordinary_weight_helpers_apply_orientation_and_applied_variable_multipliers() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let fa = typed_unary(&mut bank, "f", &a);
+        let mut eq = Eqn::alloc(fa, b, &mut bank, true).unwrap();
+
+        assert_f64_bits_eq(eq.weight(2.0, 3, 5, 7.0), 30.0);
+        assert_eq!(eq.standard_diff(), 2);
+        assert_eq!(eq.count_maximal_literals(), 2);
+
+        eq.set_prop(EP_IS_ORIENTED);
+        assert_f64_bits_eq(eq.weight(2.0, 3, 5, 7.0), 25.0);
+        assert_eq!(eq.count_maximal_literals(), 1);
+
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let a = typed_const(&mut bank, "app_a");
+        let b = typed_const(&mut bank, "app_b");
+        let app = applied_free_var(&mut bank, &x, &a);
+        let eq = Eqn::alloc(app, b, &mut bank, true).unwrap();
+
+        assert_f64_bits_eq(eq.weight(2.0, 3, 5, 10.0), 170.0);
+        assert_f64_bits_eq(eq.max_weight(3, 5, 10.0), 80.0);
+    }
+
+    #[test]
+    fn weighted_sum_nonlinear_symbol_type_and_corrected_weights_match_c_shape() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let left = typed_binary(&mut bank, "f", &x, &x);
+        let right = typed_const(&mut bank, "a");
+        let mut eq = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
+
+        assert_f64_bits_eq(eq.non_linear_weight(3.0, 7, 2, 5, 1.0), 57.0);
+        assert_f64_bits_eq(eq.sym_type_weight(2.0, 1, 2, 3, 11, 1.0), 14.0);
+
+        let flimit = left.f_code().max(right.f_code()) + 1;
+        let mut fweights = vec![0; usize::try_from(flimit).unwrap()];
+        fweights[usize::try_from(left.f_code()).unwrap()] = 13;
+        fweights[usize::try_from(right.f_code()).unwrap()] = 17;
+        assert_f64_bits_eq(eq.fun_weight(2.0, 3, flimit, &fweights, 5, 1.0, None), 72.0);
+
+        eq.set_prop(EP_IS_ORIENTED);
+        assert_f64_bits_eq(eq.non_linear_weight(3.0, 7, 2, 5, 1.0), 47.0);
+        assert_f64_bits_eq(eq.sym_type_weight(2.0, 1, 2, 3, 11, 1.0), 11.0);
+
+        let a = typed_const(&mut bank, "eq_a");
+        let b = typed_const(&mut bank, "eq_b");
+        let eq = Eqn::alloc(a, b, &mut bank, true).unwrap();
+        assert_f64_bits_eq(eq.corrected_weight(&bank, 2.0, 3, 5, 1.0), 25.0);
+        assert_f64_bits_eq(
+            eq.corrected_non_linear_weight(&bank, 2.0, 7, 2, 5, 1.0),
+            25.0,
+        );
+
+        let pred = typed_pred_const(&mut bank, "p");
+        let lit = Eqn::alloc(pred, bank.true_term().clone(), &mut bank, true).unwrap();
+        assert_f64_bits_eq(lit.corrected_weight(&bank, 2.0, 3, 5, 1.0), 10.0);
+    }
+
+    #[test]
+    fn literal_weight_helpers_apply_literal_and_polarity_multipliers() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let mut lit = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+        lit.set_prop(EP_IS_MAXIMAL);
+
+        assert_f64_bits_eq(
+            lit.literal_weight(&bank, 2.0, 3.0, 4.0, 3, 5, 1.0, false),
+            300.0,
+        );
+        assert_f64_bits_eq(
+            lit.literal_non_linear_weight(&bank, 2.0, 3.0, 4.0, 7, 2, 5, 1.0, false),
+            300.0,
+        );
+        assert_f64_bits_eq(
+            lit.literal_sym_type_weight(2.0, 3.0, 4.0, 1, 2, 3, 11, 1.0),
+            144.0,
+        );
+
+        let flimit = a.f_code().max(b.f_code()) + 1;
+        let mut fweights = vec![0; usize::try_from(flimit).unwrap()];
+        fweights[usize::try_from(a.f_code()).unwrap()] = 11;
+        fweights[usize::try_from(b.f_code()).unwrap()] = 13;
+        assert_f64_bits_eq(
+            lit.literal_fun_weight(2.0, 3.0, 4.0, 3, flimit, &fweights, 5, 1.0, None),
+            576.0,
+        );
+
+        let mut neg = Eqn::alloc(a, b, &mut bank, false).unwrap();
+        neg.set_prop(EP_IS_MAXIMAL);
+        assert_f64_bits_eq(
+            neg.literal_weight(&bank, 2.0, 3.0, 4.0, 3, 5, 1.0, false),
+            75.0,
+        );
+    }
+
+    #[test]
+    fn dag_weight_helpers_share_flags_like_c_term_dag_weight() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let fa = typed_unary(&mut bank, "f", &a);
+        let ga = typed_unary(&mut bank, "g", &a);
+        let mut eq = Eqn::alloc(fa, ga, &mut bank, true).unwrap();
+
+        assert_f64_bits_eq(eq.dag_weight(5.0, 2.0, 3, 10, 1, true, false), 62.0);
+        assert!(a.query_prop(TP_OP_FLAG));
+
+        assert_f64_bits_eq(eq.dag_weight(5.0, 2.0, 3, 10, 1, true, true), 80.0);
+        assert_f64_bits_eq(eq.dag_weight2(4.0, 3, 10, 1), 100.0);
+
+        eq.set_prop(EP_IS_ORIENTED);
+        assert_f64_bits_eq(eq.dag_weight(5.0, 2.0, 3, 10, 1, true, false), 211.0);
+    }
+
+    #[test]
+    fn position_count_helpers_preserve_c_orientation_asymmetry() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let fa = typed_unary(&mut bank, "f", &a);
+        let gb = typed_unary(&mut bank, "g", &b);
+        let mut eq = Eqn::alloc(fa, gb, &mut bank, true).unwrap();
+
+        assert_eq!(eq.max_term_positions(), 4);
+        assert_eq!(eq.inference_positions(), 2);
+
+        eq.set_prop(EP_IS_ORIENTED);
+        assert_eq!(eq.max_term_positions(), 2);
+        assert_eq!(eq.inference_positions(), 4);
     }
 
     #[test]
