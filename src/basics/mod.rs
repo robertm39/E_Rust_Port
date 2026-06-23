@@ -13,4 +13,5 @@ pub mod permastrings;
 pub mod properties;
 pub mod pstacks;
 pub mod ptrees;
+pub mod simple_stuff;
 pub mod stringtrees;

@@ -20,6 +20,7 @@ Rust files:
 - `src/basics/pdrangearrays.rs`
 - `src/basics/permastrings.rs`
 - `src/basics/properties.rs`
+- `src/basics/simple_stuff.rs`
 - `src/basics/pstacks.rs`
 - `src/basics/ptrees.rs`
 - `src/basics/stringtrees.rs`
@@ -47,6 +48,7 @@ Original C references:
 - [`BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c`](c_source_docs/BASICS/clb_pdrangearrays.md)
 - [`BASICS/clb_permastrings.h`, `BASICS/clb_permastrings.c`](c_source_docs/BASICS/clb_permastrings.md)
 - [`BASICS/clb_properties.h`](c_source_docs/BASICS/clb_properties.md)
+- [`BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`](c_source_docs/BASICS/clb_simple_stuff.md)
 - [`BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`](c_source_docs/BASICS/clb_pstacks.md)
 - [`BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`](c_source_docs/BASICS/clb_ptrees.md)
 - [`BASICS/clb_stringtrees.h`, `BASICS/clb_stringtrees.c`](c_source_docs/BASICS/clb_stringtrees.md)
@@ -69,6 +71,7 @@ Implemented behavior:
 - `MinHeap` binary minimum heap behavior from `clb_min_heap`, including comparator-driven ordering, integer/pointer-shaped add helpers, minimum pop, size/peek queries, update/remove operations, the C helper directions for `decr_key` and `incr_key`, optional index-setter callbacks after swaps/removals, and debug printing.
 - Permanent string registry behavior from `clb_permastrings`, including duplicate interning, owned-string store, null-shaped optional lookup, explicit global registry clearing, and returned shared strings that remain valid for Rust holders after the registry is cleared.
 - Property-bit helpers from `clb_properties`, including set/delete/flip/assign, all-bit and any-bit queries, masked property extraction, and masked equivalence checks.
+- Shared simple helpers from `clb_simple_stuff`, including bytewise string distance, weighted-object comparison/sorting, C-shaped JKISS random state and static-state wrapper behavior, bounded indentation strings, prefix tests, null-terminated string-index/cardinality helpers, positive-only GCD, `ProverResult`, `ProblemType`, and first-order/higher-order syntax conflict checks.
 - `StrTree` string-keyed map behavior from `clb_stringtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction, deletion, and deterministic sorted traversal.
 - `FloatTree` floating-point-keyed map behavior from `clb_floattrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction/deletion, node queries, deterministic sorted traversal for ordered float keys, signed-zero equivalence, infinities, and deterministic NaN bucketing.
 - `NumTree` numeric-keyed map behavior from `clb_numtrees`, including duplicate-preserving store semantics, lookup, mutable value rewrite, extraction/deletion, root-like draining, node/max-key queries, debug printing, deterministic sorted traversal, and limited traversal starting at the first key greater than or equal to the limit.
@@ -91,5 +94,6 @@ Known gaps:
 - `NumXTree` currently uses Rust `BTreeMap` for the same reason; exact splay-root locality is not modeled beyond tracking a recent root-like key for extraction/draining.
 - `PTree` currently uses Rust `BTreeSet` for deterministic ordered set semantics; exact C splay-root locality and pointer-address ordering should be revisited once stable arena/handle identity is wired into terms.
 - Permanent strings are represented as `Arc<str>` rather than raw `char*`; duplicate calls preserve shared allocation identity, while clearing the registry does not invalidate existing Rust handles.
+- The JKISS wrapper preserves the exported C module's static-state behavior, including the fact that the `JKISSRand` state argument does not drive the random sequence; call-site-level compatibility should be revisited when random-dependent heuristics are ported.
 - The help option table is intentionally partial until the full option table is ported.
 - Running the Rust binary on a problem currently reports that proof search is not implemented.
