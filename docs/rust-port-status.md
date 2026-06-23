@@ -59,6 +59,7 @@ Rust files:
 - `src/terms/acterms.rs`
 - `src/terms/dbvars.rs`
 - `src/terms/functypes.rs`
+- `src/terms/replace.rs`
 - `src/terms/signature.rs`
 - `src/terms/simplesorts.rs`
 - `src/terms/simpletypes.rs`
@@ -131,6 +132,7 @@ Original C references:
 - [`TERMS/cte_acterms.h`, `TERMS/cte_acterms.c`](c_source_docs/TERMS/cte_acterms.md)
 - [`TERMS/cte_dbvars.h`, `TERMS/cte_dbvars.c`](c_source_docs/TERMS/cte_dbvars.md)
 - [`TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`](c_source_docs/TERMS/cte_functypes.md)
+- [`TERMS/cte_replace.h`, `TERMS/cte_replace.c`](c_source_docs/TERMS/cte_replace.md)
 - [`TERMS/cte_signature.h`, `TERMS/cte_signature.c`](c_source_docs/TERMS/cte_signature.md)
 - [`TERMS/cte_simplesorts.h`, `TERMS/cte_simplesorts.c`](c_source_docs/TERMS/cte_simplesorts.md)
 - [`TERMS/cte_simpletypes.h`, `TERMS/cte_simpletypes.c`](c_source_docs/TERMS/cte_simpletypes.md)
@@ -196,6 +198,7 @@ Implemented behavior:
 - AC-normalized temporary term helpers from `cte_acterms`, including AC-term allocation shape, lexicographic comparison, the inherited DB-lambda comparison quirk, associative flattening with sorted arguments, binary commutative argument sorting, flat string rendering, and `TermACEqual`'s standard-weight and phony-application prechecks.
 - Shared De Bruijn-variable bank helpers from `cte_dbvars`, including nested index/type-UID lookup, unique shared DB variable allocation, DB-variable property initialization, arrow-type eta-expandable marking, and bank clearing.
 - Function-symbol type helpers from `cte_functypes`, including exact `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, appending parsed spellings to the caller-provided dynamic string, and C-shaped integer, rational, and float normalization.
+- Rewrite-link helpers from `cte_replace`, including exact `RWResultType` discriminants, rewritten/root-rewritten/SoS-rewritten property mutation, replacement and demodulator fields, top-rewritten detection, rewrite-link deletion, and chain following to the final replacement.
 - Initial signature helpers from `cte_signature`, including exact function-property bits and special-code constants, `$true`/`$false` initialization, optional list-symbol initialization, name/code/arity lookup, quoted-name lookup, first-order multi-arity name fixing, property mutation/query helpers, polymorphic and special-symbol flags, type declaration/fixing, predicate/function classification, alpha-rank computation, pop/backtrack behavior, capacity-growth accounting, arity statistics, FOF operator insertion, internal-code insertion, lazy equality/disjunction/list-code helpers, generated symbol counters, and feature-offset computation.
 - Simple-sort table helpers from `cte_simplesorts`, including predefined sort constants, default-sort state, insertion-order sort IDs, duplicate-preserving lookup, reserved default table initialization order, TSTP sort parsing through `FuncSymbParse`, TSTP sort printing, and C-shaped debug table rendering.
 - Simple type helpers from `cte_simpletypes`, including built-in sort constants, `Rc`-backed type handles, shallow copy semantics, arrow allocation/flattening, return-sort and max-arity helpers, untyped/bool/predicate/type-constructor queries, pointer-identity ordering, encoded type names, first-argument dropping, order/variable-order computation, and choice-type detection.
@@ -318,3 +321,5 @@ These notes are not permission to diverge during porting. They identify inherite
 - `cte_signature` has several compatibility quirks now mirrored in Rust: `SigSetPolymorphic` ignores its `value` parameter and always sets the bit, first-order duplicate names with different arities are silently renamed with an `_ARITYFIX... ` suffix, and `SigPopId`/`SigBacktrack` do not invalidate cached alpha ranks. These should be revisited only after signature users and reference behavior are covered.
 - The lazy negative branch of C `SigGetEqnCode` appears to set properties on `sig->eqn_code` instead of `sig->neqn_code`, which can assert if `$neq` is requested before `$eq`. Rust's lazy helper sets the properties on the created code to keep the API usable; compare against reference call order before deciding whether this bug needs a stricter compatibility shim.
 - `cte_acterms` uses raw pointer ordering as a tie-breaker when storing structurally equal temporary AC terms in a tree. Rust keeps duplicate normalized arguments in a vector and sorts by AC comparison only; this preserves equality and rendering for indistinguishable duplicates, but revisit if later diagnostics or heuristics observe duplicate tie order.
+- `cte_replace` stores a raw `struct clause_cell*` demodulator pointer in rewrite links. Rust currently stores an opaque nonzero demodulator id until clauses are ported; revisit the field type when clause ownership and `REWRITE_AT_SUBTERM` are represented directly.
+- `TBTermPosReplace` from `cte_replace` is deferred until `cte_termbanks` is available, because the C behavior creates top copies and reinserts through `TBInsertNoProps`/`TBTermTopInsert`, with LFHO branches calling `MakeRewrittenTerm`.

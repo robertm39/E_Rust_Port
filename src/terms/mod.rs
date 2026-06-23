@@ -1,6 +1,7 @@
 pub mod acterms;
 pub mod dbvars;
 pub mod functypes;
+pub mod replace;
 pub mod signature;
 pub mod simplesorts;
 pub mod simpletypes;

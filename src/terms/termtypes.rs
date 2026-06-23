@@ -156,6 +156,31 @@ pub enum RewriteLevel {
     FullRewrite = 2,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RewriteDemodulator(usize);
+
+impl RewriteDemodulator {
+    /// Creates an opaque rewrite-demodulator handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is zero. The C field is a nullable pointer, so zero is
+    /// represented by `None` in Rust.
+    #[must_use]
+    pub fn new(id: usize) -> Self {
+        assert!(
+            id != 0,
+            "rewrite demodulator id zero is represented by None"
+        );
+        Self(id)
+    }
+
+    #[must_use]
+    pub const fn id(self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Term(Rc<TermCell>);
 
@@ -171,6 +196,7 @@ struct TermCell {
     f_count: Cell<u32>,
     nf_date: [Cell<SysDate>; 2],
     rw_replace: RefCell<Option<Term>>,
+    rw_demod: Cell<Option<RewriteDemodulator>>,
     type_: RefCell<Option<Type>>,
     left: RefCell<Option<Term>>,
     right: RefCell<Option<Term>>,
@@ -392,6 +418,15 @@ impl Term {
     }
 
     #[must_use]
+    pub fn rw_demod_field(&self) -> Option<RewriteDemodulator> {
+        self.0.rw_demod.get()
+    }
+
+    pub fn set_rw_demod_field(&self, demod: Option<RewriteDemodulator>) {
+        self.0.rw_demod.set(demod);
+    }
+
+    #[must_use]
     pub fn properties(&self) -> TermProperties {
         self.0.properties.get()
     }
@@ -527,6 +562,11 @@ impl Term {
     }
 
     #[must_use]
+    pub fn is_top_rewritten(&self) -> bool {
+        self.is_rewritten() && self.rw_demod_field().is_some()
+    }
+
+    #[must_use]
     pub fn is_shared(&self) -> bool {
         self.query_prop(TP_IS_SHARED)
     }
@@ -586,6 +626,7 @@ impl Term {
                 Cell::new(SysDate::creation_time()),
             ],
             rw_replace: RefCell::new(None),
+            rw_demod: Cell::new(None),
             type_: RefCell::new(None),
             left: RefCell::new(None),
             right: RefCell::new(None),
