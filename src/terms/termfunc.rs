@@ -5,9 +5,10 @@ use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::signature::{
     Signature, FP_INTERPRETED, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
-    SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+    SIG_ITE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::{type_drop_first_arg, types_cmp, var_order};
+use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
     term_del_prop_opt, term_deref, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT,
     DEFAULT_VWEIGHT, TP_IS_GROUND, TP_OP_FLAG, TP_PRED_POS,
@@ -965,6 +966,26 @@ pub fn term_add_fun_occ(
     count
 }
 
+/// Finds the first `$ite` child subterm and writes its position to `pos`.
+///
+/// The root itself is not considered a match, matching C `TermFindIteSubterm`.
+///
+/// # Panics
+///
+/// Panics if a traversed argument slot is uninitialized.
+pub fn term_find_ite_subterm(term: &Term, pos: &mut TermPos) -> bool {
+    pos.clear();
+    let mut path = Vec::new();
+    if term_find_ite_subterm_inner(term, &mut path) {
+        for (superterm, index) in path {
+            pos.push_component(superterm, index);
+        }
+        true
+    } else {
+        false
+    }
+}
+
 #[must_use]
 pub fn term_array_no_duplicates(args: &[Term]) -> bool {
     if args.len() <= 1 {
@@ -1187,6 +1208,23 @@ fn symbol_feature_index(f_code: FunCode, offset: usize) -> usize {
         .expect("symbol feature index fits in usize")
 }
 
+fn term_find_ite_subterm_inner(term: &Term, path: &mut Vec<(Term, usize)>) -> bool {
+    if term.is_lambda() {
+        return false;
+    }
+    for index in 0..term.arity() {
+        let arg = term
+            .argument(index)
+            .expect("ITE-subterm search requires initialized args");
+        path.push((term.clone(), index));
+        if arg.f_code() == SIG_ITE_CODE || term_find_ite_subterm_inner(&arg, path) {
+            return true;
+        }
+        path.pop();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1194,14 +1232,15 @@ mod tests {
         term_add_symbol_features, term_add_symbol_features_limited, term_apply_arg,
         term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
         term_collect_variables, term_compute_function_ranks, term_compute_order,
-        term_create_prefix, term_dag_weight, term_depth, term_find_max_var_code, term_has_f_code,
-        term_has_unbound_variables, term_is_db_closed, term_is_def_term, term_is_flat,
-        term_is_ground, term_is_ground_compute, term_is_subterm, term_is_subterm_deref,
-        term_is_untyped, term_lex_compare, term_linearize, term_non_linear_weight, term_parse,
-        term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
-        term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
-        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
-        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
+        term_create_prefix, term_dag_weight, term_depth, term_find_ite_subterm,
+        term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
+        term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute, term_is_subterm,
+        term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
+        term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
+        term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
+        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
+        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
+        term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -1209,9 +1248,11 @@ mod tests {
     use crate::inout::scanner::Scanner;
     use crate::terms::functypes::FuncSymbType;
     use crate::terms::signature::{
-        Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, SIG_PHONY_APP_CODE,
+        Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE,
+        SIG_PHONY_APP_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg};
+    use crate::terms::termpos::TermPos;
     use crate::terms::termtypes::{
         term_identity_id, DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_IS_GROUND,
         TP_IS_SHARED, TP_OP_FLAG, TP_PRED_POS,
@@ -1653,6 +1694,54 @@ mod tests {
             1
         );
         assert!(cached_terms.contains_key(&term_identity_id(&cached)));
+    }
+
+    #[test]
+    fn ite_subterm_search_records_first_child_position_and_skips_lambdas() {
+        let ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        ite.set_argument(0, Term::const_cell_alloc(1));
+        ite.set_argument(1, Term::const_cell_alloc(2));
+        ite.set_argument(2, Term::const_cell_alloc(3));
+
+        let root = Term::top_alloc(10, 2);
+        root.set_argument(0, Term::const_cell_alloc(4));
+        root.set_argument(1, ite.clone());
+        let mut pos = TermPos::new();
+        assert!(term_find_ite_subterm(&root, &mut pos));
+        assert_eq!(pos.print_string(), "1");
+        assert_eq!(pos.get_subterm(&root), ite);
+
+        let deep_ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        deep_ite.set_argument(0, Term::const_cell_alloc(5));
+        deep_ite.set_argument(1, Term::const_cell_alloc(6));
+        deep_ite.set_argument(2, Term::const_cell_alloc(7));
+        let wrapper = Term::top_alloc(25, 1);
+        wrapper.set_argument(0, deep_ite.clone());
+        let later_ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        let root = Term::top_alloc(30, 2);
+        root.set_argument(0, wrapper);
+        root.set_argument(1, later_ite);
+        assert!(term_find_ite_subterm(&root, &mut pos));
+        assert_eq!(pos.print_string(), "0.0\n");
+        assert_eq!(pos.get_subterm(&root), deep_ite);
+
+        let hidden_ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        let lambda = Term::top_alloc(SIG_DB_LAMBDA_CODE, 1);
+        lambda.set_argument(0, hidden_ite);
+        let visible_ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        let root = Term::top_alloc(40, 2);
+        root.set_argument(0, lambda);
+        root.set_argument(1, visible_ite.clone());
+        assert!(term_find_ite_subterm(&root, &mut pos));
+        assert_eq!(pos.print_string(), "1");
+        assert_eq!(pos.get_subterm(&root), visible_ite);
+
+        pos.push_component(root.clone(), 0);
+        assert!(!term_find_ite_subterm(
+            &Term::top_alloc(SIG_ITE_CODE, 0),
+            &mut pos
+        ));
+        assert!(pos.is_top_pos());
     }
 
     #[test]
