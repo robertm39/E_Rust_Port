@@ -21,4 +21,5 @@ pub mod strucweight;
 pub mod termweights;
 pub mod to_autoselect;
 pub mod to_params;
+pub mod treeweight;
 pub mod varweights;
