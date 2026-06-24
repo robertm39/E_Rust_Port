@@ -132,4 +132,10 @@ Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- `GenDistribAddClause` uses `ClauseAddSymbolDistExist` as a temporary scratch count, merges only the symbols recorded in that scratch stack into `dist_array`, increments `fc_freq` once per seen symbol, and clears the scratch entries by popping the stack afterward. Rust preserves the clause-side scratch/reset shape and the signed factor path used by add/backtrack operations; formula accumulation remains deferred until `WFormula` exists.
+- `FunGenTGCmp` sorts by term frequency, then formula/clause frequency, then `f_code`; `FunGenCGCmp` swaps the first two keys. `ClauseComputeDRel` sorts only symbols found in the current clause, filters them with `f_code >= sig->internal_symbols`, computes `least_gen*benevolence` through a C `double` to `long` conversion, caps the limit by the `generosity`-indexed symbol, and pushes all symbols up to that limit. Rust preserves this ordering, inclusive internal-symbol boundary, and truncating limit calculation.
+- `GenDistribSizeAdjust` extends `dist_array` to `sig->f_count+1` but frees and recreates the temporary `f_distrib` scratch array as all zeroes. Rust mirrors that behavior; callers should not rely on scratch contents surviving size adjustment.
 <!-- END MANUAL REVIEW: c_source_docs -->

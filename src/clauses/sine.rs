@@ -6,6 +6,7 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::FormulaProperties;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
 use crate::terms::functypes::FunCode;
 use crate::terms::termbanks::TermBank;
 use std::fmt;
@@ -92,6 +93,65 @@ impl<'a> DRelation<'a> {
         self.relation[index]
             .as_mut()
             .expect("DRel entry must exist after insertion")
+    }
+
+    #[must_use]
+    pub fn entry(&self, f_code: FunCode) -> Option<&DRel<'a>> {
+        self.relation
+            .get(f_code_index(f_code))
+            .and_then(Option::as_ref)
+    }
+
+    pub fn add_clause(
+        &mut self,
+        generality: &mut GenDistrib,
+        gentype: GeneralityMeasure,
+        benevolence: f64,
+        generosity: i64,
+        clause: &'a Clause,
+    ) {
+        let mut symbols = PStack::new();
+        clause_compute_d_rel(
+            generality,
+            gentype,
+            benevolence,
+            generosity,
+            clause,
+            &mut symbols,
+        );
+        if symbols.is_empty() {
+            self.get_f_entry(0).d_clauses_mut().push(clause);
+        } else {
+            while let Some(symbol) = symbols.pop() {
+                self.get_f_entry(symbol).d_clauses_mut().push(clause);
+            }
+        }
+    }
+
+    pub fn add_clause_set(
+        &mut self,
+        generality: &mut GenDistrib,
+        gentype: GeneralityMeasure,
+        benevolence: f64,
+        generosity: i64,
+        set: &'a ClauseSet,
+    ) {
+        for clause in set.iter() {
+            self.add_clause(generality, gentype, benevolence, generosity, clause);
+        }
+    }
+
+    pub fn add_clause_sets(
+        &mut self,
+        generality: &mut GenDistrib,
+        gentype: GeneralityMeasure,
+        benevolence: f64,
+        generosity: i64,
+        sets: &PStack<&'a ClauseSet>,
+    ) {
+        for set in sets.as_slice() {
+            self.add_clause_set(generality, gentype, benevolence, generosity, set);
+        }
     }
 
     #[must_use]
@@ -227,6 +287,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::f_generality::{GenDistrib, GeneralityMeasure};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -259,6 +320,75 @@ mod tests {
         assert_eq!(relation.allocated_size(), 13);
         assert_eq!(relation.get_f_entry(12).f_code(), 12);
         assert_eq!(relation.total_entries(), 2);
+    }
+
+    #[test]
+    fn drelation_add_clause_uses_drel_symbols_and_zero_fallback_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "sine_drel_a");
+        let b = typed_const(&mut bank, "sine_drel_b");
+        let selected = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let empty = Clause::empty();
+        let set = ClauseSet::from_clauses([selected, empty]);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_set(&set, 1);
+        let mut relation = DRelation::new();
+
+        relation.add_clause_set(&mut generality, GeneralityMeasure::Terms, 10.0, 1, &set);
+
+        assert_eq!(
+            relation
+                .entry(a.f_code())
+                .map(|entry| entry.d_clauses().len()),
+            Some(1)
+        );
+        assert_eq!(
+            relation
+                .entry(b.f_code())
+                .map(|entry| entry.d_clauses().len()),
+            Some(1)
+        );
+        assert_eq!(
+            relation.entry(0).map(|entry| entry.d_clauses().len()),
+            Some(1)
+        );
+        assert_eq!(relation.total_entries(), 2);
+    }
+
+    #[test]
+    fn drelation_add_clause_sets_preserves_clause_set_stack_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "sine_set_a");
+        let b = typed_const(&mut bank, "sine_set_b");
+        let c = typed_const(&mut bank, "sine_set_c");
+        let mut first_clause = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let mut second_clause = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        let mut third_clause = clause_from(vec![literal(&mut bank, &c, &c, true)]);
+        first_clause.set_ident(10);
+        second_clause.set_ident(20);
+        third_clause.set_ident(30);
+        let first = ClauseSet::from_clauses([first_clause]);
+        let second = ClauseSet::from_clauses([second_clause, third_clause]);
+        let mut set_stack = PStack::new();
+        set_stack.push(&first);
+        set_stack.push(&second);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&set_stack);
+        let mut relation = DRelation::new();
+
+        relation.add_clause_sets(
+            &mut generality,
+            GeneralityMeasure::Terms,
+            10.0,
+            0,
+            &set_stack,
+        );
+
+        let ids = [a.f_code(), b.f_code(), c.f_code()]
+            .into_iter()
+            .map(|f_code| relation.entry(f_code).unwrap().d_clauses().as_slice()[0].ident())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![10, 20, 30]);
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
