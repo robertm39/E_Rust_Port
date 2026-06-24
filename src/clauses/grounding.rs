@@ -1,8 +1,9 @@
-use crate::basics::error::Diagnostic;
-use crate::clauses::clause::Clause;
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
+use crate::clauses::eqnlist::EqnList;
 use crate::clauses::groundconstr::{
     clause_collect_var_constr, lit_occ_add_clause_set_alt, lit_occ_add_clause_slice_alt,
     sig_collect_constant_terms, term_identity_set_from_terms, LitOccTable, TermIdentitySet,
@@ -254,6 +255,49 @@ impl GroundSet {
             result.push_str(&prop_clause_print_dimacs_string(clause));
         }
         result
+    }
+
+    /// Renders this ground set in E's LOP clause syntax.
+    ///
+    /// This mirrors C `GroundSetPrint`: unit clauses are rebuilt one at a time,
+    /// each unit receives a set-level newline, and compact non-unit clauses are
+    /// printed through the propositional clause-set helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if a stored unit lacks its atom term, or if
+    /// rebuilding a temporary unit/non-unit clause fails.
+    pub fn print_lop_string(&self, bank: &mut TermBank) -> Result<String, Diagnostic> {
+        let mut result = String::new();
+        for (&lit_no, &status) in &self.units {
+            if status.contains(GcuEncoding::Pos) {
+                result.push_str(&self.unit_lop_string(bank, lit_no, true)?);
+                result.push('\n');
+            }
+            if status.contains(GcuEncoding::Neg) {
+                result.push_str(&self.unit_lop_string(bank, lit_no, false)?);
+                result.push('\n');
+            }
+        }
+        result.push_str(&self.non_units.print_lop_string(bank)?);
+        Ok(result)
+    }
+
+    fn unit_lop_string(
+        &self,
+        bank: &mut TermBank,
+        lit_no: i64,
+        positive: bool,
+    ) -> Result<String, Diagnostic> {
+        let Some(term) = self.unit_terms.get(&lit_no) else {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                format!("ground unit literal {lit_no} has no stored term"),
+            ));
+        };
+        let eqn = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, positive)?;
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn]));
+        Ok(clause_print_lop_format_string(bank, &clause, true))
     }
 }
 
@@ -1383,6 +1427,31 @@ mod tests {
             format!(
                 "  {first_entry} 0\n -{second_entry} 0\n  {first_entry} -{second_entry} 0\n -1 0\n  1 0\n"
             )
+        );
+    }
+
+    #[test]
+    fn ground_set_lop_string_renders_units_then_non_units() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "ground_print_p", &[]);
+        let second = predicate_atom(&mut bank, "ground_print_q", &[]);
+        let mut set = GroundSet::new();
+
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+        assert!(set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ])));
+        assert!(set.insert(Clause::empty()));
+
+        assert_eq!(
+            set.print_lop_string(&mut bank).unwrap(),
+            "ground_print_p <- .\n <- ground_print_q.\nground_print_p <- ground_print_q.\n <- .\n"
         );
     }
 
