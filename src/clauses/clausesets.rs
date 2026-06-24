@@ -236,6 +236,21 @@ impl ClauseSet {
         self.delete_marked_entries()
     }
 
+    pub fn filter_trivial(&mut self, bank: &TermBank) -> i64 {
+        let mut removed = 0;
+        let mut kept = VecDeque::with_capacity(self.clauses.len());
+        while let Some(clause) = self.clauses.pop_front() {
+            if clause.is_trivial(bank) {
+                removed += 1;
+            } else {
+                kept.push_back(clause);
+            }
+        }
+        self.clauses = kept;
+        self.recompute_literals();
+        removed
+    }
+
     #[must_use]
     pub fn term_nodes(&self, bank: &TermBank) -> i64 {
         self.clauses
@@ -681,6 +696,31 @@ mod tests {
         set.insert(duplicate);
         assert_eq!(set.delete_copies(), 1);
         assert_eq!(set.members(), 1);
+    }
+
+    #[test]
+    fn filter_trivial_removes_true_and_conflicting_clauses() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let kept = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let kept_id = kept.ident();
+        let true_clause = clause_from(vec![Eqn::create_true_lit(&mut bank).unwrap()]);
+        let conflicting = clause_from(vec![
+            literal(&mut bank, &a, &b, true),
+            literal(&mut bank, &a, &b, false),
+        ]);
+        let mut set = ClauseSet::from_clauses([true_clause, kept, conflicting]);
+
+        assert_eq!(set.literals(), 4);
+        assert_eq!(set.filter_trivial(&bank), 2);
+
+        assert_eq!(set.members(), 1);
+        assert_eq!(set.literals(), 1);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![kept_id]
+        );
     }
 
     #[test]
