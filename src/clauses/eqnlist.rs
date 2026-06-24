@@ -1,7 +1,12 @@
 use crate::basics::error::Diagnostic;
+use crate::basics::simple_stuff::ProblemType;
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
-use crate::clauses::eqn::{eqn_write, eqn_write_deref, eqn_write_tstp, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{
+    eqn_parse, eqn_write, eqn_write_deref, eqn_write_tstp, Eqn, EqnPrintOptions,
+};
 use crate::clauses::eqn_props::{EqnProperties, EP_IS_POSITIVE};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::terms::functypes::func_symb_start_token;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
@@ -63,6 +68,39 @@ impl EqnList {
 
     pub fn push(&mut self, literal: Eqn) {
         self.literals.push(literal);
+    }
+
+    /// Parses the C `EqnListParse` shape using the currently ported equation
+    /// and term parsers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scanner format is `IoFormat::Auto`, matching the C
+    /// assertion that a concrete input format has been selected before list
+    /// parsing.
+    pub fn parse(
+        scanner: &mut Scanner,
+        bank: &mut TermBank,
+        sep: TokenType,
+        problem_type: ProblemType,
+    ) -> Result<Self, Diagnostic> {
+        let term_start = func_symb_start_token();
+        let starts_literal = match scanner.format() {
+            IoFormat::Tptp => scanner.test_tok(TokenType::PLUS | TokenType::HYPHEN),
+            IoFormat::Lop | IoFormat::Tstp => scanner.test_tok(term_start | TokenType::TILDE_SIGN),
+            IoFormat::Auto => panic!("format not supported"),
+        };
+        if !starts_literal {
+            return Ok(Self::new());
+        }
+
+        let mut result = Self::new();
+        result.push(eqn_parse(scanner, bank, problem_type)?);
+        while scanner.test_tok(sep) {
+            scanner.next_token()?;
+            result.push(eqn_parse(scanner, bank, problem_type)?);
+        }
+        Ok(result)
     }
 
     pub fn gc_mark_terms(&self, bank: &TermBank) {
@@ -689,10 +727,12 @@ mod tests {
     use super::{EqnList, EQN_LIST_LONG_LIMIT};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{
         EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -764,6 +804,38 @@ mod tests {
 
     fn eqn(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
+    }
+
+    #[test]
+    fn parse_reads_separated_equation_list_and_empty_start() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("list_a=list_b;~list_p", false).unwrap();
+        scanner.set_format(IoFormat::Lop);
+
+        let list = EqnList::parse(
+            &mut scanner,
+            &mut bank,
+            TokenType::SEMICOLON,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
+
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            list.print_string(&bank, ";", false, true, EqnPrintOptions::default()),
+            "list_a=list_b;~list_p"
+        );
+
+        let mut empty = Scanner::from_user_string("]", false).unwrap();
+        empty.set_format(IoFormat::Lop);
+        assert!(EqnList::parse(
+            &mut empty,
+            &mut bank,
+            TokenType::SEMICOLON,
+            ProblemType::FirstOrder
+        )
+        .unwrap()
+        .is_empty());
     }
 
     #[test]

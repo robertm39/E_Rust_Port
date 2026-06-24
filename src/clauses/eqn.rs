@@ -5,7 +5,7 @@ use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT, EQUAL_PREDICATE,
 };
-use crate::inout::scanner::IoFormat;
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
@@ -32,6 +32,7 @@ use crate::terms::termtypes::{
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::TermWeightExtension;
+use crate::terms::typecheck::type_declare_is_predicate;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -1808,6 +1809,177 @@ pub fn eqn_write_debug(
     Ok(())
 }
 
+/// Parses the C `EqnParseInfix` shape using the currently ported term parser.
+///
+/// # Panics
+///
+/// Panics if predicate declaration invariants are violated, matching the C
+/// parser assertions.
+pub fn eqn_parse_infix(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Eqn, Diagnostic> {
+    let (positive, left, right) = eqn_parse_infix_terms(scanner, bank, problem_type)?;
+    Eqn::alloc(left, right, bank, positive)
+}
+
+/// Parses the C `EqnParse` shape using the currently ported term parser.
+///
+/// # Panics
+///
+/// Panics if the scanner format is `IoFormat::Auto`, matching the C assertion
+/// that a concrete input format has been selected before literal parsing.
+pub fn eqn_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Eqn, Diagnostic> {
+    eqn_parse_real(scanner, bank, false, problem_type)
+}
+
+/// Parses the C `EqnFOFParse` shape using the currently ported term parser.
+///
+/// # Panics
+///
+/// Panics if the scanner format is `IoFormat::Auto`, matching the C assertion
+/// that a concrete input format has been selected before literal parsing.
+pub fn eqn_fof_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Eqn, Diagnostic> {
+    eqn_parse_real(scanner, bank, true, problem_type)
+}
+
+fn eqn_parse_real(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    fof: bool,
+    problem_type: ProblemType,
+) -> Result<Eqn, Diagnostic> {
+    let mut negate = false;
+    let (mut positive, left, right) = match scanner.format() {
+        IoFormat::Lop => {
+            if scanner.test_tok(TokenType::TILDE_SIGN) {
+                negate = true;
+                scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            }
+            eqn_parse_mixfix_terms(scanner, bank, problem_type)?
+        }
+        IoFormat::Tptp => {
+            if fof {
+                if scanner.test_tok(TokenType::TILDE_SIGN) {
+                    negate = true;
+                    scanner.accept_tok(TokenType::TILDE_SIGN)?;
+                }
+            } else {
+                scanner.check_tok(TokenType::PLUS | TokenType::HYPHEN)?;
+                if scanner.test_tok(TokenType::HYPHEN) {
+                    negate = true;
+                    scanner.next_token()?;
+                    scanner.accept_tok_no_skip(TokenType::HYPHEN)?;
+                } else {
+                    scanner.next_token()?;
+                    scanner.accept_tok_no_skip(TokenType::PLUS)?;
+                }
+            }
+            eqn_parse_prefix_terms(scanner, bank)?
+        }
+        IoFormat::Tstp => {
+            if scanner.test_tok(TokenType::TILDE_SIGN) {
+                negate = true;
+                scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            }
+            eqn_parse_infix_terms(scanner, bank, problem_type)?
+        }
+        IoFormat::Auto => panic!("format not supported"),
+    };
+    if negate {
+        positive = !positive;
+    }
+    Eqn::alloc(left, right, bank, positive)
+}
+
+fn eqn_parse_mixfix_terms(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<(bool, Term, Term), Diagnostic> {
+    if scanner.test_id(EQUAL_PREDICATE) {
+        eqn_parse_prefix_terms(scanner, bank)
+    } else {
+        eqn_parse_infix_terms(scanner, bank, problem_type)
+    }
+}
+
+fn eqn_parse_prefix_terms(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<(bool, Term, Term), Diagnostic> {
+    if scanner.test_id(EQUAL_PREDICATE) {
+        scanner.accept_id(EQUAL_PREDICATE)?;
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let left = bank.parse_term_simple(scanner)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        let right = bank.parse_term_simple(scanner)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        Ok((true, left, right))
+    } else {
+        let left = bank.parse_term_simple(scanner)?;
+        prepare_predicate_literal(bank, &left)?;
+        Ok((true, left, bank.true_term().clone()))
+    }
+}
+
+fn eqn_parse_infix_terms(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<(bool, Term, Term), Diagnostic> {
+    let mut in_parens = false;
+    if problem_type == ProblemType::HigherOrder && scanner.test_tok(TokenType::OPEN_BRACKET) {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        in_parens = true;
+    }
+
+    let left = bank.parse_term_simple(scanner)?;
+    if in_parens && scanner.test_tok(TokenType::CLOSE_BRACKET) {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        in_parens = false;
+    }
+
+    let mut positive = true;
+    let right = if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+            positive = false;
+        }
+        scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+        bank.parse_term_simple(scanner)?
+    } else {
+        prepare_predicate_literal(bank, &left)?;
+        bank.true_term().clone()
+    };
+
+    if in_parens {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+    Ok((positive, left, right))
+}
+
+fn prepare_predicate_literal(bank: &mut TermBank, term: &Term) -> Result<(), Diagnostic> {
+    if term.is_free_var() {
+        if term.type_().as_ref().is_some_and(type_is_predicate) {
+            return Ok(());
+        }
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Individual variable used at predicate position",
+        ));
+    }
+    type_declare_is_predicate(bank.signature_mut(), term)
+}
+
 /// Writes the C `EqnAppEncode` shape without mutating the source literal.
 ///
 /// # Errors
@@ -2034,8 +2206,8 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 #[cfg(test)]
 mod tests {
     use super::{
-        eqn_app_encode_string, eqn_debug_string, eqn_deref_string, eqn_fof_string, eqn_string,
-        eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
+        eqn_app_encode_string, eqn_debug_string, eqn_deref_string, eqn_fof_parse, eqn_fof_string,
+        eqn_parse, eqn_string, eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
     };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
@@ -2044,6 +2216,7 @@ mod tests {
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
         EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::signature::SIG_PHONY_APP_CODE;
     use crate::terms::signature::{
         FunctionProperties, Signature, FP_CL_SPLIT_DEF, FP_IS_INTEGER, FP_PSEUDO_PRED,
@@ -2125,6 +2298,63 @@ mod tests {
         term.set_argument(0, variable.clone());
         term.set_argument(1, arg.clone());
         term
+    }
+
+    #[test]
+    fn eqn_parse_uses_lop_mixfix_and_tptp_sign_shapes() {
+        let mut bank = test_bank();
+        let mut lop_infix = Scanner::from_user_string("parse_a=parse_b", false).unwrap();
+        lop_infix.set_format(IoFormat::Lop);
+        let equality = eqn_parse(&mut lop_infix, &mut bank, ProblemType::FirstOrder).unwrap();
+        assert_eq!(
+            eqn_string(&bank, &equality, false, true, EqnPrintOptions::default()),
+            "parse_a=parse_b"
+        );
+
+        let mut lop_prefix = Scanner::from_user_string("~equal(parse_a,parse_b)", false).unwrap();
+        lop_prefix.set_format(IoFormat::Lop);
+        let negated_prefix =
+            eqn_parse(&mut lop_prefix, &mut bank, ProblemType::FirstOrder).unwrap();
+        assert_eq!(
+            eqn_string(
+                &bank,
+                &negated_prefix,
+                false,
+                true,
+                EqnPrintOptions::default()
+            ),
+            "parse_a!=parse_b"
+        );
+
+        let mut predicate = Scanner::from_user_string("~parse_p", false).unwrap();
+        predicate.set_format(IoFormat::Lop);
+        let predicate = eqn_parse(&mut predicate, &mut bank, ProblemType::FirstOrder).unwrap();
+        assert_eq!(
+            eqn_string(&bank, &predicate, false, true, EqnPrintOptions::default()),
+            "~parse_p"
+        );
+
+        let mut tptp = Scanner::from_user_string("--equal(tptp_a,tptp_b)", false).unwrap();
+        tptp.set_format(IoFormat::Tptp);
+        let tptp = eqn_parse(&mut tptp, &mut bank, ProblemType::FirstOrder).unwrap();
+        assert_eq!(
+            eqn_string(&bank, &tptp, false, true, EqnPrintOptions::default()),
+            "tptp_a!=tptp_b"
+        );
+    }
+
+    #[test]
+    fn eqn_fof_parse_uses_tptp_tilde_negation() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("~equal(fof_a,fof_b)", false).unwrap();
+        scanner.set_format(IoFormat::Tptp);
+
+        let literal = eqn_fof_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(
+            eqn_fof_string(&bank, &literal, false, true, EqnFofPrintOptions::tptp()),
+            "~equal(fof_a, fof_b)"
+        );
     }
 
     #[test]
