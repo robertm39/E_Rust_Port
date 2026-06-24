@@ -120,6 +120,7 @@ Source files reviewed: `CLAUSES/ccl_clausefunc.h`, `CLAUSES/ccl_clausefunc.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PStackClausePrint` prints stack entries in increasing stack-index order, calls `ClausePrint(..., true)`, appends the optional `extra` text after each clause, and then writes the newline at the stack loop. Rust preserves that visible order/newline/suffix shape in an explicit LOP-backed helper; process-global output-format dispatch remains tied to the later `ClausePrint` integration.
 
 ### Porting Focus
 

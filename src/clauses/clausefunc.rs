@@ -1,5 +1,6 @@
 use crate::basics::error::Diagnostic;
-use crate::clauses::clause::Clause;
+use crate::basics::pstacks::PStack;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_D_INDEXED, CP_IS_S_INDEXED, CP_LIMITED_RW};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
@@ -8,6 +9,23 @@ use crate::clauses::eqnlist::EqnList;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use std::cmp::Ordering;
+
+#[must_use]
+pub fn pstack_clause_print_lop_string(
+    bank: &TermBank,
+    stack: &PStack<&Clause>,
+    extra: Option<&str>,
+) -> String {
+    let mut output = String::new();
+    for clause in stack.as_slice() {
+        output.push_str(&clause_print_lop_format_string(bank, clause, true));
+        if let Some(extra) = extra {
+            output.push_str(extra);
+        }
+        output.push('\n');
+    }
+    output
+}
 
 pub fn clause_remove_literal_index(clause: &mut Clause, index: usize) -> Option<Eqn> {
     let literal = clause.literals_mut().extract_element(index)?;
@@ -223,7 +241,9 @@ mod tests {
         clause_flip_literal_sign_index, clause_remove_ac_resolved, clause_remove_literal,
         clause_remove_literal_index, clause_remove_superfluous_literals, clause_set_canonize,
         clause_set_remove_superfluous_literals, clause_unit_simplify_test,
+        pstack_clause_print_lop_string,
     };
+    use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
@@ -296,6 +316,31 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    #[test]
+    fn pstack_clause_print_lop_string_preserves_stack_order_extra_and_newlines() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "stack_a");
+        let second = typed_const(&mut bank, "stack_b");
+        let third = typed_const(&mut bank, "stack_c");
+        let unit = clause_from(vec![literal(&mut bank, &first, &second, true)]);
+        let mixed = clause_from(vec![
+            literal(&mut bank, &second, &third, true),
+            literal(&mut bank, &third, &first, false),
+        ]);
+        let mut stack = PStack::new();
+        stack.push(&unit);
+        stack.push(&mixed);
+
+        assert_eq!(
+            pstack_clause_print_lop_string(&bank, &stack, Some(" # extra")),
+            "stack_a=stack_b <- . # extra\nstack_b=stack_c <- stack_c=stack_a. # extra\n"
+        );
+        assert_eq!(
+            pstack_clause_print_lop_string(&bank, &stack, None),
+            "stack_a=stack_b <- .\nstack_b=stack_c <- stack_c=stack_a.\n"
+        );
     }
 
     #[test]
