@@ -126,6 +126,14 @@ Source files reviewed: `HEURISTICS/che_to_precgen.h`, `HEURISTICS/che_to_precgen
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TOGeneratePrecedence` builds an `FCodeFeatureArray`, applies occurrence/symbol key modifiers before method-specific keys, sorts from `SIG_TRUE_CODE + 1`, and then writes array positions to OCB precedence weights or tuple precedence. Rust currently ports the key generation and sorted low-to-high symbol order; OCB mutation remains a later integration step.
+- `PNoMethod` falls through to `PUnaryFirst` only when no predefined precedence string was supplied. If `predefined` is present, C parses it into the OCB first and then performs no generated-precedence pass.
+- `POrientAxioms` reports `Not yet implemented`; Rust should keep this as an explicit diagnostic until the C path exists.
+- `generate_invfreq_conjmin_precedence` has comments describing conjecture symbols as larger, but the implemented key puts conjecture symbols in the lower sorted class than non-conjecture symbols. Preserve the implementation before changing names or comments.
+- The LFHO type-frequency methods allocate the type-count array from the current type-bank size before collecting type distribution, so callers rely on type traversal not introducing out-of-range type ids.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
