@@ -30,6 +30,7 @@ pub mod tfidfweight;
 pub mod to_autoselect;
 pub mod to_params;
 pub mod to_precgen;
+pub mod to_weightgen;
 pub mod treeweight;
 pub mod varweights;
 pub mod wfcb;

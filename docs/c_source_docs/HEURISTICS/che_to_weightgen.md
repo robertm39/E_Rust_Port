@@ -151,6 +151,18 @@ Source files reviewed: `HEURISTICS/che_to_weightgen.h`, `HEURISTICS/che_to_weigh
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TOGenerateWeights` loops over every f-code after `SIG_TRUE_CODE`, including built-in internal symbols. Rust tests should compute ranks, maxima, and frequency maxima over the full signature rather than only over symbols introduced by a test.
+- `WNoMethod` falls through to `generate_selmax_weights`, so a precedence is still required. `set_maximal_0` silently does nothing for higher-order problems through the global `problemType`, while `set_maximal_unary_0` does not have that higher-order skip.
+- The constant-weight post-pass overwrites arity/frequency/precedence-generated weights for arity-zero symbols whenever `to_const_weight != WConstNoSpecialWeight`, using `MAX(to_const_weight, 1)` without multiplying by `W_DEFAULT_WEIGHT`. Since `W_DEFAULT_WEIGHT` is currently 1 this is numerically invisible, but the formula is still a compatibility detail.
+- `WModArityWeight` and `WModArityMax0` set `ocb->var_weight` to `W_TO_BASEWEIGHT` only for `WConstNoSpecialWeight`; otherwise they copy `to_const_weight` directly, so the default `WConstNoWeight` can make `$true`/variable weight zero unless the later constant-forcing option lowers it differently.
+- Several rank methods intentionally allow zero symbol weights because their sentinel variables start at zero and no `MAX(weight, 1)` clamp is applied. This includes the square-rank paths, inverse conjecture-frequency rank for the initial zero/zero class, and modified inverse frequency rank for all-zero frequency groups.
+- The LFHO combined-frequency count method builds type counts by summing `FCodeFeatureArray` symbol frequencies by type, while inverse combined count and the combined rank variants use `ClauseSetAddTypeDistribution`. Preserve the inconsistency until reference strategy tests prove a cleanup is safe.
+- `generate_comb_freq_rank_weights` frees `type_counts` with `SizeFree(type_counts, sizeof(max_types*sizeof(long)))`, which passes the size of the expression rather than the allocated byte count. This is a C allocation-accounting hazard, not semantic weight behavior, and should be cleaned only after compatibility-sensitive memory tracing is out of scope.
+- `generate_precrank_weights` uses single-precision `float` division and assigns the result to `long`, truncating the bucket value. Rust should keep that conversion shape for byte-for-byte rank bucket compatibility.
+- `set_user_weights` parses a user string through `TOWeightsParse` after generated weights and prints `setting user weights` to stderr first. Rust should preserve that late override and stderr side effect when `TOWeightsParse` and OCB mutation are ported.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
