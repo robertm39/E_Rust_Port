@@ -496,7 +496,7 @@ impl ClauseSet {
             .position(|clause| clause.ident() == ident)
     }
 
-    fn recompute_literals(&mut self) {
+    pub(crate) fn recompute_literals(&mut self) {
         self.literals = self
             .clauses
             .iter()

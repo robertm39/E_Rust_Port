@@ -1,7 +1,9 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_D_INDEXED, CP_IS_S_INDEXED, CP_LIMITED_RW};
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::terms::termbanks::TermBank;
+use std::cmp::Ordering;
 
 pub fn clause_remove_literal_index(clause: &mut Clause, index: usize) -> Option<Eqn> {
     let literal = clause.literals_mut().extract_element(index)?;
@@ -51,6 +53,26 @@ pub fn clause_remove_superfluous_literals(clause: &mut Clause, bank: &TermBank) 
     removed
 }
 
+pub fn clause_set_remove_superfluous_literals(set: &mut ClauseSet, bank: &TermBank) -> i64 {
+    let removed: usize = set
+        .iter_mut()
+        .map(|clause| clause_remove_superfluous_literals(clause, bank))
+        .sum();
+    if removed != 0 {
+        set.recompute_literals();
+    }
+    usize_to_i64(removed)
+}
+
+pub fn clause_set_canonize(set: &mut ClauseSet, bank: &TermBank) {
+    for clause in set.iter_mut() {
+        let _ = clause_remove_superfluous_literals(clause, bank);
+        clause.canonize(bank);
+    }
+    set.recompute_literals();
+    set.sort_by(|left, right| cmp_i64_to_order(left.struct_weight_lex_compare(right, bank)));
+}
+
 pub fn clause_remove_ac_resolved(clause: &mut Clause, bank: &TermBank) -> usize {
     if clause.negative_literal_count() == 0 {
         return 0;
@@ -95,15 +117,24 @@ pub fn clause_canon_compare_ref(left: &Clause, right: &Clause, bank: &TermBank) 
     left.cmp_by_struct_weight(right, bank)
 }
 
+fn cmp_i64_to_order(value: i64) -> Ordering {
+    value.cmp(&0)
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         clause_canon_compare_ref, clause_flip_literal_sign_index, clause_remove_ac_resolved,
         clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
-        clause_unit_simplify_test,
+        clause_set_canonize, clause_set_remove_superfluous_literals, clause_unit_simplify_test,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_LIMITED_RW};
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
@@ -223,6 +254,61 @@ mod tests {
         assert_eq!(clause.weight(), clause.standard_weight());
         assert!(!clause.query_prop(CP_INITIAL));
         assert!(!clause.query_prop(CP_LIMITED_RW));
+    }
+
+    #[test]
+    fn clause_set_remove_superfluous_literals_updates_cached_literal_count() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let second = typed_const(&mut bank, "b");
+        let positive = literal(&mut bank, &first, &second, true);
+        let duplicate = literal(&mut bank, &second, &first, true);
+        let false_literal = literal(&mut bank, &first, &first, false);
+        let dirty = clause_from(vec![positive, duplicate, false_literal]);
+        let clean = clause_from(vec![literal(&mut bank, &second, &first, true)]);
+        let mut set = ClauseSet::from_clauses([dirty, clean]);
+
+        assert_eq!(set.literals(), 4);
+        assert_eq!(clause_set_remove_superfluous_literals(&mut set, &bank), 2);
+
+        assert_eq!(set.literals(), 2);
+        assert_eq!(
+            set.iter().map(Clause::literal_number).collect::<Vec<_>>(),
+            vec![1, 1]
+        );
+    }
+
+    #[test]
+    fn clause_set_canonize_cleans_clauses_and_sorts_by_structural_weight() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let second = typed_const(&mut bank, "b");
+        let third = typed_const(&mut bank, "c");
+        let heavy = clause_from(vec![
+            literal(&mut bank, &first, &second, true),
+            literal(&mut bank, &second, &third, true),
+        ]);
+        let light = clause_from(vec![
+            literal(&mut bank, &third, &third, false),
+            literal(&mut bank, &first, &second, true),
+        ]);
+        let heavy_id = heavy.ident();
+        let light_id = light.ident();
+        let mut set = ClauseSet::from_clauses([heavy, light]);
+
+        clause_set_canonize(&mut set, &bank);
+
+        assert_eq!(set.literals(), 3);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![light_id, heavy_id]
+        );
+        assert!(set
+            .iter()
+            .all(|clause| clause.weight() == clause.standard_weight()));
+        assert!(set.iter().all(|clause| {
+            clause.is_sorted_by(|left, right| left.struct_weight_lex_compare(right, &bank))
+        }));
     }
 
     #[test]
