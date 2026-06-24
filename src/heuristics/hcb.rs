@@ -1,7 +1,12 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::neweval::{evals_alloc, EvalCell};
-use crate::heuristics::to_params::{order_parms_print_string, OrderParmsCell};
+use crate::heuristics::to_params::{
+    order_parms_parse_into_report, order_parms_print_string, OrderParmsCell,
+};
 use crate::heuristics::wfcbadmin::WfcbAdmin;
+use crate::inout::basicparser::{parse_bool, parse_int, parse_int_limited, parse_int_max};
+use crate::inout::scanner::{describe_token, token_pos_rep, Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::RewriteLevel;
 
@@ -25,6 +30,154 @@ pub const DEFAULT_SAT_CHECK_DECISION_LIMIT: i32 = 10_000;
 pub const DEFAULT_MAX_UNIFIERS: i32 = 4;
 pub const DEFAULT_MAX_UNIF_STEPS: i32 = 256;
 pub const HCB_INITIAL_CAPACITY: usize = 4;
+pub const MAX_PM_INDEX_NAME_LEN: usize = 20;
+
+pub const LITERAL_SELECTION_NAMES: &[&str] = &[
+    "NoSelection",
+    "NoGeneration",
+    "SelectNegativeLiterals",
+    "PSelectNegativeLiterals",
+    "SelectPureVarNegLiterals",
+    "PSelectPureVarNegLiterals",
+    "SelectLargestNegLit",
+    "PSelectLargestNegLit",
+    "SelectSmallestNegLit",
+    "PSelectSmallestNegLit",
+    "SelectLargestOrientable",
+    "PSelectLargestOrientable",
+    "MSelectLargestOrientable",
+    "SelectSmallestOrientable",
+    "PSelectSmallestOrientable",
+    "MSelectSmallestOrientable",
+    "SelectDiffNegLit",
+    "PSelectDiffNegLit",
+    "SelectGroundNegLit",
+    "PSelectGroundNegLit",
+    "SelectOptimalLit",
+    "PSelectOptimalLit",
+    "SelectMinOptimalLit",
+    "PSelectMinOptimalLit",
+    "SelectMinOptimalNoTypePred",
+    "PSelectMinOptimalNoTypePred",
+    "SelectMinOptimalNoXTypePred",
+    "PSelectMinOptimalNoXTypePred",
+    "SelectMinOptimalNoRXTypePred",
+    "PSelectMinOptimalNoRXTypePred",
+    "SelectCondOptimalLit",
+    "PSelectCondOptimalLit",
+    "SelectAllCondOptimalLit",
+    "PSelectAllCondOptimalLit",
+    "SelectOptimalRestrDepth2",
+    "PSelectOptimalRestrDepth2",
+    "SelectOptimalRestrPDepth2",
+    "PSelectOptimalRestrPDepth2",
+    "SelectOptimalRestrNDepth2",
+    "PSelectOptimalRestrNDepth2",
+    "SelectNonRROptimalLit",
+    "PSelectNonRROptimalLit",
+    "SelectNonStrongRROptimalLit",
+    "PSelectNonStrongRROptimalLit",
+    "SelectAntiRROptimalLit",
+    "PSelectAntiRROptimalLit",
+    "SelectNonAntiRROptimalLit",
+    "PSelectNonAntiRROptimalLit",
+    "SelectStrongRRNonRROptimalLit",
+    "PSelectStrongRRNonRROptimalLit",
+    "SelectUnlessUniqMax",
+    "PSelectUnlessUniqMax",
+    "SelectUnlessPosMax",
+    "PSelectUnlessPosMax",
+    "SelectUnlessUniqPosMax",
+    "PSelectUnlessUniqPosMax",
+    "SelectUnlessUniqMaxPos",
+    "PSelectUnlessUniqMaxPos",
+    "SelectComplex",
+    "PSelectComplex",
+    "SelectComplexExceptRRHorn",
+    "PSelectComplexExceptRRHorn",
+    "SelectLComplex",
+    "PSelectLComplex",
+    "SelectMaxLComplex",
+    "PSelectMaxLComplex",
+    "SelectMaxLComplexNoTypePred",
+    "PSelectMaxLComplexNoTypePred",
+    "SelectMaxLComplexNoXTypePred",
+    "PSelectMaxLComplexNoXTypePred",
+    "SelectComplexPreferNEQ",
+    "PSelectComplexPreferNEQ",
+    "SelectComplexPreferEQ",
+    "PSelectComplexPreferEQ",
+    "SelectComplexExceptUniqMaxHorn",
+    "PSelectComplexExceptUniqMaxHorn",
+    "MSelectComplexExceptUniqMaxHorn",
+    "SelectNewComplex",
+    "PSelectNewComplex",
+    "SelectNewComplexExceptUniqMaxHorn",
+    "PSelectNewComplexExceptUniqMaxHorn",
+    "SelectMinInfpos",
+    "PSelectMinInfpos",
+    "HSelectMinInfpos",
+    "GSelectMinInfpos",
+    "SelectMinInfposNoTypePred",
+    "PSelectMinInfposNoTypePred",
+    "SelectMin2Infpos",
+    "PSelectMin2Infpos",
+    "SelectComplexExceptUniqMaxPosHorn",
+    "PSelectComplexExceptUniqMaxPosHorn",
+    "SelectUnlessUniqMaxSmallestOrientable",
+    "PSelectUnlessUniqMaxSmallestOrientable",
+    "SelectDivLits",
+    "SelectDivPreferIntoLits",
+    "SelectMaxLComplexG",
+    "SelectMaxLComplexAvoidPosPred",
+    "SelectMaxLComplexAPPNTNp",
+    "SelectMaxLComplexAPPNoType",
+    "SelectMaxLComplexAvoidPosUPred",
+    "SelectComplexG",
+    "SelectComplexAHP",
+    "PSelectComplexAHP",
+    "SelectNewComplexAHP",
+    "PSelectNewComplexAHP",
+    "SelectComplexAHPExceptRRHorn",
+    "PSelectComplexAHPExceptRRHorn",
+    "SelectNewComplexAHPExceptRRHorn",
+    "PSelectNewComplexAHPExceptRRHorn",
+    "SelectNewComplexAHPExceptUniqMaxHorn",
+    "PSelectNewComplexAHPExceptUniqMaxHorn",
+    "SelectNewComplexAHPNS",
+    "SelectVGNonCR",
+    "SelectCQArEqLast",
+    "SelectCQArEqFirst",
+    "SelectCQIArEqLast",
+    "SelectCQIArEqFirst",
+    "SelectCQAr",
+    "SelectCQIAr",
+    "SelectCQArNpEqFirst",
+    "SelectCQIArNpEqFirst",
+    "SelectGrCQArEqFirst",
+    "SelectCQGrArEqFirst",
+    "SelectCQArNTEqFirst",
+    "SelectCQIArNTEqFirst",
+    "SelectCQArNTNpEqFirst",
+    "SelectCQIArNTNpEqFirst",
+    "SelectCQArNXTEqFirst",
+    "SelectCQIArNXTEqFirst",
+    "SelectCQArNTNp",
+    "SelectCQIArNTNp",
+    "SelectCQArNT",
+    "SelectCQIArNT",
+    "SelectCQArNp",
+    "SelectCQIArNp",
+    "SelectCQArNpEqFirstUnlessPDom",
+    "SelectCQArNTEqFirstUnlessPDom",
+    "SelectCQPrecW",
+    "SelectCQIPrecW",
+    "SelectCQPrecWNTNp",
+    "SelectCQIPrecWNTNp",
+    "SelectMaxLComplexAvoidAppVar",
+    "SelectMaxLComplexStronglyAvoidAppVar",
+    "SelectMaxLComplexPreferAppVar",
+];
 
 pub type WfcbHandle = usize;
 
@@ -82,6 +235,21 @@ impl ParamodulationType {
             6 => Some(Self::SizeDecreasingSim),
             _ => None,
         }
+    }
+
+    #[must_use]
+    pub fn from_name(value: &str) -> Option<Self> {
+        [
+            Self::Plain,
+            Self::Sim,
+            Self::OrientedSim,
+            Self::SuperSim,
+            Self::OrientedSuperSim,
+            Self::DecreasingSim,
+            Self::SizeDecreasingSim,
+        ]
+        .into_iter()
+        .find(|variant| variant.name() == value)
     }
 
     #[must_use]
@@ -193,6 +361,23 @@ impl GroundingStrategy {
             8 => Some(Self::GlobalMin),
             _ => None,
         }
+    }
+
+    #[must_use]
+    pub fn from_name(value: &str) -> Option<Self> {
+        [
+            Self::NoGrounding,
+            Self::PseudoVar,
+            Self::FirstConst,
+            Self::ConjMinMinFreq,
+            Self::ConjMaxMinFreq,
+            Self::ConjMinMaxFreq,
+            Self::ConjMaxMaxFreq,
+            Self::GlobalMax,
+            Self::GlobalMin,
+        ]
+        .into_iter()
+        .find(|variant| variant.name() == value)
     }
 
     #[must_use]
@@ -421,6 +606,13 @@ pub struct HeuristicParmsCell {
     pub fixpoint_oracle: bool,
     pub max_unifiers: i32,
     pub max_unif_steps: i32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HeuristicParmsParseReport {
+    pub complete: bool,
+    pub missing_fields: Vec<&'static str>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 impl Default for HeuristicParmsCell {
@@ -760,6 +952,1049 @@ pub fn heuristic_parms_initialize(handle: &mut HeuristicParmsCell) {
     *handle = HeuristicParmsCell::default();
 }
 
+pub fn heuristic_parms_parse(
+    scanner: &mut Scanner,
+    warn_missing: bool,
+) -> Result<HeuristicParmsCell, Diagnostic> {
+    let mut result = heuristic_parms_alloc();
+    heuristic_parms_parse_into(scanner, &mut result, warn_missing)?;
+    Ok(result)
+}
+
+pub fn heuristic_parms_parse_into(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    warn_missing: bool,
+) -> Result<bool, Diagnostic> {
+    Ok(heuristic_parms_parse_into_report(scanner, handle, warn_missing)?.complete)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "C-compatible parser preserves the explicit HeuristicParmsParseInto field order"
+)]
+pub fn heuristic_parms_parse_into_report(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    warn_missing: bool,
+) -> Result<HeuristicParmsParseReport, Diagnostic> {
+    let mut report = HeuristicParmsParseReport {
+        complete: true,
+        ..HeuristicParmsParseReport::default()
+    };
+
+    scanner.accept_tok(TokenType::OPEN_CURLY)?;
+    if scanner.test_tok(TokenType::OPEN_CURLY) {
+        let order_report =
+            order_parms_parse_into_report(scanner, &mut handle.order_params, warn_missing)?;
+        report.complete &= order_report.complete;
+        report.missing_fields.extend(order_report.missing_fields);
+        report.warnings.extend(order_report.warnings);
+    } else {
+        note_missing(&mut report, "ordering information", warn_missing);
+    }
+
+    parse_bool_field(
+        scanner,
+        "no_preproc",
+        &mut handle.no_preproc,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "eqdef_maxclauses",
+        &mut handle.eqdef_maxclauses,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "eqdef_incrlimit",
+        &mut handle.eqdef_incrlimit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "formula_def_limit",
+        &mut handle.formula_def_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "miniscope_limit",
+        &mut handle.miniscope_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_string_field(scanner, "sine", &mut handle.sine, &mut report, warn_missing)?;
+    parse_bool_field(
+        scanner,
+        "add_goal_defs_pos",
+        &mut handle.add_goal_defs_pos,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "add_goal_defs_neg",
+        &mut handle.add_goal_defs_neg,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "add_goal_defs_subterms",
+        &mut handle.add_goal_defs_subterms,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_identifier_field(
+        scanner,
+        "heuristic_name",
+        &mut handle.heuristic_name,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_string_field(
+        scanner,
+        "heuristic_def",
+        &mut handle.heuristic_def,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "prefer_initial_clauses",
+        &mut handle.prefer_initial_clauses,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_selection_strategy_field(scanner, handle, &mut report, warn_missing)?;
+    parse_i64_field(
+        scanner,
+        "pos_lit_sel_min",
+        &mut handle.pos_lit_sel_min,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "pos_lit_sel_max",
+        &mut handle.pos_lit_sel_max,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "neg_lit_sel_min",
+        &mut handle.neg_lit_sel_min,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "neg_lit_sel_max",
+        &mut handle.neg_lit_sel_max,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "all_lit_sel_min",
+        &mut handle.all_lit_sel_min,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "all_lit_sel_max",
+        &mut handle.all_lit_sel_max,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "weight_sel_min",
+        &mut handle.weight_sel_min,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "select_on_proc_only",
+        &mut handle.select_on_proc_only,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "inherit_paramod_lit",
+        &mut handle.inherit_paramod_lit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "inherit_goal_pm_lit",
+        &mut handle.inherit_goal_pm_lit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "inherit_conj_pm_lit",
+        &mut handle.inherit_conj_pm_lit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "enable_eq_factoring",
+        &mut handle.enable_eq_factoring,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "enable_neg_unit_paramod",
+        &mut handle.enable_neg_unit_paramod,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "enable_given_forward_simpl",
+        &mut handle.enable_given_forward_simpl,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_paramod_type_field(scanner, handle, &mut report, warn_missing)?;
+    parse_ac_handling_field(scanner, handle, &mut report, warn_missing)?;
+    parse_bool_field(
+        scanner,
+        "ac_res_aggressive",
+        &mut handle.ac_res_aggressive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "forward_context_sr",
+        &mut handle.forward_context_sr,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "forward_context_sr_aggressive",
+        &mut handle.forward_context_sr_aggressive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "backward_context_sr",
+        &mut handle.backward_context_sr,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "forward_subsumption_aggressive",
+        &mut handle.forward_subsumption_aggressive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_forward_demod_field(scanner, handle, &mut report, warn_missing)?;
+    parse_bool_field(
+        scanner,
+        "prefer_general",
+        &mut handle.prefer_general,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "condensing",
+        &mut handle.condensing,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "condensing_aggressive",
+        &mut handle.condensing_aggressive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "er_varlit_destructive",
+        &mut handle.er_varlit_destructive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "er_strong_destructive",
+        &mut handle.er_strong_destructive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "er_aggressive",
+        &mut handle.er_aggressive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_split_class_field(scanner, handle, &mut report, warn_missing)?;
+    parse_split_method_field(scanner, handle, &mut report, warn_missing)?;
+    parse_bool_field(
+        scanner,
+        "split_aggressive",
+        &mut handle.split_aggressive,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "split_fresh_defs",
+        &mut handle.split_fresh_defs,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "diseq_decomposition",
+        &mut handle.diseq_decomposition,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "diseq_decomp_maxarity",
+        &mut handle.diseq_decomp_maxarity,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_index_name_field(
+        scanner,
+        "rw_bw_index_type",
+        &mut handle.rw_bw_index_type,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_index_name_field(
+        scanner,
+        "pm_from_index_type",
+        &mut handle.pm_from_index_type,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_index_name_field(
+        scanner,
+        "pm_into_index_type",
+        &mut handle.pm_into_index_type,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_grounding_strategy_field(scanner, handle, &mut report, warn_missing)?;
+    parse_i64_field(
+        scanner,
+        "sat_check_step_limit",
+        &mut handle.sat_check_step_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "sat_check_size_limit",
+        &mut handle.sat_check_size_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "sat_check_ttinsert_limit",
+        &mut handle.sat_check_ttinsert_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "sat_check_normconst",
+        &mut handle.sat_check_normconst,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "sat_check_normalize",
+        &mut handle.sat_check_normalize,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "sat_check_decision_limit",
+        &mut handle.sat_check_decision_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "filter_orphans_limit",
+        &mut handle.filter_orphans_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "forward_contract_limit",
+        &mut handle.forward_contract_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i64_field(
+        scanner,
+        "delete_bad_limit",
+        &mut handle.delete_bad_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_mem_limit_field(scanner, handle, &mut report, warn_missing)?;
+    parse_bool_field(
+        scanner,
+        "watchlist_simplify",
+        &mut handle.watchlist_simplify,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "watchlist_is_static",
+        &mut handle.watchlist_is_static,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "use_tptp_sos",
+        &mut handle.use_tptp_sos,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "presat_interreduction",
+        &mut handle.presat_interreduction,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "detsort_bw_rw",
+        &mut handle.detsort_bw_rw,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "detsort_tmpset",
+        &mut handle.detsort_tmpset,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_ext_inference_type_field(
+        scanner,
+        "arg_cong",
+        &mut handle.arg_cong,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_ext_inference_type_field(
+        scanner,
+        "neg_ext",
+        &mut handle.neg_ext,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_ext_inference_type_field(
+        scanner,
+        "pos_ext",
+        &mut handle.pos_ext,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "ext_rules_max_depth",
+        &mut handle.ext_rules_max_depth,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "inverse_recognition",
+        &mut handle.inverse_recognition,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "replace_inj_defs",
+        &mut handle.replace_inj_defs,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "lift_lambdas",
+        &mut handle.lift_lambdas,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "lambda_to_forall",
+        &mut handle.lambda_to_forall,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "unroll_only_formulas",
+        &mut handle.unroll_only_formulas,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "elim_leibniz_max_depth",
+        &mut handle.elim_leibniz_max_depth,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_prim_enum_mode_field(scanner, handle, &mut report, warn_missing)?;
+    parse_i32_field(
+        scanner,
+        "prim_enum_max_depth",
+        &mut handle.prim_enum_max_depth,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "inst_choice_max_depth",
+        &mut handle.inst_choice_max_depth,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "local_rw",
+        &mut handle.local_rw,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "prune_args",
+        &mut handle.prune_args,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "preinstantiate_induction",
+        &mut handle.preinstantiate_induction,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "fool_unroll",
+        &mut handle.fool_unroll,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "func_proj_limit",
+        &mut handle.func_proj_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "imit_limit",
+        &mut handle.imit_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "ident_limit",
+        &mut handle.ident_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "elim_limit",
+        &mut handle.elim_limit,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_unif_mode_field(scanner, handle, &mut report, warn_missing)?;
+    parse_bool_field(
+        scanner,
+        "pattern_oracle",
+        &mut handle.pattern_oracle,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_bool_field(
+        scanner,
+        "fixpoint_oracle",
+        &mut handle.fixpoint_oracle,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "max_unifiers",
+        &mut handle.max_unifiers,
+        &mut report,
+        warn_missing,
+    )?;
+    parse_i32_field(
+        scanner,
+        "max_unif_steps",
+        &mut handle.max_unif_steps,
+        &mut report,
+        warn_missing,
+    )?;
+    scanner.accept_tok(TokenType::CLOSE_CURLY)?;
+    Ok(report)
+}
+
+fn parse_bool_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut bool,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, name)? {
+        *target = parse_bool(scanner)?;
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_i64_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut i64,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, name)? {
+        *target = parse_int(scanner)?;
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_i32_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut i32,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, name)? {
+        let value = parse_int(scanner)?;
+        *target = i64_to_i32(scanner, value)?;
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_identifier_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut String,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, name)? {
+        *target = parse_identifier(scanner)?;
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_index_name_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut String,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, name)? {
+        *target = truncate_c_identifier(&parse_identifier(scanner)?);
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_string_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut Option<String>,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, name)? {
+        *target = Some(parse_c_string(scanner)?);
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_selection_strategy_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, "selection_strategy")? {
+        handle.selection_strategy = parse_named_identifier(scanner, LITERAL_SELECTION_NAMES)?;
+    } else {
+        note_missing(report, "selection_strategy", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_paramod_type_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    const PARAMODULATION_NAMES: &[&str] = &[
+        "ParamodPlain",
+        "ParamodSim",
+        "ParamodOrientedSim",
+        "ParamodSuperSim",
+        "ParamodOrientedSuperSim",
+        "ParamodDecreasingSim",
+        "ParamodSizeDecreasingSim",
+    ];
+
+    if parse_field_prefix(scanner, "pm_type")? {
+        let value = parse_named_identifier(scanner, PARAMODULATION_NAMES)?;
+        handle.pm_type = ParamodulationType::from_name(&value).ok_or_else(|| {
+            Diagnostic::new(ErrorCode::OTHER_ERROR, "paramodulation name table mismatch")
+        })?;
+    } else {
+        note_missing(report, "pm_type", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_ac_handling_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, "ac_handling")? {
+        let parsed = parse_int(scanner)?;
+        let value = i64_to_i32(scanner, parsed)?;
+        handle.ac_handling = AcHandling::from_c_value(value)
+            .ok_or_else(|| enum_value_error(scanner, "AcHandling"))?;
+    } else {
+        note_missing(report, "ac_handling", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_forward_demod_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, "forward_demod")? {
+        handle.forward_demod = match parse_int_limited(scanner, 0, 2)? {
+            0 => RewriteLevel::NoRewrite,
+            1 => RewriteLevel::RuleRewrite,
+            2 => RewriteLevel::FullRewrite,
+            _ => unreachable!("ParseIntLimited accepted only 0..=2"),
+        };
+    } else {
+        note_missing(report, "forward_demod", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_split_class_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, "split_clauses")? {
+        let parsed = parse_int(scanner)?;
+        let value = i64_to_i32(scanner, parsed)?;
+        handle.split_clauses = SplitClassType::from_c_value(value)
+            .ok_or_else(|| enum_value_error(scanner, "SplitClassType"))?;
+    } else {
+        note_missing(report, "split_clauses", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_split_method_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, "split_method")? {
+        let parsed = parse_int_limited(scanner, 0, 2)?;
+        let value = i64_to_i32(scanner, parsed)?;
+        handle.split_method =
+            SplitType::from_c_value(value).ok_or_else(|| enum_value_error(scanner, "SplitType"))?;
+    } else {
+        note_missing(report, "split_method", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_grounding_strategy_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    const GROUNDING_STRATEGY_NAMES: &[&str] = &[
+        "NoGrounding",
+        "PseudoVar",
+        "FirstConst",
+        "ConjMinMinFreq",
+        "ConjMaxMinFreq",
+        "ConjMinMaxFreq",
+        "ConjMaxMaxFreq",
+        "GlobalMax",
+        "GlobalMin",
+    ];
+
+    if parse_field_prefix(scanner, "sat_check_grounding")? {
+        let value = parse_named_identifier(scanner, GROUNDING_STRATEGY_NAMES)?;
+        handle.sat_check_grounding = GroundingStrategy::from_name(&value).ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "grounding strategy name table mismatch",
+            )
+        })?;
+    } else {
+        note_missing(report, "sat_check_grounding", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_mem_limit_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    if parse_field_prefix(scanner, "mem_limit")? {
+        handle.mem_limit = intmax_to_u64(parse_int_max(scanner)?);
+    } else {
+        note_missing(report, "mem_limit", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_ext_inference_type_field(
+    scanner: &mut Scanner,
+    name: &'static str,
+    target: &mut ExtInferenceType,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    const EXT_INFERENCE_TYPE_NAMES: &[&str] = &["all", "max", "off"];
+
+    if parse_field_prefix(scanner, name)? {
+        scanner.check_tok(TokenType::STRING | TokenType::IDENTIFIER)?;
+        let value = scanner.current_token().literal();
+        *target = str_to_ext_inference_type(&value)
+            .ok_or_else(|| named_value_error(scanner, EXT_INFERENCE_TYPE_NAMES))?;
+        scanner.next_token()?;
+    } else {
+        note_missing(report, name, warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_prim_enum_mode_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    const PRIM_ENUM_MODE_NAMES: &[&str] =
+        &["neg", "and", "or", "eq", "pragmatic", "full", "logsymbol"];
+
+    if parse_field_prefix(scanner, "prim_enum_mode")? {
+        scanner.check_tok(TokenType::STRING | TokenType::IDENTIFIER)?;
+        let value = scanner.current_token().literal();
+        handle.prim_enum_mode = str_to_prim_enum_mode(&value)
+            .ok_or_else(|| named_value_error(scanner, PRIM_ENUM_MODE_NAMES))?;
+        scanner.next_token()?;
+    } else {
+        note_missing(report, "prim_enum_mode", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_unif_mode_field(
+    scanner: &mut Scanner,
+    handle: &mut HeuristicParmsCell,
+    report: &mut HeuristicParmsParseReport,
+    warn_missing: bool,
+) -> Result<(), Diagnostic> {
+    const UNIF_MODE_NAMES: &[&str] = &["single", "multi"];
+
+    if parse_field_prefix(scanner, "unif_mode")? {
+        scanner.check_tok(TokenType::STRING | TokenType::IDENTIFIER)?;
+        let value = scanner.current_token().literal();
+        handle.unif_mode =
+            str_to_unif_mode(&value).ok_or_else(|| named_value_error(scanner, UNIF_MODE_NAMES))?;
+        scanner.next_token()?;
+    } else {
+        note_missing(report, "unif_mode", warn_missing);
+    }
+    Ok(())
+}
+
+fn parse_field_prefix(scanner: &mut Scanner, name: &str) -> Result<bool, Diagnostic> {
+    if scanner.test_id(name) {
+        scanner.next_token()?;
+        scanner.accept_tok(TokenType::COLON)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn parse_identifier(scanner: &mut Scanner) -> Result<String, Diagnostic> {
+    scanner.check_tok(TokenType::IDENTIFIER)?;
+    let result = scanner.current_token().literal();
+    scanner.next_token()?;
+    Ok(result)
+}
+
+fn parse_named_identifier(scanner: &mut Scanner, names: &[&str]) -> Result<String, Diagnostic> {
+    scanner.check_tok(TokenType::IDENTIFIER)?;
+    let result = scanner.current_token().literal();
+    if !names.contains(&result.as_str()) {
+        return Err(named_value_error(scanner, names));
+    }
+    scanner.next_token()?;
+    Ok(result)
+}
+
+fn parse_c_string(scanner: &mut Scanner) -> Result<String, Diagnostic> {
+    scanner.check_tok(TokenType::STRING)?;
+    let bytes = scanner.current_token().literal_bytes();
+    if bytes.len() < 2 {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Quoted string literal is too short",
+        ));
+    }
+    let result = String::from_utf8_lossy(&bytes[1..bytes.len() - 1]).into_owned();
+    scanner.next_token()?;
+    Ok(result)
+}
+
+fn note_missing(report: &mut HeuristicParmsParseReport, name: &'static str, warn_missing: bool) {
+    report.complete = false;
+    report.missing_fields.push(name);
+    if warn_missing {
+        report.warnings.push(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            format!("Config misses {name}"),
+        ));
+    }
+}
+
+fn named_value_error(scanner: &Scanner, names: &[&str]) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!(
+            "{}(just read '{}'): Identifier ({}) expected, but {}('{}') read ",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal(),
+            names.join("|"),
+            describe_token(scanner.current_token().kind()),
+            scanner.current_token().literal()
+        ),
+    )
+}
+
+fn enum_value_error(scanner: &Scanner, type_name: &str) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!(
+            "{}(just read '{}'): invalid {type_name} value",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal()
+        ),
+    )
+}
+
+fn i64_to_i32(scanner: &Scanner, value: i64) -> Result<i32, Diagnostic> {
+    i32::try_from(value).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{}(just read '{}'): integer does not fit int",
+                token_pos_rep(scanner.current_token()),
+                scanner.current_token().literal()
+            ),
+        )
+    })
+}
+
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn intmax_to_u64(value: i128) -> u64 {
+    value as u64
+}
+
+fn truncate_c_identifier(value: &str) -> String {
+    let max_bytes = MAX_PM_INDEX_NAME_LEN - 1;
+    let bytes = value.as_bytes();
+    let len = bytes.len().min(max_bytes);
+    String::from_utf8_lossy(&bytes[..len]).into_owned()
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn heuristic_parms_print_string(handle: &HeuristicParmsCell) -> String {
@@ -1047,7 +2282,8 @@ mod tests {
     use super::{
         bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate,
         hcb_clause_evaluate_into, hcb_standard_selection_eval_and_advance, heuristic_parms_alloc,
-        heuristic_parms_initialize, heuristic_parms_print_string, prim_enum_mode_name_raw,
+        heuristic_parms_initialize, heuristic_parms_parse, heuristic_parms_parse_into,
+        heuristic_parms_parse_into_report, heuristic_parms_print_string, prim_enum_mode_name_raw,
         str_to_ext_inference_type, str_to_prim_enum_mode, str_to_prim_enum_mode_raw,
         str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw, AcHandling, ExtInferenceType,
         GroundingStrategy, HcbCell, HcbSelectFunction, HeuristicParmsCell, ParamodulationType,
@@ -1057,19 +2293,26 @@ mod tests {
         DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT,
         DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME,
         DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC,
-        HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
+        HCB_INITIAL_CAPACITY, LITERAL_SELECTION_NAMES, MAX_PM_INDEX_NAME_LEN, NO_ELIM_LEIBNIZ,
+        NO_EXT_SUP,
     };
+    use crate::basics::error::ErrorCode;
     use crate::clauses::clause::Clause;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
-    use crate::heuristics::to_params::OrderParmsCell;
+    use crate::heuristics::to_params::{OrderParmsCell, TermOrdering};
     use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
     use crate::heuristics::wfcbadmin::WfcbAdmin;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::RewriteLevel;
     use crate::terms::typebanks::TypeBank;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    fn scanner(source: &str) -> Scanner {
+        Scanner::from_user_string(source, false).unwrap_or_else(|err| panic!("{err}"))
+    }
 
     #[test]
     fn hcb_default_constants_match_c_defines() {
@@ -1461,6 +2704,130 @@ mod tests {
         assert!(printed.contains("   prim_enum_mode:                full\n"));
         assert!(printed.contains("   unif_mode:                     multi\n"));
         assert!(printed.contains("   pattern_oracle:                false\n"));
+    }
+
+    #[test]
+    fn heuristic_parms_parse_round_trips_printed_nondefault_cell() {
+        let original = HeuristicParmsCell {
+            order_params: OrderParmsCell {
+                ordertype: TermOrdering::Lpo4Copy,
+                ..OrderParmsCell::default()
+            },
+            no_preproc: true,
+            sine: Some("Auto".to_owned()),
+            heuristic_name: "CustomHeuristic".to_owned(),
+            heuristic_def: Some("HeuristicDef".to_owned()),
+            prefer_initial_clauses: true,
+            selection_strategy: "SelectCQAr".to_owned(),
+            pos_lit_sel_min: 1,
+            neg_lit_sel_max: 9,
+            select_on_proc_only: true,
+            enable_eq_factoring: false,
+            pm_type: ParamodulationType::SuperSim,
+            ac_handling: AcHandling::KeepUnits,
+            forward_demod: RewriteLevel::RuleRewrite,
+            split_clauses: SplitClassType::All,
+            split_method: SplitType::GroundOne,
+            rw_bw_index_type: "FP6".to_owned(),
+            pm_from_index_type: "FP5".to_owned(),
+            pm_into_index_type: "FP4".to_owned(),
+            sat_check_grounding: GroundingStrategy::GlobalMax,
+            sat_check_normconst: true,
+            sat_check_normalize: true,
+            arg_cong: ExtInferenceType::MaxLits,
+            neg_ext: ExtInferenceType::AllLits,
+            pos_ext: ExtInferenceType::NoLits,
+            prim_enum_mode: PrimEnumMode::Full,
+            unif_mode: UnifMode::Multi,
+            pattern_oracle: false,
+            ..HeuristicParmsCell::default()
+        };
+        let mut scanner = scanner(&format!("{} tail", heuristic_parms_print_string(&original)));
+
+        let parsed =
+            heuristic_parms_parse(&mut scanner, true).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(parsed, original);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn heuristic_parms_parse_preserves_c_string_and_intmax_quirks() {
+        let mut default_scanner = scanner(&format!(
+            "{} tail",
+            heuristic_parms_print_string(&HeuristicParmsCell::default())
+        ));
+
+        let parsed = heuristic_parms_parse(&mut default_scanner, false)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(parsed.sine.as_deref(), Some("None"));
+        assert_eq!(parsed.heuristic_def.as_deref(), Some(""));
+        assert_ne!(parsed, HeuristicParmsCell::default());
+
+        let mut mem_scanner = scanner("{ mem_limit: 5 } tail");
+        let mut params = HeuristicParmsCell::default();
+        let complete = heuristic_parms_parse_into(&mut mem_scanner, &mut params, false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert!(!complete);
+        assert_eq!(params.mem_limit, u64::MAX - 4);
+        assert_eq!(mem_scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn heuristic_parms_parse_reports_missing_fields_and_preserves_existing_values() {
+        let mut scanner = scanner("{ no_preproc: false } tail");
+        let mut params = HeuristicParmsCell {
+            no_preproc: true,
+            selection_strategy: "SelectCQAr".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+
+        let report = heuristic_parms_parse_into_report(&mut scanner, &mut params, true)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert!(!report.complete);
+        assert!(report.missing_fields.contains(&"ordering information"));
+        assert!(report.missing_fields.contains(&"eqdef_maxclauses"));
+        assert!(report.missing_fields.contains(&"selection_strategy"));
+        assert_eq!(report.warnings.len(), report.missing_fields.len());
+        assert!(!params.no_preproc);
+        assert_eq!(params.selection_strategy, "SelectCQAr");
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn heuristic_parms_parse_validates_names_and_truncates_index_identifiers() {
+        assert!(LITERAL_SELECTION_NAMES.contains(&"SelectMaxLComplexAvoidAppVar"));
+
+        let mut bad_selection = scanner("{ selection_strategy: NoSuchSelection }");
+        let mut params = HeuristicParmsCell::default();
+        let error =
+            heuristic_parms_parse_into_report(&mut bad_selection, &mut params, false).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("NoSelection"));
+
+        let mut quoted = scanner(r#"{ arg_cong: "all" }"#);
+        let error = heuristic_parms_parse_into_report(&mut quoted, &mut params, false).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("all|max|off"));
+
+        let long_name = "ABCDEFGHIJKLMNOPQRSTUV";
+        let mut index = scanner(&format!("{{ rw_bw_index_type: {long_name} }} tail"));
+        let report = heuristic_parms_parse_into_report(&mut index, &mut params, false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert!(!report.complete);
+        assert_eq!(params.rw_bw_index_type.len(), MAX_PM_INDEX_NAME_LEN - 1);
+        assert_eq!(params.rw_bw_index_type, "ABCDEFGHIJKLMNOPQRS");
+        assert_eq!(index.current_token().literal(), "tail");
     }
 
     #[test]
