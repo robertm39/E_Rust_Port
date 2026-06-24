@@ -1,7 +1,14 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::eqn::Eqn;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::parse_float;
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_weight_compute;
+
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SimWeightParam {
@@ -73,6 +80,58 @@ pub const fn sim_weight_init(
     )
 }
 
+#[must_use]
+pub fn sim_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    equal_weight: f64,
+    var_var_clash: f64,
+    var_term_clash: f64,
+    term_term_clash: f64,
+    app_var_mult: f64,
+) -> Wfcb<SimWeightParam> {
+    wfcb_alloc(
+        sim_weight_wfcb_compute,
+        prio_fun,
+        sim_weight_exit,
+        Some(sim_weight_init(
+            equal_weight,
+            var_var_clash,
+            var_term_clash,
+            term_term_clash,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn sim_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<SimWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let equal_weight = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let var_var_clash = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let var_term_clash = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let term_term_clash = parse_float(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(sim_weight_wfcb_init(
+        prio_fun,
+        equal_weight,
+        var_var_clash,
+        var_term_clash,
+        term_term_clash,
+        app_var_mult,
+    ))
+}
+
 /// # Panics
 ///
 /// Panics if two paired terms have the same top symbol but do not both have
@@ -127,6 +186,19 @@ pub fn sim_weight_compute(param: &SimWeightParam, bank: &TermBank, clause: &Clau
     sim_weight(bank, clause, param)
 }
 
+fn sim_weight_wfcb_compute(
+    data: Option<&mut SimWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => sim_weight_compute(data, bank, clause),
+        None => panic!("Simweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn sim_weight_exit(_data: SimWeightParam) {}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
@@ -134,10 +206,12 @@ fn i64_to_f64(value: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{sim_eqn_weight, sim_weight_compute, sim_weight_init};
+    use super::{sim_eqn_weight, sim_weight_compute, sim_weight_init, sim_weight_parse};
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -232,5 +306,22 @@ mod tests {
 
         let ignored_equal = sim_weight_init(-1.0, 3.0, 5.0, 7.0, 1.0);
         assert_close(sim_weight_compute(&ignored_equal, &bank, &clause), 150.0);
+    }
+
+    #[test]
+    fn sim_weight_parse_wraps_existing_scoring_core() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let fa = typed_unary(&mut bank, "f", &a);
+        let gb = typed_unary(&mut bank, "g", &b);
+        let clause = unit_clause(&mut bank, &fa, &gb, true);
+        let mut scanner = Scanner::from_user_string("(ConstPrio,100.0,3.0,5.0,7.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = sim_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 150.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 }

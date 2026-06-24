@@ -1,7 +1,13 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OrientWeightParam {
@@ -103,6 +109,122 @@ pub const fn orient_lmax_weight_init(
 }
 
 #[must_use]
+pub fn clause_orient_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    unorientable_literal_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<OrientWeightParam> {
+    wfcb_alloc(
+        clause_orient_weight_wfcb_compute,
+        prio_fun,
+        orient_weight_exit,
+        Some(clause_orient_weight_init(
+            fweight,
+            vweight,
+            unorientable_literal_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+pub fn orient_lmax_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    unorientable_literal_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<OrientWeightParam> {
+    wfcb_alloc(
+        orient_lmax_weight_wfcb_compute,
+        prio_fun,
+        orient_weight_exit,
+        Some(orient_lmax_weight_init(
+            fweight,
+            vweight,
+            unorientable_literal_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn clause_orient_weight_parse(
+    scanner: &mut Scanner,
+) -> Result<Wfcb<OrientWeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_orient_weight_param(scanner)?;
+    Ok(clause_orient_weight_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.unorientable_literal_multiplier(),
+        param.max_literal_multiplier(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+pub fn orient_lmax_weight_parse(
+    scanner: &mut Scanner,
+) -> Result<Wfcb<OrientWeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_orient_weight_param(scanner)?;
+    Ok(orient_lmax_weight_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.unorientable_literal_multiplier(),
+        param.max_literal_multiplier(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+fn parse_orient_weight_param(
+    scanner: &mut Scanner,
+) -> Result<(ClausePrioFun, OrientWeightParam), Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let unorientable_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok((
+        prio_fun,
+        OrientWeightParam::new(
+            fweight,
+            vweight,
+            unorientable_literal_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        ),
+    ))
+}
+
+#[must_use]
 pub fn clause_orient_weight_compute(
     param: &OrientWeightParam,
     bank: &TermBank,
@@ -139,16 +261,43 @@ pub fn orient_lmax_weight_compute(param: &OrientWeightParam, clause: &Clause) ->
     result
 }
 
+fn clause_orient_weight_wfcb_compute(
+    data: Option<&mut OrientWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => clause_orient_weight_compute(data, bank, clause),
+        None => panic!("Orientweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn orient_lmax_weight_wfcb_compute(
+    data: Option<&mut OrientWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => orient_lmax_weight_compute(data, clause),
+        None => panic!("OrientLMaxWeight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn orient_weight_exit(_data: OrientWeightParam) {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_orient_weight_compute, clause_orient_weight_init, orient_lmax_weight_compute,
-        orient_lmax_weight_init, DEFAULT_MAX_MULT,
+        clause_orient_weight_compute, clause_orient_weight_init, clause_orient_weight_parse,
+        orient_lmax_weight_compute, orient_lmax_weight_init, orient_lmax_weight_parse,
+        DEFAULT_MAX_MULT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -211,5 +360,27 @@ mod tests {
         let param = orient_lmax_weight_init(2, 1, 7.0, 5.0, 3.0, 1.0);
 
         assert_close(orient_lmax_weight_compute(&param, &clause), 212.0);
+    }
+
+    #[test]
+    fn orient_weight_parsers_wrap_existing_scoring_cores() {
+        let mut bank = test_bank();
+        let clause = marked_clause(&mut bank);
+        let mut orient_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut lmax_scanner = Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut orient =
+            clause_orient_weight_parse(&mut orient_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut lmax =
+            orient_lmax_weight_parse(&mut lmax_scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(orient.compute_eval(&bank, &clause), 636.0);
+        assert_close(lmax.compute_eval(&bank, &clause), 212.0);
+        assert_eq!(orient.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(lmax.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(orient_scanner.current_token().literal(), "tail");
+        assert_eq!(lmax_scanner.current_token().literal(), "tail");
     }
 }

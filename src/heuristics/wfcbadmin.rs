@@ -9,8 +9,10 @@ use crate::heuristics::dagweight::{
 use crate::heuristics::diversityweight::diversity_weight_parse;
 use crate::heuristics::fifo::fifo_eval_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
+use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
 use crate::heuristics::random::rand_weight_parse;
 use crate::heuristics::refinedweight::{clause_refined_weight2_parse, clause_refined_weight_parse};
+use crate::heuristics::simweight::sim_weight_parse;
 use crate::heuristics::varweights::{
     clause_weight_age_parse, depth_weight_parse, nl_weight_parse, pn_refined_weight_parse,
     proof_weight_parse, sig_weight_parse, sym_type_weight_parse, tptp_type_weight_parse,
@@ -223,6 +225,9 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "Depthweight"
             | "WLessDWeight"
             | "Proofweight"
+            | "Orientweight"
+            | "OrientLMaxWeight"
+            | "Simweight"
             | "ClauseWeightAge"
             | "RandomWeight"
             | "FIFOWeight"
@@ -268,6 +273,9 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
         "Depthweight" => Ok(Box::new(depth_weight_parse(scanner)?)),
         "WLessDWeight" => Ok(Box::new(weight_less_depth_parse(scanner)?)),
         "Proofweight" => Ok(Box::new(proof_weight_parse(scanner)?)),
+        "Orientweight" => Ok(Box::new(clause_orient_weight_parse(scanner)?)),
+        "OrientLMaxWeight" => Ok(Box::new(orient_lmax_weight_parse(scanner)?)),
+        "Simweight" => Ok(Box::new(sim_weight_parse(scanner)?)),
         "ClauseWeightAge" => Ok(Box::new(clause_weight_age_parse(scanner)?)),
         "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
@@ -428,6 +436,9 @@ mod tests {
         assert!(weight_fun_parser_is_ported("Depthweight"));
         assert!(weight_fun_parser_is_ported("WLessDWeight"));
         assert!(weight_fun_parser_is_ported("Proofweight"));
+        assert!(weight_fun_parser_is_ported("Orientweight"));
+        assert!(weight_fun_parser_is_ported("OrientLMaxWeight"));
+        assert!(weight_fun_parser_is_ported("Simweight"));
         assert!(weight_fun_parser_is_ported("ClauseWeightAge"));
         assert!(!weight_fun_parser_is_ported("StaggeredWeight"));
     }
@@ -565,6 +576,29 @@ mod tests {
             "WLessDWeight(ConstPrio,2,1,3.0,1.0,7.0,0.5) tail",
             "Proofweight(ConstPrio,2,1,1.0,1.0,1.0,8.0,6.0) tail",
             "ClauseWeightAge(ConstPrio,2,1,1.0,4.0) tail",
+        ];
+
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let mut wfcb = weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+            let mut evaluations = evals_alloc(1);
+
+            wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
+    fn weight_fun_parse_dispatches_orient_and_sim_weight_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let specs = [
+            "Orientweight(ConstPrio,2,1,7.0,5.0,3.0) tail",
+            "OrientLMaxWeight(ConstPrio,2,1,7.0,5.0,3.0) tail",
+            "Simweight(ConstPrio,100.0,3.0,5.0,7.0) tail",
         ];
 
         for spec in specs {
