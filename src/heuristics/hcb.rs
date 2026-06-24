@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::{FormulaProperties, CP_DELETE_CLAUSE};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::neweval::{evals_alloc, EvalCell};
 use crate::heuristics::to_params::{
@@ -1019,6 +1020,69 @@ fn select_best_non_orphan(
             return Some(clause);
         }
     }
+}
+
+pub fn hcb_clause_set_del_prop<Data>(
+    hcb: &HcbCell<Data>,
+    set: &mut ClauseSet,
+    mut number: i64,
+    prop: FormulaProperties,
+) -> i64 {
+    if number <= 0 || hcb.wfcb_no() == 0 {
+        return 0;
+    }
+
+    let eval_orders = (0..hcb.wfcb_no())
+        .map(|idx| set.eval_order_objects(idx))
+        .collect::<Vec<_>>();
+    let mut positions = vec![0; hcb.wfcb_no()];
+    let c_loop_iterations = hcb_delprop_c_loop_iterations(hcb);
+    if c_loop_iterations == 0 {
+        return 0;
+    }
+
+    let mut prop_cleared = 0;
+    while number > 0 {
+        for idx in 0..hcb.wfcb_no() {
+            for _ in 0..c_loop_iterations {
+                while let Some(&object) = eval_orders[idx].get(positions[idx]) {
+                    positions[idx] += 1;
+                    if set.del_prop_by_eval_object(object, prop) {
+                        prop_cleared += 1;
+                        break;
+                    }
+                }
+
+                number -= 1;
+                if number == 0 {
+                    break;
+                }
+            }
+            if number == 0 {
+                break;
+            }
+        }
+    }
+    prop_cleared
+}
+
+pub fn hcb_clause_set_delete_bad_clauses<Data>(
+    hcb: &HcbCell<Data>,
+    set: &mut ClauseSet,
+    number: i64,
+) -> i64 {
+    set.set_prop(CP_DELETE_CLAUSE);
+    let _ = hcb_clause_set_del_prop(hcb, set, number, CP_DELETE_CLAUSE);
+    set.delete_marked_entries()
+}
+
+fn hcb_delprop_c_loop_iterations<Data>(hcb: &HcbCell<Data>) -> usize {
+    let mut j = 0_usize;
+    while i64::try_from(j).is_ok_and(|index| index < hcb.select_switch.get(j).copied().unwrap_or(0))
+    {
+        j += 1;
+    }
+    j
 }
 
 pub fn default_exit_fun<Data>(_data: Data) {}
@@ -2361,7 +2425,8 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 mod tests {
     use super::{
         bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate,
-        hcb_clause_evaluate_into, hcb_single_weight_clause_select_with, hcb_standard_clause_select,
+        hcb_clause_evaluate_into, hcb_clause_set_del_prop, hcb_clause_set_delete_bad_clauses,
+        hcb_single_weight_clause_select_with, hcb_standard_clause_select,
         hcb_standard_clause_select_with, hcb_standard_selection_eval_and_advance,
         heuristic_parms_alloc, heuristic_parms_initialize, heuristic_parms_parse,
         heuristic_parms_parse_into, heuristic_parms_parse_into_report,
@@ -2379,6 +2444,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_DELETE_CLAUSE, CP_INITIAL};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
     use crate::heuristics::to_params::{OrderParmsCell, TermOrdering};
@@ -3051,6 +3117,55 @@ mod tests {
         assert_eq!(hcb.select_count(), 0);
         assert_eq!(hcb.current_eval(), 0);
         assert_eq!(set.find_best(0).map(Clause::ident), Some(first_id));
+    }
+
+    #[test]
+    fn hcb_clause_set_delete_bad_clauses_keeps_best_number() {
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, 10, 4);
+        let first_id = 301;
+        let second_id = 302;
+        let third_id = 303;
+        let first = clause_with_evaluations(first_id, &[(PRIO_NORMAL, 1.0)]);
+        let second = clause_with_evaluations(second_id, &[(PRIO_NORMAL, 2.0)]);
+        let third = clause_with_evaluations(third_id, &[(PRIO_NORMAL, 3.0)]);
+        let mut set = ClauseSet::from_clauses([first, second, third]);
+
+        let deleted = hcb_clause_set_delete_bad_clauses(&hcb, &mut set, 2);
+
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![first_id, second_id]
+        );
+        assert!(set
+            .iter()
+            .all(|clause| !clause.query_prop(CP_DELETE_CLAUSE)));
+    }
+
+    #[test]
+    fn hcb_clause_set_del_prop_preserves_c_select_switch_j_bound() {
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, 10, 4);
+        hcb_add_wfcb(&mut hcb, 11, 4);
+        let first_id = 401;
+        let second_id = 402;
+        let third_id = 403;
+        let fourth_id = 404;
+        let first = clause_with_evaluations(first_id, &[(PRIO_NORMAL, 1.0), (PRIO_NORMAL, 4.0)]);
+        let second = clause_with_evaluations(second_id, &[(PRIO_NORMAL, 2.0), (PRIO_NORMAL, 3.0)]);
+        let third = clause_with_evaluations(third_id, &[(PRIO_NORMAL, 3.0), (PRIO_NORMAL, 2.0)]);
+        let fourth = clause_with_evaluations(fourth_id, &[(PRIO_NORMAL, 4.0), (PRIO_NORMAL, 1.0)]);
+        let mut set = ClauseSet::from_clauses([first, second, third, fourth]);
+        set.set_prop(CP_INITIAL);
+
+        let cleared = hcb_clause_set_del_prop(&hcb, &mut set, 3, CP_INITIAL);
+
+        assert_eq!(cleared, 3);
+        assert!(!set.find_by_id(first_id).unwrap().query_prop(CP_INITIAL));
+        assert!(!set.find_by_id(second_id).unwrap().query_prop(CP_INITIAL));
+        assert!(set.find_by_id(third_id).unwrap().query_prop(CP_INITIAL));
+        assert!(!set.find_by_id(fourth_id).unwrap().query_prop(CP_INITIAL));
     }
 
     #[test]

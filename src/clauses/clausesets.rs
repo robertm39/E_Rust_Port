@@ -241,6 +241,29 @@ impl ClauseSet {
         self.extract_at_position(position)
     }
 
+    #[must_use]
+    pub fn eval_order_objects(&self, idx: usize) -> Vec<EvalObjectHandle> {
+        self.eval_indices.get(idx).map_or_else(Vec::new, |root| {
+            root.iter().map(|entry| entry.object).collect()
+        })
+    }
+
+    pub fn del_prop_by_eval_object(
+        &mut self,
+        object: EvalObjectHandle,
+        prop: FormulaProperties,
+    ) -> bool {
+        let Some(clause) = self.find_by_eval_object_mut(object) else {
+            return false;
+        };
+        if clause.query_prop(prop) {
+            clause.del_prop(prop);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn remove_evaluations(&mut self) {
         for root in &mut self.eval_indices {
             root.clear();
@@ -697,6 +720,15 @@ impl ClauseSet {
 
     fn find_by_eval_object(&self, object: EvalObjectHandle) -> Option<&Clause> {
         self.clauses.iter().find(|clause| {
+            clause
+                .evaluations()
+                .and_then(EvalCell::object)
+                .is_some_and(|candidate| candidate == object)
+        })
+    }
+
+    fn find_by_eval_object_mut(&mut self, object: EvalObjectHandle) -> Option<&mut Clause> {
+        self.clauses.iter_mut().find(|clause| {
             clause
                 .evaluations()
                 .and_then(EvalCell::object)
