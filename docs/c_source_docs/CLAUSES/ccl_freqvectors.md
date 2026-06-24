@@ -153,6 +153,11 @@ Source files reviewed: `CLAUSES/ccl_freqvectors.h`, `CLAUSES/ccl_freqvectors.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### C Behaviors To Revisit After Compatibility
+
+- `FreqVectorPrint` owns only a raw `vec->clause` pointer for optional clause rendering; Rust keeps vector storage independent and requires callers to pass the optional clause explicitly for LOP-backed printing. Use stable clause handles rather than raw aliasing once clause-set ownership is fully ported.
+- The existing Rust identifier-based vector debug string is not the C `FreqVectorPrint` shape when a clause pointer is present. Prefer the explicit optional-clause renderer for compatibility-facing output.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

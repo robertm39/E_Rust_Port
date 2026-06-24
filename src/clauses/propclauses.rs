@@ -1,5 +1,5 @@
 use crate::basics::error::Diagnostic;
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnProperties;
 use crate::clauses::eqnlist::EqnList;
@@ -88,6 +88,18 @@ impl PropClause {
         Ok(Clause::alloc(EqnList::from_vec(literals)))
     }
 
+    /// Renders this propositional clause through the first-order LOP clause
+    /// printer after temporarily rebuilding the ordinary clause, matching the
+    /// ownership shape of C `PropClausePrint`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if allocating any rebuilt literal fails.
+    pub fn print_lop_string(&self, bank: &mut TermBank) -> Result<String, Diagnostic> {
+        let clause = self.to_clause(bank)?;
+        Ok(clause_print_lop_format_string(bank, &clause, true))
+    }
+
     #[must_use]
     pub fn max_var(&self) -> i64 {
         self.literals
@@ -160,6 +172,23 @@ impl PropClauseSet {
             .map(PropClause::max_var)
             .max()
             .unwrap_or(0)
+    }
+
+    /// Renders all propositional clauses in insertion order.
+    ///
+    /// The C set printer calls `PropClausePrint` and then writes a newline for
+    /// each element, while the single-clause printer itself is newline-free.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if rebuilding any stored propositional clause fails.
+    pub fn print_lop_string(&self, bank: &mut TermBank) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(&clause.print_lop_string(bank)?);
+            output.push('\n');
+        }
+        Ok(output)
     }
 }
 
@@ -244,6 +273,22 @@ mod tests {
     }
 
     #[test]
+    fn prop_clause_print_lop_string_rebuilds_and_renders_without_newline() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p_print");
+        let second = predicate_atom(&mut bank, "q_print");
+        let prop_clause = PropClause::alloc(&clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ]));
+
+        assert_eq!(
+            prop_clause.print_lop_string(&mut bank).unwrap(),
+            "p_print <- q_print."
+        );
+    }
+
+    #[test]
     fn max_var_uses_current_literal_entry_numbers() {
         let mut bank = test_bank();
         let first = predicate_atom(&mut bank, "p");
@@ -287,6 +332,26 @@ mod tests {
         assert_eq!(set.clauses()[1].lit_no(), 2);
         assert!(set.clauses()[2].is_empty());
         assert_eq!(set.max_var(), 29);
+    }
+
+    #[test]
+    fn prop_clause_set_print_lop_string_adds_set_level_newlines() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p_set_print");
+        let second = predicate_atom(&mut bank, "q_set_print");
+        let mut set = PropClauseSet::new();
+
+        set.insert_prop_clause(PropClause::alloc(&clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        set.insert_prop_clause(PropClause::alloc(&clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+
+        assert_eq!(
+            set.print_lop_string(&mut bank).unwrap(),
+            "p_set_print <- .\n <- q_set_print.\n"
+        );
     }
 
     #[test]

@@ -111,6 +111,11 @@ Source files reviewed: `CLAUSES/ccl_propclauses.h`, `CLAUSES/ccl_propclauses.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### C Behaviors To Revisit After Compatibility
+
+- `PropClausePrint` temporarily rebuilds an ordinary `Clause` and then calls global `ClausePrint`; the temporary clause has an unpredictable identifier. Rust now exposes explicit LOP rendering for the rebuilt clause and should keep identifier-sensitive global formats at the outer output boundary.
+- `PropClauseSetPrint` adds the newline after each `PropClausePrint` call, not inside the single-clause printer. Rust preserves this split in the LOP string helpers.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

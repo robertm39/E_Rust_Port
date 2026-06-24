@@ -1,7 +1,8 @@
 use crate::basics::fixdarrays::FixedDArray;
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
@@ -273,12 +274,38 @@ impl FreqVector {
             Some(ident) => format!("% FV for clause #{ident}.\n"),
             None => "% FV, no clause given.\n".to_owned(),
         };
-        let _ = write!(&mut result, "% FV(len={}):", self.len());
+        self.append_vector_line(&mut result);
+        result
+    }
+
+    #[must_use]
+    pub fn print_lop_string(
+        &self,
+        bank: &TermBank,
+        clause: Option<&Clause>,
+        full_terms: bool,
+    ) -> String {
+        let clause_text =
+            clause.map(|clause| clause_print_lop_format_string(bank, clause, full_terms));
+        self.print_string_with_clause_text(clause_text.as_deref())
+    }
+
+    #[must_use]
+    pub fn print_string_with_clause_text(&self, clause_text: Option<&str>) -> String {
+        let mut result = match clause_text {
+            Some(clause_text) => format!("% FV for: {clause_text}\n"),
+            None => "% FV, no clause given.\n".to_owned(),
+        };
+        self.append_vector_line(&mut result);
+        result
+    }
+
+    fn append_vector_line(&self, result: &mut String) {
+        let _ = write!(result, "% FV(len={}):", self.len());
         for value in &self.array {
-            let _ = write!(&mut result, " {value}");
+            let _ = write!(result, " {value}");
         }
         result.push('\n');
-        result
     }
 
     fn assert_compatible(&self, left: &Self, right: &Self) {
@@ -1004,6 +1031,24 @@ mod tests {
         assert_eq!(
             optimized.as_slice(),
             &[full.as_slice()[0], full.as_slice()[full.len() - 1]]
+        );
+    }
+
+    #[test]
+    fn frequency_vector_lop_print_uses_explicit_clause_when_available() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_print_a");
+        let second = typed_const(&mut bank, "fv_print_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)]);
+        let vector = FreqVector::from_values(vec![3, 1, 4]);
+
+        assert_eq!(
+            vector.print_lop_string(&bank, Some(&clause), true),
+            "% FV for: fv_print_a=fv_print_b <- .\n% FV(len=3): 3 1 4\n"
+        );
+        assert_eq!(
+            vector.print_lop_string(&bank, None, true),
+            "% FV, no clause given.\n% FV(len=3): 3 1 4\n"
         );
     }
 

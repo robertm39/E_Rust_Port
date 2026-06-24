@@ -1,4 +1,4 @@
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clausepos_tree::clause_key;
 use crate::clauses::freqvectors::{
     fv_pack_clause, optimized_var_freq_vector_compute, FreqVector, FvCollect, FvCollectLayout,
@@ -149,6 +149,23 @@ impl FvIndex {
         output
     }
 
+    #[must_use]
+    pub fn print_lop_string(&self, bank: &TermBank, full_terms: bool) -> String {
+        self.print_string_with_clause_renderer(|clause| {
+            clause_print_lop_format_string(bank, clause, full_terms)
+        })
+    }
+
+    #[must_use]
+    pub fn print_string_with_clause_renderer<R>(&self, mut render_clause: R) -> String
+    where
+        R: FnMut(&Clause) -> String,
+    {
+        let mut output = "* ROOT *\n".to_owned();
+        self.write_print(&mut output, 0, &mut render_clause);
+        output
+    }
+
     fn insert_vector_clause(
         &mut self,
         vector: &FreqVector,
@@ -204,6 +221,29 @@ impl FvIndex {
                 }
                 let _ = writeln!(output, "Alternative {key}: ");
                 successor.write_debug(output, level + 1);
+            }
+        }
+    }
+
+    fn write_print<R>(&self, output: &mut String, level: usize, render_clause: &mut R)
+    where
+        R: FnMut(&Clause) -> String,
+    {
+        if self.final_node {
+            for clause in self.clauses.values() {
+                for _ in 0..=level {
+                    output.push_str("--");
+                }
+                output.push_str(&render_clause(clause));
+                output.push_str(" \n");
+            }
+        } else {
+            for (key, successor) in &self.successors {
+                for _ in 0..level {
+                    output.push_str("--");
+                }
+                let _ = writeln!(output, "Alternative {key}: ");
+                successor.write_print(output, level + 1, render_clause);
             }
         }
     }
@@ -308,11 +348,11 @@ pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> F
 
 #[cfg(test)]
 mod tests {
-    use super::{fv_index_pack_clause, fv_index_storage, FvIndexAnchor, FvIndexParams};
+    use super::{fv_index_pack_clause, fv_index_storage, FvIndex, FvIndexAnchor, FvIndexParams};
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
-    use crate::clauses::freqvectors::{FvCollect, FvCollectLayout, FvIndexType};
+    use crate::clauses::freqvectors::{FreqVector, FvCollect, FvCollectLayout, FvIndexType};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -458,5 +498,22 @@ mod tests {
             .index()
             .get_next_non_empty_node(first_value)
             .is_none());
+    }
+
+    #[test]
+    fn index_print_lop_string_renders_root_alternatives_and_clauses() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_index_a");
+        let second = typed_const(&mut bank, "fv_index_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)], 50);
+        let mut index = FvIndex::new();
+        let vector = FreqVector::from_values(vec![2, 0]);
+
+        assert!(index.insert_vector_clause(&vector, 1, clause));
+
+        assert_eq!(
+            index.print_lop_string(&bank, true),
+            "* ROOT *\nAlternative 2: \n--Alternative 0: \n------fv_index_a=fv_index_b <- . \n"
+        );
     }
 }

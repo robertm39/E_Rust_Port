@@ -125,6 +125,11 @@ Source files reviewed: `CLAUSES/ccl_fcvindexing.h`, `CLAUSES/ccl_fcvindexing.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### C Behaviors To Revisit After Compatibility
+
+- `FVIndexPrint` accepts an `out` stream, but `FVIndexPrint`, `fv_index_print`, and `print_clauses` write the root marker, alternatives, and leaf newlines to `stderr` while clause text is written to `out`. Rust's pure string renderer intentionally returns the combined human-readable tree; exact mixed-stream behavior should be handled only if a compatibility test observes it.
+- Final-leaf clause lines are indented one level deeper than the final node level because `print_clauses` receives `level+1`. Rust preserves this visible indentation in the LOP-backed tree renderer.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
