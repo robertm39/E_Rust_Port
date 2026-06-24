@@ -81,6 +81,14 @@ Source files reviewed: `HEURISTICS/che_heuristics.h`, `HEURISTICS/che_heuristics
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `GetHeuristic` parses an inline heuristic only when the source starts with `(`. Otherwise it consumes exactly the first identifier and looks that name up in `control->hcbs`; trailing material is ignored in the named-lookup path, so `Name=(...)` is still just a lookup for `Name`.
+- The inline-definition path calls `HeuristicDefParse`, then checks for `NoToken`. If trailing material is present, the newly parsed `Default` HCB has already been added to the admin before the syntax error is raised.
+- Inline definitions always use the name `Default`, so repeated inline calls shadow earlier default heuristics through `HCBAdminFindHCB`'s reverse lookup.
+- The disabled `HCBCreate` fallback means unknown names are fatal usage errors; Rust should not invent heuristics on lookup failure.
+- `finalize_auto_parms` is not declared in the header but mutates `ProofControl` auto-selected parameters, adjusts `delete_bad_limit` from `mem_limit`, and disables AC handling for no-equality specs. Keep this tied to proof-control/spec-feature integration rather than the standalone lookup helper.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

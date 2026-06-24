@@ -11,6 +11,7 @@ pub mod funweights;
 pub mod gdweight;
 pub mod hcb;
 pub mod hcbadmin;
+pub mod heuristic_lookup;
 pub mod learning;
 pub mod levweight;
 pub mod lifo;
