@@ -694,6 +694,40 @@ pub fn hcb_clause_evaluate_into<Data>(
     }
 }
 
+/// Returns the current evaluation index and advances the standard-selection
+/// schedule.
+///
+/// This is the scheduling mutation performed by `HCBStandardClauseSelect`
+/// after `ClauseSetFindBest` and orphan deletion. The clause-set evaluation
+/// indices are not owned by Rust `ClauseSet` yet, so this helper ports the
+/// HCB state transition independently.
+///
+/// # Panics
+///
+/// Panics if a non-empty HCB has an invalid current evaluation index.
+#[must_use]
+pub fn hcb_standard_selection_eval_and_advance<Data>(hcb: &mut HcbCell<Data>) -> Option<usize> {
+    if hcb.wfcb_no() == 0 {
+        return None;
+    }
+    assert!(
+        hcb.current_eval < hcb.wfcb_no(),
+        "current evaluation index must reference an HCB WFCB"
+    );
+
+    let selected_eval = hcb.current_eval;
+    hcb.select_count += 1;
+    while hcb.select_count == hcb.select_switch[hcb.current_eval] {
+        hcb.current_eval += 1;
+        if hcb.current_eval == hcb.wfcb_no() {
+            hcb.select_count = 0;
+            hcb.current_eval = 0;
+            break;
+        }
+    }
+    Some(selected_eval)
+}
+
 pub fn default_exit_fun<Data>(_data: Data) {}
 
 #[must_use]
@@ -991,17 +1025,17 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 mod tests {
     use super::{
         bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate_into,
-        heuristic_parms_alloc, heuristic_parms_initialize, heuristic_parms_print_string,
-        prim_enum_mode_name_raw, str_to_ext_inference_type, str_to_prim_enum_mode,
-        str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw,
-        AcHandling, ExtInferenceType, GroundingStrategy, HcbCell, HcbSelectFunction,
-        HeuristicParmsCell, ParamodulationType, PrimEnumMode, SplitClassType, SplitType, UnifMode,
-        DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES,
-        DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT,
-        DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS,
-        DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME,
-        DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS,
-        HCB_DEFAULT_HEURISTIC, HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
+        hcb_standard_selection_eval_and_advance, heuristic_parms_alloc, heuristic_parms_initialize,
+        heuristic_parms_print_string, prim_enum_mode_name_raw, str_to_ext_inference_type,
+        str_to_prim_enum_mode, str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw,
+        unif_mode_name_raw, AcHandling, ExtInferenceType, GroundingStrategy, HcbCell,
+        HcbSelectFunction, HeuristicParmsCell, ParamodulationType, PrimEnumMode, SplitClassType,
+        SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT,
+        DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT,
+        DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS,
+        DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME,
+        DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT,
+        DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC, HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
@@ -1446,6 +1480,43 @@ mod tests {
         let mut hcb = hcb_alloc();
 
         hcb_add_wfcb(&mut hcb, 10, 0);
+    }
+
+    #[test]
+    fn standard_selection_advances_on_cumulative_switch_boundaries() {
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, 10, 2);
+        hcb_add_wfcb(&mut hcb, 11, 3);
+        hcb_add_wfcb(&mut hcb, 12, 1);
+
+        let selected = (0..8)
+            .map(|_| hcb_standard_selection_eval_and_advance(&mut hcb))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selected,
+            vec![
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(0),
+                Some(0)
+            ]
+        );
+        assert_eq!(hcb.select_count(), 2);
+        assert_eq!(hcb.current_eval(), 1);
+    }
+
+    #[test]
+    fn standard_selection_empty_hcb_has_no_schedule_state_to_advance() {
+        let mut hcb = hcb_alloc();
+
+        assert_eq!(hcb_standard_selection_eval_and_advance(&mut hcb), None);
+        assert_eq!(hcb.select_count(), 0);
+        assert_eq!(hcb.current_eval(), 0);
     }
 
     #[test]
