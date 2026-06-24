@@ -23,6 +23,7 @@ use crate::heuristics::refinedweight::{clause_refined_weight2_parse, clause_refi
 use crate::heuristics::simweight::sim_weight_parse;
 use crate::heuristics::strucweight::conjecture_struc_distance_weight_parse;
 use crate::heuristics::termweights::conjecture_relative_term_weight_parse;
+use crate::heuristics::tfidfweight::conjecture_term_tfidf_weight_parse;
 use crate::heuristics::treeweight::conjecture_tree_distance_weight_parse;
 use crate::heuristics::varweights::{
     clause_weight_age_parse, depth_weight_parse, nl_weight_parse, pn_refined_weight_parse,
@@ -301,6 +302,7 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ConjectureStrucDistanceWeight"
             | "ConjectureRelativeTermWeight"
             | "ConjectureTermPrefixWeight"
+            | "ConjectureTermTfIdfWeight"
             | "FunWeight"
             | "SymOffsetWeight"
             | "RandomWeight"
@@ -414,6 +416,12 @@ pub fn weight_fun_parse_with_context(
         "ConjectureTermPrefixWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
             Ok(Box::new(conjecture_term_prefix_weight_parse(
+                scanner, axioms,
+            )?))
+        }
+        "ConjectureTermTfIdfWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(conjecture_term_tfidf_weight_parse(
                 scanner, axioms,
             )?))
         }
@@ -596,6 +604,7 @@ mod tests {
         assert!(weight_fun_parser_is_ported("ConjectureStrucDistanceWeight"));
         assert!(weight_fun_parser_is_ported("ConjectureRelativeTermWeight"));
         assert!(weight_fun_parser_is_ported("ConjectureTermPrefixWeight"));
+        assert!(weight_fun_parser_is_ported("ConjectureTermTfIdfWeight"));
         assert!(weight_fun_parser_is_ported("FunWeight"));
         assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
         assert!(!weight_fun_parser_is_ported(
@@ -792,6 +801,7 @@ mod tests {
             "ConjectureStrucDistanceWeight(ConstPrio,0,0,5.0,10.0,2.0,3.0,0,1.0,1.0,1.0) tail",
             "ConjectureRelativeTermWeight(ConstPrio,0,0,2.0,10,3,20,1,0,1.0,1.0,1.0) tail",
             "ConjectureTermPrefixWeight(ConstPrio,0,0,0.5,5.0,0,1.0,1.0,1.0) tail",
+            "ConjectureTermTfIdfWeight(ConstPrio,0,0,0,1.0,0,1.0,1.0,1.0) tail",
         ];
 
         assert_eq!(context.axioms().map(ClauseSet::len), Some(0));

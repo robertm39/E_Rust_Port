@@ -282,12 +282,28 @@ pub fn prefix_compute_term_code(term: &Term) -> Vec<PrefixToken> {
 #[must_use]
 pub fn prefix_match_counts(term: &Term, prefixes: &[Vec<PrefixToken>]) -> (usize, usize) {
     let term_code = prefix_compute_term_code(term);
+    prefix_code_match_counts(&term_code, prefixes)
+}
+
+#[must_use]
+pub fn prefix_code_match_counts(
+    term_code: &[PrefixToken],
+    prefixes: &[Vec<PrefixToken>],
+) -> (usize, usize) {
     let matched = prefixes
         .iter()
-        .map(|prefix| common_prefix_len(&term_code, prefix))
+        .map(|prefix| common_prefix_len(term_code, prefix))
         .max()
         .unwrap_or(0);
     (matched, term_code.len() - matched)
+}
+
+#[must_use]
+pub fn prefix_code_ref_count(term_code: &[PrefixToken], prefixes: &[Vec<PrefixToken>]) -> usize {
+    prefixes
+        .iter()
+        .filter(|prefix| prefix.starts_with(term_code))
+        .count()
 }
 
 #[must_use]

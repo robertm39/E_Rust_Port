@@ -22,6 +22,7 @@ pub mod simweight;
 pub mod specsigfeatures;
 pub mod strucweight;
 pub mod termweights;
+pub mod tfidfweight;
 pub mod to_autoselect;
 pub mod to_params;
 pub mod treeweight;
