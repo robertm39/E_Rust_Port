@@ -25,3 +25,4 @@ pub mod to_params;
 pub mod treeweight;
 pub mod varweights;
 pub mod wfcb;
+pub mod wfcbadmin;

@@ -4,6 +4,13 @@ use crate::clauses::neweval::{EvalCell, EvalPriority, PRIO_BEST};
 pub type ClauseEvalFun<Data> = fn(Option<&Data>, &Clause) -> f64;
 pub type ClausePrioFun = fn(&Clause) -> EvalPriority;
 pub type GenericExitFun<Data> = fn(Data);
+pub type BoxedWfcb = Box<dyn WfcbOps>;
+
+pub trait WfcbOps {
+    fn compute_eval(&self, clause: &Clause) -> f64;
+    fn compute_priority(&self, clause: &Clause) -> EvalPriority;
+    fn add_evaluation(&self, evaluations: &mut EvalCell, clause: &Clause, pos: usize, empty: bool);
+}
 
 pub struct Wfcb<Data> {
     eval_fun: ClauseEvalFun<Data>,
@@ -49,6 +56,20 @@ impl<Data> Drop for Wfcb<Data> {
         if let Some(data) = self.data.take() {
             (self.exit_fun)(data);
         }
+    }
+}
+
+impl<Data> WfcbOps for Wfcb<Data> {
+    fn compute_eval(&self, clause: &Clause) -> f64 {
+        Self::compute_eval(self, clause)
+    }
+
+    fn compute_priority(&self, clause: &Clause) -> EvalPriority {
+        Self::compute_priority(self, clause)
+    }
+
+    fn add_evaluation(&self, evaluations: &mut EvalCell, clause: &Clause, pos: usize, empty: bool) {
+        clause_add_evaluation(self, evaluations, clause, pos, empty);
     }
 }
 
