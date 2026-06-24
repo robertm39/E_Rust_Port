@@ -247,6 +247,7 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 ### Compatibility Notes
 
 - `ClauseSetInsert`, extraction, `ClauseSetFindBest`, and `ClauseSetRemoveEvaluations` keep the evaluation-index roots in sync with each clause's owned `EvalCell`. Rust preserves the root-clearing order and `EvalCompare` key semantics with safe sorted roots, but the C splay-tree locality profile should be benchmarked later before finalizing hot processed/unprocessed-set performance.
+- `ClauseSetPrint` and `ClauseSetPrintPrefix` append the newline at the set loop, not in `ClausePrint`; the prefix variant always calls `ClausePrint(..., true)` regardless of the non-prefix caller's `fullterms` argument. Rust preserves this shape in explicit LOP set and prefix string helpers.
 
 ### Porting Focus
 

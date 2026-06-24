@@ -1,7 +1,7 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
 use crate::basics::sysdate::SysDate;
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_TYPE_CONJECTURE,
 };
@@ -172,6 +172,27 @@ impl ClauseSet {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Clause> {
         self.clauses.iter_mut()
+    }
+
+    #[must_use]
+    pub fn print_lop_string(&self, bank: &TermBank, full_terms: bool) -> String {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(&clause_print_lop_format_string(bank, clause, full_terms));
+            output.push('\n');
+        }
+        output
+    }
+
+    #[must_use]
+    pub fn print_lop_prefix_string(&self, bank: &TermBank, prefix: &str) -> String {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(prefix);
+            output.push_str(&clause_print_lop_format_string(bank, clause, true));
+            output.push('\n');
+        }
+        output
     }
 
     pub fn insert(&mut self, mut clause: Clause) {
@@ -983,6 +1004,30 @@ mod tests {
             vec![first_id, second_id]
         );
         assert_eq!(target.literals(), 3);
+    }
+
+    #[test]
+    fn lop_print_helpers_render_each_clause_in_set_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_print_a");
+        let b = typed_const(&mut bank, "set_print_b");
+        let c = typed_const(&mut bank, "set_print_c");
+        let set = ClauseSet::from_clauses([
+            clause_from(vec![literal(&mut bank, &a, &b, true)]),
+            clause_from(vec![
+                literal(&mut bank, &b, &c, true),
+                literal(&mut bank, &c, &a, false),
+            ]),
+        ]);
+
+        assert_eq!(
+            set.print_lop_string(&bank, true),
+            "set_print_a=set_print_b <- .\nset_print_b=set_print_c <- set_print_c=set_print_a.\n"
+        );
+        assert_eq!(
+            set.print_lop_prefix_string(&bank, "# "),
+            "# set_print_a=set_print_b <- .\n# set_print_b=set_print_c <- set_print_c=set_print_a.\n"
+        );
     }
 
     #[test]
