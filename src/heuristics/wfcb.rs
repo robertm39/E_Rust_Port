@@ -2,13 +2,13 @@ use crate::clauses::clause::Clause;
 use crate::clauses::neweval::{EvalCell, EvalPriority, PRIO_BEST};
 use crate::terms::termbanks::TermBank;
 
-pub type ClauseEvalFun<Data> = fn(Option<&mut Data>, &Clause) -> f64;
+pub type ClauseEvalFun<Data> = fn(Option<&mut Data>, &TermBank, &Clause) -> f64;
 pub use crate::heuristics::prio_funs::ClausePrioFun;
 pub type GenericExitFun<Data> = fn(Data);
 pub type BoxedWfcb = Box<dyn WfcbOps>;
 
 pub trait WfcbOps {
-    fn compute_eval(&mut self, clause: &Clause) -> f64;
+    fn compute_eval(&mut self, bank: &TermBank, clause: &Clause) -> f64;
     fn compute_priority(&self, bank: &TermBank, clause: &Clause) -> EvalPriority;
     fn add_evaluation(
         &mut self,
@@ -49,8 +49,8 @@ impl<Data> Wfcb<Data> {
     }
 
     #[must_use]
-    pub fn compute_eval(&mut self, clause: &Clause) -> f64 {
-        (self.eval_fun)(self.data.as_mut(), clause)
+    pub fn compute_eval(&mut self, bank: &TermBank, clause: &Clause) -> f64 {
+        (self.eval_fun)(self.data.as_mut(), bank, clause)
     }
 
     #[must_use]
@@ -68,8 +68,8 @@ impl<Data> Drop for Wfcb<Data> {
 }
 
 impl<Data> WfcbOps for Wfcb<Data> {
-    fn compute_eval(&mut self, clause: &Clause) -> f64 {
-        Self::compute_eval(self, clause)
+    fn compute_eval(&mut self, bank: &TermBank, clause: &Clause) -> f64 {
+        Self::compute_eval(self, bank, clause)
     }
 
     fn compute_priority(&self, bank: &TermBank, clause: &Clause) -> EvalPriority {
@@ -113,7 +113,7 @@ pub fn clause_add_evaluation<Data>(
     pos: usize,
     empty: bool,
 ) {
-    let heuristic = wfcb.compute_eval(clause);
+    let heuristic = wfcb.compute_eval(bank, clause);
     let eval = evaluations.eval_mut(pos);
     eval.set_heuristic_from_eval(heuristic);
     if empty {
@@ -140,7 +140,7 @@ mod tests {
         exit_count: Rc<Cell<i32>>,
     }
 
-    fn eval_with_data(data: Option<&mut EvalData>, _clause: &Clause) -> f64 {
+    fn eval_with_data(data: Option<&mut EvalData>, _bank: &TermBank, _clause: &Clause) -> f64 {
         data.map_or(0.0, |data| data.base)
     }
 
@@ -175,7 +175,10 @@ mod tests {
         let clause = Clause::empty();
 
         assert!(wfcb.data().is_some());
-        assert_eq!(wfcb.compute_eval(&clause).to_bits(), 12.5_f64.to_bits());
+        assert_eq!(
+            wfcb.compute_eval(&term_bank(), &clause).to_bits(),
+            12.5_f64.to_bits()
+        );
         assert_eq!(
             wfcb.compute_priority(&term_bank(), &clause),
             PRIO_NORMAL + 7

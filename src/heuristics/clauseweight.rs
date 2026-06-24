@@ -1,9 +1,15 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::eqn::Eqn;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 
 pub const DEFAULT_POS_MULT: f64 = 1.0;
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeightParam {
@@ -73,6 +79,159 @@ pub const fn cmax_weight_init(
     app_var_mult: f64,
 ) -> WeightParam {
     WeightParam::new(fweight, vweight, pos_multiplier, app_var_mult)
+}
+
+#[must_use]
+pub fn clause_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<WeightParam> {
+    wfcb_alloc(
+        clause_weight_wfcb_compute,
+        prio_fun,
+        weight_param_exit,
+        Some(clause_weight_init(
+            fweight,
+            vweight,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+pub fn lmax_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<WeightParam> {
+    wfcb_alloc(
+        lmax_weight_wfcb_compute,
+        prio_fun,
+        weight_param_exit,
+        Some(lmax_weight_init(
+            fweight,
+            vweight,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+pub fn cmax_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<WeightParam> {
+    wfcb_alloc(
+        cmax_weight_wfcb_compute,
+        prio_fun,
+        weight_param_exit,
+        Some(cmax_weight_init(
+            fweight,
+            vweight,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+pub fn uniq_weight_wfcb_init(prio_fun: ClausePrioFun) -> Wfcb<()> {
+    wfcb_alloc(
+        uniq_weight_wfcb_compute,
+        prio_fun,
+        trivial_weight_exit,
+        None,
+    )
+}
+
+#[must_use]
+pub fn default_weight_wfcb_init(prio_fun: ClausePrioFun) -> Wfcb<()> {
+    wfcb_alloc(
+        default_weight_wfcb_compute,
+        prio_fun,
+        trivial_weight_exit,
+        None,
+    )
+}
+
+pub fn clause_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<WeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_weight_param(scanner)?;
+    Ok(clause_weight_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+pub fn lmax_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<WeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_weight_param(scanner)?;
+    Ok(lmax_weight_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+pub fn cmax_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<WeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_weight_param(scanner)?;
+    Ok(cmax_weight_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+pub fn uniq_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<()>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(uniq_weight_wfcb_init(prio_fun))
+}
+
+pub fn default_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<()>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(default_weight_wfcb_init(prio_fun))
+}
+
+fn parse_weight_param(scanner: &mut Scanner) -> Result<(ClausePrioFun, WeightParam), Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok((
+        prio_fun,
+        WeightParam::new(fweight, vweight, pos_multiplier, app_var_mult),
+    ))
 }
 
 #[must_use]
@@ -152,6 +311,51 @@ pub fn default_weight_compute(clause: &Clause) -> f64 {
     i64_to_f64(clause.standard_weight())
 }
 
+fn clause_weight_wfcb_compute(
+    data: Option<&mut WeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => clause_weight_compute(data, bank, clause),
+        None => panic!("Clauseweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn lmax_weight_wfcb_compute(
+    data: Option<&mut WeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => lmax_weight_compute(data, clause),
+        None => panic!("ClauseLMaxWeight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn cmax_weight_wfcb_compute(
+    data: Option<&mut WeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => cmax_weight_compute(data, clause),
+        None => panic!("ClauseCMaxWeight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn uniq_weight_wfcb_compute(_data: Option<&mut ()>, _bank: &TermBank, clause: &Clause) -> f64 {
+    uniq_weight_compute(clause)
+}
+
+fn default_weight_wfcb_compute(_data: Option<&mut ()>, _bank: &TermBank, clause: &Clause) -> f64 {
+    default_weight_compute(clause)
+}
+
+fn weight_param_exit(_data: WeightParam) {}
+
+fn trivial_weight_exit(_data: ()) {}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
@@ -169,13 +373,16 @@ fn usize_to_i32(value: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_weight_compute, clause_weight_init, cmax_weight_compute, cmax_weight_init,
-        default_weight_compute, lmax_weight_compute, lmax_weight_init, uniq_eqn_weight,
-        uniq_term_weight, uniq_weight_compute, DEFAULT_POS_MULT,
+        clause_weight_compute, clause_weight_init, clause_weight_parse, cmax_weight_compute,
+        cmax_weight_init, cmax_weight_parse, default_weight_compute, default_weight_parse,
+        lmax_weight_compute, lmax_weight_init, lmax_weight_parse, uniq_eqn_weight,
+        uniq_term_weight, uniq_weight_compute, uniq_weight_parse, DEFAULT_POS_MULT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -279,6 +486,82 @@ mod tests {
 
         assert_eq!(clause.standard_weight(), 8);
         assert_close(default_weight_compute(&clause), 8.0);
+    }
+
+    #[test]
+    fn clause_weight_parse_wraps_bank_aware_literal_weight() {
+        let mut bank = test_bank();
+        let clause = mixed_clause(&mut bank);
+        let mut scanner = Scanner::from_user_string("(ConstPrio,2,1,3.0) tail", false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut wfcb = clause_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 24.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn clause_weight_parse_accepts_optional_app_var_multiplier() {
+        let mut bank = test_bank();
+        let clause = mixed_clause(&mut bank);
+        let mut scanner = Scanner::from_user_string("(ConstPrio,2,1,3.0,2.5) tail", false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut wfcb = clause_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 24.0);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn lmax_and_cmax_weight_parsers_wrap_c_compatible_scoring() {
+        let mut bank = test_bank();
+        let clause = mixed_clause(&mut bank);
+        let mut lmax_scanner = Scanner::from_user_string("(ConstPrio,2,1,3.0) tail", false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut cmax_scanner = Scanner::from_user_string("(ConstPrio,2,1,3.0) tail", false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut lmax = lmax_weight_parse(&mut lmax_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut cmax = cmax_weight_parse(&mut cmax_scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(lmax.compute_eval(&bank, &clause), 0.0);
+        assert_close(cmax.compute_eval(&bank, &clause), 8.0);
+        assert_eq!(lmax.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(cmax.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(lmax_scanner.current_token().literal(), "tail");
+        assert_eq!(cmax_scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn uniq_and_default_weight_parsers_need_only_priority_function() {
+        let mut bank = test_bank();
+        let clause = mixed_clause(&mut bank);
+        let mut uniq_scanner =
+            Scanner::from_user_string("(ConstPrio) tail", false).unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut default_scanner = Scanner::from_user_string("(ConstPrio) tail", false)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut uniq = uniq_weight_parse(&mut uniq_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut default =
+            default_weight_parse(&mut default_scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(uniq.compute_eval(&bank, &clause), 36.0);
+        assert_close(default.compute_eval(&bank, &clause), 8.0);
+        assert_eq!(uniq.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(default.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(uniq_scanner.current_token().literal(), "tail");
+        assert_eq!(default_scanner.current_token().literal(), "tail");
     }
 
     #[test]

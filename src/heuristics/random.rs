@@ -5,6 +5,7 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::termbanks::TermBank;
 
 const RANDOM_X_DEFAULT: u32 = 684_291_357;
 const RANDOM_Y_DEFAULT: u32 = 123_459_876;
@@ -157,7 +158,11 @@ pub fn rand_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<RandomWeightEvalu
     ))
 }
 
-fn rand_weight_wfcb_compute(data: Option<&mut RandomWeightEvaluator>, clause: &Clause) -> f64 {
+fn rand_weight_wfcb_compute(
+    data: Option<&mut RandomWeightEvaluator>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
     match data {
         Some(data) => data.compute(clause),
         None => panic!("RandomWeight WFCB requires initialized evaluator data"),

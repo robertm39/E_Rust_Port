@@ -1,4 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::heuristics::clauseweight::{
+    clause_weight_parse, cmax_weight_parse, default_weight_parse, lmax_weight_parse,
+    uniq_weight_parse,
+};
 use crate::heuristics::fifo::fifo_eval_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::random::rand_weight_parse;
@@ -187,7 +191,17 @@ pub fn get_weight_fun_parse_fun_index(name: &str) -> Option<usize> {
 
 #[must_use]
 pub fn weight_fun_parser_is_ported(name: &str) -> bool {
-    matches!(name, "RandomWeight" | "FIFOWeight" | "LIFOWeight")
+    matches!(
+        name,
+        "Clauseweight"
+            | "ClauseLMaxWeight"
+            | "ClauseCMaxWeight"
+            | "Uniqweight"
+            | "Defaultweight"
+            | "RandomWeight"
+            | "FIFOWeight"
+            | "LIFOWeight"
+    )
 }
 
 pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> {
@@ -208,6 +222,11 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
 
     scanner.next_token()?;
     match name.as_str() {
+        "Clauseweight" => Ok(Box::new(clause_weight_parse(scanner)?)),
+        "ClauseLMaxWeight" => Ok(Box::new(lmax_weight_parse(scanner)?)),
+        "ClauseCMaxWeight" => Ok(Box::new(cmax_weight_parse(scanner)?)),
+        "Uniqweight" => Ok(Box::new(uniq_weight_parse(scanner)?)),
+        "Defaultweight" => Ok(Box::new(default_weight_parse(scanner)?)),
         "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
         "LIFOWeight" => Ok(Box::new(lifo_eval_parse(scanner)?)),
@@ -248,7 +267,7 @@ mod tests {
         exit_count: Rc<Cell<i32>>,
     }
 
-    fn eval(data: Option<&mut TestData>, _clause: &Clause) -> f64 {
+    fn eval(data: Option<&mut TestData>, _bank: &TermBank, _clause: &Clause) -> f64 {
         data.map_or(0.0, |data| data.weight)
     }
 
@@ -305,7 +324,7 @@ mod tests {
             admin
                 .find_wfcb_mut("weight")
                 .expect("duplicate name should be found")
-                .compute_eval(&clause)
+                .compute_eval(&term_bank(), &clause)
                 .to_bits(),
             3.0_f64.to_bits()
         );
@@ -347,7 +366,12 @@ mod tests {
         assert!(weight_fun_parser_is_ported("FIFOWeight"));
         assert!(weight_fun_parser_is_ported("LIFOWeight"));
         assert!(weight_fun_parser_is_ported("RandomWeight"));
-        assert!(!weight_fun_parser_is_ported("Clauseweight"));
+        assert!(weight_fun_parser_is_ported("Clauseweight"));
+        assert!(weight_fun_parser_is_ported("ClauseLMaxWeight"));
+        assert!(weight_fun_parser_is_ported("ClauseCMaxWeight"));
+        assert!(weight_fun_parser_is_ported("Uniqweight"));
+        assert!(weight_fun_parser_is_ported("Defaultweight"));
+        assert!(!weight_fun_parser_is_ported("DAGweight"));
     }
 
     #[test]
@@ -398,6 +422,31 @@ mod tests {
     }
 
     #[test]
+    fn weight_fun_parse_dispatches_clause_weight_family_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let specs = [
+            "Clauseweight(ConstPrio,2,1,3.0) tail",
+            "ClauseLMaxWeight(ConstPrio,2,1,3.0) tail",
+            "ClauseCMaxWeight(ConstPrio,2,1,3.0) tail",
+            "Uniqweight(ConstPrio) tail",
+            "Defaultweight(ConstPrio) tail",
+        ];
+
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let mut wfcb = weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+            let mut evaluations = evals_alloc(1);
+
+            wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
     fn weight_fun_parse_rejects_unknown_or_unported_names() {
         let mut unknown = Scanner::from_user_string("NoSuchWeight(ConstPrio)", false)
             .unwrap_or_else(|err| {
@@ -408,8 +457,8 @@ mod tests {
         };
         assert!(err.to_string().contains("Not a valid weight function"));
 
-        let mut unported = Scanner::from_user_string("Clauseweight(ConstPrio)", false)
-            .unwrap_or_else(|err| {
+        let mut unported =
+            Scanner::from_user_string("DAGweight(ConstPrio)", false).unwrap_or_else(|err| {
                 panic!("{err}");
             });
         let Err(err) = weight_fun_parse(&mut unported) else {

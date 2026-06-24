@@ -3,6 +3,7 @@ use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::termbanks::TermBank;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FifoEvaluator {
@@ -58,7 +59,11 @@ pub fn fifo_eval_parse(scanner: &mut Scanner) -> Result<Wfcb<FifoEvaluator>, Dia
     Ok(fifo_eval_wfcb_init(prio_fun))
 }
 
-fn fifo_eval_wfcb_compute(data: Option<&mut FifoEvaluator>, clause: &Clause) -> f64 {
+fn fifo_eval_wfcb_compute(
+    data: Option<&mut FifoEvaluator>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
     match data {
         Some(data) => data.compute(clause),
         None => panic!("FIFO WFCB requires initialized counter data"),

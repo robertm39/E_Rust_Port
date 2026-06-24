@@ -3,6 +3,7 @@ use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::termbanks::TermBank;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LifoEvaluator {
@@ -58,7 +59,11 @@ pub fn lifo_eval_parse(scanner: &mut Scanner) -> Result<Wfcb<LifoEvaluator>, Dia
     Ok(lifo_eval_wfcb_init(prio_fun))
 }
 
-fn lifo_eval_wfcb_compute(data: Option<&mut LifoEvaluator>, clause: &Clause) -> f64 {
+fn lifo_eval_wfcb_compute(
+    data: Option<&mut LifoEvaluator>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
     match data {
         Some(data) => data.compute(clause),
         None => panic!("LIFO WFCB requires initialized counter data"),
