@@ -146,6 +146,7 @@ Source files reviewed: `CLAUSES/ccl_sine.h`, `CLAUSES/ccl_sine.c`.
 
 ### Compatibility Notes
 
+- `DRelAlloc` initializes `activated` to false and creates separate clause/formula stacks. `DRelationAlloc` starts with a 10-slot pointer array, `DRelationGetFEntry` grows by function-code index and creates missing entries, and `DRelationTotalEntries` counts entries from index 1 upward. Rust preserves the clause-side stack shape and the index-0 skip; formula stacks remain deferred until `WFormula` exists.
 - `PStackClausePrintTSTP` prints clauses in increasing stack-index order, calls `ClauseTSTPPrint(out, clause, true, true)`, and appends one newline after each clause. Rust preserves the clause-stack text shape with explicit `ProblemType` and propagates diagnostics for the currently deferred typed/higher-order formula-closure branch; `PStackFormulaPrintTSTP` remains deferred until `WFormula` printing is ported.
 - `PStackClauseDelProp` mutates every clause referenced by the stack without consuming or reordering the stack. Rust models this as a stack of mutable clause references; formula property deletion remains deferred until `WFormula` ownership exists.
 - `PQueueStoreClause` writes two adjacent queue entries, the raw `ATClause` integer tag followed by the borrowed clause pointer. `ClauseSetFindAxSelectionSeeds` scans clauses in set order and stores conjectures plus hypotheses only when requested. Rust preserves the clause-only queue layout with `IntOrP<&Clause>`; mixed formula queues remain deferred until formulas have stable Rust handles.

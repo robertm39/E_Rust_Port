@@ -6,8 +6,106 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::FormulaProperties;
 use crate::clauses::clausesets::ClauseSet;
+use crate::terms::functypes::FunCode;
 use crate::terms::termbanks::TermBank;
 use std::fmt;
+
+#[derive(Debug)]
+pub struct DRel<'a> {
+    f_code: FunCode,
+    activated: bool,
+    d_clauses: PStack<&'a Clause>,
+}
+
+impl<'a> DRel<'a> {
+    #[must_use]
+    pub fn new(f_code: FunCode) -> Self {
+        Self {
+            f_code,
+            activated: false,
+            d_clauses: PStack::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn f_code(&self) -> FunCode {
+        self.f_code
+    }
+
+    #[must_use]
+    pub const fn is_activated(&self) -> bool {
+        self.activated
+    }
+
+    pub const fn set_activated(&mut self, activated: bool) {
+        self.activated = activated;
+    }
+
+    #[must_use]
+    pub const fn d_clauses(&self) -> &PStack<&'a Clause> {
+        &self.d_clauses
+    }
+
+    pub fn d_clauses_mut(&mut self) -> &mut PStack<&'a Clause> {
+        &mut self.d_clauses
+    }
+}
+
+#[derive(Debug)]
+pub struct DRelation<'a> {
+    relation: Vec<Option<DRel<'a>>>,
+}
+
+impl Default for DRelation<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> DRelation<'a> {
+    #[must_use]
+    pub fn new() -> Self {
+        let mut relation = Vec::with_capacity(10);
+        relation.resize_with(10, || None);
+        Self { relation }
+    }
+
+    #[must_use]
+    pub fn allocated_size(&self) -> usize {
+        self.relation.len()
+    }
+
+    /// Returns the `DRel` entry for `f_code`, creating it when absent.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `f_code` is negative or does not fit in `usize`, matching
+    /// the C assumption that function codes are valid array indexes here.
+    pub fn get_f_entry(&mut self, f_code: FunCode) -> &mut DRel<'a> {
+        let index = f_code_index(f_code);
+        if index >= self.relation.len() {
+            self.relation.resize_with(index + 1, || None);
+        }
+        if self.relation[index].is_none() {
+            self.relation[index] = Some(DRel::new(f_code));
+        }
+        self.relation[index]
+            .as_mut()
+            .expect("DRel entry must exist after insertion")
+    }
+
+    #[must_use]
+    pub fn total_entries(&self) -> i64 {
+        usize_to_i64(
+            self.relation
+                .iter()
+                .skip(1)
+                .filter_map(Option::as_ref)
+                .map(|entry| entry.d_clauses().len())
+                .sum(),
+        )
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i64)]
@@ -103,11 +201,19 @@ fn tstp_stack_write_error(_error: fmt::Error) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause stack")
 }
 
+fn f_code_index(f_code: FunCode) -> usize {
+    usize::try_from(f_code).unwrap_or_else(|_| panic!("function code must fit usize: {f_code}"))
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
-        pstack_clause_print_tstp_string, AxiomType,
+        pstack_clause_print_tstp_string, AxiomType, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -130,6 +236,29 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    #[test]
+    fn drel_and_drelation_initialize_and_count_clause_entries_like_c() {
+        let mut rel = DRel::new(7);
+        assert_eq!(rel.f_code(), 7);
+        assert!(!rel.is_activated());
+        assert!(rel.d_clauses().is_empty());
+        rel.set_activated(true);
+        assert!(rel.is_activated());
+
+        let zero_clause = Clause::empty();
+        let first = Clause::empty();
+        let second = Clause::empty();
+        let mut relation = DRelation::new();
+        assert_eq!(relation.allocated_size(), 10);
+        relation.get_f_entry(0).d_clauses_mut().push(&zero_clause);
+        relation.get_f_entry(3).d_clauses_mut().push(&first);
+        relation.get_f_entry(12).d_clauses_mut().push(&second);
+
+        assert_eq!(relation.allocated_size(), 13);
+        assert_eq!(relation.get_f_entry(12).f_code(), 12);
+        assert_eq!(relation.total_entries(), 2);
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
