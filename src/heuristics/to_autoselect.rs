@@ -19,6 +19,40 @@ pub const UNORIENT_LITERAL_PENALTY: i64 = 1;
 pub const MAX_CONST_WEIGHT: i64 = 2;
 pub const DEFAULT_COMCHAR_RAW: &str = "%";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutoOrderingMode {
+    Auto,
+    AutoSched0,
+    AutoSched1,
+    AutoSched2,
+    AutoSched3,
+    AutoSched4,
+    AutoSched5,
+    AutoSched6,
+    AutoSched7,
+    AutoSched8,
+    AutoSched9,
+}
+
+impl AutoOrderingMode {
+    #[must_use]
+    pub const fn analysis_label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::AutoSched0 => "AutoSched0",
+            Self::AutoSched1 => "AutoSched1",
+            Self::AutoSched2 => "AutoSched2",
+            Self::AutoSched3 => "AutoSched3",
+            Self::AutoSched4 => "AutoSched4",
+            Self::AutoSched5 => "AutoSched5",
+            Self::AutoSched6 => "AutoSched6",
+            Self::AutoSched7 => "AutoSched7",
+            Self::AutoSched8 => "AutoSched8",
+            Self::AutoSched9 => "AutoSched9",
+        }
+    }
+}
+
 pub fn init_oparms(oparms: &mut OrderParmsCell) {
     oparms.ordertype = TermOrdering::Kbo6;
     oparms.to_const_weight = W_CONST_NO_SPECIAL_WEIGHT;
@@ -199,6 +233,51 @@ pub fn describe_auto_ordering(oparms: &OrderParmsCell) -> String {
     )
 }
 
+#[must_use]
+pub fn auto_ordering_params(mode: AutoOrderingMode, ho_order_kind: HoOrderKind) -> OrderParmsCell {
+    let mut params = OrderParmsCell::default();
+    match mode {
+        AutoOrderingMode::Auto
+        | AutoOrderingMode::AutoSched0
+        | AutoOrderingMode::AutoSched1
+        | AutoOrderingMode::AutoSched2
+        | AutoOrderingMode::AutoSched3
+        | AutoOrderingMode::AutoSched4
+        | AutoOrderingMode::AutoSched5
+        | AutoOrderingMode::AutoSched6
+        | AutoOrderingMode::AutoSched7
+        | AutoOrderingMode::AutoSched8
+        | AutoOrderingMode::AutoSched9 => init_oparms(&mut params),
+    }
+    params.ho_order_kind = ho_order_kind;
+    params
+}
+
+/// Generate an initialized auto/AutoSched ordering.
+///
+/// This covers C `generate_auto_ordering` and `generate_autosched0_ordering`
+/// through `generate_autosched9_ordering`, which all call `init_oparms` and
+/// then `TOCreateOrdering`.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`to_create_ordering`].
+///
+/// # Panics
+///
+/// Panics under the same internal-invariant conditions as
+/// [`to_create_ordering`].
+pub fn generate_auto_ordering(
+    signature: &mut Signature,
+    axioms: &ClauseSet,
+    mode: AutoOrderingMode,
+    ho_order_kind: HoOrderKind,
+    higher_order_problem: bool,
+) -> Result<OrderControlBlock, Diagnostic> {
+    let params = auto_ordering_params(mode, ho_order_kind);
+    to_create_ordering(signature, axioms, &params, None, None, higher_order_problem)
+}
+
 /// Create the OCB described by a fully specified C `OrderParmsCell`.
 ///
 /// This mirrors `TOCreateOrdering`: allocate the concrete ordering, generate
@@ -343,11 +422,11 @@ fn literal_cmp_from_raw(value: i64) -> Result<LiteralCmp, Diagnostic> {
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_ordering_analysis_string, describe_auto_ordering, init_oparms,
-        order_next_const_weight, order_next_ordering, order_next_prec_gen, order_next_type,
-        order_next_weight_gen, print_oparms_string, to_create_ordering, to_select_ordering,
-        KBO_BONUS, MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY,
-        UNORIENT_LITERAL_PENALTY,
+        auto_ordering_analysis_string, auto_ordering_params, describe_auto_ordering,
+        generate_auto_ordering, init_oparms, order_next_const_weight, order_next_ordering,
+        order_next_prec_gen, order_next_type, order_next_weight_gen, print_oparms_string,
+        to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS, MAX_CONST_WEIGHT,
+        MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::CompareResult;
@@ -459,6 +538,67 @@ mod tests {
                 "%\n"
             )
         );
+    }
+
+    #[test]
+    fn auto_ordering_modes_provide_c_analysis_labels() {
+        assert_eq!(AutoOrderingMode::Auto.analysis_label(), "Auto");
+        assert_eq!(AutoOrderingMode::AutoSched0.analysis_label(), "AutoSched0");
+        assert_eq!(AutoOrderingMode::AutoSched9.analysis_label(), "AutoSched9");
+        assert_eq!(
+            auto_ordering_analysis_string(AutoOrderingMode::AutoSched4.analysis_label()),
+            "\n% AutoSched4-Ordering is analysing problem.\n"
+        );
+    }
+
+    #[test]
+    fn auto_ordering_params_match_initialized_c_auto_sched_variants() {
+        for mode in [
+            AutoOrderingMode::Auto,
+            AutoOrderingMode::AutoSched0,
+            AutoOrderingMode::AutoSched1,
+            AutoOrderingMode::AutoSched2,
+            AutoOrderingMode::AutoSched3,
+            AutoOrderingMode::AutoSched4,
+            AutoOrderingMode::AutoSched5,
+            AutoOrderingMode::AutoSched6,
+            AutoOrderingMode::AutoSched7,
+            AutoOrderingMode::AutoSched8,
+            AutoOrderingMode::AutoSched9,
+        ] {
+            let params = auto_ordering_params(mode, HoOrderKind::LambdaOrder);
+
+            assert_eq!(params.ordertype, TermOrdering::Kbo6);
+            assert_eq!(params.to_const_weight, W_CONST_NO_SPECIAL_WEIGHT);
+            assert_eq!(params.to_weight_gen, TOWeightGenMethod::SelectMaximal);
+            assert_eq!(params.to_prec_gen, TOPrecGenMethod::UnaryFirst);
+            assert_eq!(params.lit_cmp, i64::from(LiteralCmp::Normal.c_value()));
+            assert_eq!(params.ho_order_kind, HoOrderKind::LambdaOrder);
+            assert_eq!(params.db_w, DEFAULT_DB_WEIGHT);
+            assert_eq!(params.lam_w, DEFAULT_LAMBDA_WEIGHT);
+            assert!(!params.force_kbo_var_weight);
+        }
+    }
+
+    #[test]
+    fn generate_auto_ordering_creates_default_kbo6_ocb() {
+        let mut signature = signature();
+        typed_symbol(&mut signature, "a", 0);
+        typed_symbol(&mut signature, "f", 1);
+
+        let ocb = generate_auto_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            AutoOrderingMode::AutoSched3,
+            HoOrderKind::LfhoOrder,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.ordering_type, TermOrdering::Kbo6);
+        assert!(ocb.weights.is_some());
+        assert!(ocb.prec_weights.is_some());
+        assert_eq!(ocb.ho_order_kind, HoOrderKind::LfhoOrder);
     }
 
     #[test]
