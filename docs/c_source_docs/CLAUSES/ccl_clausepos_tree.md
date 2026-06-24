@@ -100,6 +100,10 @@ Source files reviewed: `CLAUSES/ccl_clausepos_tree.h`, `CLAUSES/ccl_clausepos_tr
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### C Behaviors To Revisit After Compatibility
+
+- `ClauseTPosTreePrint` combines global `ClausePrint` output with `NumTreeDebugPrint`, which prints the actual numeric-tree shape and a `Tree size` line. Rust now provides explicit LOP-backed clause rendering over sorted compact positions; reproduce the exact numeric-tree debug output only if this path becomes compatibility-visible.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

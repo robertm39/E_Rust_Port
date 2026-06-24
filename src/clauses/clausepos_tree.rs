@@ -1,5 +1,6 @@
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clausecpos::CompactPos;
+use crate::terms::termbanks::TermBank;
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 
@@ -61,6 +62,26 @@ impl ClauseTPos {
     pub fn debug_string(&self) -> String {
         let mut output = String::new();
         let _ = self.write_debug(&mut output);
+        output
+    }
+
+    pub fn write_lop_debug(&self, output: &mut impl Write, bank: &TermBank) -> fmt::Result {
+        writeln!(
+            output,
+            "OLs: {}",
+            clause_print_lop_format_string(bank, &self.clause, true)
+        )?;
+        write!(output, "occ:")?;
+        for pos in &self.positions {
+            write!(output, " {pos}")?;
+        }
+        writeln!(output)
+    }
+
+    #[must_use]
+    pub fn lop_debug_string(&self, bank: &TermBank) -> String {
+        let mut output = String::new();
+        let _ = self.write_lop_debug(&mut output, bank);
         output
     }
 }
@@ -246,5 +267,22 @@ mod tests {
         assert_eq!(cmp_clause_tpos_cells(&left_cell, &left_cell), 0);
         assert_ne!(cmp_clause_tpos_cells(&left_cell, &right_cell), 0);
         assert_eq!(left_cell.debug_string(), "OLs: clause#7\nocc: 1 5\n");
+    }
+
+    #[test]
+    fn lop_debug_print_uses_explicit_clause_rendering() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "clause_tpos_a");
+        let right = typed_const(&mut bank, "clause_tpos_b");
+        let literal = Eqn::alloc(left, right, &mut bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        let mut cell = ClauseTPos::new(&clause);
+        cell.insert_pos(5);
+        cell.insert_pos(1);
+
+        assert_eq!(
+            cell.lop_debug_string(&bank),
+            "OLs: clause_tpos_a=clause_tpos_b <- .\nocc: 1 5\n"
+        );
     }
 }
