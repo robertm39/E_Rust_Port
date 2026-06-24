@@ -3,6 +3,9 @@ use crate::heuristics::clauseweight::{
     clause_weight_parse, cmax_weight_parse, default_weight_parse, lmax_weight_parse,
     uniq_weight_parse,
 };
+use crate::heuristics::dagweight::{
+    dag_weight_parse, rdag_weight2_parse, rdag_weight3_parse, rdag_weight_parse,
+};
 use crate::heuristics::fifo::fifo_eval_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::random::rand_weight_parse;
@@ -198,6 +201,10 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ClauseCMaxWeight"
             | "Uniqweight"
             | "Defaultweight"
+            | "DAGweight"
+            | "RDAGweight"
+            | "RDAGweight2"
+            | "RDAGweight3"
             | "RandomWeight"
             | "FIFOWeight"
             | "LIFOWeight"
@@ -227,6 +234,10 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
         "ClauseCMaxWeight" => Ok(Box::new(cmax_weight_parse(scanner)?)),
         "Uniqweight" => Ok(Box::new(uniq_weight_parse(scanner)?)),
         "Defaultweight" => Ok(Box::new(default_weight_parse(scanner)?)),
+        "DAGweight" => Ok(Box::new(dag_weight_parse(scanner)?)),
+        "RDAGweight" => Ok(Box::new(rdag_weight_parse(scanner)?)),
+        "RDAGweight2" => Ok(Box::new(rdag_weight2_parse(scanner)?)),
+        "RDAGweight3" => Ok(Box::new(rdag_weight3_parse(scanner)?)),
         "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
         "LIFOWeight" => Ok(Box::new(lifo_eval_parse(scanner)?)),
@@ -371,7 +382,11 @@ mod tests {
         assert!(weight_fun_parser_is_ported("ClauseCMaxWeight"));
         assert!(weight_fun_parser_is_ported("Uniqweight"));
         assert!(weight_fun_parser_is_ported("Defaultweight"));
-        assert!(!weight_fun_parser_is_ported("DAGweight"));
+        assert!(weight_fun_parser_is_ported("DAGweight"));
+        assert!(weight_fun_parser_is_ported("RDAGweight"));
+        assert!(weight_fun_parser_is_ported("RDAGweight2"));
+        assert!(weight_fun_parser_is_ported("RDAGweight3"));
+        assert!(!weight_fun_parser_is_ported("Refinedweight"));
     }
 
     #[test]
@@ -447,6 +462,30 @@ mod tests {
     }
 
     #[test]
+    fn weight_fun_parse_dispatches_dag_weight_family_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let specs = [
+            "DAGweight(ConstPrio,2,1,3.0,1,true,false,false,true,false,false,false) tail",
+            "RDAGweight(ConstPrio,10,3,1,5.0,2.0,7.0,4.0) tail",
+            "RDAGweight2(ConstPrio,10,3,1,4.0,2.0) tail",
+            "RDAGweight3(ConstPrio,2,1,13,17,1,3.0,5.0,7.0,11.0) tail",
+        ];
+
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let mut wfcb = weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+            let mut evaluations = evals_alloc(1);
+
+            wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
     fn weight_fun_parse_rejects_unknown_or_unported_names() {
         let mut unknown = Scanner::from_user_string("NoSuchWeight(ConstPrio)", false)
             .unwrap_or_else(|err| {
@@ -457,8 +496,8 @@ mod tests {
         };
         assert!(err.to_string().contains("Not a valid weight function"));
 
-        let mut unported =
-            Scanner::from_user_string("DAGweight(ConstPrio)", false).unwrap_or_else(|err| {
+        let mut unported = Scanner::from_user_string("Refinedweight(ConstPrio)", false)
+            .unwrap_or_else(|err| {
                 panic!("{err}");
             });
         let Err(err) = weight_fun_parse(&mut unported) else {

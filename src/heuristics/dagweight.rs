@@ -1,4 +1,9 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_bool, parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_dag_weight;
 use crate::terms::termtypes::TP_OP_FLAG;
@@ -147,6 +152,89 @@ pub const fn dag_weight_init(
         neg_eqn_reset,
         pos_neg_reset,
     )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "C-compatible helper mirrors DAGWeightInit"
+)]
+pub fn dag_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    pos_multiplier: f64,
+    dup_weight: i64,
+    pos_use_dag: bool,
+    pos_term_reset: bool,
+    pos_eqn_reset: bool,
+    neg_use_dag: bool,
+    neg_term_reset: bool,
+    neg_eqn_reset: bool,
+    pos_neg_reset: bool,
+) -> Wfcb<DagWeightParam> {
+    wfcb_alloc(
+        dag_weight_wfcb_compute,
+        prio_fun,
+        dag_weight_exit,
+        Some(dag_weight_init(
+            fweight,
+            vweight,
+            pos_multiplier,
+            dup_weight,
+            pos_use_dag,
+            pos_term_reset,
+            pos_eqn_reset,
+            neg_use_dag,
+            neg_term_reset,
+            neg_eqn_reset,
+            pos_neg_reset,
+        )),
+    )
+}
+
+pub fn dag_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<DagWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let dup_weight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_use_dag = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_term_reset = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_eqn_reset = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let neg_use_dag = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let neg_term_reset = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let neg_eqn_reset = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_neg_reset = parse_bool(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(dag_weight_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        pos_multiplier,
+        dup_weight,
+        pos_use_dag,
+        pos_term_reset,
+        pos_eqn_reset,
+        neg_use_dag,
+        neg_term_reset,
+        neg_eqn_reset,
+        pos_neg_reset,
+    ))
 }
 
 #[must_use]
@@ -349,6 +437,68 @@ pub const fn rdag_weight_init(
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RDAGWeightInit without the OCB pointer"
+)]
+pub fn rdag_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    dup_weight: i64,
+    uniqmax_term_multiplier: f64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+) -> Wfcb<RDagWeightParam> {
+    wfcb_alloc(
+        rdag_weight_wfcb_compute,
+        prio_fun,
+        rdag_weight_exit,
+        Some(rdag_weight_init(
+            fweight,
+            vweight,
+            dup_weight,
+            uniqmax_term_multiplier,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+        )),
+    )
+}
+
+pub fn rdag_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<RDagWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let dup_weight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let uniqmax_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(rdag_weight_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        dup_weight,
+        uniqmax_term_multiplier,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+    ))
+}
+
+#[must_use]
 pub fn rdag_weight_compute(param: &RDagWeightParam, clause: &Clause) -> f64 {
     clause.literals().term_del_prop(TP_OP_FLAG);
     clause
@@ -396,6 +546,54 @@ pub const fn rdag_weight2_init(
         1.0,
         1.0,
     )
+}
+
+#[must_use]
+pub fn rdag_weight2_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    dup_weight: i64,
+    max_term_multiplier: f64,
+    pos_multiplier: f64,
+) -> Wfcb<RDagWeightParam> {
+    wfcb_alloc(
+        rdag_weight2_wfcb_compute,
+        prio_fun,
+        rdag_weight_exit,
+        Some(rdag_weight2_init(
+            fweight,
+            vweight,
+            dup_weight,
+            max_term_multiplier,
+            pos_multiplier,
+        )),
+    )
+}
+
+pub fn rdag_weight2_parse(scanner: &mut Scanner) -> Result<Wfcb<RDagWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let dup_weight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(rdag_weight2_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        dup_weight,
+        max_term_multiplier,
+        pos_multiplier,
+    ))
 }
 
 #[must_use]
@@ -454,6 +652,83 @@ pub const fn rdag_weight3_init(
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::similar_names,
+    reason = "C-compatible helper mirrors RDAGWeight3Init without the OCB pointer"
+)]
+pub fn rdag_weight3_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    nfweight: i64,
+    nvweight: i64,
+    dup_weight: i64,
+    max_term_multiplier: f64,
+    pos_multiplier: f64,
+    pneq_multiplier: f64,
+    nneq_multiplier: f64,
+) -> Wfcb<RDagWeightParam> {
+    wfcb_alloc(
+        rdag_weight3_wfcb_compute,
+        prio_fun,
+        rdag_weight_exit,
+        Some(rdag_weight3_init(
+            fweight,
+            vweight,
+            nfweight,
+            nvweight,
+            dup_weight,
+            max_term_multiplier,
+            pos_multiplier,
+            pneq_multiplier,
+            nneq_multiplier,
+        )),
+    )
+}
+
+#[expect(
+    clippy::similar_names,
+    reason = "C-compatible parser keeps normal and negative weight names close to RDAGWeight3Parse"
+)]
+pub fn rdag_weight3_parse(scanner: &mut Scanner) -> Result<Wfcb<RDagWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let nfweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let nvweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let dup_weight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pneq_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let nneq_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(rdag_weight3_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        nfweight,
+        nvweight,
+        dup_weight,
+        max_term_multiplier,
+        pos_multiplier,
+        pneq_multiplier,
+        nneq_multiplier,
+    ))
+}
+
+#[must_use]
 pub fn rdag_weight3_compute(param: &RDagWeightParam, bank: &TermBank, clause: &Clause) -> f64 {
     let mut result = 0.0;
     for literal in clause.literals().as_slice() {
@@ -509,6 +784,54 @@ pub fn rdag_weight3_compute(param: &RDagWeightParam, bank: &TermBank, clause: &C
     result
 }
 
+fn dag_weight_wfcb_compute(
+    data: Option<&mut DagWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => dag_weight_compute(data, bank, clause),
+        None => panic!("DAGweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn rdag_weight_wfcb_compute(
+    data: Option<&mut RDagWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => rdag_weight_compute(data, clause),
+        None => panic!("RDAGweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn rdag_weight2_wfcb_compute(
+    data: Option<&mut RDagWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => rdag_weight2_compute(data, clause),
+        None => panic!("RDAGweight2 WFCB requires initialized weight parameters"),
+    }
+}
+
+fn rdag_weight3_wfcb_compute(
+    data: Option<&mut RDagWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => rdag_weight3_compute(data, bank, clause),
+        None => panic!("RDAGweight3 WFCB requires initialized weight parameters"),
+    }
+}
+
+fn dag_weight_exit(_data: DagWeightParam) {}
+
+fn rdag_weight_exit(_data: RDagWeightParam) {}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
@@ -517,14 +840,17 @@ fn i64_to_f64(value: i64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        dag_weight_compute, dag_weight_init, rdag_weight2_compute, rdag_weight2_init,
-        rdag_weight3_compute, rdag_weight3_init, rdag_weight_compute, rdag_weight_init,
+        dag_weight_compute, dag_weight_init, dag_weight_parse, rdag_weight2_compute,
+        rdag_weight2_init, rdag_weight2_parse, rdag_weight3_compute, rdag_weight3_init,
+        rdag_weight3_parse, rdag_weight_compute, rdag_weight_init, rdag_weight_parse,
         DEFAULT_DAG_DUP_WEIGHT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -584,6 +910,33 @@ mod tests {
         let positive = Eqn::alloc(fa.clone(), fa.clone(), bank, true).unwrap();
         let negative = Eqn::alloc(fa, a, bank, false).unwrap();
         Clause::alloc(EqnList::from_vec(vec![positive, negative]))
+    }
+
+    fn oriented_positive_clause(bank: &mut TermBank) -> Clause {
+        let a = typed_const(bank, "a");
+        let fa = typed_unary(bank, "f", &a);
+        let ga = typed_unary(bank, "g", &a);
+        let mut positive = Eqn::alloc(fa, ga, bank, true).unwrap();
+        positive.set_prop(EP_IS_ORIENTED);
+        Clause::alloc(EqnList::from_vec(vec![positive]))
+    }
+
+    fn positive_equation_clause(bank: &mut TermBank) -> Clause {
+        let a = typed_const(bank, "a");
+        let fa = typed_unary(bank, "f", &a);
+        let ga = typed_unary(bank, "g", &a);
+        let positive = Eqn::alloc(fa, ga, bank, true).unwrap();
+        Clause::alloc(EqnList::from_vec(vec![positive]))
+    }
+
+    fn mixed_equation_predicate_clause(bank: &mut TermBank) -> Clause {
+        let a = typed_const(bank, "a");
+        let b = typed_const(bank, "b");
+        let positive_eq = Eqn::alloc(a.clone(), b.clone(), bank, true).unwrap();
+        let negative_eq = Eqn::alloc(a, b, bank, false).unwrap();
+        let pred = typed_pred_const(bank, "p");
+        let pred_lit = Eqn::alloc(pred, bank.true_term().clone(), bank, true).unwrap();
+        Clause::alloc(EqnList::from_vec(vec![positive_eq, pred_lit, negative_eq]))
     }
 
     #[test]
@@ -656,12 +1009,7 @@ mod tests {
     #[test]
     fn refined_dag_weight_compute_uses_marked_orientation_flags() {
         let mut bank = test_bank();
-        let a = typed_const(&mut bank, "a");
-        let fa = typed_unary(&mut bank, "f", &a);
-        let ga = typed_unary(&mut bank, "g", &a);
-        let mut positive = Eqn::alloc(fa, ga, &mut bank, true).unwrap();
-        positive.set_prop(EP_IS_ORIENTED);
-        let clause = Clause::alloc(EqnList::from_vec(vec![positive]));
+        let clause = oriented_positive_clause(&mut bank);
         let param = rdag_weight_init(10, 3, 1, 5.0, 2.0, 7.0, 4.0);
 
         assert_close(rdag_weight_compute(&param, &clause), 880.0);
@@ -677,11 +1025,7 @@ mod tests {
     #[test]
     fn refined_dag_weight2_boosts_larger_side_without_orientation() {
         let mut bank = test_bank();
-        let a = typed_const(&mut bank, "a");
-        let fa = typed_unary(&mut bank, "f", &a);
-        let ga = typed_unary(&mut bank, "g", &a);
-        let positive = Eqn::alloc(fa, ga, &mut bank, true).unwrap();
-        let clause = Clause::alloc(EqnList::from_vec(vec![positive]));
+        let clause = positive_equation_clause(&mut bank);
         let param = rdag_weight2_init(10, 3, 1, 4.0, 2.0);
 
         assert_close(rdag_weight2_compute(&param, &clause), 200.0);
@@ -690,13 +1034,7 @@ mod tests {
     #[test]
     fn refined_dag_weight3_preserves_equational_multiplier_condition() {
         let mut bank = test_bank();
-        let a = typed_const(&mut bank, "a");
-        let b = typed_const(&mut bank, "b");
-        let positive_eq = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
-        let negative_eq = Eqn::alloc(a, b, &mut bank, false).unwrap();
-        let pred = typed_pred_const(&mut bank, "p");
-        let pred_lit = Eqn::alloc(pred, bank.true_term().clone(), &mut bank, true).unwrap();
-        let clause = Clause::alloc(EqnList::from_vec(vec![positive_eq, pred_lit, negative_eq]));
+        let clause = mixed_equation_predicate_clause(&mut bank);
         let param = rdag_weight3_init(2, 1, 13, 17, 1, 3.0, 5.0, 7.0, 11.0);
 
         assert_close(rdag_weight3_compute(&param, &bank, &clause), 606.0);
@@ -704,5 +1042,61 @@ mod tests {
         assert_eq!(param.nvweight(), 17);
         assert_close(param.pneq_multiplier(), 7.0);
         assert_close(param.nneq_multiplier(), 11.0);
+    }
+
+    #[test]
+    fn dag_weight_parse_wraps_boolean_reset_modes() {
+        let mut bank = test_bank();
+        let clause = shared_positive_negative_clause(&mut bank);
+        let mut scanner = Scanner::from_user_string(
+            "(ConstPrio,2,1,3.0,1,true,false,false,true,false,false,false) tail",
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = dag_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 17.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn refined_dag_weight_parsers_wrap_existing_scoring_cores() {
+        let mut oriented_bank = test_bank();
+        let mut plain_bank = test_bank();
+        let mut mixed_bank = test_bank();
+        let oriented = oriented_positive_clause(&mut oriented_bank);
+        let plain_positive = positive_equation_clause(&mut plain_bank);
+        let mixed = mixed_equation_predicate_clause(&mut mixed_bank);
+        let mut oriented_scanner =
+            Scanner::from_user_string("(ConstPrio,10,3,1,5.0,2.0,7.0,4.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut plain_scanner = Scanner::from_user_string("(ConstPrio,10,3,1,4.0,2.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut mixed_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,13,17,1,3.0,5.0,7.0,11.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut rdag =
+            rdag_weight_parse(&mut oriented_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut rdag2 =
+            rdag_weight2_parse(&mut plain_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut rdag3 =
+            rdag_weight3_parse(&mut mixed_scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(rdag.compute_eval(&oriented_bank, &oriented), 880.0);
+        assert_close(rdag2.compute_eval(&plain_bank, &plain_positive), 200.0);
+        assert_close(rdag3.compute_eval(&mixed_bank, &mixed), 606.0);
+        assert_eq!(
+            rdag.compute_priority(&oriented_bank, &oriented),
+            PRIO_NORMAL
+        );
+        assert_eq!(
+            rdag2.compute_priority(&plain_bank, &plain_positive),
+            PRIO_NORMAL
+        );
+        assert_eq!(rdag3.compute_priority(&mixed_bank, &mixed), PRIO_NORMAL);
+        assert_eq!(oriented_scanner.current_token().literal(), "tail");
+        assert_eq!(plain_scanner.current_token().literal(), "tail");
+        assert_eq!(mixed_scanner.current_token().literal(), "tail");
     }
 }
