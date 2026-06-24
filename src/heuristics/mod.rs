@@ -8,3 +8,4 @@ pub mod orientweight;
 pub mod random;
 pub mod refinedweight;
 pub mod simweight;
+pub mod varweights;
