@@ -5,15 +5,19 @@ use crate::basics::pstacks::PStack;
 use crate::clauses::clausesets::ClauseSet;
 use crate::inout::scanner::Scanner;
 use crate::learn::annotations::Annotation;
-use crate::learn::annoterms::{anno_set_rec_to_flat_enc, AnnoSet};
+use crate::learn::annoterms::{
+    anno_set_compute_pattern_subst, anno_set_parse, anno_set_rec_to_flat_enc, AnnoSet,
+};
 use crate::learn::examplerep::{example_set_parse, example_set_select_by_dist, ExampleSet};
-use crate::learn::flatannoterms::{flat_anno_set_translate, FlatAnnoSet};
+use crate::learn::flatannoterms::{flat_anno_set_alloc, flat_anno_set_translate, FlatAnnoSet};
+use crate::learn::indexfunctions::IndexType;
 use crate::learn::kbdesc::{kb_file_name, KB_ANNOTATION_NO};
 use crate::learn::numfeatures::{
     compute_clause_set_num_features, Features, SEL_FEATURE_WEIGHTS, SEL_FUNC_WEIGHT,
     SEL_PRED_WEIGHT,
 };
-use crate::learn::tsm::{Tsm, TsmAdmin, TsmId, TsmType};
+use crate::learn::patterns::PatternSubst;
+use crate::learn::tsm::{tsm_admin_alloc, tsm_admin_build_tsm, Tsm, TsmAdmin, TsmId, TsmType};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use std::path::Path;
@@ -159,6 +163,75 @@ pub fn example_set_from_kb(
     ))
 }
 
+/// Create a TSM admin from a knowledge-base directory.
+///
+/// # Errors
+///
+/// Returns scanner, parser, term-bank allocation, recursive-to-flat recoding,
+/// or TSM construction diagnostics from the KB-loading and TSM-building steps.
+///
+/// # Panics
+///
+/// Panics under the same in-memory preparation and TSM-construction invariants
+/// as [`example_set_prepare`] and [`tsm_admin_build_tsm`].
+#[allow(clippy::too_many_arguments)]
+pub fn tsm_from_kb(
+    flat_patterns: bool,
+    eval_weights: &[f64],
+    kb: &str,
+    sig: &mut Signature,
+    target: &ClauseSet,
+    sel_no: i64,
+    set_part: f64,
+    dist_part: f64,
+    index_type: IndexType,
+    tsm_type: TsmType,
+    index_depth: i32,
+) -> Result<TsmAdmin, Diagnostic> {
+    let mut filename = DynamicString::new();
+    let mut bank = TermBank::new(sig.clone())?;
+
+    let clausepatterns_name = kb_file_name(&mut filename, kb, "clausepatterns");
+    let mut clausepatterns_scanner = Scanner::from_file(Path::new(&clausepatterns_name), true)?;
+    let mut annoset = anno_set_parse(&mut clausepatterns_scanner, &mut bank, KB_ANNOTATION_NO)?;
+
+    let signature_name = kb_file_name(&mut filename, kb, "signature");
+    let mut signature_scanner = Scanner::from_file(Path::new(&signature_name), true)?;
+    bank.signature_mut()
+        .parse_declarations(&mut signature_scanner, true)?;
+    *sig = bank.signature().clone();
+
+    let problems_name = kb_file_name(&mut filename, kb, "problems");
+    let mut problems_scanner = Scanner::from_file(Path::new(&problems_name), true)?;
+    let mut proof_examples = ExampleSet::new();
+    example_set_parse(&mut problems_scanner, &mut proof_examples)?;
+
+    let mut flatset = flat_anno_set_alloc();
+    if flat_patterns {
+        anno_set_rec_to_flat_enc(&mut bank, &mut annoset)?;
+    }
+    let eval_default = example_set_prepare(
+        &mut flatset,
+        &mut annoset,
+        eval_weights,
+        &mut proof_examples,
+        sig,
+        target,
+        sel_no,
+        set_part,
+        dist_part,
+    );
+
+    let mut subst = PatternSubst::default_subst(bank.signature());
+    anno_set_compute_pattern_subst(&mut subst, &annoset);
+    let mut admin = tsm_admin_alloc(sig.clone(), tsm_type)?;
+    tsm_admin_build_tsm(&mut admin, &flatset, index_type, index_depth, subst)?;
+    admin.set_unmapped_eval(eval_default);
+    admin.set_unmapped_weight(tsm_get_highest_weight(&admin));
+
+    Ok(admin)
+}
+
 /// Return C's post-build TSM "highest" weight value.
 ///
 /// This mirrors the C helper exactly, including its very large initial values
@@ -258,8 +331,8 @@ fn i64_to_f64(value: i64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        example_set_from_kb, example_set_prepare, get_default_eval, tsm_get_highest_weight,
-        LARGE_TSM_WEIGHT,
+        example_set_from_kb, example_set_prepare, get_default_eval, tsm_from_kb,
+        tsm_get_highest_weight, LARGE_TSM_WEIGHT,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::inout::scanner::Scanner;
@@ -485,6 +558,57 @@ mod tests {
         assert_ne!(signature.find_f_code("left_sym"), 0);
         assert_eq!(flat.nodes(), 2);
         assert!(annos.get(30).is_none());
+
+        remove_dir_if_present(&kb_dir);
+    }
+
+    #[test]
+    fn tsm_from_kb_loads_clausepatterns_and_builds_admin() {
+        let kb_dir = temp_kb_dir("tsm-from-kb");
+        remove_dir_if_present(&kb_dir);
+        std::fs::create_dir_all(&kb_dir).expect("create temporary KB directory");
+        std::fs::write(
+            kb_dir.join("clausepatterns"),
+            "left_sym : 1:(1,0,1,2,0,0,0). \
+             right_sym : 2:(1,0,3,4,0,0,0). \
+             stale_sym : 99:(1,0,10,20,0,0,0).",
+        )
+        .expect("write clausepatterns file");
+        std::fs::write(
+            kb_dir.join("signature"),
+            "left_sym:0 right_sym:0 stale_sym:0",
+        )
+        .expect("write signature file");
+        let features = zero_feature_source();
+        std::fs::write(
+            kb_dir.join("problems"),
+            format!("1: \"left\" {features} 2: \"right\" {features}"),
+        )
+        .expect("write problems file");
+        let mut signature = Signature::new(TypeBank::new());
+        let target = ClauseSet::new();
+        let kb_name = kb_dir.to_string_lossy();
+
+        let admin = tsm_from_kb(
+            false,
+            &[0.0, 2.0, 5.0, 0.0, 0.0, 0.0],
+            &kb_name,
+            &mut signature,
+            &target,
+            2,
+            1.0,
+            1.0,
+            IndexType::ARITY,
+            TsmType::Flat,
+            0,
+        )
+        .expect("TSM from KB");
+
+        assert_eq!(admin.tsm_type(), TsmType::Flat);
+        assert!(admin.root_tsm().is_some());
+        assert_close(admin.unmapped_eval(), 7.0);
+        assert_close(admin.unmapped_weight(), LARGE_TSM_WEIGHT);
+        assert_ne!(signature.find_f_code("left_sym"), 0);
 
         remove_dir_if_present(&kb_dir);
     }

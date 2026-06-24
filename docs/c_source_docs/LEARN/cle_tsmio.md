@@ -102,7 +102,8 @@ Source files reviewed: `LEARN/cle_tsmio.h`, `LEARN/cle_tsmio.c`.
 - `ExampleSetPrepare` declares its local `res` as `long` even though `get_default_eval` and the exported function return `double`; any fractional default evaluation is truncated before return.
 - `ExampleSetFromKB` opens `signature` and `problems` with comment skipping enabled, mutates the supplied signature from the signature file, optionally recodes the supplied annotation set from recursive to flat clause encoding, and then delegates all selection/flattening/normalization work to `ExampleSetPrepare`.
 - `rec_get_highest_weight` and `level_get_highest_weight` initialize their result to `1000000000000.0` and then take `MAX` with all actual `eval_weight` values. As written, they return the large sentinel rather than the true highest training weight. Preserve this for `TSMFromKB` parity, but revisit the unmapped-weight policy behind learned-map reference tests.
-- `TSMFromKB` still combines clause-pattern parsing, pattern-substitution computation, TSM construction, unmapped default/weight installation, and verbose output; keep its ownership and parser boundaries explicit when wiring the final constructor.
+- `TSMFromKB` parses `clausepatterns` before loading the KB `signature` file because the temporary C term bank shares the caller's raw `Sig_p`. A Rust port with owned term-bank signatures needs an explicit signature synchronization step or a future shared-signature owner.
+- `TSMFromKB` emits `VERBOUT("TSM created\n")` after successful construction; keep this diagnostic behavior in mind when wiring the final executable learning path.
 
 ### Porting Focus
 
