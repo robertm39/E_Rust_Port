@@ -119,7 +119,8 @@ Source files reviewed: `HEURISTICS/che_wfcbadmin.h`, `HEURISTICS/che_wfcbadmin.c
 
 ### Compatibility Notes
 
-- `WeightFunParse` dispatches by a compile-time table of names and parser function pointers; Rust keeps the table order and now wires `TSMWeight`/`TSMRWeight` as axiom-backed parsers rather than staging them behind a not-ported diagnostic.
+- `WeightFunParse` dispatches by parallel compile-time tables of names and parser function pointers. Rust keeps the table order and dispatches every current parser entry, with proof-state-dependent parsers receiving an explicit axiom-backed context until full proof-state ownership is ported.
+- `WeightFunDefParse` duplicates explicit definition names before `WFCBAdminAddWFCB`, which duplicates them again, and it passes stack-local anonymous names only because `WFCBAdminAddWFCB` immediately duplicates the string. Rust stores owned `String` names directly; revisit only if strategy parsing allocation cost becomes visible.
 - C parser failures are fatal diagnostics from the current scanner position. Rust returns `Diagnostic` values but keeps the token-consumption boundary explicit so strategy parsing can later choose whether to abort like C.
 
 ### Porting Focus

@@ -267,59 +267,6 @@ pub fn get_weight_fun_parse_fun_index(name: &str) -> Option<usize> {
         .position(|candidate| *candidate == name)
 }
 
-#[must_use]
-pub fn weight_fun_parser_is_ported(name: &str) -> bool {
-    matches!(
-        name,
-        "Clauseweight"
-            | "ClauseLMaxWeight"
-            | "ClauseCMaxWeight"
-            | "Uniqweight"
-            | "Defaultweight"
-            | "DAGweight"
-            | "RDAGweight"
-            | "RDAGweight2"
-            | "RDAGweight3"
-            | "Refinedweight"
-            | "Refinedweight2"
-            | "Diversityweight"
-            | "PNRefinedweight"
-            | "TPTPTypeweight"
-            | "Sigweight"
-            | "NLweight"
-            | "SymbolTypeweight"
-            | "Depthweight"
-            | "WLessDWeight"
-            | "Proofweight"
-            | "Orientweight"
-            | "OrientLMaxWeight"
-            | "Simweight"
-            | "ClauseWeightAge"
-            | "TSMWeight"
-            | "TSMRWeight"
-            | "StaggeredWeight"
-            | "GDWeight"
-            | "ConjectureSymbolWeight"
-            | "ConjectureGeneralSymbolWeight"
-            | "ConjectureRelativeSymbolWeight"
-            | "ConjectureRelativeTypeSymbolWeight"
-            | "ConjectureTypeBasedWeight"
-            | "RelevanceLevelWeight"
-            | "RelevanceLevelWeight2"
-            | "ConjectureLevDistanceWeight"
-            | "ConjectureTreeDistanceWeight"
-            | "ConjectureStrucDistanceWeight"
-            | "ConjectureRelativeTermWeight"
-            | "ConjectureTermPrefixWeight"
-            | "ConjectureTermTfIdfWeight"
-            | "FunWeight"
-            | "SymOffsetWeight"
-            | "RandomWeight"
-            | "FIFOWeight"
-            | "LIFOWeight"
-    )
-}
-
 pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> {
     let context = WeightParseContext::empty();
     weight_fun_parse_with_context(scanner, context)
@@ -339,12 +286,6 @@ pub fn weight_fun_parse_with_context(
         return Err(weight_fun_error(
             scanner,
             &format!("Not a valid weight function specifier: {name}"),
-        ));
-    }
-    if !weight_fun_parser_is_ported(&name) {
-        return Err(weight_fun_error(
-            scanner,
-            &format!("Weight function parser is not ported yet: {name}"),
         ));
     }
 
@@ -486,8 +427,7 @@ fn weight_fun_error(scanner: &Scanner, message: &str) -> Diagnostic {
 mod tests {
     use super::{
         get_weight_fun_parse_fun_index, weight_fun_parse, weight_fun_parse_with_context,
-        weight_fun_parser_is_ported, wfcb_admin_alloc, WeightParseContext, WfcbAdmin,
-        WEIGHT_FUN_PARSE_FUN_NAMES,
+        wfcb_admin_alloc, WeightParseContext, WfcbAdmin, WEIGHT_FUN_PARSE_FUN_NAMES,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -602,56 +542,9 @@ mod tests {
         );
         assert_eq!(get_weight_fun_parse_fun_index("GDWeight"), Some(45));
         assert_eq!(get_weight_fun_parse_fun_index("NoSuchWeight"), None);
-        assert!(weight_fun_parser_is_ported("FIFOWeight"));
-        assert!(weight_fun_parser_is_ported("LIFOWeight"));
-        assert!(weight_fun_parser_is_ported("RandomWeight"));
-        assert!(weight_fun_parser_is_ported("Clauseweight"));
-        assert!(weight_fun_parser_is_ported("ClauseLMaxWeight"));
-        assert!(weight_fun_parser_is_ported("ClauseCMaxWeight"));
-        assert!(weight_fun_parser_is_ported("Uniqweight"));
-        assert!(weight_fun_parser_is_ported("Defaultweight"));
-        assert!(weight_fun_parser_is_ported("DAGweight"));
-        assert!(weight_fun_parser_is_ported("RDAGweight"));
-        assert!(weight_fun_parser_is_ported("RDAGweight2"));
-        assert!(weight_fun_parser_is_ported("RDAGweight3"));
-        assert!(weight_fun_parser_is_ported("Refinedweight"));
-        assert!(weight_fun_parser_is_ported("Refinedweight2"));
-        assert!(weight_fun_parser_is_ported("Diversityweight"));
-        assert!(weight_fun_parser_is_ported("PNRefinedweight"));
-        assert!(weight_fun_parser_is_ported("TPTPTypeweight"));
-        assert!(weight_fun_parser_is_ported("Sigweight"));
-        assert!(weight_fun_parser_is_ported("NLweight"));
-        assert!(weight_fun_parser_is_ported("SymbolTypeweight"));
-        assert!(weight_fun_parser_is_ported("Depthweight"));
-        assert!(weight_fun_parser_is_ported("WLessDWeight"));
-        assert!(weight_fun_parser_is_ported("Proofweight"));
-        assert!(weight_fun_parser_is_ported("Orientweight"));
-        assert!(weight_fun_parser_is_ported("OrientLMaxWeight"));
-        assert!(weight_fun_parser_is_ported("Simweight"));
-        assert!(weight_fun_parser_is_ported("ClauseWeightAge"));
-        assert!(weight_fun_parser_is_ported("StaggeredWeight"));
-        assert!(weight_fun_parser_is_ported("GDWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureSymbolWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureGeneralSymbolWeight"));
-        assert!(weight_fun_parser_is_ported(
-            "ConjectureRelativeSymbolWeight"
-        ));
-        assert!(weight_fun_parser_is_ported(
-            "ConjectureRelativeTypeSymbolWeight"
-        ));
-        assert!(weight_fun_parser_is_ported("ConjectureTypeBasedWeight"));
-        assert!(weight_fun_parser_is_ported("RelevanceLevelWeight"));
-        assert!(weight_fun_parser_is_ported("RelevanceLevelWeight2"));
-        assert!(weight_fun_parser_is_ported("ConjectureLevDistanceWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureTreeDistanceWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureStrucDistanceWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureRelativeTermWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureTermPrefixWeight"));
-        assert!(weight_fun_parser_is_ported("ConjectureTermTfIdfWeight"));
-        assert!(weight_fun_parser_is_ported("FunWeight"));
-        assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
-        assert!(weight_fun_parser_is_ported("TSMWeight"));
-        assert!(weight_fun_parser_is_ported("TSMRWeight"));
+        for (index, name) in WEIGHT_FUN_PARSE_FUN_NAMES.iter().enumerate() {
+            assert_eq!(get_weight_fun_parse_fun_index(name), Some(index));
+        }
     }
 
     #[test]
@@ -909,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn weight_fun_parse_rejects_unknown_or_unported_names() {
+    fn weight_fun_parse_rejects_unknown_or_contextless_names() {
         let mut unknown = Scanner::from_user_string("NoSuchWeight(ConstPrio)", false)
             .unwrap_or_else(|err| {
                 panic!("{err}");
