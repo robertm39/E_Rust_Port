@@ -9,3 +9,4 @@ pub mod numfeatures;
 pub mod patterns;
 pub mod termtops;
 pub mod tsm;
+pub mod tsmio;

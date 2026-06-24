@@ -95,6 +95,14 @@ Source files reviewed: `LEARN/cle_tsmio.h`, `LEARN/cle_tsmio.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `get_default_eval` sets the temporary annotation length to `KB_ANNOTATION_NO` (`7`) and loops over slots `3..=7`, but `AnnotationEval` evaluates only slots `1..6` for length `7`. Slot `7` is accumulated and normalized but ignored in the returned default evaluation.
+- `get_default_eval` stores `AnnotationCount` in a C `long`, so fractional counts are truncated before they are used as weights and before the total count divisor is updated.
+- `ExampleSetPrepare` declares its local `res` as `long` even though `get_default_eval` and the exported function return `double`; any fractional default evaluation is truncated before return.
+- `rec_get_highest_weight` and `level_get_highest_weight` initialize their result to `1000000000000.0` and then take `MAX` with all actual `eval_weight` values. As written, they return the large sentinel rather than the true highest training weight. Preserve this for `TSMFromKB` parity, but revisit the unmapped-weight policy behind learned-map reference tests.
+- The file-based constructors combine KB filename conventions, signature parsing, problem-example parsing, annotation parsing, optional recursive-to-flat recoding, pattern-substitution computation, TSM construction, and verbose output. Port the in-memory path first and keep the file path pending until these parser and ownership boundaries are integrated.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
