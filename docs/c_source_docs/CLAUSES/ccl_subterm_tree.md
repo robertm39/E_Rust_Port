@@ -125,6 +125,10 @@ Source files reviewed: `CLAUSES/ccl_subterm_tree.h`, `CLAUSES/ccl_subterm_tree.c
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### C Behaviors To Revisit After Compatibility
+
+- `SubtermTreePrint` includes raw node/data/child pointers around the term text, and `SubtermTreePrintDot` can switch between real tree-shaped DOT output and a flattened record label at compile time. Rust now has explicit term-bank-backed term debug rendering, but exact pointer and DOT output should wait until these debug printers are compatibility-visible.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -1,6 +1,7 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clausecpos::CompactPos;
 use crate::clauses::clausepos_tree::{clause_key, ClauseTPosTree};
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, Term};
 use std::cmp::Ordering;
 use std::collections::{btree_map::Entry, BTreeMap};
@@ -199,6 +200,22 @@ impl SubtermTree {
         let _ = self.write_debug(&mut output);
         output
     }
+
+    pub fn write_term_debug(&self, output: &mut impl Write, bank: &TermBank) -> fmt::Result {
+        for entry in self.entries.values() {
+            write!(output, "Key: {} = ", entry.term.entry_no())?;
+            bank.write_term(output, &entry.term, true)?;
+            writeln!(output)?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn term_debug_string(&self, bank: &TermBank) -> String {
+        let mut output = String::new();
+        let _ = self.write_term_debug(&mut output, bank);
+        output
+    }
 }
 
 #[must_use]
@@ -344,5 +361,16 @@ mod tests {
         assert_eq!(cmp_subterm_cells(&left_occ, &left_occ), 0);
         assert_ne!(cmp_subterm_cells(&left_occ, &right_occ), 0);
         assert_eq!(tree.debug_string(), "Key: 5 f_code=40\n");
+    }
+
+    #[test]
+    fn term_debug_output_uses_explicit_term_bank_rendering() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "subterm_print_a");
+        left.set_entry_no(7);
+        let mut tree = SubtermTree::new();
+        tree.insert_term(&left);
+
+        assert_eq!(tree.term_debug_string(&bank), "Key: 7 = subterm_print_a\n");
     }
 }
