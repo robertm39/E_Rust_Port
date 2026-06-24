@@ -228,6 +228,7 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 - `EqnListPrintDeref` uses the same no-leading-separator loop and forwards one `DerefType` to every literal. Rust preserves the separator behavior while keeping dereference expansion explicit in the literal helper.
 - `EqnListTSTPPrint` reuses the same first-literal/no-leading-separator loop but always delegates to `EqnTSTPPrint` without a negation argument. Rust keeps the separator behavior and forwards explicit `fullterms` and oriented-output choices to the bank-explicit TSTP literal writer.
 - `EqnListParse` first checks for a format-specific literal start and returns an empty list without consuming input if none is present; otherwise it parses the first literal and then consumes the caller-supplied separator before each following literal. Rust preserves that control flow over the currently ported equation/simple-term parser.
+- `EqnListMaximalLiterals` temporarily extracts and relinks literals while using a stack archive to restore the original list order. Rust preserves the maximal and strictly-maximal flag results through an index-based active-candidate list; later stable literal-handle ownership should keep this temporary relinking unobservable.
 
 ### Porting Focus
 

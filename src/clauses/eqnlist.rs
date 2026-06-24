@@ -1,11 +1,15 @@
 use crate::basics::error::Diagnostic;
+use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn::{
     eqn_parse, eqn_write, eqn_write_deref, eqn_write_tstp, Eqn, EqnPrintOptions,
 };
-use crate::clauses::eqn_props::{EqnProperties, EP_IS_POSITIVE};
+use crate::clauses::eqn_props::{
+    EqnProperties, EP_IS_MAXIMAL, EP_IS_POSITIVE, EP_IS_STRICTLY_MAXIMAL,
+};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::func_symb_start_token;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -163,6 +167,70 @@ impl EqnList {
         for literal in &mut self.literals {
             literal.map_terms(bank, &mut mapper);
         }
+    }
+
+    /// Orient every literal in the list and return the number of swaps.
+    pub fn orient(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> usize {
+        let mut swaps = 0;
+        for literal in &mut self.literals {
+            if literal.orient(ocb, bank) {
+                swaps += 1;
+            }
+        }
+        swaps
+    }
+
+    /// Mark maximal and strictly maximal literals under the selected ordering.
+    ///
+    /// This preserves C `EqnListMaximalLiterals` while keeping the Rust list
+    /// order stable instead of destructively relinking candidates.
+    pub fn mark_maximal_literals(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> usize {
+        self.set_prop(EP_IS_STRICTLY_MAXIMAL);
+        self.del_prop(EP_IS_MAXIMAL);
+
+        let mut candidates: Vec<usize> = (0..self.len()).collect();
+        let mut maximal = Vec::new();
+
+        while !candidates.is_empty() {
+            let candidate = candidates.remove(0);
+            let mut candidate_survives = true;
+            let mut step = 0;
+
+            while step < candidates.len() {
+                let current = candidates[step];
+                match self.literals[candidate].literal_compare(ocb, bank, &self.literals[current]) {
+                    CompareResult::Greater => {
+                        self.literals[current].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        candidates.remove(step);
+                    }
+                    CompareResult::Lesser => {
+                        self.literals[candidate].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        candidate_survives = false;
+                        break;
+                    }
+                    CompareResult::Equal => {
+                        self.literals[current].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        self.literals[candidate].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        step += 1;
+                    }
+                    CompareResult::Unknown
+                    | CompareResult::Uncomparable
+                    | CompareResult::NotGreaterEqual
+                    | CompareResult::NotLessEqual => {
+                        step += 1;
+                    }
+                }
+            }
+
+            if candidate_survives {
+                maximal.push(candidate);
+            }
+        }
+
+        for index in &maximal {
+            self.literals[*index].set_prop(EP_IS_MAXIMAL);
+        }
+        maximal.len()
     }
 
     #[must_use]
@@ -725,14 +793,18 @@ fn eqn_syntax_key(literal: &Eqn, bank: &TermBank) -> (u8, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::{EqnList, EQN_LIST_LONG_LIMIT};
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{
-        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
+        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_IS_SELECTED, EP_IS_STRICTLY_MAXIMAL,
+        EP_MAX_IS_UP_TO_DATE,
     };
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -806,6 +878,15 @@ mod tests {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
 
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     #[test]
     fn parse_reads_separated_equation_list_and_empty_start() {
         let mut bank = test_bank();
@@ -856,6 +937,50 @@ mod tests {
         assert_eq!(list.query_prop_number(EP_IS_SELECTED), 0);
         assert_eq!(list.flip_prop(EP_IS_MAXIMAL), 2);
         assert!(list.as_slice().iter().all(Eqn::is_maximal));
+    }
+
+    #[test]
+    fn orient_orients_all_literals_and_counts_swaps() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut list = EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &f_a, true),
+            eqn(&mut bank, &f_a, &a, true),
+        ]);
+        let mut ocb = kbo_ocb(&bank);
+
+        assert_eq!(list.orient(&mut ocb, &bank), 1);
+
+        assert_eq!(list.as_slice()[0].left(), &f_a);
+        assert_eq!(list.as_slice()[0].right(), &a);
+        assert!(list.as_slice().iter().all(Eqn::is_oriented));
+        assert!(list
+            .as_slice()
+            .iter()
+            .all(|literal| literal.query_prop(EP_MAX_IS_UP_TO_DATE)));
+    }
+
+    #[test]
+    fn mark_maximal_literals_preserves_c_candidate_semantics() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let dominant = eqn(&mut bank, &f_a, &a, true);
+        let equal_dominant = eqn(&mut bank, &f_a, &a, true);
+        let dominated = eqn(&mut bank, &a, &a, true);
+        let mut list = EqnList::from_vec(vec![dominant, equal_dominant, dominated]);
+        let mut ocb = kbo_ocb(&bank);
+
+        assert_eq!(list.mark_maximal_literals(&mut ocb, &bank), 2);
+
+        assert!(list.as_slice()[0].is_maximal());
+        assert!(list.as_slice()[1].is_maximal());
+        assert!(!list.as_slice()[2].is_maximal());
+        assert!(!list.as_slice()[0].is_strictly_maximal());
+        assert!(!list.as_slice()[1].is_strictly_maximal());
+        assert!(!list.as_slice()[2].query_prop(EP_IS_STRICTLY_MAXIMAL));
+        assert_eq!(list.query_prop_number(EP_IS_MAXIMAL), 2);
     }
 
     #[test]
