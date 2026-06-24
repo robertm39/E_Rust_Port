@@ -1,5 +1,6 @@
 pub mod annotations;
 pub mod annoterms;
+pub mod clauseenc;
 pub mod examplerep;
 pub mod flatannoterms;
 pub mod indexfunctions;
