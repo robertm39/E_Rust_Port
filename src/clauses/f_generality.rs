@@ -4,6 +4,9 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use std::cmp::Ordering;
+use std::fmt;
+
+const DEFAULT_COMCHAR_RAW: &str = "%";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FunGen {
@@ -141,6 +144,43 @@ impl GenDistrib {
         self.add_clause_set_stack(stack, start, -1);
     }
 
+    pub fn write_debug(
+        &self,
+        output: &mut impl fmt::Write,
+        signature: &Signature,
+        limit: i64,
+    ) -> fmt::Result {
+        let (term_freq_total, fc_freq_total) = self.debug_totals(signature);
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} GenDist {:p} {term_freq_total} {fc_freq_total}",
+            std::ptr::from_ref(self)
+        )?;
+
+        let start = debug_external_start(signature);
+        let end = debug_row_end(signature, self.size(), limit);
+        for f_code in start..end {
+            let entry = self.dist_array[f_code_index(f_code)];
+            let name = signature.find_name(f_code).unwrap_or("<unknown>");
+            writeln!(
+                output,
+                "{DEFAULT_COMCHAR_RAW} {name:<30} ({f_code:8} = {entry_f_code:8}): {term_freq:8}  {fc_freq:8}",
+                entry_f_code = entry.f_code(),
+                term_freq = entry.term_freq(),
+                fc_freq = entry.fc_freq()
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn debug_string(&self, signature: &Signature, limit: i64) -> String {
+        let mut output = String::new();
+        let _ = self.write_debug(&mut output, signature, limit);
+        output
+    }
+
     fn compute_d_rel(
         &self,
         gentype: GeneralityMeasure,
@@ -197,6 +237,17 @@ impl GenDistrib {
         for f_code in symbol_stack.into_iter().rev() {
             self.f_distrib[f_code_index(f_code)] = 0;
         }
+    }
+
+    fn debug_totals(&self, signature: &Signature) -> (i64, i64) {
+        let mut term_freq_total = 0;
+        let mut fc_freq_total = 0;
+        for f_code in debug_external_start(signature)..usize_to_i64(self.size()) {
+            let entry = self.dist_array[f_code_index(f_code)];
+            term_freq_total += entry.term_freq();
+            fc_freq_total += entry.fc_freq();
+        }
+        (term_freq_total, fc_freq_total)
     }
 }
 
@@ -280,6 +331,21 @@ fn init_dist_array(size: usize) -> Vec<FunGen> {
     (0..size)
         .map(|index| FunGen::new(usize_to_i64(index)))
         .collect()
+}
+
+fn debug_external_start(signature: &Signature) -> FunCode {
+    signature
+        .internal_symbols()
+        .checked_add(1)
+        .unwrap_or_else(|| panic!("internal-symbol boundary must fit f-code range"))
+}
+
+fn debug_row_end(signature: &Signature, dist_size: usize, limit: i64) -> FunCode {
+    let limited_end = signature
+        .internal_symbols()
+        .checked_add(limit)
+        .unwrap_or_else(|| panic!("GenDistrib print limit must fit f-code range"));
+    limited_end.min(usize_to_i64(dist_size))
 }
 
 fn f_code_index(f_code: FunCode) -> usize {
@@ -490,5 +556,56 @@ mod tests {
         );
 
         assert!(res.is_empty());
+    }
+
+    #[test]
+    fn gen_distrib_debug_string_matches_c_totals_rows_and_limit_boundary() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "print_a");
+        let b = typed_const(&mut bank, "print_b");
+        let f_of_a = typed_unary(&mut bank, "print_f", &a);
+        let clause = clause_from(vec![literal(&mut bank, &f_of_a, &b, true)]);
+        let mut dist = GenDistrib::new(bank.signature());
+        dist.add_clause(&clause, 1);
+
+        let rendered = dist.debug_string(bank.signature(), 4);
+        let mut lines = rendered.lines();
+        let header = lines.next().unwrap();
+
+        assert!(header.starts_with("% GenDist 0x"));
+        assert!(header.ends_with(" 3 3"));
+        assert_eq!(
+            lines.collect::<Vec<_>>(),
+            vec![
+                format!(
+                    "% {:<30} ({:8} = {:8}): {:8}  {:8}",
+                    "print_a",
+                    a.f_code(),
+                    a.f_code(),
+                    1,
+                    1
+                ),
+                format!(
+                    "% {:<30} ({:8} = {:8}): {:8}  {:8}",
+                    "print_b",
+                    b.f_code(),
+                    b.f_code(),
+                    1,
+                    1
+                ),
+                format!(
+                    "% {:<30} ({:8} = {:8}): {:8}  {:8}",
+                    "print_f",
+                    f_of_a.f_code(),
+                    f_of_a.f_code(),
+                    1,
+                    1
+                ),
+            ]
+        );
+
+        let first_only = dist.debug_string(bank.signature(), 2);
+        assert!(first_only.contains("print_a"));
+        assert!(!first_only.contains("print_b"));
     }
 }
