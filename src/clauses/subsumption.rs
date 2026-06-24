@@ -1,4 +1,7 @@
 use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
+use crate::clauses::clausefunc::clause_remove_literal_index;
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
@@ -98,6 +101,107 @@ pub fn unit_clause_subsumes_clause(unit: &Clause, clause: &Clause) -> bool {
         "unit subsumption requires one literal"
     );
     literal_subsumes_clause(&unit.literals().as_slice()[0], clause)
+}
+
+#[must_use]
+/// Returns a unit clause from `set` that subsumes one literal of `clause`.
+///
+/// This plain-set path mirrors `UnitClauseSetSubsumesClause` without using the
+/// C demodulator index.
+pub fn unit_clause_set_subsumes_clause<'set>(
+    set: &'set ClauseSet,
+    clause: &Clause,
+) -> Option<&'set Clause> {
+    clause.literals().as_slice().iter().find_map(|literal| {
+        if literal.is_positive() {
+            find_positive_unit_simplifier(set, literal.left(), literal.right())
+        } else {
+            find_negative_top_unit_simplifier(set, literal.left(), literal.right())
+        }
+    })
+}
+
+/// Returns the first clause at or after `start_index` subsumed by a unit clause.
+///
+/// # Panics
+///
+/// Panics if `subsumer` is not unit, matching `ClauseSetFindUnitSubsumedClause`.
+#[must_use]
+pub fn clause_set_find_unit_subsumed_clause<'set>(
+    set: &'set ClauseSet,
+    start_index: usize,
+    subsumer: &Clause,
+) -> Option<&'set Clause> {
+    assert_eq!(
+        subsumer.literal_number(),
+        1,
+        "unit subsumption requires one literal"
+    );
+    set.iter()
+        .skip(start_index)
+        .find(|candidate| unit_clause_subsumes_clause(subsumer, candidate))
+}
+
+/// Removes negative literals simplified by positive unit clauses in `set`.
+///
+/// This plain-set path preserves the C mutation semantics but uses linear
+/// search until demodulator indexes are available.
+#[must_use]
+pub fn clause_positive_simplify_reflect(set: &ClauseSet, clause: &mut Clause) -> bool {
+    let mut index = 0;
+    while index < clause.literal_number() {
+        let simplifier_sos = {
+            let literal = &clause.literals().as_slice()[index];
+            if literal.is_positive() {
+                None
+            } else {
+                find_positive_unit_simplifier(set, literal.left(), literal.right())
+                    .map(Clause::is_sos)
+            }
+        };
+
+        if let Some(simplifier_sos) = simplifier_sos {
+            let _ = clause_remove_literal_index(clause, index);
+            if simplifier_sos {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+        } else {
+            index += 1;
+        }
+    }
+    clause.is_empty()
+}
+
+/// Removes positive literals simplified by negative unit clauses in `set`.
+///
+/// This plain-set path preserves the C mutation semantics but uses linear
+/// search until demodulator indexes are available.
+#[must_use]
+pub fn clause_negative_simplify_reflect(set: &ClauseSet, clause: &mut Clause) -> bool {
+    let mut index = 0;
+    while index < clause.literal_number() {
+        let simplifier_sos = {
+            let literal = &clause.literals().as_slice()[index];
+            if literal.is_negative() {
+                None
+            } else {
+                find_negative_top_unit_simplifier(set, literal.left(), literal.right())
+                    .map(Clause::is_sos)
+            }
+        };
+
+        if let Some(simplifier_sos) = simplifier_sos {
+            let _ = clause_remove_literal_index(clause, index);
+            if simplifier_sos {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+        } else {
+            index += 1;
+        }
+    }
+    clause.is_empty()
 }
 
 pub fn clause_subsume_order_sort_lits(clause: &mut Clause, bank: &TermBank) {
@@ -236,14 +340,54 @@ fn literal_matches_with_subst(pattern: &Eqn, candidate: &Eqn, subst: &mut Substi
     pattern.subsume(candidate, subst)
 }
 
+fn find_positive_unit_simplifier<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Option<&'set Clause> {
+    set.iter().find(|candidate| {
+        candidate
+            .literals()
+            .as_slice()
+            .first()
+            .is_some_and(|literal| {
+                candidate.is_unit()
+                    && literal.is_positive()
+                    && eqn_subsumes_termpair(literal, left, right)
+            })
+    })
+}
+
+fn find_negative_top_unit_simplifier<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Option<&'set Clause> {
+    set.iter().find(|candidate| {
+        candidate
+            .literals()
+            .as_slice()
+            .first()
+            .is_some_and(|literal| {
+                candidate.is_unit()
+                    && literal.is_negative()
+                    && eqn_topsubsumes_termpair(literal, left, right)
+            })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_is_subsume_ordered, clause_subsume_order_sort_lits, clause_subsumes_clause,
-        eqn_subsumes_termpair, eqn_topsubsumes_termpair, literal_subsumes_clause,
+        clause_is_subsume_ordered, clause_negative_simplify_reflect,
+        clause_positive_simplify_reflect, clause_set_find_unit_subsumed_clause,
+        clause_subsume_order_sort_lits, clause_subsumes_clause, eqn_subsumes_termpair,
+        eqn_topsubsumes_termpair, literal_subsumes_clause, unit_clause_set_subsumes_clause,
         unit_clause_subsumes_clause,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -376,5 +520,136 @@ mod tests {
 
         assert!(unit_clause_subsumes_clause(&unit, &candidate));
         assert!(clause_subsumes_clause(&unit, &candidate, &bank));
+    }
+
+    #[test]
+    fn unit_clause_set_subsumes_clause_returns_first_matching_unit() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let other = typed_const(&mut bank, "b");
+        let left = typed_unary(&mut bank, "f", &other);
+        let right = typed_unary(&mut bank, "f", &constant);
+        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &constant, true)]);
+        let positive_id = positive_unit.ident();
+        let negative_unit = clause_from(vec![literal(&mut bank, &variable, &constant, false)]);
+        let negative_id = negative_unit.ident();
+        let set = ClauseSet::from_clauses([positive_unit, negative_unit]);
+        let positive_candidate = clause_from(vec![literal(&mut bank, &left, &right, true)]);
+        let negative_candidate = clause_from(vec![literal(&mut bank, &other, &constant, false)]);
+
+        assert_eq!(
+            unit_clause_set_subsumes_clause(&set, &positive_candidate).map(Clause::ident),
+            Some(positive_id)
+        );
+        assert_eq!(
+            unit_clause_set_subsumes_clause(&set, &negative_candidate).map(Clause::ident),
+            Some(negative_id)
+        );
+    }
+
+    #[test]
+    fn clause_set_find_unit_subsumed_clause_honors_start_index() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let first_witness = typed_const(&mut bank, "b");
+        let second_witness = typed_const(&mut bank, "c");
+        let mut unit = clause_from(vec![literal(&mut bank, &variable, &constant, true)]);
+        let mut first = clause_from(vec![literal(&mut bank, &first_witness, &constant, true)]);
+        let mut second = clause_from(vec![literal(&mut bank, &second_witness, &constant, true)]);
+        prepare(&mut unit, &bank);
+        prepare(&mut first, &bank);
+        prepare(&mut second, &bank);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let set = ClauseSet::from_clauses([first, second]);
+
+        assert_eq!(
+            clause_set_find_unit_subsumed_clause(&set, 0, &unit).map(Clause::ident),
+            Some(first_id)
+        );
+        assert_eq!(
+            clause_set_find_unit_subsumed_clause(&set, 1, &unit).map(Clause::ident),
+            Some(second_id)
+        );
+        assert!(clause_set_find_unit_subsumed_clause(&set, 2, &unit).is_none());
+    }
+
+    #[test]
+    fn positive_simplify_reflect_removes_negative_literals_and_propagates_sos() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let other = typed_const(&mut bank, "b");
+        let unrelated = typed_const(&mut bank, "c");
+        let left = typed_unary(&mut bank, "f", &other);
+        let right = typed_unary(&mut bank, "f", &constant);
+        let mut positive_unit = clause_from(vec![literal(&mut bank, &variable, &constant, true)]);
+        positive_unit.set_prop(CP_IS_SOS);
+        let set = ClauseSet::from_clauses([positive_unit]);
+        let mut target = clause_from(vec![
+            literal(&mut bank, &left, &right, false),
+            literal(&mut bank, &unrelated, &constant, true),
+        ]);
+        target.set_weight(target.standard_weight());
+        let original_weight = target.weight();
+        let removed_weight = target.literals().as_slice()[1].standard_weight();
+        target.set_prop(CP_INITIAL | CP_LIMITED_RW);
+
+        assert!(!clause_positive_simplify_reflect(&set, &mut target));
+
+        assert_eq!(target.positive_literal_count(), 1);
+        assert_eq!(target.negative_literal_count(), 0);
+        assert_eq!(target.weight(), original_weight - removed_weight);
+        assert!(target.query_prop(CP_IS_SOS));
+        assert!(!target.query_prop(CP_INITIAL));
+        assert!(!target.query_prop(CP_LIMITED_RW));
+    }
+
+    #[test]
+    fn negative_simplify_reflect_uses_top_level_negative_units_only() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let other = typed_const(&mut bank, "b");
+        let left = typed_unary(&mut bank, "f", &other);
+        let right = typed_unary(&mut bank, "f", &constant);
+        let negative_unit = clause_from(vec![literal(&mut bank, &variable, &constant, false)]);
+        let set = ClauseSet::from_clauses([negative_unit]);
+        let mut target = clause_from(vec![
+            literal(&mut bank, &left, &right, true),
+            literal(&mut bank, &other, &constant, true),
+        ]);
+        target.set_weight(target.standard_weight());
+        let top_literal_weight = target.literals().as_slice()[1].standard_weight();
+        let original_weight = target.weight();
+        target.set_prop(CP_INITIAL | CP_LIMITED_RW);
+
+        assert!(!clause_negative_simplify_reflect(&set, &mut target));
+
+        assert_eq!(target.positive_literal_count(), 1);
+        assert_eq!(target.negative_literal_count(), 0);
+        assert_eq!(target.weight(), original_weight - top_literal_weight);
+        assert_eq!(target.literals().as_slice()[0].left(), &left);
+        assert!(!target.query_prop(CP_INITIAL));
+        assert!(!target.query_prop(CP_LIMITED_RW));
+    }
+
+    #[test]
+    fn simplify_reflect_reports_empty_clause_after_last_literal_removed() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let witness = typed_const(&mut bank, "b");
+        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &constant, true)]);
+        let set = ClauseSet::from_clauses([positive_unit]);
+        let mut target = clause_from(vec![literal(&mut bank, &witness, &constant, false)]);
+        target.set_weight(target.standard_weight());
+
+        assert!(clause_positive_simplify_reflect(&set, &mut target));
+
+        assert!(target.is_empty());
+        assert_eq!(target.weight(), 0);
     }
 }
