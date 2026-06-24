@@ -161,6 +161,9 @@ Source files reviewed: `LEARN/cle_patterns.h`, `LEARN/cle_patterns.c`.
 - `pat_symbol_compare` checks whether `f2` is bound in `subst1` in the second one-bound branch. This appears suspicious but is observable ordering behavior and should be preserved until reference tests justify a cleanup.
 - Normalized function ids are allocated in ascending per-arity order via `used_idents`, while normalized variable ids decrement from `NORM_VAR_INIT`; alternate variable f-codes pass through unchanged and are not stored in `var_subst`.
 - `PatternLitListCompare` compares raw stack pointer lengths before pairwise comparison, so the C result is based on the alternating pointer/int stack size rather than a typed literal-count abstraction.
+- `PatternSubstGetOriginalSymbol` checks `VarFCodeIsAltCode(f)` before scanning `var_subst`, so normalized variable ids that look like alternate variables are returned unchanged. For other normalized variables, the scan uses `fun_subst->size` as the bound while reading `var_subst`, and returns the positive array index rather than the original negative variable f-code.
+- `PatternTranslateSig` temporarily installs bindings on source-term variables, calls `TermCopy(..., DEREF_ONCE)`, then clears every traversed source variable binding to `NULL`. This can clobber pre-existing bindings if the caller violates the "uninstantiated term" assumption.
+- `PatternTranslateSig` inserts translated function symbols into the destination signature with `SigInsertId(..., false)` but does not declare corresponding types, even though copied terms still carry type pointers.
 
 ### Porting Focus
 

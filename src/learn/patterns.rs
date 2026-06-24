@@ -1,14 +1,16 @@
 use std::cmp::Ordering;
+use std::fmt;
 
 use crate::basics::partial_orderings::CompareResult;
 use crate::basics::pdarrays::PDIntArray;
+use crate::clauses::clause::Clause;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::PatEqnDirection;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, DEFAULT_SIGNATURE_SIZE};
-use crate::terms::termfunc::term_standard_weight;
-use crate::terms::termtypes::Term;
-use crate::terms::termvars::{f_code_is_alt_code, DEFAULT_VARBANK_SIZE};
+use crate::terms::termfunc::{term_copy, term_standard_weight};
+use crate::terms::termtypes::{DerefType, Term};
+use crate::terms::termvars::{f_code_is_alt_code, VarBank, DEFAULT_VARBANK_SIZE};
 
 pub const DEFAULT_LITERAL_NO: usize = 8;
 pub const PATTERN_SEARCH_BRANCHLIMIT: usize = 3;
@@ -159,6 +161,29 @@ impl PatternSubst {
         changed
     }
 
+    #[must_use]
+    pub fn original_symbol(&mut self, f_code: FunCode) -> FunCode {
+        if f_code > 0 {
+            for index in 0..self.fun_subst.size() {
+                if self.fun_subst.element_int(index_to_pd(index)) == f_code {
+                    return usize_to_f_code(index);
+                }
+            }
+            return 0;
+        }
+
+        if f_code_is_alt_code(f_code) {
+            return f_code;
+        }
+
+        for index in 0..self.fun_subst.size() {
+            if self.var_subst.element_int(index_to_pd(index)) == f_code {
+                return usize_to_f_code(index);
+            }
+        }
+        0
+    }
+
     fn comparison_value(&mut self, f_code: FunCode) -> FunCode {
         assert_ne!(f_code, 0, "pattern symbols must be non-zero");
         if f_code > 0 {
@@ -203,6 +228,19 @@ pub const fn pattern_id_get_ident(ident: FunCode) -> FunCode {
 #[must_use]
 pub const fn pat_id_is_norm_id(symbol: FunCode) -> bool {
     symbol >= NORM_SYMBOL_LIMIT
+}
+
+/// # Panics
+///
+/// Panics if `f_code` is not a normalized pattern id.
+#[must_use]
+pub fn pattern_print_rep(f_code: FunCode) -> String {
+    assert!(pat_id_is_norm_id(f_code));
+    format!(
+        "f{}_{}",
+        pattern_id_get_arity(f_code),
+        pattern_id_get_ident(f_code)
+    )
 }
 
 /// # Panics
@@ -255,6 +293,128 @@ pub fn pattern_term_compare(
         }
     }
     CompareResult::Equal
+}
+
+/// # Panics
+///
+/// Panics if a term contains f-code zero, if a non-constant term has a missing
+/// argument, or if a normalized non-variable id is malformed.
+#[must_use]
+pub fn pattern_term_print_string(subst: &mut PatternSubst, term: &Term, sig: &Signature) -> String {
+    let mut output = String::new();
+    let _ = pattern_term_write(&mut output, subst, term, sig);
+    output
+}
+
+/// # Panics
+///
+/// Panics under the same conditions as `pattern_term_print_string`; additionally
+/// panics if the literal shape and equational property bit disagree.
+#[must_use]
+pub fn pattern_eqn_print_string(
+    subst: &mut PatternSubst,
+    eqn: &Eqn,
+    direction: PatEqnDirection,
+    bank: &crate::terms::termbanks::TermBank,
+) -> String {
+    let mut output = String::new();
+    let _ = pattern_eqn_write(&mut output, subst, eqn, direction, bank);
+    output
+}
+
+/// # Panics
+///
+/// Panics under the same conditions as `pattern_eqn_print_string`.
+#[must_use]
+pub fn pattern_clause_print_string(
+    subst: &mut PatternSubst,
+    listrep: &[(&Eqn, PatEqnDirection)],
+    bank: &crate::terms::termbanks::TermBank,
+) -> String {
+    let mut output = String::new();
+    let mut prefix = "";
+    for (eqn, direction) in listrep {
+        output.push_str(prefix);
+        let _ = pattern_eqn_write(&mut output, subst, eqn, *direction, bank);
+        prefix = ";";
+    }
+    output.push_str(" <- .");
+    output
+}
+
+#[must_use]
+pub fn debug_pattern_clause_to_list(clause: &Clause) -> Vec<(&Eqn, PatEqnDirection)> {
+    clause
+        .literals()
+        .as_slice()
+        .iter()
+        .map(|eqn| (eqn, PatEqnDirection::Normal))
+        .collect()
+}
+
+/// # Panics
+///
+/// Panics if traversed variables have no type, if variable-bank invariants are
+/// violated, if source argument slots are missing, or if normalized ids are
+/// malformed.
+#[must_use]
+pub fn pattern_translate_sig(
+    term: &Term,
+    subst: &mut PatternSubst,
+    old_sig: &Signature,
+    new_sig: &mut Signature,
+    new_vars: &VarBank,
+) -> Term {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_free_var() {
+            let f_code = subst.symbol_value(current.f_code());
+            if f_code != 0 {
+                let type_ = current
+                    .type_()
+                    .expect("translated variables must have types");
+                current.set_binding(Some(
+                    new_vars.var_assert_alloc(f_code - NORM_VAR_INIT, &type_),
+                ));
+            }
+        } else {
+            push_arguments(&current, &mut stack);
+        }
+    }
+
+    let copy = term_copy(term, new_vars, None, DerefType::Once);
+
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_free_var() {
+            current.set_binding(None);
+        } else {
+            push_arguments(&current, &mut stack);
+        }
+    }
+
+    let mut stack = vec![copy.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_free_var() {
+            continue;
+        }
+
+        let f_code = subst.symbol_value(current.f_code());
+        let new_name = if pat_id_is_norm_id(f_code) {
+            pattern_print_rep(f_code)
+        } else {
+            old_sig
+                .find_name(current.f_code())
+                .expect("translated function symbol must have a source name")
+                .to_string()
+        };
+        let arity = i32::try_from(current.arity()).unwrap_or(i32::MAX);
+        let new_code = new_sig.insert_id(&new_name, arity, false);
+        assert_ne!(new_code, 0, "signature insertion must return a valid code");
+        current.set_f_code(new_code);
+        push_arguments(&current, &mut stack);
+    }
+    copy
 }
 
 pub fn pattern_term_pair_compute(
@@ -412,6 +572,68 @@ fn pat_eqn_terms(eqn: &Eqn, direction: PatEqnDirection) -> (&Term, &Term) {
     }
 }
 
+fn pattern_term_write(
+    output: &mut impl fmt::Write,
+    subst: &mut PatternSubst,
+    term: &Term,
+    sig: &Signature,
+) -> fmt::Result {
+    let id = subst.symbol_value(term.f_code());
+    if term.is_free_var() {
+        if id == 0 {
+            write!(output, "X{}", -term.f_code())
+        } else {
+            write!(output, "Xn{}", -(id - NORM_VAR_INIT))
+        }
+    } else {
+        if pat_id_is_norm_id(id) {
+            output.write_str(&pattern_print_rep(id))?;
+        } else {
+            output.write_str(sig.find_name(term.f_code()).unwrap_or("<unknown>"))?;
+        }
+        if term.arity() != 0 {
+            output.write_char('(')?;
+            pattern_term_write(output, subst, &required_argument(term, 0), sig)?;
+            for index in 1..term.arity() {
+                output.write_char(',')?;
+                pattern_term_write(output, subst, &required_argument(term, index), sig)?;
+            }
+            output.write_char(')')?;
+        }
+        Ok(())
+    }
+}
+
+fn pattern_eqn_write(
+    output: &mut impl fmt::Write,
+    subst: &mut PatternSubst,
+    eqn: &Eqn,
+    direction: PatEqnDirection,
+    bank: &crate::terms::termbanks::TermBank,
+) -> fmt::Result {
+    if eqn.is_equ_lit(bank) {
+        let (left, right) = pat_eqn_terms(eqn, direction);
+        pattern_term_write(output, subst, left, bank.signature())?;
+        if eqn.is_positive() {
+            output.write_char('=')?;
+        } else {
+            output.write_str("!=")?;
+        }
+        pattern_term_write(output, subst, right, bank.signature())
+    } else {
+        if eqn.is_negative() {
+            output.write_char('~')?;
+        }
+        pattern_term_write(output, subst, eqn.left(), bank.signature())
+    }
+}
+
+fn push_arguments(term: &Term, stack: &mut Vec<Term>) {
+    for index in 0..term.arity() {
+        stack.push(required_argument(term, index));
+    }
+}
+
 fn required_argument(term: &Term, index: usize) -> Term {
     match term.argument(index) {
         Some(arg) => arg,
@@ -431,18 +653,32 @@ fn pd_index(value: i64) -> isize {
     isize::try_from(value).unwrap_or(isize::MAX)
 }
 
+fn index_to_pd(index: usize) -> isize {
+    isize::try_from(index).unwrap_or(isize::MAX)
+}
+
+fn usize_to_f_code(index: usize) -> FunCode {
+    FunCode::try_from(index).unwrap_or(FunCode::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        pat_id_is_norm_id, pattern_id_get_arity, pattern_id_get_ident, pattern_lit_list_compare,
-        pattern_lit_list_compute, pattern_norm_code, pattern_term_compare, pattern_term_compute,
-        pattern_term_pair_compare, pattern_term_pair_compute, PatternSubst, DEFAULT_LITERAL_NO,
-        NORM_ARITY_LIMIT, NORM_SYMBOL_LIMIT, NORM_VAR_INIT, PATTERN_SEARCH_BRANCHLIMIT,
+        debug_pattern_clause_to_list, pat_id_is_norm_id, pattern_clause_print_string,
+        pattern_eqn_print_string, pattern_id_get_arity, pattern_id_get_ident,
+        pattern_lit_list_compare, pattern_lit_list_compute, pattern_norm_code, pattern_print_rep,
+        pattern_term_compare, pattern_term_compute, pattern_term_pair_compare,
+        pattern_term_pair_compute, pattern_term_print_string, pattern_translate_sig, PatternSubst,
+        DEFAULT_LITERAL_NO, NORM_ARITY_LIMIT, NORM_SYMBOL_LIMIT, NORM_VAR_INIT,
+        PATTERN_SEARCH_BRANCHLIMIT,
     };
     use crate::basics::partial_orderings::CompareResult;
+    use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::PatEqnDirection;
+    use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{Term, TP_IS_SHARED};
     use crate::terms::typebanks::TypeBank;
@@ -459,6 +695,7 @@ mod tests {
         assert!(pat_id_is_norm_id(ident));
         assert_eq!(pattern_id_get_arity(ident), 3);
         assert_eq!(pattern_id_get_ident(ident), 7);
+        assert_eq!(pattern_print_rep(ident), "f3_7");
     }
 
     #[test]
@@ -500,6 +737,31 @@ mod tests {
     }
 
     #[test]
+    fn original_symbol_lookup_preserves_c_scan_and_variable_index_quirk() {
+        let mut sig = Signature::new(TypeBank::new());
+        let f = sig.insert_id("f", 2, false);
+        let mut subst = PatternSubst::new(&sig);
+
+        assert!(subst.extend(f, 2));
+        let f_rep = subst.fun_binding(f);
+        assert_eq!(subst.original_symbol(f_rep), f);
+        assert_eq!(subst.original_symbol(pattern_norm_code(99, 2)), 0);
+
+        assert!(subst.extend(-2, 0));
+        assert!(subst.extend(-4, 0));
+        let odd_var_rep = subst.var_binding(-2);
+        let even_var_rep = subst.var_binding(-4);
+        assert_eq!(subst.original_symbol(odd_var_rep), odd_var_rep);
+        assert_eq!(subst.original_symbol(even_var_rep), 4);
+        assert_eq!(subst.original_symbol(-1), -1);
+
+        let mut copy = subst.clone();
+        assert!(subst.backtrack_to(0));
+        assert_eq!(copy.fun_binding(f), f_rep);
+        assert_eq!(copy.original_symbol(even_var_rep), 4);
+    }
+
+    #[test]
     fn term_compute_binds_function_symbols_and_normal_variables() {
         let mut sig = Signature::new(TypeBank::new());
         let f = sig.insert_id("f", 2, false);
@@ -536,6 +798,26 @@ mod tests {
         assert_eq!(
             pattern_term_compare(&mut left_subst, &left, &mut right_subst, &larger),
             CompareResult::Greater
+        );
+    }
+
+    #[test]
+    fn term_printing_uses_pattern_specific_variable_and_norm_names() {
+        let mut sig = Signature::new(TypeBank::new());
+        let f = sig.insert_id("f", 2, false);
+        let a = sig.insert_id("a", 0, false);
+        let term = fun(f, &[constant(a), variable(-2)]);
+        let mut subst = PatternSubst::new(&sig);
+
+        assert_eq!(
+            pattern_term_print_string(&mut subst, &term, &sig),
+            "f(a,X2)"
+        );
+
+        assert!(pattern_term_compute(&mut subst, &term));
+        assert_eq!(
+            pattern_term_print_string(&mut subst, &term, &sig),
+            "f2_1(f0_1,Xn1)"
         );
     }
 
@@ -601,6 +883,77 @@ mod tests {
         );
     }
 
+    #[test]
+    fn equation_clause_printing_and_debug_list_match_c_surface() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let eqn = Eqn::alloc(a, b, &mut bank, true).unwrap();
+        let mut subst = PatternSubst::new(bank.signature());
+
+        assert!(pattern_term_pair_compute(
+            &mut subst,
+            &eqn,
+            PatEqnDirection::Normal
+        ));
+
+        assert_eq!(
+            pattern_eqn_print_string(&mut subst, &eqn, PatEqnDirection::Normal, &bank),
+            "f0_1=f0_2"
+        );
+        assert_eq!(
+            pattern_eqn_print_string(&mut subst, &eqn, PatEqnDirection::Reverse, &bank),
+            "f0_2=f0_1"
+        );
+        assert_eq!(
+            pattern_clause_print_string(&mut subst, &[(&eqn, PatEqnDirection::Normal)], &bank),
+            "f0_1=f0_2 <- ."
+        );
+
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn]));
+        let debug = debug_pattern_clause_to_list(&clause);
+        assert_eq!(debug.len(), 1);
+        assert_eq!(debug[0].1, PatEqnDirection::Normal);
+    }
+
+    #[test]
+    fn translate_sig_maps_norm_symbols_and_clobbers_source_variable_bindings_like_c() {
+        let mut old_sig = Signature::new(TypeBank::new());
+        let type_ = old_sig.type_bank().i_type();
+        let f = old_sig.insert_id("f", 2, false);
+        old_sig
+            .declare_final_type(
+                f,
+                alloc_arrow_type(vec![type_.clone(), type_.clone(), type_.clone()]),
+            )
+            .unwrap();
+        let a_code = old_sig.insert_id("a", 0, false);
+        old_sig.declare_final_type(a_code, type_.clone()).unwrap();
+
+        let old_vars = crate::terms::termvars::VarBank::new(old_sig.type_bank());
+        let var = old_vars.var_assert_alloc(-2, &type_);
+        let a = typed_const_cell(a_code, &type_);
+        let term = typed_fun_cell(f, &[a, var.clone()], &type_);
+        let mut subst = PatternSubst::new(&old_sig);
+        assert!(pattern_term_compute(&mut subst, &term));
+
+        let stale_binding = typed_const_cell(a_code, &type_);
+        var.set_binding(Some(stale_binding));
+        let mut new_sig = Signature::new(TypeBank::new());
+        let new_vars = crate::terms::termvars::VarBank::new(new_sig.type_bank());
+
+        let translated =
+            pattern_translate_sig(&term, &mut subst, &old_sig, &mut new_sig, &new_vars);
+
+        assert!(var.binding().is_none());
+        assert_eq!(new_sig.find_name(translated.f_code()), Some("f2_1"));
+        let translated_const = translated.argument(0).unwrap();
+        assert_eq!(new_sig.find_name(translated_const.f_code()), Some("f0_1"));
+        let translated_var = translated.argument(1).unwrap();
+        assert_eq!(translated_var.f_code(), -1);
+        assert_eq!(new_vars.f_code_find(-1), Some(translated_var));
+    }
+
     fn test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation")
     }
@@ -612,6 +965,21 @@ mod tests {
             .declare_type(f_code, type_)
             .expect("constant type declaration");
         bank.create_const_term(f_code).expect("constant insertion")
+    }
+
+    fn typed_const_cell(f_code: i64, type_: &Type) -> Term {
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_.clone()));
+        term
+    }
+
+    fn typed_fun_cell(f_code: i64, args: &[Term], type_: &Type) -> Term {
+        let term = Term::top_alloc(f_code, args.len());
+        term.set_type(Some(type_.clone()));
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index, arg.clone());
+        }
+        term
     }
 
     fn constant(f_code: i64) -> Term {
