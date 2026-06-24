@@ -10,6 +10,32 @@ use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+static CLAUSE_CLAUSE_SUBSUMPTION_CALLS: AtomicI64 = AtomicI64::new(0);
+static CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC: AtomicI64 = AtomicI64::new(0);
+static CLAUSE_CLAUSE_SUBSUMPTION_SUCCESSES: AtomicI64 = AtomicI64::new(0);
+static UNIT_CLAUSE_CLAUSE_SUBSUMPTION_CALLS: AtomicI64 = AtomicI64::new(0);
+
+#[must_use]
+pub fn clause_clause_subsumption_calls() -> i64 {
+    CLAUSE_CLAUSE_SUBSUMPTION_CALLS.load(Ordering::SeqCst)
+}
+
+#[must_use]
+pub fn clause_clause_subsumption_calls_rec() -> i64 {
+    CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC.load(Ordering::SeqCst)
+}
+
+#[must_use]
+pub fn clause_clause_subsumption_successes() -> i64 {
+    CLAUSE_CLAUSE_SUBSUMPTION_SUCCESSES.load(Ordering::SeqCst)
+}
+
+#[must_use]
+pub fn unit_clause_clause_subsumption_calls() -> i64 {
+    UNIT_CLAUSE_CLAUSE_SUBSUMPTION_CALLS.load(Ordering::SeqCst)
+}
 
 #[must_use]
 pub fn eqn_topsubsumes_termpair(eqn: &Eqn, left: &Term, right: &Term) -> bool {
@@ -103,6 +129,7 @@ pub fn unit_clause_subsumes_clause(unit: &Clause, clause: &Clause) -> bool {
         1,
         "unit subsumption requires one literal"
     );
+    UNIT_CLAUSE_CLAUSE_SUBSUMPTION_CALLS.fetch_add(1, Ordering::SeqCst);
     literal_subsumes_clause(&unit.literals().as_slice()[0], clause)
 }
 
@@ -272,6 +299,7 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
     if subsumer.is_unit() {
         return unit_clause_subsumes_clause(subsumer, sub_candidate);
     }
+    CLAUSE_CLAUSE_SUBSUMPTION_CALLS.fetch_add(1, Ordering::SeqCst);
     if subsumer.positive_literal_count() > sub_candidate.positive_literal_count()
         || subsumer.negative_literal_count() > sub_candidate.negative_literal_count()
         || subsumer.weight() > sub_candidate.weight()
@@ -286,6 +314,7 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
 
     let mut subst = Substitution::new();
     let mut picked = vec![false; sub_candidate.literal_number()];
+    CLAUSE_CLAUSE_SUBSUMPTION_CALLS_REC.fetch_add(1, Ordering::SeqCst);
     let result = eqn_list_rec_subsume(
         subsumer.literals().as_slice(),
         sub_candidate.literals().as_slice(),
@@ -294,6 +323,9 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
         bank,
     );
     subst.backtrack();
+    if result {
+        CLAUSE_CLAUSE_SUBSUMPTION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+    }
     result
 }
 
@@ -884,18 +916,20 @@ fn find_negative_top_unit_simplifier<'set>(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_is_subsume_ordered, clause_negative_simplify_reflect,
-        clause_positive_simplify_reflect, clause_positive_simplify_reflect_with_strong,
-        clause_set_find_first_subsumed_clause, clause_set_find_first_subsumed_clause_with_index,
-        clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
-        clause_set_find_subsumed_clauses_with_index, clause_set_find_unit_subsumed_clause,
-        clause_set_find_variant_clause_indexed, clause_set_subsumes_clause,
-        clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
-        clause_subsumes_clause, eqn_subsumes_termpair, eqn_topsubsumes_termpair,
-        fv_index_find_first_subsumed_clause, fv_index_find_subsumed_clauses,
-        fv_index_find_variant_clause, fv_index_subsumes_packed_clause, literal_subsumes_clause,
-        unit_clause_set_subsumes_clause, unit_clause_set_subsumes_clause_with_strong,
-        unit_clause_subsumes_clause,
+        clause_clause_subsumption_calls, clause_clause_subsumption_calls_rec,
+        clause_clause_subsumption_successes, clause_is_subsume_ordered,
+        clause_negative_simplify_reflect, clause_positive_simplify_reflect,
+        clause_positive_simplify_reflect_with_strong, clause_set_find_first_subsumed_clause,
+        clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clause,
+        clause_set_find_subsumed_clauses, clause_set_find_subsumed_clauses_with_index,
+        clause_set_find_unit_subsumed_clause, clause_set_find_variant_clause_indexed,
+        clause_set_subsumes_clause, clause_set_subsumes_clause_with_index,
+        clause_subsume_order_sort_lits, clause_subsumes_clause, eqn_subsumes_termpair,
+        eqn_topsubsumes_termpair, fv_index_find_first_subsumed_clause,
+        fv_index_find_subsumed_clauses, fv_index_find_variant_clause,
+        fv_index_subsumes_packed_clause, literal_subsumes_clause,
+        unit_clause_clause_subsumption_calls, unit_clause_set_subsumes_clause,
+        unit_clause_set_subsumes_clause_with_strong, unit_clause_subsumes_clause,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1047,8 +1081,14 @@ mod tests {
         prepare(&mut not_matching, &bank);
 
         assert!(clause_is_subsume_ordered(&subsumer, &bank));
+        let calls_before = clause_clause_subsumption_calls();
+        let rec_before = clause_clause_subsumption_calls_rec();
+        let successes_before = clause_clause_subsumption_successes();
         assert!(clause_subsumes_clause(&subsumer, &matching, &bank));
         assert!(!clause_subsumes_clause(&subsumer, &not_matching, &bank));
+        assert!(clause_clause_subsumption_calls() >= calls_before + 2);
+        assert!(clause_clause_subsumption_calls_rec() >= rec_before + 2);
+        assert!(clause_clause_subsumption_successes() > successes_before);
     }
 
     #[test]
@@ -1062,8 +1102,10 @@ mod tests {
         prepare(&mut unit, &bank);
         prepare(&mut candidate, &bank);
 
+        let unit_calls_before = unit_clause_clause_subsumption_calls();
         assert!(unit_clause_subsumes_clause(&unit, &candidate));
         assert!(clause_subsumes_clause(&unit, &candidate, &bank));
+        assert!(unit_clause_clause_subsumption_calls() >= unit_calls_before + 2);
     }
 
     #[test]
