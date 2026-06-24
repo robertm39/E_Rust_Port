@@ -129,7 +129,8 @@ Source files reviewed: `ORDERINGS/cto_kbolin.h`, `ORDERINGS/cto_kbolin.c`.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - This unit is the active `KBO6` path used by the ordering dispatcher, distinct from the classic first-order `cto_kbo` implementation. Do not treat a classic KBO port as covering default KBO6 behavior.
-- `KBO6Compare` mutates balance fields in the OCB (`wb`, `pos_bal`, `neg_bal`, `max_var`, `vb`, and LFHO variable-map state) and resets them after comparison. Rust should preserve the comparison-local mutation/reset boundary before considering a more functional API.
+- `KBO6Compare` mutates balance fields in the OCB (`wb`, `pos_bal`, `neg_bal`, `max_var`, `vb`, and LFHO variable-map state) and resets them at comparison entry. It does not reliably clear them at return, and the debug-only `kbo6cmp` assertion can leave a second trace in those fields.
+- First-order `kbolincmp` can return the initialized `to_equal` for distinct non-variable heads with equal weight when `OCBFunCompare` is neither greater nor lesser. The slower `kbo6cmp` check has an explicit distinct-head `to_uncomparable` branch, so matrix/equivalence precedence variants need reference tests before cleanup.
 - The source mixes first-order, lambda, and LFHO comparison branches behind compile-time conditions. A cleaned Rust API should make the problem-type/HO-order dispatch explicit after the compatibility behavior is covered.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
