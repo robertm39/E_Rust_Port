@@ -9,6 +9,8 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_depth;
 use crate::terms::termtypes::Term;
 
+const DEFAULT_COMCHAR_RAW: &str = "%";
+
 #[must_use]
 pub fn clause_count_ext_symbols(clause: &Clause, signature: &Signature, min_arity: i64) -> i64 {
     varweight_clause_count_ext_symbols(clause, signature, min_arity)
@@ -183,6 +185,56 @@ pub fn clause_info_string(bank: &TermBank, clause: &Clause) -> String {
     )
 }
 
+#[must_use]
+pub fn clause_prop_info_stats_string(clause: &Clause) -> String {
+    clause_prop_info_stats_string_with_comment(DEFAULT_COMCHAR_RAW, clause)
+}
+
+#[must_use]
+pub fn clause_prop_info_stats_string_with_comment(comment: &str, clause: &Clause) -> String {
+    let standard_weight = clause.standard_weight();
+    let symbol_count =
+        c_long_from_clause_weight(clause.sym_type_weight(1.0, 1.0, 1.0, 1, 1, 1, 1, 1.0));
+    let function_symbols =
+        c_long_from_clause_weight(clause.sym_type_weight(1.0, 1.0, 1.0, 0, 1, 0, 0, 1.0));
+    let variables =
+        c_long_from_clause_weight(clause.sym_type_weight(1.0, 1.0, 1.0, 1, 0, 0, 0, 1.0));
+    let constants =
+        c_long_from_clause_weight(clause.sym_type_weight(1.0, 1.0, 1.0, 0, 0, 1, 0, 1.0));
+    let predicate_symbols =
+        c_long_from_clause_weight(clause.sym_type_weight(1.0, 1.0, 1.0, 0, 0, 0, 1, 1.0));
+    let depth = clause.depth();
+    let literals = clause.literal_number();
+    let positive = clause.positive_literal_count();
+    let negative = clause.negative_literal_count();
+
+    format!(
+        concat!(
+            "\n{comment} Standardweight: {standard_weight:6}\n",
+            "{comment} Symbol count  : {symbol_count:6}\n",
+            "{comment}    F. symbols : {function_symbols:6}\n",
+            "{comment}    Variables  : {variables:6}\n",
+            "{comment}    Constants  : {constants:6}\n",
+            "{comment}    P. symbols : {predicate_symbols:6}\n",
+            "{comment} Depth         : {depth:6}\n",
+            "{comment} Literals      : {literals:6}\n",
+            "{comment}    ...positive: {positive:6}\n",
+            "{comment}    ...negative: {negative:6}\n",
+        ),
+        comment = comment,
+        standard_weight = standard_weight,
+        symbol_count = symbol_count,
+        function_symbols = function_symbols,
+        variables = variables,
+        constants = constants,
+        predicate_symbols = predicate_symbols,
+        depth = depth,
+        literals = literals,
+        positive = positive,
+        negative = negative,
+    )
+}
+
 fn eqn_tptp_depth_info_add(
     bank: &TermBank,
     eqn: &Eqn,
@@ -255,7 +307,8 @@ mod tests {
     use super::{
         clause_add_var_distribution, clause_count_ext_symbols, clause_count_maximal_literals,
         clause_count_maximal_terms, clause_count_singleton_set, clause_count_unorientable_literals,
-        clause_count_variable_set, clause_info_string, clause_tptp_depth_info_add,
+        clause_count_variable_set, clause_info_string, clause_prop_info_stats_string,
+        clause_prop_info_stats_string_with_comment, clause_tptp_depth_info_add,
         eqn_add_var_distribution, eqn_list_add_var_distribution, term_add_var_distribution,
     };
     use crate::basics::pdarrays::PDIntArray;
@@ -480,6 +533,46 @@ mod tests {
         assert_eq!(
             clause_info_string(&bank, &clause),
             "info(7, 0, 0, 3, 1, 1, 1, 0)"
+        );
+    }
+
+    #[test]
+    fn clause_prop_info_stats_string_matches_c_stat_block_format() {
+        let mut bank = term_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "prop_a");
+        let fx = typed_unary(&mut bank, "prop_f", &x);
+        let clause = clause_from(vec![equation(&mut bank, &fx, &a, true)]);
+
+        assert_eq!(
+            clause_prop_info_stats_string(&clause),
+            concat!(
+                "\n% Standardweight:      5\n",
+                "% Symbol count  :      3\n",
+                "%    F. symbols :      1\n",
+                "%    Variables  :      1\n",
+                "%    Constants  :      1\n",
+                "%    P. symbols :      0\n",
+                "% Depth         :      2\n",
+                "% Literals      :      1\n",
+                "%    ...positive:      1\n",
+                "%    ...negative:      0\n",
+            )
+        );
+        assert_eq!(
+            clause_prop_info_stats_string_with_comment("#", &clause),
+            concat!(
+                "\n# Standardweight:      5\n",
+                "# Symbol count  :      3\n",
+                "#    F. symbols :      1\n",
+                "#    Variables  :      1\n",
+                "#    Constants  :      1\n",
+                "#    P. symbols :      0\n",
+                "# Depth         :      2\n",
+                "# Literals      :      1\n",
+                "#    ...positive:      1\n",
+                "#    ...negative:      0\n",
+            )
         );
     }
 

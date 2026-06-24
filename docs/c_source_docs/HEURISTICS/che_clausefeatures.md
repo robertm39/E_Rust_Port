@@ -120,4 +120,5 @@ Source files reviewed: `HEURISTICS/che_clausefeatures.h`, `HEURISTICS/che_clause
 ### C Behaviors To Revisit After Compatibility
 
 - `ClauseInfoPrint` labels field `d6` as variable occurrences, but computes it through `ClauseWeight(..., max_term_multiplier=0, vweight=1, fweight=1, ...)`, so the value includes the corrected equality-predicate contribution and follows orientation/maximality weight semantics rather than a direct variable-occurrence count.
+- `ClausePropInfoPrint` emits its statistics through fixed `%6ld`/`%6d` fields and the compile-time `COMCHAR` prefix. The Rust stats-block helper keeps the spacing and accepts an explicit comment prefix; wire the final wrapper to the eventual output-format configuration before exposing it as full `ClausePropInfoPrint`.
 <!-- END MANUAL REVIEW: c_source_docs -->
