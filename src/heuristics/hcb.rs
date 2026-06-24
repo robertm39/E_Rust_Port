@@ -1,4 +1,4 @@
-use crate::heuristics::to_params::OrderParmsCell;
+use crate::heuristics::to_params::{order_parms_print_string, OrderParmsCell};
 use crate::terms::termtypes::RewriteLevel;
 
 pub const NO_EXT_SUP: i32 = -1;
@@ -80,6 +80,19 @@ impl ParamodulationType {
     #[must_use]
     pub const fn c_value(self) -> i32 {
         self as i32
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Plain => "ParamodPlain",
+            Self::Sim => "ParamodSim",
+            Self::OrientedSim => "ParamodOrientedSim",
+            Self::SuperSim => "ParamodSuperSim",
+            Self::OrientedSuperSim => "ParamodOrientedSuperSim",
+            Self::DecreasingSim => "ParamodDecreasingSim",
+            Self::SizeDecreasingSim => "ParamodSizeDecreasingSim",
+        }
     }
 }
 
@@ -178,6 +191,21 @@ impl GroundingStrategy {
     #[must_use]
     pub const fn c_value(self) -> i32 {
         self as i32
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NoGrounding => "NoGrounding",
+            Self::PseudoVar => "PseudoVar",
+            Self::FirstConst => "FirstConst",
+            Self::ConjMinMinFreq => "ConjMinMinFreq",
+            Self::ConjMaxMinFreq => "ConjMaxMinFreq",
+            Self::ConjMinMaxFreq => "ConjMinMaxFreq",
+            Self::ConjMaxMaxFreq => "ConjMaxMaxFreq",
+            Self::GlobalMax => "GlobalMax",
+            Self::GlobalMin => "GlobalMin",
+        }
     }
 }
 
@@ -509,6 +537,214 @@ pub fn heuristic_parms_initialize(handle: &mut HeuristicParmsCell) {
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn heuristic_parms_print_string(handle: &HeuristicParmsCell) -> String {
+    format!(
+        concat!(
+            "{{\n",
+            "{}",
+            "   no_preproc:                     {}\n",
+            "   eqdef_maxclauses:               {}\n",
+            "   eqdef_incrlimit:                {}\n",
+            "   formula_def_limit:              {}\n",
+            "   miniscope_limit:                {}\n",
+            "   sine:                           \"{}\"\n",
+            "   add_goal_defs_pos:             {}\n",
+            "   add_goal_defs_neg:             {}\n",
+            "   add_goal_defs_subterms:        {}\n",
+            "   heuristic_name:                {}\n",
+            "   heuristic_def:                 \"{}\"\n",
+            "   prefer_initial_clauses:         {}\n",
+            "   selection_strategy:             {}\n",
+            "   pos_lit_sel_min:                {}\n",
+            "   pos_lit_sel_max:                {}\n",
+            "   neg_lit_sel_min:                {}\n",
+            "   neg_lit_sel_max:                {}\n",
+            "   all_lit_sel_min:                {}\n",
+            "   all_lit_sel_max:                {}\n",
+            "   weight_sel_min:                 {}\n",
+            "   select_on_proc_only:            {}\n",
+            "   inherit_paramod_lit:            {}\n",
+            "   inherit_goal_pm_lit:            {}\n",
+            "   inherit_conj_pm_lit:            {}\n",
+            "   enable_eq_factoring:            {}\n",
+            "   enable_neg_unit_paramod:        {}\n",
+            "   enable_given_forward_simpl:     {}\n",
+            "   pm_type:                        {}\n",
+            "   ac_handling:                    {}\n",
+            "   ac_res_aggressive:              {}\n",
+            "   forward_context_sr:             {}\n",
+            "   forward_context_sr_aggressive:  {}\n",
+            "   backward_context_sr:            {}\n",
+            "   forward_subsumption_aggressive: {}\n",
+            "   forward_demod:                  {}\n",
+            "   prefer_general:                 {}\n",
+            "   condensing:                     {}\n",
+            "   condensing_aggressive:          {}\n",
+            "   er_varlit_destructive:          {}\n",
+            "   er_strong_destructive:          {}\n",
+            "   er_aggressive:                  {}\n",
+            "   split_clauses:                  {}\n",
+            "   split_method:                   {}\n",
+            "   split_aggressive:               {}\n",
+            "   split_fresh_defs:               {}\n",
+            "   diseq_decomposition:            {}\n",
+            "   diseq_decomp_maxarity:          {}\n",
+            "   rw_bw_index_type:               {}\n",
+            "   pm_from_index_type:             {}\n",
+            "   pm_into_index_type:             {}\n",
+            "   sat_check_grounding:            {}\n",
+            "   sat_check_step_limit:           {}\n",
+            "   sat_check_size_limit:           {}\n",
+            "   sat_check_ttinsert_limit:       {}\n",
+            "   sat_check_normconst:            {}\n",
+            "   sat_check_normalize:            {}\n",
+            "   sat_check_decision_limit:       {}\n",
+            "   filter_orphans_limit:           {}\n",
+            "   forward_contract_limit:         {}\n",
+            "   delete_bad_limit:               {}\n",
+            "   mem_limit:                      {}\n",
+            "   watchlist_simplify:             {}\n",
+            "   watchlist_is_static:            {}\n",
+            "   use_tptp_sos:                   {}\n",
+            "   presat_interreduction:          {}\n",
+            "   detsort_bw_rw:                  {}\n",
+            "   detsort_tmpset:                 {}\n",
+            "   arg_cong:                       {}\n",
+            "   neg_ext:                        {}\n",
+            "   pos_ext:                        {}\n",
+            "   ext_rules_max_depth:            {}\n",
+            "   inverse_recognition:            {}\n",
+            "   replace_inj_defs:               {}\n",
+            "   lift_lambdas:                  {}\n",
+            "   lambda_to_forall:              {}\n",
+            "   unroll_only_formulas:          {}\n",
+            "   elim_leibniz_max_depth:        {}\n",
+            "   prim_enum_mode:                {}\n",
+            "   prim_enum_max_depth:           {}\n",
+            "   inst_choice_max_depth:         {}\n",
+            "   local_rw:                      {}\n",
+            "   prune_args:                    {}\n",
+            "   preinstantiate_induction:      {}\n",
+            "   fool_unroll:                   {}\n",
+            "   func_proj_limit:               {}\n",
+            "   imit_limit:                    {}\n",
+            "   ident_limit:                   {}\n",
+            "   elim_limit:                    {}\n",
+            "   unif_mode:                     {}\n",
+            "   pattern_oracle:                {}\n",
+            "   fixpoint_oracle:               {}\n",
+            "   max_unifiers:                  {}\n",
+            "   max_unif_steps:                {}\n",
+            "}}\n"
+        ),
+        order_parms_print_string(&handle.order_params),
+        bool_name(handle.no_preproc),
+        handle.eqdef_maxclauses,
+        handle.eqdef_incrlimit,
+        handle.formula_def_limit,
+        handle.miniscope_limit,
+        handle.sine.as_deref().unwrap_or("None"),
+        bool_name(handle.add_goal_defs_pos),
+        bool_name(handle.add_goal_defs_neg),
+        bool_name(handle.add_goal_defs_subterms),
+        handle.heuristic_name.as_str(),
+        handle.heuristic_def.as_deref().unwrap_or(""),
+        bool_name(handle.prefer_initial_clauses),
+        handle.selection_strategy.as_str(),
+        handle.pos_lit_sel_min,
+        handle.pos_lit_sel_max,
+        handle.neg_lit_sel_min,
+        handle.neg_lit_sel_max,
+        handle.all_lit_sel_min,
+        handle.all_lit_sel_max,
+        handle.weight_sel_min,
+        bool_name(handle.select_on_proc_only),
+        bool_name(handle.inherit_paramod_lit),
+        bool_name(handle.inherit_goal_pm_lit),
+        bool_name(handle.inherit_conj_pm_lit),
+        bool_name(handle.enable_eq_factoring),
+        bool_name(handle.enable_neg_unit_paramod),
+        bool_name(handle.enable_given_forward_simpl),
+        handle.pm_type.name(),
+        handle.ac_handling.c_value(),
+        bool_name(handle.ac_res_aggressive),
+        bool_name(handle.forward_context_sr),
+        bool_name(handle.forward_context_sr_aggressive),
+        bool_name(handle.backward_context_sr),
+        bool_name(handle.forward_subsumption_aggressive),
+        handle.forward_demod as u8,
+        bool_name(handle.prefer_general),
+        bool_name(handle.condensing),
+        bool_name(handle.condensing_aggressive),
+        bool_name(handle.er_varlit_destructive),
+        bool_name(handle.er_strong_destructive),
+        bool_name(handle.er_aggressive),
+        handle.split_clauses.c_value(),
+        handle.split_method.c_value(),
+        bool_name(handle.split_aggressive),
+        bool_name(handle.split_fresh_defs),
+        handle.diseq_decomposition,
+        handle.diseq_decomp_maxarity,
+        handle.rw_bw_index_type.as_str(),
+        handle.pm_from_index_type.as_str(),
+        handle.pm_into_index_type.as_str(),
+        handle.sat_check_grounding.name(),
+        handle.sat_check_step_limit,
+        handle.sat_check_size_limit,
+        handle.sat_check_ttinsert_limit,
+        bool_name(handle.sat_check_normconst),
+        bool_name(handle.sat_check_normalize),
+        handle.sat_check_decision_limit,
+        handle.filter_orphans_limit,
+        handle.forward_contract_limit,
+        handle.delete_bad_limit,
+        handle.mem_limit,
+        bool_name(handle.watchlist_simplify),
+        bool_name(handle.watchlist_is_static),
+        bool_name(handle.use_tptp_sos),
+        bool_name(handle.presat_interreduction),
+        bool_name(handle.detsort_bw_rw),
+        bool_name(handle.detsort_tmpset),
+        handle.arg_cong.name(),
+        handle.neg_ext.name(),
+        handle.pos_ext.name(),
+        handle.ext_rules_max_depth,
+        bool_name(handle.inverse_recognition),
+        bool_name(handle.replace_inj_defs),
+        bool_name(handle.lift_lambdas),
+        bool_name(handle.lambda_to_forall),
+        bool_name(handle.unroll_only_formulas),
+        handle.elim_leibniz_max_depth,
+        handle.prim_enum_mode.name(),
+        handle.prim_enum_max_depth,
+        handle.inst_choice_max_depth,
+        bool_name(handle.local_rw),
+        bool_name(handle.prune_args),
+        bool_name(handle.preinstantiate_induction),
+        bool_name(handle.fool_unroll),
+        handle.func_proj_limit,
+        handle.imit_limit,
+        handle.ident_limit,
+        handle.elim_limit,
+        handle.unif_mode.name(),
+        bool_name(handle.pattern_oracle),
+        bool_name(handle.fixpoint_oracle),
+        handle.max_unifiers,
+        handle.max_unif_steps
+    )
+}
+
+#[must_use]
+pub const fn bool_name(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+#[must_use]
 pub const fn ext_inference_type_name_raw(value: i32) -> &'static str {
     match value {
         0 => "all",
@@ -585,17 +821,17 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ext_inference_type_name_raw, heuristic_parms_alloc, heuristic_parms_initialize,
-        prim_enum_mode_name_raw, str_to_ext_inference_type, str_to_prim_enum_mode,
-        str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw,
-        AcHandling, ExtInferenceType, GroundingStrategy, HeuristicParmsCell, ParamodulationType,
-        PrimEnumMode, SplitClassType, SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT,
-        DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT,
-        DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION,
-        DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT,
-        DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME,
-        DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC, NO_ELIM_LEIBNIZ,
-        NO_EXT_SUP,
+        bool_name, ext_inference_type_name_raw, heuristic_parms_alloc, heuristic_parms_initialize,
+        heuristic_parms_print_string, prim_enum_mode_name_raw, str_to_ext_inference_type,
+        str_to_prim_enum_mode, str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw,
+        unif_mode_name_raw, AcHandling, ExtInferenceType, GroundingStrategy, HeuristicParmsCell,
+        ParamodulationType, PrimEnumMode, SplitClassType, SplitType, UnifMode,
+        DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES,
+        DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT,
+        DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS,
+        DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME,
+        DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS,
+        HCB_DEFAULT_HEURISTIC, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
     use crate::heuristics::to_params::OrderParmsCell;
     use crate::terms::termtypes::RewriteLevel;
@@ -689,6 +925,17 @@ mod tests {
 
     #[test]
     fn raw_name_helpers_preserve_macro_fallbacks() {
+        assert_eq!(bool_name(true), "true");
+        assert_eq!(bool_name(false), "false");
+
+        assert_eq!(ParamodulationType::Plain.name(), "ParamodPlain");
+        assert_eq!(
+            ParamodulationType::SizeDecreasingSim.name(),
+            "ParamodSizeDecreasingSim"
+        );
+        assert_eq!(GroundingStrategy::NoGrounding.name(), "NoGrounding");
+        assert_eq!(GroundingStrategy::GlobalMin.name(), "GlobalMin");
+
         assert_eq!(ExtInferenceType::AllLits.name(), "all");
         assert_eq!(ExtInferenceType::MaxLits.name(), "max");
         assert_eq!(ExtInferenceType::NoLits.name(), "off");
@@ -888,5 +1135,106 @@ mod tests {
         assert!(handle.fixpoint_oracle);
         assert_eq!(handle.max_unifiers, DEFAULT_MAX_UNIFIERS);
         assert_eq!(handle.max_unif_steps, DEFAULT_MAX_UNIF_STEPS);
+    }
+
+    #[test]
+    fn heuristic_parms_print_string_matches_c_default_surface() {
+        let printed = heuristic_parms_print_string(&HeuristicParmsCell::default());
+
+        assert!(printed.starts_with("{\n   {\n"));
+        assert!(printed.ends_with("}\n"));
+        assert!(printed.contains("      ordertype:               KBO6\n"));
+        assert!(printed.contains("   no_preproc:                     false\n"));
+        assert!(printed.contains("   sine:                           \"None\"\n"));
+        assert!(printed.contains("   heuristic_def:                 \"\"\n"));
+        assert!(printed.contains("   selection_strategy:             NoSelection\n"));
+        assert!(printed.contains("   pm_type:                        ParamodPlain\n"));
+        assert!(printed.contains("   ac_handling:                    1\n"));
+        assert!(printed.contains("   sat_check_grounding:            NoGrounding\n"));
+        assert!(printed.contains("   arg_cong:                       all\n"));
+        assert!(printed.contains("   prim_enum_mode:                pragmatic\n"));
+        assert!(printed.contains("   unif_mode:                     single\n"));
+        assert!(!printed.contains("   bce:"));
+        assert!(!printed.contains("   pred_elim:"));
+        assert!(!printed.contains("   lambda_demod:"));
+        assert_substrings_in_order(
+            &printed,
+            &[
+                "   no_preproc:",
+                "   heuristic_name:",
+                "   selection_strategy:",
+                "   enable_eq_factoring:",
+                "   pm_type:",
+                "   split_clauses:",
+                "   sat_check_grounding:",
+                "   watchlist_simplify:",
+                "   arg_cong:",
+                "   unif_mode:",
+                "   max_unif_steps:",
+            ],
+        );
+    }
+
+    #[test]
+    fn heuristic_parms_print_string_formats_nondefault_values() {
+        let handle = HeuristicParmsCell {
+            no_preproc: true,
+            sine: Some("Auto".to_owned()),
+            heuristic_name: "CustomHeuristic".to_owned(),
+            heuristic_def: Some("PreferGoals".to_owned()),
+            prefer_initial_clauses: true,
+            selection_strategy: "SelectComplex".to_owned(),
+            pm_type: ParamodulationType::OrientedSuperSim,
+            ac_handling: AcHandling::KeepUnits,
+            forward_demod: RewriteLevel::RuleRewrite,
+            split_clauses: SplitClassType::All,
+            split_method: SplitType::GroundFull,
+            split_aggressive: true,
+            sat_check_grounding: GroundingStrategy::GlobalMin,
+            sat_check_normconst: true,
+            sat_check_normalize: true,
+            mem_limit: 123,
+            arg_cong: ExtInferenceType::MaxLits,
+            neg_ext: ExtInferenceType::AllLits,
+            pos_ext: ExtInferenceType::MaxLits,
+            prim_enum_mode: PrimEnumMode::Full,
+            unif_mode: UnifMode::Multi,
+            pattern_oracle: false,
+            ..HeuristicParmsCell::default()
+        };
+        let printed = heuristic_parms_print_string(&handle);
+
+        assert!(printed.contains("   no_preproc:                     true\n"));
+        assert!(printed.contains("   sine:                           \"Auto\"\n"));
+        assert!(printed.contains("   heuristic_name:                CustomHeuristic\n"));
+        assert!(printed.contains("   heuristic_def:                 \"PreferGoals\"\n"));
+        assert!(printed.contains("   prefer_initial_clauses:         true\n"));
+        assert!(printed.contains("   selection_strategy:             SelectComplex\n"));
+        assert!(printed.contains("   pm_type:                        ParamodOrientedSuperSim\n"));
+        assert!(printed.contains("   ac_handling:                    2\n"));
+        assert!(printed.contains("   forward_demod:                  1\n"));
+        assert!(printed.contains("   split_clauses:                  7\n"));
+        assert!(printed.contains("   split_method:                   2\n"));
+        assert!(printed.contains("   split_aggressive:               true\n"));
+        assert!(printed.contains("   sat_check_grounding:            GlobalMin\n"));
+        assert!(printed.contains("   sat_check_normconst:            true\n"));
+        assert!(printed.contains("   sat_check_normalize:            true\n"));
+        assert!(printed.contains("   mem_limit:                      123\n"));
+        assert!(printed.contains("   arg_cong:                       max\n"));
+        assert!(printed.contains("   neg_ext:                        all\n"));
+        assert!(printed.contains("   pos_ext:                        max\n"));
+        assert!(printed.contains("   prim_enum_mode:                full\n"));
+        assert!(printed.contains("   unif_mode:                     multi\n"));
+        assert!(printed.contains("   pattern_oracle:                false\n"));
+    }
+
+    fn assert_substrings_in_order(text: &str, needles: &[&str]) {
+        let mut next_start = 0;
+        for needle in needles {
+            let relative = text[next_start..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing substring {needle}"));
+            next_start += relative + needle.len();
+        }
     }
 }
