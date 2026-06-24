@@ -152,6 +152,14 @@ Source files reviewed: `LEARN/cle_tsm.h`, `LEARN/cle_tsm.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TSMEvalNormalize(eval, limit)` uses a strict `< limit` comparison; values exactly equal to the limit classify as positive.
+- `TSMRemainderEntropy` computes a weighted average over non-empty partition buckets and divides by `global_count` without an empty-partition guard, so an empty partition yields NaN while `parts` remains zero.
+- `TSMPartitionSet` assigns `FlatAnnoTerm.next` links as scratch bucket chains. Any Rust implementation that keeps flat annotation terms shared must preserve or isolate this mutation carefully.
+- `TSMCreateSubtermSet` asserts that every listed term has the selected direct subterm, then inserts borrowed subterms as new flat annotations using the source term's eval, eval weight, and source count.
+- `cle_tsm.h` declares `TSMFindPartLimit`, but no implementation appears in this checkout. Treat it as header-only surface until a caller or reference implementation requires it.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
