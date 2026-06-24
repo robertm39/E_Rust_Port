@@ -1,3 +1,5 @@
+use crate::terms::termtypes::Term;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
 pub enum TermWeightExtensionStyle {
@@ -135,6 +137,44 @@ impl<Data, WeightFun> TermWeightExtension<Data, WeightFun> {
             result = result.max((self.term_weight_fun)(subterm, &self.data));
             if !is_free_var(subterm) {
                 stack.extend(args(subterm));
+            }
+        }
+        result
+    }
+}
+
+impl<Data, WeightFun> TermWeightExtension<Data, WeightFun>
+where
+    WeightFun: Fn(&Term, &Data) -> f64,
+{
+    #[must_use]
+    pub fn term_weight(&self, term: &Term) -> f64 {
+        match self.ext_style {
+            TermWeightExtensionStyle::Simple => (self.term_weight_fun)(term, &self.data),
+            TermWeightExtensionStyle::SubtermsSum => self.term_weight_sum(term),
+            TermWeightExtensionStyle::SubtermsMax => self.term_weight_max(term),
+        }
+    }
+
+    fn term_weight_sum(&self, term: &Term) -> f64 {
+        let mut result = 0.0;
+        let mut stack = vec![term.clone()];
+        while let Some(subterm) = stack.pop() {
+            result += (self.term_weight_fun)(&subterm, &self.data);
+            if !subterm.is_free_var() {
+                stack.extend(subterm.argument_clones().into_iter().flatten());
+            }
+        }
+        result
+    }
+
+    fn term_weight_max(&self, term: &Term) -> f64 {
+        let mut result = -f64::MAX;
+        let mut stack = vec![term.clone()];
+        while let Some(subterm) = stack.pop() {
+            result = result.max((self.term_weight_fun)(&subterm, &self.data));
+            if !subterm.is_free_var() {
+                stack.extend(subterm.argument_clones().into_iter().flatten());
             }
         }
         result

@@ -30,6 +30,7 @@ use crate::terms::termtypes::{
     TP_PRED_POS,
 };
 use crate::terms::termvars::VarBank;
+use crate::terms::termweightext::TermWeightExtension;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
@@ -843,6 +844,40 @@ impl Eqn {
     }
 
     #[must_use]
+    pub fn term_ext_weight<Data, WeightFun>(
+        &self,
+        extension: &TermWeightExtension<Data, WeightFun>,
+    ) -> f64
+    where
+        WeightFun: Fn(&Term, &Data) -> f64,
+    {
+        let mut result = extension.term_weight(&self.rterm);
+        if !self.is_oriented() {
+            result *= extension.max_term_multiplier();
+        }
+        result += extension.term_weight(&self.lterm) * extension.max_term_multiplier();
+        result
+    }
+
+    #[must_use]
+    pub fn literal_term_ext_weight<Data, WeightFun>(
+        &self,
+        extension: &TermWeightExtension<Data, WeightFun>,
+    ) -> f64
+    where
+        WeightFun: Fn(&Term, &Data) -> f64,
+    {
+        let mut result = self.term_ext_weight(extension);
+        if self.is_maximal() {
+            result *= extension.max_literal_multiplier();
+        }
+        if self.is_positive() {
+            result *= extension.pos_eq_multiplier();
+        }
+        result
+    }
+
+    #[must_use]
     pub fn non_linear_weight(
         &self,
         max_multiplier: f64,
@@ -1601,6 +1636,7 @@ mod tests {
     use crate::terms::termtypes::{
         DerefType, Term, TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
     };
+    use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
     use crate::terms::typebanks::TypeBank;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2169,6 +2205,50 @@ mod tests {
             neg.literal_weight(&bank, 2.0, 3.0, 4.0, 3, 5, 1.0, false),
             75.0,
         );
+    }
+
+    #[test]
+    fn term_extension_weight_helpers_apply_term_literal_and_polarity_multipliers() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let f_of_a = typed_unary(&mut bank, "f", &a);
+        let mut lit = Eqn::alloc(f_of_a, b, &mut bank, true).unwrap();
+        let simple = TermWeightExtension::new(
+            2.0,
+            3.0,
+            4.0,
+            TermWeightExtensionStyle::Simple,
+            |term: &Term, base: &f64| base + if term.arity() == 0 { 0.0 } else { 1.0 },
+            10.0,
+        );
+
+        assert_f64_bits_eq(lit.term_ext_weight(&simple), 42.0);
+        lit.set_prop(EP_IS_MAXIMAL);
+        assert_f64_bits_eq(lit.literal_term_ext_weight(&simple), 504.0);
+
+        lit.set_prop(EP_IS_ORIENTED);
+        assert_f64_bits_eq(lit.term_ext_weight(&simple), 32.0);
+        assert_f64_bits_eq(lit.literal_term_ext_weight(&simple), 384.0);
+    }
+
+    #[test]
+    fn term_extension_weight_uses_real_term_subterm_traversal() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let f_of_a = typed_unary(&mut bank, "f", &a);
+        let lit = Eqn::alloc(f_of_a, b, &mut bank, false).unwrap();
+        let subterms = TermWeightExtension::new(
+            2.0,
+            3.0,
+            4.0,
+            TermWeightExtensionStyle::SubtermsSum,
+            |_term: &Term, _data: &()| 1.0,
+            (),
+        );
+
+        assert_f64_bits_eq(lit.term_ext_weight(&subterms), 6.0);
     }
 
     #[test]

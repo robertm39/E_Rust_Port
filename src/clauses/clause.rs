@@ -16,6 +16,7 @@ use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_OP_FLAG};
 use crate::terms::termvars::VarBank;
+use crate::terms::termweightext::TermWeightExtension;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
@@ -674,6 +675,21 @@ impl Clause {
     }
 
     #[must_use]
+    pub fn term_ext_weight<Data, WeightFun>(
+        &self,
+        extension: &TermWeightExtension<Data, WeightFun>,
+    ) -> f64
+    where
+        WeightFun: Fn(&Term, &Data) -> f64,
+    {
+        self.literals
+            .as_slice()
+            .iter()
+            .map(|literal| literal.literal_term_ext_weight(extension))
+            .sum()
+    }
+
+    #[must_use]
     #[expect(
         clippy::too_many_arguments,
         reason = "C-compatible helper mirrors ccl_clauses argument list"
@@ -979,6 +995,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_OP_FLAG, TP_SPECIAL_FLAG};
     use crate::terms::termvars::VarBank;
+    use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
     use crate::terms::typebanks::TypeBank;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1228,6 +1245,18 @@ mod tests {
         assert!(clause.fun_weight(2.0, 3.0, 4.0, 1, 100, &[1; 101], 2, 1.0, None) > 0.0);
         assert!(clause.non_linear_weight(&bank, 2.0, 3.0, 4.0, 1, 2, 3, 1.0, false) > 0.0);
         assert!(clause.sym_type_weight(2.0, 3.0, 4.0, 1, 2, 3, 4, 1.0) > 0.0);
+        let extension = TermWeightExtension::new(
+            2.0,
+            3.0,
+            4.0,
+            TermWeightExtensionStyle::Simple,
+            |_term: &Term, _data: &()| 1.0,
+            (),
+        );
+        assert_eq!(
+            clause.term_ext_weight(&extension).to_bits(),
+            52.0_f64.to_bits()
+        );
         assert!(clause.orient_weight(&bank, 5.0, 3.0, 4.0, 1, 2, 1.0, false) > 0.0);
         assert_eq!(clause.depth(), 2);
 
