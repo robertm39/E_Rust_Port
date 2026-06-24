@@ -115,9 +115,27 @@ pub fn unit_clause_set_subsumes_clause<'set>(
     set: &'set ClauseSet,
     clause: &Clause,
 ) -> Option<&'set Clause> {
+    unit_clause_set_subsumes_clause_with_strong(set, clause, false)
+}
+
+/// Returns a unit clause from `set` that subsumes one literal of `clause`.
+///
+/// When `strong_unit_forward_subsumption` is true, positive target literals use
+/// C's `unit_clause_set_strongsubsumes_termpair` descent instead of the ordinary
+/// single-difference simplifying-unit descent.
+#[must_use]
+pub fn unit_clause_set_subsumes_clause_with_strong<'set>(
+    set: &'set ClauseSet,
+    clause: &Clause,
+    strong_unit_forward_subsumption: bool,
+) -> Option<&'set Clause> {
     clause.literals().as_slice().iter().find_map(|literal| {
         if literal.is_positive() {
-            find_positive_unit_simplifier(set, literal.left(), literal.right())
+            if strong_unit_forward_subsumption {
+                find_strong_unit_simplifier(set, literal.left(), literal.right(), true)
+            } else {
+                find_positive_unit_simplifier(set, literal.left(), literal.right())
+            }
         } else {
             find_negative_top_unit_simplifier(set, literal.left(), literal.right())
         }
@@ -151,12 +169,28 @@ pub fn clause_set_find_unit_subsumed_clause<'set>(
 /// search until demodulator indexes are available.
 #[must_use]
 pub fn clause_positive_simplify_reflect(set: &ClauseSet, clause: &mut Clause) -> bool {
+    clause_positive_simplify_reflect_with_strong(set, clause, false)
+}
+
+/// Removes negative literals simplified by positive unit clauses in `set`.
+///
+/// When `strong_unit_forward_subsumption` is true, this uses C's strong
+/// unit-forward subsumption descent for the positive units.
+#[must_use]
+pub fn clause_positive_simplify_reflect_with_strong(
+    set: &ClauseSet,
+    clause: &mut Clause,
+    strong_unit_forward_subsumption: bool,
+) -> bool {
     let mut index = 0;
     while index < clause.literal_number() {
         let simplifier_sos = {
             let literal = &clause.literals().as_slice()[index];
             if literal.is_positive() {
                 None
+            } else if strong_unit_forward_subsumption {
+                find_strong_unit_simplifier(set, literal.left(), literal.right(), true)
+                    .map(Clause::is_sos)
             } else {
                 find_positive_unit_simplifier(set, literal.left(), literal.right())
                     .map(Clause::is_sos)
@@ -676,10 +710,57 @@ fn find_positive_unit_simplifier<'set>(
     })
 }
 
-fn find_negative_top_unit_simplifier<'set>(
+fn find_strong_unit_simplifier<'set>(
     set: &'set ClauseSet,
     left: &Term,
     right: &Term,
+    positive: bool,
+) -> Option<&'set Clause> {
+    let mut stack = vec![(left.clone(), right.clone())];
+    while let Some((current_left, current_right)) = stack.pop() {
+        if let Some(result) = find_top_unit_simplifier(set, &current_left, &current_right, positive)
+        {
+            return Some(result);
+        }
+        if current_left.is_applied_free_var()
+            || current_right.is_applied_free_var()
+            || current_left.is_lambda()
+            || current_right.is_lambda()
+            || current_left.f_code() != current_right.f_code()
+            || current_left.arity() == 0
+        {
+            break;
+        }
+        assert_eq!(
+            current_left.arity(),
+            current_right.arity(),
+            "strong unit subsumption descent expects equal arities"
+        );
+        assert_eq!(
+            current_left.type_(),
+            current_right.type_(),
+            "strong unit subsumption descent expects equal types"
+        );
+        for index in 0..current_left.arity() {
+            let next_left = current_left
+                .argument(index)
+                .expect("left term arguments must be initialized");
+            let next_right = current_right
+                .argument(index)
+                .expect("right term arguments must be initialized");
+            if next_left != next_right {
+                stack.push((next_left, next_right));
+            }
+        }
+    }
+    None
+}
+
+fn find_top_unit_simplifier<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+    positive: bool,
 ) -> Option<&'set Clause> {
     set.iter().find(|candidate| {
         candidate
@@ -688,24 +769,32 @@ fn find_negative_top_unit_simplifier<'set>(
             .first()
             .is_some_and(|literal| {
                 candidate.is_unit()
-                    && literal.is_negative()
+                    && literal.is_positive() == positive
                     && eqn_topsubsumes_termpair(literal, left, right)
             })
     })
+}
+
+fn find_negative_top_unit_simplifier<'set>(
+    set: &'set ClauseSet,
+    left: &Term,
+    right: &Term,
+) -> Option<&'set Clause> {
+    find_top_unit_simplifier(set, left, right, false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         clause_is_subsume_ordered, clause_negative_simplify_reflect,
-        clause_positive_simplify_reflect, clause_set_find_first_subsumed_clause,
-        clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
-        clause_set_find_unit_subsumed_clause, clause_set_subsumes_clause,
-        clause_subsume_order_sort_lits, clause_subsumes_clause, eqn_subsumes_termpair,
-        eqn_topsubsumes_termpair, fv_index_find_first_subsumed_clause,
+        clause_positive_simplify_reflect, clause_positive_simplify_reflect_with_strong,
+        clause_set_find_first_subsumed_clause, clause_set_find_subsumed_clause,
+        clause_set_find_subsumed_clauses, clause_set_find_unit_subsumed_clause,
+        clause_set_subsumes_clause, clause_subsume_order_sort_lits, clause_subsumes_clause,
+        eqn_subsumes_termpair, eqn_topsubsumes_termpair, fv_index_find_first_subsumed_clause,
         fv_index_find_subsumed_clauses, fv_index_find_variant_clause,
         fv_index_subsumes_packed_clause, literal_subsumes_clause, unit_clause_set_subsumes_clause,
-        unit_clause_subsumes_clause,
+        unit_clause_set_subsumes_clause_with_strong, unit_clause_subsumes_clause,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -749,6 +838,24 @@ mod tests {
         let term = Term::top_alloc(f_code, 1);
         term.set_type(Some(type_));
         term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_binary(bank: &mut TermBank, name: &str, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![type_.clone(), type_.clone(), type_.clone()]),
+                )
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
@@ -1140,6 +1247,28 @@ mod tests {
     }
 
     #[test]
+    fn strong_unit_clause_set_subsumption_checks_multiple_differing_subterms() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let left_other = typed_const(&mut bank, "b");
+        let right_other = typed_const(&mut bank, "c");
+        let right_match = typed_const(&mut bank, "d");
+        let left = typed_binary(&mut bank, "f", &left_other, &right_other);
+        let right = typed_binary(&mut bank, "f", &constant, &right_match);
+        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &right_match, true)]);
+        let positive_id = positive_unit.ident();
+        let set = ClauseSet::from_clauses([positive_unit]);
+        let target = clause_from(vec![literal(&mut bank, &left, &right, true)]);
+
+        assert!(unit_clause_set_subsumes_clause(&set, &target).is_none());
+        assert_eq!(
+            unit_clause_set_subsumes_clause_with_strong(&set, &target, true).map(Clause::ident),
+            Some(positive_id)
+        );
+    }
+
+    #[test]
     fn clause_set_find_unit_subsumed_clause_honors_start_index() {
         let mut bank = test_bank();
         let variable = typed_var(&bank, -10);
@@ -1196,6 +1325,40 @@ mod tests {
         assert!(target.query_prop(CP_IS_SOS));
         assert!(!target.query_prop(CP_INITIAL));
         assert!(!target.query_prop(CP_LIMITED_RW));
+    }
+
+    #[test]
+    fn strong_positive_simplify_reflect_removes_multi_difference_negative_literal() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let left_other = typed_const(&mut bank, "b");
+        let right_other = typed_const(&mut bank, "c");
+        let right_match = typed_const(&mut bank, "d");
+        let kept_left = typed_const(&mut bank, "e");
+        let kept_right = typed_const(&mut bank, "g");
+        let left = typed_binary(&mut bank, "f", &left_other, &right_other);
+        let right = typed_binary(&mut bank, "f", &constant, &right_match);
+        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &right_match, true)]);
+        let set = ClauseSet::from_clauses([positive_unit]);
+        let mut default_target = clause_from(vec![
+            literal(&mut bank, &left, &right, false),
+            literal(&mut bank, &kept_left, &kept_right, true),
+        ]);
+        let mut strong_target = default_target.clone();
+        default_target.set_weight(default_target.standard_weight());
+        strong_target.set_weight(strong_target.standard_weight());
+
+        assert!(!clause_positive_simplify_reflect(&set, &mut default_target));
+        assert_eq!(default_target.negative_literal_count(), 1);
+
+        assert!(!clause_positive_simplify_reflect_with_strong(
+            &set,
+            &mut strong_target,
+            true
+        ));
+        assert_eq!(strong_target.negative_literal_count(), 0);
+        assert_eq!(strong_target.positive_literal_count(), 1);
     }
 
     #[test]
