@@ -4,6 +4,7 @@ use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::relevance::RelevanceData;
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
@@ -23,6 +24,8 @@ enum FunWeightInitKind {
     ConjectureSymbols,
     ConjectureSymbolTypes,
     ConjectureTypeBased,
+    RelevanceLevels,
+    RelevanceLevelsSpecialOne,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +41,10 @@ pub struct FunWeightParam {
     conj_fweight: i64,
     conj_cweight: i64,
     conj_pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
     weight_stack: Vec<(String, i64)>,
     axioms: Option<ClauseSet>,
     init_kind: FunWeightInitKind,
@@ -75,6 +82,10 @@ impl FunWeightParam {
             conj_fweight: fweight,
             conj_cweight: fweight,
             conj_pweight: fweight,
+            level_poly_const: 0,
+            level_poly_lin: 0.0,
+            level_poly_square: 0.0,
+            default_level_penalty: 0,
             weight_stack,
             axioms: None,
             init_kind: FunWeightInitKind::ExplicitSymbols,
@@ -117,6 +128,10 @@ impl FunWeightParam {
             conj_fweight,
             conj_cweight,
             conj_pweight,
+            level_poly_const: 0,
+            level_poly_lin: 0.0,
+            level_poly_square: 0.0,
+            default_level_penalty: 0,
             weight_stack: Vec::new(),
             axioms: Some(axioms.clone()),
             init_kind: FunWeightInitKind::ConjectureSymbols,
@@ -197,6 +212,57 @@ impl FunWeightParam {
     }
 
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible constructor mirrors RelevanceLevelWeightInit without OCB"
+    )]
+    pub fn with_relevance_levels(
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        cweight: i64,
+        pweight: i64,
+        level_poly_const: i64,
+        level_poly_lin: f64,
+        level_poly_square: f64,
+        default_level_penalty: i64,
+        axioms: &ClauseSet,
+        app_var_mult: f64,
+        special_symbols_level_one: bool,
+    ) -> Self {
+        Self {
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            conj_fweight: fweight,
+            conj_cweight: cweight,
+            conj_pweight: pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            weight_stack: Vec::new(),
+            axioms: Some(axioms.clone()),
+            init_kind: if special_symbols_level_one {
+                FunWeightInitKind::RelevanceLevelsSpecialOne
+            } else {
+                FunWeightInitKind::RelevanceLevels
+            },
+            flimit: 0,
+            fweights: None,
+            type_freqs: None,
+            f_occur: None,
+        }
+    }
+
+    #[must_use]
     pub const fn max_term_multiplier(&self) -> f64 {
         self.max_term_multiplier
     }
@@ -252,6 +318,26 @@ impl FunWeightParam {
     }
 
     #[must_use]
+    pub const fn level_poly_const(&self) -> i64 {
+        self.level_poly_const
+    }
+
+    #[must_use]
+    pub const fn level_poly_lin(&self) -> f64 {
+        self.level_poly_lin
+    }
+
+    #[must_use]
+    pub const fn level_poly_square(&self) -> f64 {
+        self.level_poly_square
+    }
+
+    #[must_use]
+    pub const fn default_level_penalty(&self) -> i64 {
+        self.default_level_penalty
+    }
+
+    #[must_use]
     pub const fn axioms(&self) -> Option<&ClauseSet> {
         self.axioms.as_ref()
     }
@@ -291,6 +377,12 @@ impl FunWeightParam {
             }
             FunWeightInitKind::ConjectureTypeBased => {
                 self.init_conjecture_type_based_weights(bank.signature());
+            }
+            FunWeightInitKind::RelevanceLevels => {
+                self.init_relevance_level_weights(bank.signature(), false);
+            }
+            FunWeightInitKind::RelevanceLevelsSpecialOne => {
+                self.init_relevance_level_weights(bank.signature(), true);
             }
         }
     }
@@ -448,6 +540,46 @@ impl FunWeightParam {
         self.fweights = Some(fweights);
     }
 
+    fn init_relevance_level_weights(
+        &mut self,
+        signature: &Signature,
+        special_symbols_level_one: bool,
+    ) {
+        self.flimit = signature.f_count() + 1;
+        let len = usize::try_from(self.flimit)
+            .unwrap_or_else(|_| panic!("signature f-count must fit vector length"));
+        let mut fweights = vec![0; len];
+        let axioms = self
+            .axioms
+            .as_ref()
+            .unwrap_or_else(|| panic!("RelevanceLevelWeight requires proof-state axioms"));
+        let relevance = RelevanceData::compute(signature, axioms);
+
+        for f_code in 1..self.flimit {
+            let index = usize::try_from(f_code)
+                .unwrap_or_else(|_| panic!("positive f-code must fit vector index"));
+            let mut effective_level = if special_symbols_level_one && signature.is_special(f_code) {
+                1
+            } else {
+                relevance.f_code_relevance(f_code)
+            };
+            if effective_level == 0 {
+                effective_level = self.default_level_penalty + relevance.max_level();
+            }
+            let base =
+                typed_symbol_weight(signature, f_code, self.fweight, self.cweight, self.pweight);
+            fweights[index] = relevance_scaled_weight(
+                base,
+                effective_level,
+                self.level_poly_const,
+                self.level_poly_lin,
+                self.level_poly_square,
+            );
+        }
+
+        self.fweights = Some(fweights);
+    }
+
     fn weight_for_f_code(&self, f_code: FunCode) -> i64 {
         if f_code < self.flimit {
             let index = usize::try_from(f_code)
@@ -595,6 +727,82 @@ pub fn conjecture_type_based_weight_init(
         vweight,
         axioms,
         app_var_mult,
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit without prio/OCB"
+)]
+pub fn relevance_level_weight_init(
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    axioms: &ClauseSet,
+    app_var_mult: f64,
+) -> FunWeightParam {
+    FunWeightParam::with_relevance_levels(
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        level_poly_const,
+        level_poly_lin,
+        level_poly_square,
+        default_level_penalty,
+        axioms,
+        app_var_mult,
+        false,
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit2 without prio/OCB"
+)]
+pub fn relevance_level_weight2_init(
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    axioms: &ClauseSet,
+    app_var_mult: f64,
+) -> FunWeightParam {
+    FunWeightParam::with_relevance_levels(
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        level_poly_const,
+        level_poly_lin,
+        level_poly_square,
+        default_level_penalty,
+        axioms,
+        app_var_mult,
+        true,
     )
 }
 
@@ -763,6 +971,92 @@ pub fn conjecture_type_based_weight_wfcb_init(
             max_literal_multiplier,
             pos_multiplier,
             vweight,
+            axioms,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit parameters without OCB"
+)]
+pub fn relevance_level_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    app_var_mult: f64,
+) -> Wfcb<FunWeightParam> {
+    wfcb_alloc(
+        generic_fun_weight_wfcb_compute,
+        prio_fun,
+        fun_weight_exit,
+        Some(relevance_level_weight_init(
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            axioms,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit2 parameters without OCB"
+)]
+pub fn relevance_level_weight2_wfcb_init(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    app_var_mult: f64,
+) -> Wfcb<FunWeightParam> {
+    wfcb_alloc(
+        generic_fun_weight_wfcb_compute,
+        prio_fun,
+        fun_weight_exit,
+        Some(relevance_level_weight2_init(
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
             axioms,
             app_var_mult,
         )),
@@ -999,6 +1293,89 @@ pub fn conjecture_type_based_weight_parse(
     ))
 }
 
+pub fn relevance_level_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    parse_relevance_level_weight(scanner, axioms, false)
+}
+
+pub fn relevance_level_weight2_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    parse_relevance_level_weight(scanner, axioms, true)
+}
+
+fn parse_relevance_level_weight(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+    special_symbols_level_one: bool,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let level_poly_const = f64_to_i64(parse_float(scanner)?);
+    scanner.accept_tok(TokenType::COMMA)?;
+    let level_poly_lin = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let level_poly_square = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let default_level_penalty = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let cweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_optional_app_var_mult(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    if special_symbols_level_one {
+        Ok(relevance_level_weight2_wfcb_init(
+            prio_fun,
+            axioms,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            app_var_mult,
+        ))
+    } else {
+        Ok(relevance_level_weight_wfcb_init(
+            prio_fun,
+            axioms,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            app_var_mult,
+        ))
+    }
+}
+
 #[must_use]
 /// # Panics
 ///
@@ -1227,6 +1604,21 @@ fn type_freq_map(type_freqs: &[i64], convert: impl Fn(i64) -> i64) -> BTreeMap<i
         .collect()
 }
 
+fn relevance_scaled_weight(
+    base: i64,
+    effective_level: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+) -> i64 {
+    f64_to_i64(
+        i64_to_f64(base)
+            * (i64_to_f64(level_poly_const)
+                + (level_poly_lin * i64_to_f64(effective_level))
+                + (level_poly_square * i64_to_f64(effective_level) * i64_to_f64(effective_level))),
+    )
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
@@ -1247,10 +1639,11 @@ mod tests {
         conjecture_relative_symbol_type_weight_parse, conjecture_relative_symbol_weight_parse,
         conjecture_simplified_symbol_weight_parse, conjecture_symbol_weight_parse,
         conjecture_type_based_weight_parse, fun_weight_compute, fun_weight_init, fun_weight_parse,
-        sym_offset_weight_compute, sym_offset_weight_init, sym_offset_weight_parse,
+        relevance_level_weight2_parse, relevance_level_weight_parse, sym_offset_weight_compute,
+        sym_offset_weight_init, sym_offset_weight_parse,
     };
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clause_props::{CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -1276,8 +1669,12 @@ mod tests {
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        typed_const_with_special(bank, name, false)
+    }
+
+    fn typed_const_with_special(bank: &mut TermBank, name: &str, special: bool) -> Term {
         let type_ = bank.signature().type_bank().default_type();
-        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        let f_code = bank.signature_mut().insert_id(name, 0, special);
         bank.signature_mut()
             .declare_final_type(f_code, type_.clone())
             .unwrap();
@@ -1309,6 +1706,21 @@ mod tests {
         let g_of_b = typed_unary(bank, "g", &b);
         let literal = Eqn::alloc(f_of_a, g_of_b, bank, true).unwrap();
         Clause::alloc(EqnList::from_vec(vec![literal]))
+    }
+
+    fn relevance_axioms(bank: &mut TermBank) -> ClauseSet {
+        let a = typed_const(bank, "a");
+        let b = typed_const(bank, "b");
+        let f_of_a = typed_unary(bank, "f", &a);
+        let f_of_b = typed_unary(bank, "f", &b);
+        let g_of_b = typed_unary(bank, "g", &b);
+        let conjecture_literal = Eqn::alloc(f_of_a, a, bank, false).unwrap();
+        let mut conjecture = Clause::alloc(EqnList::from_vec(vec![conjecture_literal]));
+        conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let axiom_literal = Eqn::alloc(f_of_b, g_of_b, bank, true).unwrap();
+        let mut axiom = Clause::alloc(EqnList::from_vec(vec![axiom_literal]));
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        ClauseSet::from_clauses([conjecture, axiom])
     }
 
     fn negated_conjecture_axioms(bank: &mut TermBank) -> ClauseSet {
@@ -1489,6 +1901,53 @@ mod tests {
                 .and_then(|freqs| freqs.get(&symbol_type_uid(&bank, "f")).copied()),
             Some(6)
         );
+    }
+
+    #[test]
+    fn relevance_level_weight_parse_scores_symbols_by_relevance_level() {
+        let mut bank = test_bank();
+        let axioms = relevance_axioms(&mut bank);
+        let clause = test_clause(&mut bank);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,0.0,1.0,0.0,10,2,3,5,7,1.0,1.0,1.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = relevance_level_weight_parse(&mut scanner, &axioms).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 15.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+        let data = wfcb.data().expect("parser should install funweight data");
+        assert_eq!(data.level_poly_const(), 0);
+        assert_close(data.level_poly_lin(), 1.0);
+        assert_close(data.level_poly_square(), 0.0);
+        assert_eq!(data.default_level_penalty(), 10);
+    }
+
+    #[test]
+    fn relevance_level_weight2_parse_treats_special_symbols_as_level_one() {
+        let mut bank = test_bank();
+        let axioms = ClauseSet::new();
+        let special = typed_const_with_special(&mut bank, "special", true);
+        let literal = Eqn::alloc(special.clone(), special, &mut bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        let spec = "(ConstPrio,0.0,1.0,0.0,10,2,3,5,7,1.0,1.0,1.0) tail";
+        let mut base_scanner =
+            Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+        let mut special_scanner =
+            Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+        let mut base_wfcb = relevance_level_weight_parse(&mut base_scanner, &axioms)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut special_wfcb = relevance_level_weight2_parse(&mut special_scanner, &axioms)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(base_wfcb.compute_eval(&bank, &clause), 66.0);
+        assert_close(special_wfcb.compute_eval(&bank, &clause), 6.0);
+        assert_eq!(special_wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(special_scanner.current_token().literal(), "tail");
     }
 
     #[test]

@@ -12,7 +12,8 @@ use crate::heuristics::fifo::fifo_eval_parse;
 use crate::heuristics::funweights::{
     conjecture_relative_symbol_type_weight_parse, conjecture_relative_symbol_weight_parse,
     conjecture_simplified_symbol_weight_parse, conjecture_symbol_weight_parse,
-    conjecture_type_based_weight_parse, fun_weight_parse, sym_offset_weight_parse,
+    conjecture_type_based_weight_parse, fun_weight_parse, relevance_level_weight2_parse,
+    relevance_level_weight_parse, sym_offset_weight_parse,
 };
 use crate::heuristics::gdweight::gd_clause_weight_parse;
 use crate::heuristics::levweight::conjecture_lev_distance_weight_parse;
@@ -300,6 +301,8 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ConjectureRelativeSymbolWeight"
             | "ConjectureRelativeTypeSymbolWeight"
             | "ConjectureTypeBasedWeight"
+            | "RelevanceLevelWeight"
+            | "RelevanceLevelWeight2"
             | "ConjectureLevDistanceWeight"
             | "ConjectureTreeDistanceWeight"
             | "ConjectureStrucDistanceWeight"
@@ -403,6 +406,14 @@ pub fn weight_fun_parse_with_context(
             Ok(Box::new(conjecture_type_based_weight_parse(
                 scanner, axioms,
             )?))
+        }
+        "RelevanceLevelWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(relevance_level_weight_parse(scanner, axioms)?))
+        }
+        "RelevanceLevelWeight2" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(relevance_level_weight2_parse(scanner, axioms)?))
         }
         "ConjectureLevDistanceWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
@@ -618,6 +629,8 @@ mod tests {
             "ConjectureRelativeTypeSymbolWeight"
         ));
         assert!(weight_fun_parser_is_ported("ConjectureTypeBasedWeight"));
+        assert!(weight_fun_parser_is_ported("RelevanceLevelWeight"));
+        assert!(weight_fun_parser_is_ported("RelevanceLevelWeight2"));
         assert!(weight_fun_parser_is_ported("ConjectureLevDistanceWeight"));
         assert!(weight_fun_parser_is_ported("ConjectureTreeDistanceWeight"));
         assert!(weight_fun_parser_is_ported("ConjectureStrucDistanceWeight"));
@@ -814,6 +827,8 @@ mod tests {
             "ConjectureRelativeSymbolWeight(ConstPrio,0.5,10,4,99,1,1.0,1.0,1.0) tail",
             "ConjectureRelativeTypeSymbolWeight(ConstPrio,0.5,10,4,99,1,1.0,1.0,1.0) tail",
             "ConjectureTypeBasedWeight(ConstPrio,1,1.0,1.0,1.0) tail",
+            "RelevanceLevelWeight(ConstPrio,0.0,1.0,0.0,10,2,3,5,7,1.0,1.0,1.0) tail",
+            "RelevanceLevelWeight2(ConstPrio,0.0,1.0,0.0,10,2,3,5,7,1.0,1.0,1.0) tail",
             "ConjectureLevDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0) tail",
             "ConjectureTreeDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0) tail",
             "ConjectureStrucDistanceWeight(ConstPrio,0,0,5.0,10.0,2.0,3.0,0,1.0,1.0,1.0) tail",
