@@ -1,18 +1,21 @@
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_IGNORE_PROPS, CP_IS_D_INDEXED, CP_IS_SOS, CP_TYPE_AXIOM,
-    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
-    CP_TYPE_WATCH_CLAUSE,
+    clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
+    CP_IS_D_INDEXED, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+    CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::eqn::{eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{EqnProperties, EqnSide, EP_PSEUDO_LIT};
 use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
+use crate::inout::basicparser::parse_skip_parenthesized_expr;
+use crate::inout::scanner::{test_tok, IoFormat, Scanner, TokenType};
+use crate::terms::functypes::func_symb_start_token;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
@@ -26,6 +29,21 @@ use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 static GLOBAL_CLAUSE_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClauseParseOptions {
+    pub clauses_have_local_variables: bool,
+    pub clauses_have_disjoint_variables: bool,
+}
+
+impl Default for ClauseParseOptions {
+    fn default() -> Self {
+        Self {
+            clauses_have_local_variables: true,
+            clauses_have_disjoint_variables: false,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clause {
@@ -968,6 +986,248 @@ impl Clause {
     }
 }
 
+#[must_use]
+pub fn clause_starts_maybe(scanner: &Scanner) -> bool {
+    if scanner.test_tok(func_symb_start_token() | TokenType::TILDE_SIGN) {
+        return true;
+    }
+    if scanner.test_tok(TokenType::LESSER_SIGN | TokenType::QUESTION_MARK) {
+        let look = scanner.look_token(1);
+        return !look.skipped() && test_tok(look, TokenType::HYPHEN);
+    }
+    false
+}
+
+pub fn clause_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Clause, Diagnostic> {
+    clause_parse_with_options(scanner, bank, problem_type, ClauseParseOptions::default())
+}
+
+/// Parses the C `ClauseParse` control flow over the currently ported simple
+/// term/equation parser.
+///
+/// # Panics
+///
+/// Panics if the scanner format is `IoFormat::Auto`, matching the C
+/// precondition that scanner format has already been resolved.
+pub fn clause_parse_with_options(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+    options: ClauseParseOptions,
+) -> Result<Clause, Diagnostic> {
+    apply_clause_parse_var_scope(bank, options);
+    let start_line = usize_to_i64(scanner.current_token().line());
+    let start_column = usize_to_i64(scanner.current_token().column());
+    let mut type_ = CP_TYPE_AXIOM;
+    let (literals, name) = match scanner.format() {
+        IoFormat::Tptp => clause_parse_tptp(scanner, bank, problem_type, &mut type_)?,
+        IoFormat::Tstp => clause_parse_tstp(scanner, bank, problem_type, &mut type_)?,
+        IoFormat::Lop => (
+            clause_parse_lop(scanner, bank, problem_type, &mut type_)?,
+            None,
+        ),
+        IoFormat::Auto => panic!("format not supported"),
+    };
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    let mut clause = Clause::alloc(literals);
+    clause.set_tptp_type(type_);
+    clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+    clause.set_info(Some(ClauseInfo::new(
+        name.as_deref(),
+        None,
+        start_line,
+        start_column,
+    )));
+    Ok(clause)
+}
+
+pub fn clause_pcl_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Clause, Diagnostic> {
+    clause_pcl_parse_with_options(scanner, bank, problem_type, ClauseParseOptions::default())
+}
+
+/// Parses the C `ClausePCLParse` shape over the currently ported simple
+/// term/equation parser.
+///
+/// # Panics
+///
+/// Panics if the scanner format is not `IoFormat::Tptp`, matching the C
+/// assertion.
+pub fn clause_pcl_parse_with_options(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+    options: ClauseParseOptions,
+) -> Result<Clause, Diagnostic> {
+    assert_eq!(scanner.format(), IoFormat::Tptp);
+    if options.clauses_have_local_variables {
+        bank.vars().clear_ext_names();
+    }
+    scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+    let literals = EqnList::parse(scanner, bank, TokenType::COMMA, problem_type)?;
+    scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+    let mut clause = Clause::alloc(literals);
+    clause.set_tptp_type(if clause.positive_literal_count() != 0 {
+        CP_TYPE_AXIOM
+    } else {
+        CP_TYPE_CONJECTURE
+    });
+    Ok(clause)
+}
+
+fn clause_parse_tptp(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+    type_: &mut FormulaProperties,
+) -> Result<(EqnList, Option<String>), Diagnostic> {
+    scanner.accept_id("input_clause")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    *type_ = clause_type_parse(
+        scanner,
+        "axiom|hypothesis|conjecture|lemma|unknown|watchlist",
+        problem_type,
+    )?;
+    if *type_ == CP_TYPE_CONJECTURE {
+        *type_ = CP_TYPE_NEG_CONJECTURE;
+    }
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+    let literals = EqnList::parse(scanner, bank, TokenType::COMMA, problem_type)?;
+    scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok((literals, Some(name)))
+}
+
+fn clause_parse_tstp(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+    type_: &mut FormulaProperties,
+) -> Result<(EqnList, Option<String>), Diagnostic> {
+    scanner.accept_id("cnf")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    *type_ = clause_type_parse(
+        scanner,
+        "axiom|definition|theorem|assumption|hypothesis|negated_conjecture|lemma|unknown|plain|watchlist",
+        problem_type,
+    )?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let literals = if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let parsed = EqnList::parse(scanner, bank, TokenType::PIPE, problem_type)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        parsed
+    } else {
+        EqnList::parse(scanner, bank, TokenType::PIPE, problem_type)?
+    };
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        tstp_skip_source(scanner)?;
+        if scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            scanner.check_tok(TokenType::OPEN_SQUARE)?;
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok((literals, Some(name)))
+}
+
+fn clause_parse_lop(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+    type_: &mut FormulaProperties,
+) -> Result<EqnList, Diagnostic> {
+    let mut conclusion = EqnList::parse(scanner, bank, TokenType::SEMICOLON, problem_type)?;
+    let mut procedural = false;
+    if scanner.test_tok(TokenType::COLON) {
+        if conclusion.len() > 1 {
+            return Err(syntax_error(
+                "Procedural rule cannot have more than one head literal",
+            ));
+        }
+        procedural = true;
+    } else if scanner.test_tok(TokenType::QUESTION_MARK) {
+        if !conclusion.is_empty() {
+            return Err(syntax_error("Query should consist only of tail literals"));
+        }
+        *type_ = CP_TYPE_NEG_CONJECTURE;
+    }
+
+    if scanner.test_tok(TokenType::FULLSTOP) {
+        if conclusion.len() > 1 {
+            return Err(syntax_error(
+                "Procedural fact cannot have more than one literal",
+            ));
+        }
+        return Ok(conclusion);
+    }
+
+    scanner.accept_tok(TokenType::LESSER_SIGN | TokenType::COLON | TokenType::QUESTION_MARK)?;
+    scanner.accept_tok_no_skip(TokenType::HYPHEN)?;
+    let mut preconditions = EqnList::parse(scanner, bank, TokenType::COMMA, problem_type)?;
+    if procedural && preconditions.is_empty() {
+        return Err(syntax_error(
+            "Procedural rule or query needs at least one tail literal",
+        ));
+    }
+    preconditions.negate_eqns();
+    conclusion.append(preconditions);
+    Ok(conclusion)
+}
+
+fn clause_type_parse(
+    scanner: &mut Scanner,
+    legal_types: &str,
+    problem_type: ProblemType,
+) -> Result<FormulaProperties, Diagnostic> {
+    scanner.check_id(legal_types)?;
+    let identifier = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::IDENT)?;
+    Ok(clause_type_from_identifier(&identifier, problem_type))
+}
+
+fn tstp_skip_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    if scanner.test_tok(TokenType::OPEN_SQUARE) {
+        parse_skip_parenthesized_expr(scanner)
+    } else {
+        scanner.accept_tok(TokenType::IDENTIFIER | TokenType::POS_INT)?;
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+        Ok(())
+    }
+}
+
+fn apply_clause_parse_var_scope(bank: &TermBank, options: ClauseParseOptions) {
+    if options.clauses_have_local_variables {
+        bank.vars().clear_ext_names();
+    }
+    if options.clauses_have_disjoint_variables {
+        bank.vars().clear_ext_names_no_reset();
+    }
+}
+
+fn syntax_error(message: &str) -> Diagnostic {
+    Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
+}
+
 pub fn clause_write_list(
     output: &mut impl fmt::Write,
     bank: &TermBank,
@@ -1378,10 +1638,10 @@ fn is_key_subset(left: &BTreeMap<usize, Term>, right: &BTreeMap<usize, Term>) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_debug_string, clause_pcl_string, clause_print_axiom_string,
-        clause_print_goal_string, clause_print_lop_format_string, clause_print_query_string,
-        clause_print_rule_string, clause_print_tptp_format_string, clause_print_tstp_core_string,
-        Clause,
+        clause_debug_string, clause_parse, clause_pcl_parse, clause_pcl_string,
+        clause_print_axiom_string, clause_print_goal_string, clause_print_lop_format_string,
+        clause_print_query_string, clause_print_rule_string, clause_print_tptp_format_string,
+        clause_print_tstp_core_string, clause_starts_maybe, Clause,
     };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
@@ -1396,6 +1656,7 @@ mod tests {
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_PSEUDO_LIT};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::evals_alloc;
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -1576,6 +1837,101 @@ mod tests {
             clause_debug_string(&bank, &long_min_clause, ProblemType::FirstOrder),
             "thf(cl3, plain,  )."
         );
+    }
+
+    #[test]
+    fn clause_starts_maybe_matches_c_token_and_lookahead_rule() {
+        let term = Scanner::from_user_string("p.", false).unwrap();
+        let query = Scanner::from_user_string("?- p.", false).unwrap();
+        let spaced_query = Scanner::from_user_string("? - p.", false).unwrap();
+        let other = Scanner::from_user_string(").", false).unwrap();
+
+        assert!(clause_starts_maybe(&term));
+        assert!(clause_starts_maybe(&query));
+        assert!(!clause_starts_maybe(&spaced_query));
+        assert!(!clause_starts_maybe(&other));
+    }
+
+    #[test]
+    fn clause_parse_reads_lop_rules_queries_and_facts() {
+        let mut bank = test_bank();
+        let mut rule = Scanner::from_user_string("p(a) <- q(a), r(a). tail", false).unwrap();
+        rule.set_format(IoFormat::Lop);
+        let parsed_rule = clause_parse(&mut rule, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(
+            clause_print_lop_format_string(&bank, &parsed_rule, true),
+            "p(a) <- q(a), r(a)."
+        );
+        assert_eq!(parsed_rule.query_tptp_type(), CP_TYPE_AXIOM);
+        assert!(parsed_rule.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+        assert_eq!(rule.current_token().literal(), "tail");
+
+        let mut query = Scanner::from_user_string("?- goal(a).", false).unwrap();
+        query.set_format(IoFormat::Lop);
+        let parsed_query = clause_parse(&mut query, &mut bank, ProblemType::FirstOrder).unwrap();
+        assert_eq!(parsed_query.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            clause_print_lop_format_string(&bank, &parsed_query, true),
+            "?- goal(a)."
+        );
+
+        let mut invalid = Scanner::from_user_string("p(a); q(a).", false).unwrap();
+        invalid.set_format(IoFormat::Lop);
+        let error = clause_parse(&mut invalid, &mut bank, ProblemType::FirstOrder).unwrap_err();
+        assert!(error
+            .message()
+            .contains("Procedural fact cannot have more than one literal"));
+    }
+
+    #[test]
+    fn clause_parse_reads_old_tptp_and_tstp_wrappers() {
+        let mut bank = test_bank();
+        let mut old_tptp =
+            Scanner::from_user_string("input_clause(c_0_1,conjecture,[--p(a)]).", false).unwrap();
+        old_tptp.set_format(IoFormat::Tptp);
+        let parsed_tptp = clause_parse(&mut old_tptp, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(parsed_tptp.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(parsed_tptp.info().and_then(ClauseInfo::name), Some("c_0_1"));
+        assert_eq!(
+            clause_print_lop_format_string(&bank, &parsed_tptp, true),
+            "?- p(a)."
+        );
+
+        let mut tstp = Scanner::from_user_string(
+            "cnf(c2, negated_conjecture, (p(a)|~q(a)), file('x.p',unknown)).",
+            false,
+        )
+        .unwrap();
+        tstp.set_format(IoFormat::Tstp);
+        let parsed_tstp = clause_parse(&mut tstp, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(parsed_tstp.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(parsed_tstp.info().and_then(ClauseInfo::name), Some("c2"));
+        assert_eq!(parsed_tstp.literal_number(), 2);
+        assert_eq!(parsed_tstp.positive_literal_count(), 1);
+        assert_eq!(parsed_tstp.negative_literal_count(), 1);
+    }
+
+    #[test]
+    fn clause_pcl_parse_reads_tptp_literal_lists_and_sets_type_by_polarity() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("[++p(a),--q(a)] tail", false).unwrap();
+        scanner.set_format(IoFormat::Tptp);
+
+        let parsed = clause_pcl_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(parsed.query_tptp_type(), CP_TYPE_AXIOM);
+        assert_eq!(parsed.positive_literal_count(), 1);
+        assert_eq!(parsed.negative_literal_count(), 1);
+        assert_eq!(scanner.current_token().literal(), "tail");
+
+        let mut negative = Scanner::from_user_string("[--goal(a)]", false).unwrap();
+        negative.set_format(IoFormat::Tptp);
+        let parsed_negative =
+            clause_pcl_parse(&mut negative, &mut bank, ProblemType::FirstOrder).unwrap();
+        assert_eq!(parsed_negative.query_tptp_type(), CP_TYPE_CONJECTURE);
     }
 
     #[test]
