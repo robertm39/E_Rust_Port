@@ -19,6 +19,7 @@ pub mod g_lithash;
 pub mod garbage_coll;
 pub mod groundconstr;
 pub mod grounding;
+pub mod neweval;
 pub mod propclauses;
 pub mod subsumption;
 pub mod subterm_index;
