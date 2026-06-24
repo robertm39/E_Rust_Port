@@ -1,7 +1,11 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::clauses::clause::{
+    clause_parse_with_options, clause_print_lop_format_string, clause_starts_maybe, Clause,
+    ClauseParseOptions,
+};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_TYPE_CONJECTURE,
 };
@@ -13,6 +17,7 @@ use crate::clauses::freqvectors::{
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::clauses::tautologies::clause_is_tautology;
+use crate::inout::scanner::Scanner;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -193,6 +198,45 @@ impl ClauseSet {
             output.push('\n');
         }
         output
+    }
+
+    /// Parses the C `ClauseSetParseList` loop over the currently ported simple
+    /// clause parser.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `scanner` is in `IoFormat::Auto`, matching the clause parser's
+    /// concrete-format precondition.
+    pub fn parse_list(
+        &mut self,
+        scanner: &mut Scanner,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<i64, Diagnostic> {
+        self.parse_list_with_options(scanner, bank, problem_type, ClauseParseOptions::default())
+    }
+
+    /// Parses clauses until the current token no longer starts a clause,
+    /// inserting each parsed clause in set order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `scanner` is in `IoFormat::Auto`, matching the clause parser's
+    /// concrete-format precondition.
+    pub fn parse_list_with_options(
+        &mut self,
+        scanner: &mut Scanner,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        options: ClauseParseOptions,
+    ) -> Result<i64, Diagnostic> {
+        let mut count = 0;
+        while clause_starts_maybe(scanner) {
+            let clause = clause_parse_with_options(scanner, bank, problem_type, options)?;
+            self.insert(clause);
+            count += 1;
+        }
+        Ok(count)
     }
 
     pub fn insert(&mut self, mut clause: Clause) {
@@ -883,6 +927,7 @@ mod tests {
         clause_set_stack_cardinality, ClauseSet,
     };
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -897,6 +942,7 @@ mod tests {
         FvCollectLayout, FvIndexType,
     };
     use crate::clauses::neweval::{evals_alloc, EvalCell};
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1028,6 +1074,38 @@ mod tests {
             set.print_lop_prefix_string(&bank, "# "),
             "# set_print_a=set_print_b <- .\n# set_print_b=set_print_c <- set_print_c=set_print_a.\n"
         );
+    }
+
+    #[test]
+    fn parse_list_reads_clauses_until_non_clause_start() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("p(a). q(a) <- r(a). )", false).unwrap();
+        scanner.set_format(IoFormat::Lop);
+        let mut set = ClauseSet::new();
+
+        assert_eq!(
+            set.parse_list(&mut scanner, &mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            2
+        );
+
+        assert_eq!(set.members(), 2);
+        assert_eq!(set.literals(), 3);
+        assert_eq!(scanner.current_token().literal(), ")");
+        assert_eq!(
+            set.print_lop_string(&bank, true),
+            "p(a) <- .\nq(a) <- r(a).\n"
+        );
+
+        let mut empty = Scanner::from_user_string(")", false).unwrap();
+        empty.set_format(IoFormat::Lop);
+        assert_eq!(
+            set.parse_list(&mut empty, &mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            0
+        );
+        assert_eq!(empty.current_token().literal(), ")");
+        assert_eq!(set.members(), 2);
     }
 
     #[test]
