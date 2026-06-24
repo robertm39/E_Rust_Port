@@ -246,6 +246,12 @@ Source files reviewed: `HEURISTICS/che_clausesetfeatures.h`, `HEURISTICS/che_cla
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SpecFeaturesPrint` prints the higher-order tail fields after `clause_avg_depth`, but `SpecFeaturesParse` still expects the older vector shape ending at `clause_avg_depth` before `): class`. Rust preserves these as separate print and legacy parse surfaces instead of making them round-trip.
+- `SpecTypeString` builds 21 classification bytes in a 22-byte local buffer, accepts masks with length 13 through 22, and returns only 21 bytes via `SecureStrndup(result, 21)`. A 22nd mask byte can affect only the C buffer terminator and is not observable in the returned string.
+- `SpecFeaturesParse` accepts `G`, `H`, or `U` for the axiom class but only `H` or `U` for the goal class, even though `SpecTypeString` can encode general goals as `G`.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

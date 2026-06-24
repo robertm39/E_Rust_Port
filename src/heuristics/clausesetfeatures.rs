@@ -1,3 +1,5 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
@@ -5,6 +7,8 @@ use crate::heuristics::clausefeatures::{
     clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
     clause_count_unorientable_literals, clause_count_variable_set, clause_tptp_depth_info_add,
 };
+use crate::inout::basicparser::{parse_float, parse_int, parse_plain_filename};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -111,6 +115,12 @@ pub const DEFS_PERC_MEDIUM_DEFAULT: f64 = 0.15;
 pub const DEFS_PERC_LARGE_DEFAULT: f64 = 0.5;
 pub const PERC_APPLIT_MEDIUM_DEFAULT: f64 = 0.1;
 pub const PERC_APPLIT_LARGE_DEFAULT: f64 = 0.5;
+pub const SPEC_STRING_MEM: usize = 22;
+pub const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
+pub const DEFAULT_CLASS_MASK: &str = "aaaaaaaaaaaaa";
+
+const SPEC_TYPE_LEN: usize = SPEC_STRING_MEM - 1;
+const SPEC_FEATURE_ENCODING: &[u8] = b"UHGNSPFSMFSMFSMFSMSML0123SMLSMDFSHFSMFSMFSM";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpecLimits {
@@ -227,6 +237,11 @@ impl SpecLimits {
             ..Self::alloc()
         }
     }
+}
+
+#[must_use]
+pub const fn create_default_spec_limits() -> SpecLimits {
+    SpecLimits::default_auto()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -589,6 +604,225 @@ pub fn spec_features_add_eval(features: &mut SpecFeatureCell, limits: &SpecLimit
     };
 }
 
+#[must_use]
+pub fn spec_features_print_string(features: &SpecFeatureCell) -> String {
+    format!(
+        concat!(
+            "( {:3}, {:3}, {:3}, {:3}, {:3}, {:3}, {:3}, {:3}, {:3},",
+            " {:3}, {:3}, {:3}, {:3}, {:3}, {:3}, {:8.6}, {:8.6},",
+            " {:3}, {:3}, {:3}, {:3}, {:3}, {:3}, {:3}, {:8.6}, {:8.6}, {}, {} )"
+        ),
+        features.goals,
+        features.axioms,
+        features.clauses,
+        features.literals,
+        features.term_cells,
+        features.unitgoals,
+        features.unitaxioms,
+        features.horngoals,
+        features.hornaxioms,
+        features.eq_clauses,
+        features.peq_clauses,
+        features.groundunitaxioms,
+        features.groundgoals,
+        features.groundpositiveaxioms,
+        features.positiveaxioms,
+        features.ng_unit_axioms_part,
+        features.ground_positive_axioms_part,
+        features.max_fun_arity,
+        features.avg_fun_arity,
+        features.sum_fun_arity,
+        features.clause_max_depth,
+        features.clause_avg_depth,
+        features.order,
+        features.num_of_definitions,
+        features.perc_of_form_defs,
+        features.perc_of_appvar_lits,
+        bool_string(features.quantifies_booleans),
+        bool_string(features.has_defined_choice),
+    )
+}
+
+/// Encodes the C `SpecTypeString` classification using the process problem type.
+///
+/// # Panics
+///
+/// Panics if `mask` is shorter than 13 bytes or longer than 22 bytes, matching
+/// the C assertion on `strlen(mask)`.
+#[must_use]
+pub fn spec_type_string(features: &SpecFeatureCell, mask: &str) -> String {
+    spec_type_string_for_problem(features, mask, problem_type())
+}
+
+/// Encodes the C `SpecTypeString` classification for an explicit problem type.
+///
+/// # Panics
+///
+/// Panics if `mask` is shorter than 13 bytes or longer than 22 bytes, matching
+/// the C assertion on `strlen(mask)`.
+#[must_use]
+pub fn spec_type_string_for_problem(
+    features: &SpecFeatureCell,
+    mask: &str,
+    problem_type: ProblemType,
+) -> String {
+    assert!((13..=SPEC_STRING_MEM).contains(&mask.len()));
+    let mut result = [b'-'; SPEC_TYPE_LEN];
+    result[0] = if problem_type == ProblemType::HigherOrder {
+        b'H'
+    } else {
+        b'F'
+    };
+    result[1] = spec_feature_encoding(features.axiomtypes);
+    result[2] = spec_feature_encoding(features.goaltypes);
+    result[3] = spec_feature_encoding(features.eq_content);
+    result[4] = spec_feature_encoding(features.ng_unit_content);
+    result[5] = if features.goals_are_ground {
+        b'G'
+    } else {
+        b'N'
+    };
+    result[6] = spec_feature_encoding(features.set_clause_size);
+    result[7] = spec_feature_encoding(features.set_literal_size);
+    result[8] = spec_feature_encoding(features.set_termcell_size);
+    result[9] = spec_feature_encoding(features.ground_positive_content);
+    result[10] = spec_feature_encoding(features.max_fun_ar_class);
+    result[11] = spec_feature_encoding(features.avg_fun_ar_class);
+    result[12] = spec_feature_encoding(features.sum_fun_ar_class);
+    result[13] = spec_feature_encoding(features.max_depth_class);
+    result[14] = spec_feature_encoding(features.order_class);
+    result[15] = spec_feature_encoding(features.goal_order_class);
+    result[16] = spec_feature_encoding(features.defs_class);
+    result[17] = spec_feature_encoding(features.form_defs_class);
+    result[18] = spec_feature_encoding(features.appvar_lits_class);
+    result[19] = if features.quantifies_booleans {
+        b'B'
+    } else {
+        b'N'
+    };
+    result[20] = if features.has_defined_choice {
+        b'C'
+    } else {
+        b'N'
+    };
+
+    for (index, mask_byte) in mask.bytes().take(SPEC_TYPE_LEN).enumerate() {
+        if mask_byte == b'-' {
+            result[index] = b'-';
+        }
+    }
+
+    String::from_utf8_lossy(&result).into_owned()
+}
+
+#[must_use]
+pub fn spec_type_print_string(features: &SpecFeatureCell, mask: &str) -> String {
+    spec_type_string(features, mask)
+}
+
+pub fn spec_features_parse(
+    scanner: &mut Scanner,
+    features: &mut SpecFeatureCell,
+) -> Result<(), Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    features.goals = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.axioms = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.clauses = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.literals = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.term_cells = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.unitgoals = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.unitaxioms = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.horngoals = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.hornaxioms = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.eq_clauses = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.peq_clauses = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.groundunitaxioms = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.groundgoals = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.groundpositiveaxioms = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.positiveaxioms = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.ng_unit_axioms_part = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.ground_positive_axioms_part = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.max_fun_arity = parse_i32(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.avg_fun_arity = parse_i32(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.sum_fun_arity = parse_i32(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.clause_max_depth = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    features.clause_avg_depth = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::COLON)?;
+
+    let class = parse_plain_filename(scanner)?;
+    parse_spec_class(features, &class)
+}
+
+#[must_use]
+pub fn spec_limits_print_string(limits: &SpecLimits) -> String {
+    format!(
+        concat!(
+            "[ {} | {} | {} | {} | {} | {} |",
+            " {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | ",
+            " {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | ",
+            " {} | {} | {} | {} ]\n"
+        ),
+        bool_int(limits.ngu_absolute),
+        c_g_float(limits.ngu_few_limit),
+        c_g_float(limits.ngu_many_limit),
+        bool_int(limits.gpc_absolute),
+        c_g_float(limits.gpc_few_limit),
+        c_g_float(limits.gpc_many_limit),
+        limits.ax_some_limit,
+        limits.ax_many_limit,
+        limits.lit_some_limit,
+        limits.lit_many_limit,
+        limits.term_medium_limit,
+        limits.term_large_limit,
+        limits.far_sum_medium_limit,
+        limits.far_sum_large_limit,
+        limits.depth_medium_limit,
+        limits.depth_deep_limit,
+        limits.symbols_medium_limit,
+        limits.symbols_large_limit,
+        limits.predc_medium_limit,
+        limits.predc_large_limit,
+        limits.pred_medium_limit,
+        limits.pred_large_limit,
+        limits.func_medium_limit,
+        limits.func_large_limit,
+        limits.fun_medium_limit,
+        limits.fun_large_limit,
+        limits.order_medium_limit,
+        limits.order_large_limit,
+        limits.num_of_lams_medium_limit,
+        limits.num_of_lams_large_limit,
+        limits.num_of_defs_medium_limit,
+        limits.num_of_defs_large_limit,
+        c_g_float(limits.perc_form_defs_medium_limit),
+        c_g_float(limits.perc_form_defs_large_limit),
+        c_g_float(limits.perc_app_lits_medium_limit),
+        c_g_float(limits.perc_app_lits_large_limit),
+    )
+}
+
 /// Collects the arity statistics used by the C strategy feature extractor.
 ///
 /// # Panics
@@ -800,12 +1034,102 @@ fn order_feature_class(order: i32) -> SpecFeatureClass {
     }
 }
 
+fn spec_feature_encoding(class: SpecFeatureClass) -> u8 {
+    let index = usize::try_from(class as i32)
+        .unwrap_or_else(|_| panic!("SpecFeatureClass discriminant must be non-negative"));
+    *SPEC_FEATURE_ENCODING
+        .get(index)
+        .unwrap_or_else(|| panic!("SpecFeatureClass discriminant must have a C encoding"))
+}
+
+fn parse_spec_class(features: &mut SpecFeatureCell, class: &str) -> Result<(), Diagnostic> {
+    let class = class.as_bytes();
+    if class.len() < 5 {
+        return Err(spec_class_error(
+            "Insufficient class information in class name(s) (to short)",
+        ));
+    }
+
+    features.axiomtypes = match class[0] {
+        b'G' => SpecFeatureClass::General,
+        b'H' => SpecFeatureClass::Horn,
+        b'U' => SpecFeatureClass::Unit,
+        _ => {
+            return Err(spec_class_error(
+                "Insufficient class information in class name(s)",
+            ));
+        }
+    };
+    features.goaltypes = match class[1] {
+        b'H' => SpecFeatureClass::Horn,
+        b'U' => SpecFeatureClass::Unit,
+        _ => {
+            return Err(spec_class_error(
+                "Insufficient class information in class name(s)",
+            ));
+        }
+    };
+    features.eq_content = match class[2] {
+        b'N' => SpecFeatureClass::NoEq,
+        b'S' => SpecFeatureClass::SomeEq,
+        b'P' => SpecFeatureClass::PureEq,
+        _ => {
+            return Err(spec_class_error(
+                "Insufficient class information in class name(s)",
+            ));
+        }
+    };
+    features.goals_are_ground = match class[4] {
+        b'G' => true,
+        b'N' => false,
+        _ => {
+            return Err(spec_class_error(
+                "Insufficient class information in class name(s)",
+            ));
+        }
+    };
+    Ok(())
+}
+
+fn spec_class_error(message: &str) -> Diagnostic {
+    Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
+}
+
+fn bool_string(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+const fn bool_int(value: bool) -> i32 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
+fn c_g_float(value: f64) -> String {
+    format!("{value}")
+}
+
 fn fcode_index(f_code: FunCode) -> usize {
     usize::try_from(f_code).unwrap_or_else(|_| panic!("f-code must fit feature-array index"))
 }
 
 fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn parse_i32(scanner: &mut Scanner) -> Result<i32, Diagnostic> {
+    parse_int(scanner).map(i64_to_i32)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn i64_to_i32(value: i64) -> i32 {
+    value as i32
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -833,9 +1157,12 @@ mod tests {
         clause_set_is_horn_set, clause_set_is_pure_equational_set, clause_set_is_unit_set,
         clause_set_max_literal_number, clause_set_max_standard_weight,
         clause_set_non_ground_axiom_part, clause_set_term_cells, clause_set_tptp_depth_info_add,
-        spec_features_add_basic_eval, spec_features_add_eval, SpecFeatureCell, SpecFeatureClass,
-        SpecLimits,
+        create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
+        spec_features_parse, spec_features_print_string, spec_limits_print_string,
+        spec_type_print_string, spec_type_string_for_problem, SpecFeatureCell, SpecFeatureClass,
+        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
@@ -845,6 +1172,7 @@ mod tests {
         clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
         clause_count_unorientable_literals, clause_count_variable_set, clause_tptp_depth_info_add,
     };
+    use crate::inout::scanner::Scanner;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
@@ -986,6 +1314,140 @@ mod tests {
         assert_f64_eq(auto.perc_form_defs_large_limit, 0.5);
         assert_f64_eq(auto.perc_app_lits_medium_limit, 0.1);
         assert_f64_eq(auto.perc_app_lits_large_limit, 0.5);
+        assert_eq!(create_default_spec_limits(), auto);
+        assert_eq!(SPEC_STRING_MEM, 22);
+        assert_eq!(DEFAULT_OUTPUT_DESCRIPTOR, "eigEIG");
+        assert_eq!(DEFAULT_CLASS_MASK, "aaaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn spec_type_string_matches_c_encoding_and_masking() {
+        let features = SpecFeatureCell {
+            axiomtypes: SpecFeatureClass::General,
+            goaltypes: SpecFeatureClass::Horn,
+            eq_content: SpecFeatureClass::SomeEq,
+            ng_unit_content: SpecFeatureClass::ManyPosNonGroundUnits,
+            goals_are_ground: false,
+            set_clause_size: SpecFeatureClass::SomeAxioms,
+            set_literal_size: SpecFeatureClass::ManyLiterals,
+            set_termcell_size: SpecFeatureClass::LargeTerms,
+            ground_positive_content: SpecFeatureClass::FewPosGround,
+            max_fun_ar_class: SpecFeatureClass::Arity2,
+            avg_fun_ar_class: SpecFeatureClass::Arity1,
+            sum_fun_ar_class: SpecFeatureClass::AritySumLarge,
+            max_depth_class: SpecFeatureClass::DepthDeep,
+            order_class: SpecFeatureClass::Ho,
+            goal_order_class: SpecFeatureClass::So,
+            defs_class: SpecFeatureClass::MediumDefs,
+            form_defs_class: SpecFeatureClass::ManyFormDefs,
+            appvar_lits_class: SpecFeatureClass::FewApplits,
+            quantifies_booleans: true,
+            has_defined_choice: false,
+            ..SpecFeatureCell::default()
+        };
+
+        assert_eq!(
+            spec_type_string_for_problem(&features, DEFAULT_CLASS_MASK, ProblemType::HigherOrder),
+            "HGHSMNSMLF21LDHSSMFBN"
+        );
+        assert_eq!(
+            spec_type_string_for_problem(&features, DEFAULT_CLASS_MASK, ProblemType::FirstOrder),
+            "FGHSMNSMLF21LDHSSMFBN"
+        );
+        assert_eq!(
+            spec_type_print_string(&features, &"-".repeat(22)),
+            "-".repeat(21)
+        );
+    }
+
+    #[test]
+    fn spec_features_print_string_matches_c_field_order() {
+        let features = SpecFeatureCell {
+            goals: 1,
+            axioms: 2,
+            clauses: 3,
+            literals: 4,
+            term_cells: 5,
+            unitgoals: 6,
+            unitaxioms: 7,
+            horngoals: 8,
+            hornaxioms: 9,
+            eq_clauses: 10,
+            peq_clauses: 11,
+            groundunitaxioms: 12,
+            groundgoals: 13,
+            groundpositiveaxioms: 14,
+            positiveaxioms: 15,
+            ng_unit_axioms_part: 0.25,
+            ground_positive_axioms_part: 0.75,
+            max_fun_arity: 16,
+            avg_fun_arity: 17,
+            sum_fun_arity: 18,
+            clause_max_depth: 19,
+            clause_avg_depth: 20,
+            order: 21,
+            num_of_definitions: 22,
+            perc_of_form_defs: 0.125,
+            perc_of_appvar_lits: 0.5,
+            quantifies_booleans: true,
+            has_defined_choice: false,
+            ..SpecFeatureCell::default()
+        };
+
+        assert_eq!(
+            spec_features_print_string(&features),
+            "(   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15, 0.250000, 0.750000,  16,  17,  18,  19,  20,  21,  22, 0.125000, 0.500000, true, false )"
+        );
+    }
+
+    #[test]
+    fn spec_features_parse_matches_c_legacy_shape_and_class_recovery() {
+        let mut features = SpecFeatureCell {
+            ng_unit_content: SpecFeatureClass::ManyPosNonGroundUnits,
+            ..SpecFeatureCell::default()
+        };
+        let mut scanner = Scanner::from_user_string(
+            "(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): UHSMG tail",
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        spec_features_parse(&mut scanner, &mut features).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(features.goals, 1);
+        assert_eq!(features.axioms, 2);
+        assert_eq!(features.clause_avg_depth, 20);
+        assert_eq!(features.axiomtypes, SpecFeatureClass::Unit);
+        assert_eq!(features.goaltypes, SpecFeatureClass::Horn);
+        assert_eq!(features.eq_content, SpecFeatureClass::SomeEq);
+        assert_eq!(
+            features.ng_unit_content,
+            SpecFeatureClass::ManyPosNonGroundUnits
+        );
+        assert!(features.goals_are_ground);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn spec_features_parse_rejects_general_goal_class_like_c() {
+        let mut features = SpecFeatureCell::default();
+        let mut scanner = Scanner::from_user_string(
+            "(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0.25,0.75,16,17,18,19,20): UGSFG",
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let error = spec_features_parse(&mut scanner, &mut features).unwrap_err();
+
+        assert!(error.to_string().contains("Insufficient class information"));
+    }
+
+    #[test]
+    fn spec_limits_print_string_matches_c_shape() {
+        assert_eq!(
+            spec_limits_print_string(&SpecLimits::alloc()),
+            "[ 1 | 1 | 3 | 1 | 2 | 5 | 1000 | 10000 | 400 | 4000 | 200 | 1500 | 4 | 29 | 0 | 6 |  100 | 1000 | 0 | 2 | 1225 | 4000 | 8 | 110 | 360 | 400 | 2 | 3 | 2 | 8 | 8 | 64 |  0.15 | 0.15 | 0.1 | 0.5 ]\n"
+        );
     }
 
     #[test]
