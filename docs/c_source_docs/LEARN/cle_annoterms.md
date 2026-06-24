@@ -127,6 +127,13 @@ Source files reviewed: `LEARN/cle_annoterms.h`, `LEARN/cle_annoterms.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `AnnoSetAlloc` eagerly creates the equality and recursive-clause representation symbols in the supplied term-bank signature (`$eq`, `$neq`, `$or`, `$cnil`) even when the set remains empty. Preserve this side effect when parsing knowledge-base annotation sets.
+- `AnnoTermParse` delegates term syntax to `TBTermParse`, then consumes `:`, an annotation list with an exact expected element count, and `.`. `AnnoSetParse` keeps parsing while the current token is `TermStartToken`, so an extra term-like token after the last annotated term is parsed as a malformed annotated term rather than ignored as trailing data.
+- `AnnoTermPrint` writes `term : annotations.` and `AnnotationListPrint` concatenates annotation entries without separators; set printing prefixes entries with a blank line and `# Annotated terms:`.
+- `AnnoSetRecToFlatEnc` mutates each stored annotated term in place and returns the number of terms visited.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

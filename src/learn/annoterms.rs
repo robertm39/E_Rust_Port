@@ -1,8 +1,14 @@
 use crate::basics::ddarrays::{DDArray, DDArrayIndex};
+use crate::basics::error::Diagnostic;
 use crate::basics::numtrees::NumTree;
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::learn::annotations::{
-    annotation_merge, Annotation, AnnotationTree, ANNOTATION_DEFAULT_SIZE,
+    annotation_list_parse, annotation_list_print_string, annotation_merge, Annotation,
+    AnnotationTree, ANNOTATION_DEFAULT_SIZE,
 };
+use crate::learn::clauseenc::flat_recode_rec_clause_rep;
+use crate::terms::functypes::func_symb_start_token;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +48,11 @@ impl AnnoTerm {
         } else {
             None
         }
+    }
+
+    pub fn rec_to_flat_enc(&mut self, bank: &mut TermBank) -> Result<(), Diagnostic> {
+        self.term = flat_recode_rec_clause_rep(bank, &self.term)?;
+        Ok(())
     }
 }
 
@@ -176,6 +187,88 @@ impl AnnoSet {
             }
         }
     }
+
+    pub fn rec_to_flat_enc(&mut self, bank: &mut TermBank) -> Result<i64, Diagnostic> {
+        let keys = self.set.iter().map(|(key, _entry)| key).collect::<Vec<_>>();
+        let mut result = 0_i64;
+        for key in keys {
+            let Some(entry) = self.set.find_mut(key) else {
+                continue;
+            };
+            entry.val1.rec_to_flat_enc(bank)?;
+            result += 1;
+        }
+        Ok(result)
+    }
+}
+
+#[must_use]
+pub fn anno_set_alloc(bank: &mut TermBank) -> AnnoSet {
+    bank.signature_mut().get_eqn_code(true);
+    bank.signature_mut().get_eqn_code(false);
+    bank.signature_mut().get_or_code();
+    bank.signature_mut().get_cnil_code();
+    AnnoSet::new()
+}
+
+pub fn anno_term_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    expected: i64,
+) -> Result<AnnoTerm, Diagnostic> {
+    let term = bank.parse_term_simple(scanner)?;
+    scanner.accept_tok(TokenType::COLON)?;
+    let mut annotations = AnnotationTree::new();
+    annotation_list_parse(scanner, &mut annotations, expected)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    Ok(AnnoTerm::new(term, annotations))
+}
+
+#[must_use]
+pub fn anno_term_print_string(term: &AnnoTerm, bank: &TermBank, fullterms: bool) -> String {
+    format!(
+        "{} : {}.",
+        bank.term_string(&term.term, fullterms),
+        annotation_list_print_string(&term.annotations)
+    )
+}
+
+pub fn anno_term_rec_to_flat_enc(
+    bank: &mut TermBank,
+    term: &mut AnnoTerm,
+) -> Result<(), Diagnostic> {
+    term.rec_to_flat_enc(bank)
+}
+
+pub fn anno_set_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    expected: i64,
+) -> Result<AnnoSet, Diagnostic> {
+    let mut set = anno_set_alloc(bank);
+    while anno_term_starts(scanner) {
+        let term = anno_term_parse(scanner, bank, expected)?;
+        set.add_term(term);
+    }
+    Ok(set)
+}
+
+#[must_use]
+pub fn anno_set_print_string(set: &AnnoSet, bank: &TermBank) -> String {
+    let mut result = "\n# Annotated terms:\n".to_owned();
+    for (_key, term) in set.iter() {
+        result.push_str(&anno_term_print_string(term, bank, true));
+        result.push('\n');
+    }
+    result
+}
+
+pub fn anno_set_rec_to_flat_enc(bank: &mut TermBank, set: &mut AnnoSet) -> Result<i64, Diagnostic> {
+    set.rec_to_flat_enc(bank)
+}
+
+fn anno_term_starts(scanner: &Scanner) -> bool {
+    scanner.test_tok(func_symb_start_token() | TokenType::MULT)
 }
 
 fn annotation_collect_max(max_values: &mut DDArray, annotation: &Annotation) {
@@ -218,9 +311,19 @@ fn dd_index(index: i64) -> DDArrayIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnnoSet, AnnoTerm};
+    use super::{
+        anno_set_alloc, anno_set_parse, anno_set_print_string, anno_term_parse,
+        anno_term_print_string, anno_term_rec_to_flat_enc, AnnoSet, AnnoTerm,
+    };
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::PatEqnDirection;
+    use crate::inout::scanner::{Scanner, TokenType};
     use crate::learn::annotations::{Annotation, AnnotationTree};
+    use crate::learn::clauseenc::rec_encode_clause_list_rep;
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
+    use crate::terms::typebanks::TypeBank;
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
@@ -251,6 +354,23 @@ mod tests {
             tree.store(annotation.key(), annotation, ());
         }
         tree
+    }
+
+    fn test_bank() -> TermBank {
+        TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation")
+    }
+
+    fn make_scanner(source: &str) -> Scanner {
+        Scanner::from_user_string(source, false).expect("scanner allocation")
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        let type_ = bank.signature().type_bank().i_type();
+        bank.signature_mut()
+            .declare_type(f_code, type_)
+            .expect("constant type declaration");
+        bank.create_const_term(f_code).expect("constant insertion")
     }
 
     #[test]
@@ -392,5 +512,77 @@ mod tests {
         assert_close(right_anno.count(), 1.0);
         assert_close(right_anno.value(1).unwrap(), 1.0);
         assert_close(right_anno.value(2).unwrap(), 0.5);
+    }
+
+    #[test]
+    fn anno_set_alloc_eagerly_creates_clause_encoding_symbols() {
+        let mut bank = test_bank();
+        assert_eq!(bank.signature().eqn_code(), 0);
+        assert_eq!(bank.signature().cnil_code(), 0);
+
+        let set = anno_set_alloc(&mut bank);
+
+        assert!(set.is_empty());
+        assert_ne!(bank.signature().eqn_code(), 0);
+        assert_ne!(bank.signature().neqn_code(), 0);
+        assert_ne!(bank.signature().or_code(), 0);
+        assert_ne!(bank.signature().cnil_code(), 0);
+    }
+
+    #[test]
+    fn anno_term_parse_and_print_preserve_c_shape() {
+        let mut bank = test_bank();
+        let mut scanner = make_scanner("f(a) : 2:(1,3.5),1:(2,4). tail");
+
+        let parsed = anno_term_parse(&mut scanner, &mut bank, 2).unwrap();
+
+        assert_eq!(bank.term_string(parsed.term(), true), "f(a)");
+        assert_eq!(parsed.annotations().nodes(), 2);
+        assert_eq!(scanner.current_token().literal(), "tail");
+        assert_eq!(
+            anno_term_print_string(&parsed, &bank, true),
+            "f(a) : 1:(2.000000,4.000000)2:(1.000000,3.500000)."
+        );
+    }
+
+    #[test]
+    fn anno_set_parse_merges_duplicate_terms_and_prints_sorted_entries() {
+        let mut bank = test_bank();
+        let mut scanner = make_scanner("f(a) : 1:(2,10). f(a) : 1:(3,20). g(a) : 2:(1,30).");
+
+        let set = anno_set_parse(&mut scanner, &mut bank, 2).unwrap();
+
+        assert_eq!(set.nodes(), 2);
+        assert_eq!(scanner.current_token().kind(), TokenType::NO_TOKEN);
+        let f_entry = set
+            .iter()
+            .find(|(_key, term)| bank.term_string(term.term(), true) == "f(a)")
+            .map(|(_key, term)| term)
+            .expect("merged f(a) entry");
+        let annotation = &f_entry.annotations().find(1).unwrap().val1;
+        assert_close(annotation.count(), 5.0);
+        assert_close(annotation.value(1).unwrap(), 16.0);
+        assert_eq!(
+            anno_set_print_string(&set, &bank),
+            "\n# Annotated terms:\nf(a) : 1:(5.000000,16.000000).\ng(a) : 2:(1.000000,30.000000).\n"
+        );
+    }
+
+    #[test]
+    fn anno_term_rec_to_flat_enc_rewrites_recursive_clause_terms() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let literal = Eqn::alloc(a, b, &mut bank, true).unwrap();
+        let rec =
+            rec_encode_clause_list_rep(&mut bank, &[(&literal, PatEqnDirection::Normal)]).unwrap();
+        let mut annotated = AnnoTerm::new(rec, annotation_tree(vec![annotation(1, 1.0, &[2.0])]));
+
+        anno_term_rec_to_flat_enc(&mut bank, &mut annotated).unwrap();
+
+        assert_eq!(
+            annotated.term().f_code(),
+            bank.signature_mut().get_or_n_code(1)
+        );
     }
 }
