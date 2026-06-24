@@ -8,6 +8,7 @@ use crate::terms::signature::Signature;
 use crate::terms::termtypes::Term;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 #[derive(Clone, Debug, Default)]
 pub struct FPTree<T>
@@ -132,6 +133,75 @@ where
         let start = result.len();
         self.collect_leaves_rek(result);
         result.len() - start
+    }
+
+    pub fn print_with<F>(&self, mut print_leaf: F) -> String
+    where
+        F: FnMut(&[FunCode], &Self, &mut String),
+    {
+        let mut output = String::new();
+        let mut payload_paths = Vec::new();
+        self.collect_payload_paths(&mut payload_paths);
+        for (path, leaf) in payload_paths {
+            print_leaf(&path, leaf, &mut output);
+        }
+        output
+    }
+
+    #[must_use]
+    pub fn distrib_string(&self) -> String {
+        let mut output = String::new();
+        let mut payload_paths = Vec::new();
+        self.collect_payload_paths(&mut payload_paths);
+        let leaves = payload_paths.len();
+        let entries = payload_paths
+            .iter()
+            .map(|(_path, leaf)| leaf.payload_nodes())
+            .sum::<usize>();
+        for (path, leaf) in payload_paths {
+            write_leaf_size(&path, leaf, &mut output);
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "C FPIndexDistribPrint casts long counters to double for the summary"
+        )]
+        let entries_per_leaf = entries as f64 / leaves as f64;
+        let _ = writeln!(
+            output,
+            "% {entries} entries, {leaves} leaves, {entries_per_leaf:.6} entries/leaf"
+        );
+        output
+    }
+
+    #[must_use]
+    pub fn dot_string<F>(&self, name: &str, sig: &Signature, mut print_payload: F) -> String
+    where
+        F: FnMut(&ObjTree<T>, &Signature) -> String,
+    {
+        let mut output = String::new();
+        let _ = writeln!(output, "graph {name}{{");
+        output.push_str("   rankdir=LR\n   nodesep=0.05\n");
+
+        let mut path = Vec::new();
+        self.write_dot_nodes(sig, &mut path, &mut output);
+        self.write_dot_edges(sig, &mut output);
+
+        let mut leaves = Vec::new();
+        self.collect_leaves(&mut leaves);
+        for leaf in leaves {
+            if let Some(payload) = &leaf.payload {
+                output.push_str(&print_payload(payload, sig));
+                let _ = writeln!(
+                    output,
+                    "   {} -- t{:p} [ranksep=0.1]",
+                    leaf.dot_node_id(),
+                    payload
+                );
+            }
+        }
+
+        output.push_str("}\n");
+        output
     }
 
     #[must_use]
@@ -421,6 +491,55 @@ where
             .map(|child| child.collect_distrib_rek(payload_sizes))
             .sum::<usize>()
     }
+
+    fn collect_payload_paths<'a>(&'a self, result: &mut Vec<(Vec<FunCode>, &'a Self)>) {
+        let mut path = Vec::new();
+        self.collect_payload_paths_rek(&mut path, result);
+    }
+
+    fn collect_payload_paths_rek<'a>(
+        &'a self,
+        path: &mut Vec<FunCode>,
+        result: &mut Vec<(Vec<FunCode>, &'a Self)>,
+    ) {
+        if self.payload.is_some() {
+            result.push((path.clone(), self));
+        }
+
+        for (sample, child) in &self.alternatives {
+            path.push(*sample);
+            child.collect_payload_paths_rek(path, result);
+            let _ = path.pop();
+        }
+    }
+
+    fn write_dot_nodes(&self, sig: &Signature, path: &mut Vec<FunCode>, output: &mut String) {
+        let label = fp_path_label(sig, path);
+        let _ = writeln!(output, "   {} [label=\"{}\"]", self.dot_node_id(), label);
+
+        for (sample, child) in &self.alternatives {
+            path.push(*sample);
+            child.write_dot_nodes(sig, path, output);
+            let _ = path.pop();
+        }
+    }
+
+    fn write_dot_edges(&self, sig: &Signature, output: &mut String) {
+        for (sample, child) in &self.alternatives {
+            let _ = writeln!(
+                output,
+                "   {} -- {} [label={}]",
+                self.dot_node_id(),
+                child.dot_node_id(),
+                fp_symbol(sig, *sample)
+            );
+            child.write_dot_edges(sig, output);
+        }
+    }
+
+    fn dot_node_id(&self) -> String {
+        format!("l{self:p}")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -528,6 +647,26 @@ where
         self.index.collect_leaves(result)
     }
 
+    pub fn print_with<F>(&self, print_leaf: F) -> String
+    where
+        F: FnMut(&[FunCode], &FPTree<T>, &mut String),
+    {
+        self.index.print_with(print_leaf)
+    }
+
+    #[must_use]
+    pub fn distrib_string(&self) -> String {
+        self.index.distrib_string()
+    }
+
+    #[must_use]
+    pub fn dot_string<F>(&self, name: &str, print_payload: F) -> String
+    where
+        F: FnMut(&ObjTree<T>, &Signature) -> String,
+    {
+        self.index.dot_string(name, self.sig, print_payload)
+    }
+
     #[must_use]
     pub fn collect_distrib(&self) -> FPIndexDistrib {
         self.index.collect_distrib()
@@ -540,6 +679,36 @@ fn symbol_arity(sig: &Signature, f_code: FunCode) -> i32 {
             .expect("discrimination-tree index requires known positive f-code")
     } else {
         0
+    }
+}
+
+fn write_leaf_size<T>(path: &[FunCode], leaf: &FPTree<T>, output: &mut String)
+where
+    T: Ord + Clone,
+{
+    output.push_str("% ");
+    for sample in path {
+        let _ = write!(output, "{sample:4}.");
+    }
+    let _ = writeln!(output, ":{} terms", leaf.payload_nodes());
+}
+
+fn fp_path_label(sig: &Signature, path: &[FunCode]) -> String {
+    path.iter()
+        .map(|sample| fp_symbol(sig, *sample))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn fp_symbol(sig: &Signature, symbol: FunCode) -> String {
+    match symbol {
+        BELOW_VAR => "B".to_owned(),
+        ANY_VAR => "A".to_owned(),
+        NOT_IN_TERM => "N".to_owned(),
+        _ => sig
+            .find_name(symbol)
+            .expect("fingerprint sample must name a signature symbol")
+            .to_owned(),
     }
 }
 
@@ -730,5 +899,73 @@ mod tests {
             .clear_payload();
         index.delete(&g);
         assert!(index.find(&g).is_none());
+    }
+
+    #[test]
+    fn distribution_prints_payload_paths_and_c_summary_shape() {
+        let data = test_signature();
+        let mut tree = FPTree::<i32>::new();
+
+        tree.insert(&IndexFingerprint::from_samples(vec![data.f]))
+            .store_payload(1);
+        tree.insert(&IndexFingerprint::from_samples(vec![data.f, ANY_VAR]))
+            .store_payload(2);
+
+        assert_eq!(
+            tree.distrib_string(),
+            format!(
+                "% {f:4}.:1 terms\n% {f:4}.{any_var:4}.:1 terms\n% 2 entries, 2 leaves, 1.000000 entries/leaf\n",
+                f = data.f,
+                any_var = ANY_VAR
+            )
+        );
+
+        let rendered = tree.print_with(|path, leaf, output| {
+            output.push('[');
+            for sample in path {
+                output.push_str(&sample.to_string());
+                output.push(',');
+            }
+            output.push_str("]=");
+            output.push_str(&leaf.payload_nodes().to_string());
+            output.push('\n');
+        });
+        assert_eq!(
+            rendered,
+            format!(
+                "[{f},]=1\n[{f},{any_var},]=1\n",
+                f = data.f,
+                any_var = ANY_VAR
+            )
+        );
+    }
+
+    #[test]
+    fn dot_prints_c_pointer_ids_and_only_structural_leaf_payload_edges() {
+        let data = test_signature();
+        let mut tree = FPTree::<i32>::new();
+
+        tree.insert(&IndexFingerprint::from_samples(vec![data.f]))
+            .store_payload(1);
+        tree.insert(&IndexFingerprint::from_samples(vec![data.f, ANY_VAR]))
+            .store_payload(2);
+
+        let dot = tree.dot_string("fp", &data.sig, |payload, _sig| {
+            format!(
+                "     t{:p} [shape=box label=\"{} terms\"]\n",
+                payload,
+                payload.nodes()
+            )
+        });
+
+        assert!(dot.starts_with("graph fp{\n   rankdir=LR\n   nodesep=0.05\n"));
+        assert!(dot.contains("[label=\"\"]\n"));
+        assert!(dot.contains("[label=\"f\"]\n"));
+        assert!(dot.contains("[label=\"f, A\"]\n"));
+        assert!(dot.contains("[label=f]\n"));
+        assert!(dot.contains("[label=A]\n"));
+        assert_eq!(dot.matches("shape=box").count(), 1);
+        assert_eq!(dot.matches("[ranksep=0.1]").count(), 1);
+        assert!(dot.ends_with("}\n"));
     }
 }
