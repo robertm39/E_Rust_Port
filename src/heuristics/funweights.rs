@@ -2,15 +2,24 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_parse_operator;
 
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FunWeightInitKind {
+    ExplicitSymbols,
+    ConjectureSymbols,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunWeightParam {
@@ -20,7 +29,14 @@ pub struct FunWeightParam {
     app_var_mult: f64,
     vweight: i64,
     fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    conj_fweight: i64,
+    conj_cweight: i64,
+    conj_pweight: i64,
     weight_stack: Vec<(String, i64)>,
+    axioms: Option<ClauseSet>,
+    init_kind: FunWeightInitKind,
     flimit: FunCode,
     fweights: Option<Vec<i64>>,
     f_occur: Option<PDIntArray>,
@@ -49,10 +65,58 @@ impl FunWeightParam {
             app_var_mult,
             vweight,
             fweight,
+            cweight: fweight,
+            pweight: fweight,
+            conj_fweight: fweight,
+            conj_cweight: fweight,
+            conj_pweight: fweight,
             weight_stack,
+            axioms: None,
+            init_kind: FunWeightInitKind::ExplicitSymbols,
             flimit: 0,
             fweights: None,
             f_occur: with_occurrences.then(|| PDIntArray::new_int(8, 0)),
+        }
+    }
+
+    #[must_use]
+    #[allow(clippy::similar_names)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible constructor mirrors ConjectureSymbolWeightInit without OCB"
+    )]
+    pub fn with_conjecture_symbols(
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        cweight: i64,
+        pweight: i64,
+        conj_fweight: i64,
+        conj_cweight: i64,
+        conj_pweight: i64,
+        axioms: &ClauseSet,
+        app_var_mult: f64,
+    ) -> Self {
+        Self {
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            conj_fweight,
+            conj_cweight,
+            conj_pweight,
+            weight_stack: Vec::new(),
+            axioms: Some(axioms.clone()),
+            init_kind: FunWeightInitKind::ConjectureSymbols,
+            flimit: 0,
+            fweights: None,
+            f_occur: None,
         }
     }
 
@@ -87,6 +151,36 @@ impl FunWeightParam {
     }
 
     #[must_use]
+    pub const fn cweight(&self) -> i64 {
+        self.cweight
+    }
+
+    #[must_use]
+    pub const fn pweight(&self) -> i64 {
+        self.pweight
+    }
+
+    #[must_use]
+    pub const fn conj_fweight(&self) -> i64 {
+        self.conj_fweight
+    }
+
+    #[must_use]
+    pub const fn conj_cweight(&self) -> i64 {
+        self.conj_cweight
+    }
+
+    #[must_use]
+    pub const fn conj_pweight(&self) -> i64 {
+        self.conj_pweight
+    }
+
+    #[must_use]
+    pub const fn axioms(&self) -> Option<&ClauseSet> {
+        self.axioms.as_ref()
+    }
+
+    #[must_use]
     pub fn weight_stack(&self) -> &[(String, i64)] {
         &self.weight_stack
     }
@@ -106,7 +200,16 @@ impl FunWeightParam {
             return;
         }
 
-        self.flimit = bank.signature().f_count() + 1;
+        match self.init_kind {
+            FunWeightInitKind::ExplicitSymbols => self.init_explicit_fun_weights(bank.signature()),
+            FunWeightInitKind::ConjectureSymbols => {
+                self.init_conjecture_symbol_weights(bank.signature());
+            }
+        }
+    }
+
+    fn init_explicit_fun_weights(&mut self, signature: &Signature) {
+        self.flimit = signature.f_count() + 1;
         let len = usize::try_from(self.flimit)
             .unwrap_or_else(|_| panic!("signature f-count must fit vector length"));
         let mut fweights = vec![0; len];
@@ -115,12 +218,47 @@ impl FunWeightParam {
         }
 
         for (name, weight) in &self.weight_stack {
-            let f_code = bank.signature().find_f_code(name);
+            let f_code = signature.find_f_code(name);
             if f_code != 0 && f_code < self.flimit {
                 let index = usize::try_from(f_code)
                     .unwrap_or_else(|_| panic!("positive f-code must fit vector index"));
                 fweights[index] = *weight;
             }
+        }
+
+        self.fweights = Some(fweights);
+    }
+
+    fn init_conjecture_symbol_weights(&mut self, signature: &Signature) {
+        self.flimit = signature.f_count() + 1;
+        let len = usize::try_from(self.flimit)
+            .unwrap_or_else(|_| panic!("signature f-count must fit vector length"));
+        let mut fweights = vec![0; len];
+
+        let axioms = self
+            .axioms
+            .as_ref()
+            .unwrap_or_else(|| panic!("ConjectureSymbolWeight requires proof-state axioms"));
+        for clause in axioms.iter() {
+            if clause.query_tptp_type() == CP_TYPE_NEG_CONJECTURE {
+                clause.add_symbol_distribution(&mut fweights);
+            }
+        }
+
+        for f_code in 1..self.flimit {
+            let index = usize::try_from(f_code)
+                .unwrap_or_else(|_| panic!("positive f-code must fit vector index"));
+            fweights[index] = if fweights[index] == 0 {
+                typed_symbol_weight(signature, f_code, self.fweight, self.cweight, self.pweight)
+            } else {
+                typed_symbol_weight(
+                    signature,
+                    f_code,
+                    self.conj_fweight,
+                    self.conj_cweight,
+                    self.conj_pweight,
+                )
+            };
         }
 
         self.fweights = Some(fweights);
@@ -186,6 +324,42 @@ pub fn sym_offset_weight_init(
 }
 
 #[must_use]
+#[allow(clippy::similar_names)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ConjectureSymbolWeightInit without prio/OCB"
+)]
+pub fn conjecture_symbol_weight_init(
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    conj_fweight: i64,
+    conj_cweight: i64,
+    conj_pweight: i64,
+    axioms: &ClauseSet,
+    app_var_mult: f64,
+) -> FunWeightParam {
+    FunWeightParam::with_conjecture_symbols(
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        conj_fweight,
+        conj_cweight,
+        conj_pweight,
+        axioms,
+        app_var_mult,
+    )
+}
+
+#[must_use]
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible helper mirrors FunWeightInit parameters without OCB"
@@ -247,6 +421,48 @@ pub fn sym_offset_weight_wfcb_init(
     )
 }
 
+#[must_use]
+#[allow(clippy::similar_names)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ConjectureSymbolWeightInit parameters without OCB"
+)]
+pub fn conjecture_symbol_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    conj_fweight: i64,
+    conj_cweight: i64,
+    conj_pweight: i64,
+    app_var_mult: f64,
+) -> Wfcb<FunWeightParam> {
+    wfcb_alloc(
+        generic_fun_weight_wfcb_compute,
+        prio_fun,
+        fun_weight_exit,
+        Some(conjecture_symbol_weight_init(
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            conj_fweight,
+            conj_cweight,
+            conj_pweight,
+            axioms,
+            app_var_mult,
+        )),
+    )
+}
+
 pub fn fun_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
     let (prio_fun, param) = parse_fun_weight_param(scanner, false)?;
     Ok(fun_weight_wfcb_init(
@@ -272,6 +488,138 @@ pub fn sym_offset_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<FunWeightPa
         param.fweight,
         param.weight_stack,
         param.app_var_mult,
+    ))
+}
+
+#[allow(clippy::similar_names)]
+pub fn conjecture_symbol_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let cweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conj_fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conj_cweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conj_pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_optional_app_var_mult(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(conjecture_symbol_weight_wfcb_init(
+        prio_fun,
+        axioms,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        conj_fweight,
+        conj_cweight,
+        conj_pweight,
+        app_var_mult,
+    ))
+}
+
+#[allow(clippy::similar_names)]
+pub fn conjecture_simplified_symbol_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conj_fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conj_pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_optional_app_var_mult(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(conjecture_symbol_weight_wfcb_init(
+        prio_fun,
+        axioms,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        fweight,
+        pweight,
+        conj_fweight,
+        conj_fweight,
+        conj_pweight,
+        app_var_mult,
+    ))
+}
+
+pub fn conjecture_relative_symbol_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conj_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let cweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_optional_app_var_mult(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(conjecture_symbol_weight_wfcb_init(
+        prio_fun,
+        axioms,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        f64_to_i64(conj_multiplier * i64_to_f64(fweight)),
+        f64_to_i64(conj_multiplier * i64_to_f64(cweight)),
+        f64_to_i64(conj_multiplier * i64_to_f64(pweight)),
+        app_var_mult,
     ))
 }
 
@@ -417,6 +765,15 @@ fn parse_fun_weight_param(
     ))
 }
 
+fn parse_optional_app_var_mult(scanner: &mut Scanner) -> Result<f64, Diagnostic> {
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+    Ok(app_var_mult)
+}
+
 fn parse_op_weight(
     scanner: &mut Scanner,
     signed_weight: bool,
@@ -447,18 +804,46 @@ fn f_code_to_pd_index(f_code: FunCode) -> PDArrayIndex {
         .unwrap_or_else(|_| panic!("positive f-code must fit dynamic-array index"))
 }
 
+fn typed_symbol_weight(
+    signature: &Signature,
+    f_code: FunCode,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+) -> i64 {
+    if signature.is_predicate(f_code) {
+        pweight
+    } else if signature.find_arity(f_code).unwrap_or(0) != 0 {
+        fweight
+    } else {
+        cweight
+    }
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn f64_to_i64(value: f64) -> i64 {
+    value as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        fun_weight_compute, fun_weight_init, fun_weight_parse, sym_offset_weight_compute,
-        sym_offset_weight_init, sym_offset_weight_parse,
+        conjecture_relative_symbol_weight_parse, conjecture_simplified_symbol_weight_parse,
+        conjecture_symbol_weight_parse, fun_weight_compute, fun_weight_init, fun_weight_parse,
+        sym_offset_weight_compute, sym_offset_weight_init, sym_offset_weight_parse,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
@@ -495,7 +880,10 @@ mod tests {
 
     fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
         let type_ = bank.signature().type_bank().default_type();
-        let arrow = alloc_arrow_type(vec![type_.clone(), type_.clone()]);
+        let arrow = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_.clone()]));
         let f_code = bank.signature_mut().insert_id(name, 1, false);
         bank.signature_mut()
             .declare_final_type(f_code, arrow)
@@ -513,6 +901,15 @@ mod tests {
         let g_of_b = typed_unary(bank, "g", &b);
         let literal = Eqn::alloc(f_of_a, g_of_b, bank, true).unwrap();
         Clause::alloc(EqnList::from_vec(vec![literal]))
+    }
+
+    fn negated_conjecture_axioms(bank: &mut TermBank) -> ClauseSet {
+        let a = typed_const(bank, "a");
+        let f_of_a = typed_unary(bank, "f", &a);
+        let literal = Eqn::alloc(f_of_a, a, bank, false).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        ClauseSet::from_clauses([clause])
     }
 
     #[test]
@@ -549,6 +946,73 @@ mod tests {
         let mut wfcb = fun_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
 
         assert_close(wfcb.compute_eval(&bank, &clause), 34.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn conjecture_simplified_symbol_weight_parse_marks_negated_conjecture_symbols() {
+        let mut bank = test_bank();
+        let axioms = negated_conjecture_axioms(&mut bank);
+        let clause = test_clause(&mut bank);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,10,99,1,88,1,1.0,1.0,1.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = conjecture_simplified_symbol_weight_parse(&mut scanner, &axioms)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 22.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+        let data = wfcb.data().expect("parser should install funweight data");
+        assert_eq!(data.fweight(), 10);
+        assert_eq!(data.cweight(), 10);
+        assert_eq!(data.pweight(), 99);
+        assert_eq!(data.conj_fweight(), 1);
+        assert_eq!(data.conj_cweight(), 1);
+        assert_eq!(data.conj_pweight(), 88);
+        assert_eq!(data.axioms().map(ClauseSet::len), Some(1));
+        assert_eq!(data.flimit(), bank.signature().f_count() + 1);
+    }
+
+    #[test]
+    fn conjecture_general_symbol_weight_parse_keeps_constant_weight_distinct() {
+        let mut bank = test_bank();
+        let axioms = negated_conjecture_axioms(&mut bank);
+        let clause = test_clause(&mut bank);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,10,3,99,1,2,88,1,1.0,1.0,1.0,2.5) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb =
+            conjecture_symbol_weight_parse(&mut scanner, &axioms).unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 16.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+        let data = wfcb.data().expect("parser should install funweight data");
+        assert_close(data.app_var_mult(), 2.5);
+        assert_eq!(data.cweight(), 3);
+        assert_eq!(data.conj_cweight(), 2);
+    }
+
+    #[test]
+    fn conjecture_relative_symbol_weight_parse_truncates_scaled_weights() {
+        let mut bank = test_bank();
+        let axioms = negated_conjecture_axioms(&mut bank);
+        let clause = test_clause(&mut bank);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,0.25,10,4,99,1,1.0,1.0,1.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = conjecture_relative_symbol_weight_parse(&mut scanner, &axioms)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let data = wfcb.data().expect("parser should install funweight data");
+        assert_eq!(data.conj_fweight(), 2);
+        assert_eq!(data.conj_cweight(), 1);
+        assert_eq!(data.conj_pweight(), 24);
+        assert_close(wfcb.compute_eval(&bank, &clause), 17.0);
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
         assert_eq!(scanner.current_token().literal(), "tail");
     }

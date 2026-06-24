@@ -9,7 +9,10 @@ use crate::heuristics::dagweight::{
 };
 use crate::heuristics::diversityweight::diversity_weight_parse;
 use crate::heuristics::fifo::fifo_eval_parse;
-use crate::heuristics::funweights::{fun_weight_parse, sym_offset_weight_parse};
+use crate::heuristics::funweights::{
+    conjecture_relative_symbol_weight_parse, conjecture_simplified_symbol_weight_parse,
+    conjecture_symbol_weight_parse, fun_weight_parse, sym_offset_weight_parse,
+};
 use crate::heuristics::gdweight::gd_clause_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
@@ -285,6 +288,9 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ClauseWeightAge"
             | "StaggeredWeight"
             | "GDWeight"
+            | "ConjectureSymbolWeight"
+            | "ConjectureGeneralSymbolWeight"
+            | "ConjectureRelativeSymbolWeight"
             | "FunWeight"
             | "SymOffsetWeight"
             | "RandomWeight"
@@ -350,6 +356,22 @@ pub fn weight_fun_parse_with_context(
         "GDWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
             Ok(Box::new(gd_clause_weight_parse(scanner, axioms)?))
+        }
+        "ConjectureSymbolWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(conjecture_simplified_symbol_weight_parse(
+                scanner, axioms,
+            )?))
+        }
+        "ConjectureGeneralSymbolWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(conjecture_symbol_weight_parse(scanner, axioms)?))
+        }
+        "ConjectureRelativeSymbolWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(conjecture_relative_symbol_weight_parse(
+                scanner, axioms,
+            )?))
         }
         "FunWeight" => Ok(Box::new(fun_weight_parse(scanner)?)),
         "SymOffsetWeight" => Ok(Box::new(sym_offset_weight_parse(scanner)?)),
@@ -520,8 +542,16 @@ mod tests {
         assert!(weight_fun_parser_is_ported("ClauseWeightAge"));
         assert!(weight_fun_parser_is_ported("StaggeredWeight"));
         assert!(weight_fun_parser_is_ported("GDWeight"));
+        assert!(weight_fun_parser_is_ported("ConjectureSymbolWeight"));
+        assert!(weight_fun_parser_is_ported("ConjectureGeneralSymbolWeight"));
+        assert!(weight_fun_parser_is_ported(
+            "ConjectureRelativeSymbolWeight"
+        ));
         assert!(weight_fun_parser_is_ported("FunWeight"));
         assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
+        assert!(!weight_fun_parser_is_ported(
+            "ConjectureRelativeTypeSymbolWeight"
+        ));
         assert!(!weight_fun_parser_is_ported("TSMWeight"));
     }
 
@@ -705,6 +735,9 @@ mod tests {
         let specs = [
             "StaggeredWeight(ConstPrio,1.0) tail",
             "GDWeight(ConstPrio,2,1,1.0,0.0,5) tail",
+            "ConjectureSymbolWeight(ConstPrio,10,99,1,88,1,1.0,1.0,1.0) tail",
+            "ConjectureGeneralSymbolWeight(ConstPrio,10,3,99,1,2,88,1,1.0,1.0,1.0) tail",
+            "ConjectureRelativeSymbolWeight(ConstPrio,0.5,10,4,99,1,1.0,1.0,1.0) tail",
         ];
 
         assert_eq!(context.axioms().map(ClauseSet::len), Some(0));
@@ -761,6 +794,16 @@ mod tests {
             });
         let Err(err) = weight_fun_parse(&mut no_context) else {
             panic!("context-backed weight function should fail without axioms");
+        };
+        assert!(err.to_string().contains("requires proof-state axioms"));
+
+        let mut conjecture_without_context =
+            Scanner::from_user_string("ConjectureSymbolWeight(ConstPrio,2,1,1,1,1,1,1,1)", false)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+        let Err(err) = weight_fun_parse(&mut conjecture_without_context) else {
+            panic!("conjecture symbol weight should fail without axioms");
         };
         assert!(err.to_string().contains("requires proof-state axioms"));
 
