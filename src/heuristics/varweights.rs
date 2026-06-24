@@ -16,6 +16,16 @@ use crate::terms::termtypes::Term;
 
 const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
+#[derive(Clone, Copy, Debug)]
+struct RefinedWeightParsePrefix {
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VarWeightParam {
     max_term_multiplier: f64,
@@ -208,6 +218,60 @@ pub fn tptp_type_weight_compute(param: &VarWeightParam, bank: &TermBank, clause:
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors TPTPTypeWeightInit parameters without OCB"
+)]
+pub fn tptp_type_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    conjecture_multiplier: f64,
+    hypothesis_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        tptp_type_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(tptp_type_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            conjecture_multiplier,
+            hypothesis_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn tptp_type_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    let prefix = parse_refined_weight_prefix(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let conjecture_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let hypothesis_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(tptp_type_weight_wfcb_init(
+        prefix.prio_fun,
+        prefix.fweight,
+        prefix.vweight,
+        prefix.max_term_multiplier,
+        prefix.max_literal_multiplier,
+        prefix.pos_multiplier,
+        conjecture_multiplier,
+        hypothesis_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub const fn sig_weight_init(
     fweight: i64,
     vweight: i64,
@@ -247,6 +311,55 @@ pub fn sig_weight_compute(
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors SigWeightInit parameters without OCB"
+)]
+pub fn sig_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    sig_size_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        sig_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(sig_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            sig_size_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn sig_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    let prefix = parse_refined_weight_prefix(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let sig_size_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(sig_weight_wfcb_init(
+        prefix.prio_fun,
+        prefix.fweight,
+        prefix.vweight,
+        prefix.max_term_multiplier,
+        prefix.max_literal_multiplier,
+        prefix.pos_multiplier,
+        sig_size_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
     reason = "C-compatible helper mirrors ProofWeightInit parameters without prio/OCB"
 )]
 pub const fn proof_weight_init(
@@ -280,6 +393,60 @@ pub fn proof_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Cl
     result *= 1.0
         + param.proof_size_multiplier * (1.0 / i64_to_f64(clause.proof_size().saturating_add(1)));
     result
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ProofWeightInit parameters without OCB"
+)]
+pub fn proof_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    proof_size_multiplier: f64,
+    proof_depth_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        proof_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(proof_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            proof_size_multiplier,
+            proof_depth_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn proof_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    let prefix = parse_refined_weight_prefix(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let proof_size_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let proof_depth_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(proof_weight_wfcb_init(
+        prefix.prio_fun,
+        prefix.fweight,
+        prefix.vweight,
+        prefix.max_term_multiplier,
+        prefix.max_literal_multiplier,
+        prefix.pos_multiplier,
+        proof_size_multiplier,
+        proof_depth_multiplier,
+        app_var_mult,
+    ))
 }
 
 #[must_use]
@@ -346,6 +513,55 @@ pub fn depth_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors DepthWeightInit parameters without OCB"
+)]
+pub fn depth_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    term_weight_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        depth_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(depth_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            term_weight_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn depth_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    let prefix = parse_refined_weight_prefix(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let term_weight_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(depth_weight_wfcb_init(
+        prefix.prio_fun,
+        prefix.fweight,
+        prefix.vweight,
+        prefix.max_term_multiplier,
+        prefix.max_literal_multiplier,
+        prefix.pos_multiplier,
+        term_weight_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub const fn weight_less_depth_init(
     fweight: i64,
     vweight: i64,
@@ -406,6 +622,55 @@ pub fn weight_less_depth_compute(param: &VarWeightParam, clause: &Clause) -> f64
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors WeightLessDepthInit parameters without OCB"
+)]
+pub fn weight_less_depth_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    term_depth_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        weight_less_depth_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(weight_less_depth_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            term_depth_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn weight_less_depth_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    let prefix = parse_refined_weight_prefix(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let term_depth_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(weight_less_depth_wfcb_init(
+        prefix.prio_fun,
+        prefix.fweight,
+        prefix.vweight,
+        prefix.max_term_multiplier,
+        prefix.max_literal_multiplier,
+        prefix.pos_multiplier,
+        term_depth_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub const fn nl_weight_init(
     fweight: i64,
     linear_var_weight: i64,
@@ -440,6 +705,66 @@ pub fn nl_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Claus
         param.app_var_mult,
         false,
     )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors NLWeightInit parameters without OCB"
+)]
+pub fn nl_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    linear_var_weight: i64,
+    repeat_var_weight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        nl_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(nl_weight_init(
+            fweight,
+            linear_var_weight,
+            repeat_var_weight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn nl_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let linear_var_weight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let repeat_var_weight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(nl_weight_wfcb_init(
+        prio_fun,
+        fweight,
+        linear_var_weight,
+        repeat_var_weight,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        app_var_mult,
+    ))
 }
 
 #[must_use]
@@ -529,14 +854,8 @@ pub fn pn_refined_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightPa
     let max_literal_multiplier = parse_float(scanner)?;
     scanner.accept_tok(TokenType::COMMA)?;
     let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
 
-    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
-    if scanner.test_tok(TokenType::COMMA) {
-        scanner.accept_tok(TokenType::COMMA)?;
-        app_var_mult = parse_float(scanner)?;
-    }
-
-    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     Ok(pn_refined_weight_wfcb_init(
         prio_fun,
         fweight,
@@ -589,10 +908,80 @@ fn pn_refined_weight_wfcb_compute(
     bank: &TermBank,
     clause: &Clause,
 ) -> f64 {
-    match data {
-        Some(data) => pn_refined_weight_compute(data, bank, clause),
-        None => panic!("PNRefinedweight WFCB requires initialized weight parameters"),
-    }
+    pn_refined_weight_compute(var_weight_data(data, "PNRefinedweight"), bank, clause)
+}
+
+fn tptp_type_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    tptp_type_weight_compute(var_weight_data(data, "TPTPTypeweight"), bank, clause)
+}
+
+fn sig_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    sig_weight_compute(
+        var_weight_data(data, "Sigweight"),
+        bank,
+        bank.signature(),
+        clause,
+    )
+}
+
+fn proof_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    proof_weight_compute(var_weight_data(data, "Proofweight"), bank, clause)
+}
+
+fn depth_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    depth_weight_compute(var_weight_data(data, "Depthweight"), clause)
+}
+
+fn weight_less_depth_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    weight_less_depth_compute(var_weight_data(data, "WLessDWeight"), clause)
+}
+
+fn nl_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    nl_weight_compute(var_weight_data(data, "NLweight"), bank, clause)
+}
+
+fn sym_type_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    sym_type_weight_compute(var_weight_data(data, "SymbolTypeweight"), clause)
+}
+
+fn clause_weight_age_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    clause_weight_age_compute(var_weight_data(data, "ClauseWeightAge"), bank, clause)
+}
+
+fn var_weight_data<'a>(data: Option<&'a mut VarWeightParam>, name: &str) -> &'a mut VarWeightParam {
+    data.unwrap_or_else(|| panic!("{name} WFCB requires initialized weight parameters"))
 }
 
 fn var_weight_exit(_data: VarWeightParam) {}
@@ -640,6 +1029,71 @@ pub fn sym_type_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors SymTypeWeightInit parameters without OCB"
+)]
+pub fn sym_type_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    cweight: i64,
+    pweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        sym_type_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(sym_type_weight_init(
+            fweight,
+            vweight,
+            cweight,
+            pweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn sym_type_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let cweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(sym_type_weight_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        cweight,
+        pweight,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub const fn clause_weight_age_init(
     fweight: i64,
     vweight: i64,
@@ -673,6 +1127,52 @@ pub fn clause_weight_age_compute(param: &VarWeightParam, bank: &TermBank, clause
 }
 
 #[must_use]
+pub fn clause_weight_age_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    pos_multiplier: f64,
+    weight_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        clause_weight_age_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(clause_weight_age_init(
+            fweight,
+            vweight,
+            pos_multiplier,
+            weight_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn clause_weight_age_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let weight_multiplier = parse_float(scanner)?;
+    let app_var_mult = parse_app_var_mult_and_close(scanner)?;
+
+    Ok(clause_weight_age_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        pos_multiplier,
+        weight_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub fn staggered_weight_init(stagger_factor: f64, axioms: &ClauseSet) -> VarWeightParam {
     let clause_max_size = axioms
         .find_max_standard_weight()
@@ -698,6 +1198,43 @@ pub fn clause_count_ext_symbols(clause: &Clause, signature: &Signature, min_arit
             .filter(|&f_code| is_counted_external_symbol(signature, f_code, min_arity))
             .count(),
     )
+}
+
+fn parse_refined_weight_prefix(
+    scanner: &mut Scanner,
+) -> Result<RefinedWeightParsePrefix, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+
+    Ok(RefinedWeightParsePrefix {
+        prio_fun,
+        fweight,
+        vweight,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+    })
+}
+
+fn parse_app_var_mult_and_close(scanner: &mut Scanner) -> Result<f64, Diagnostic> {
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(app_var_mult)
 }
 
 const fn base_refined_param(
@@ -769,12 +1306,14 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_count_ext_symbols, clause_weight_age_compute, clause_weight_age_init,
-        depth_weight_compute, depth_weight_init, nl_weight_compute, nl_weight_init,
-        pn_refined_weight_compute, pn_refined_weight_init, pn_refined_weight_parse,
-        proof_weight_compute, proof_weight_init, sig_weight_compute, sig_weight_init,
+        clause_weight_age_parse, depth_weight_compute, depth_weight_init, depth_weight_parse,
+        nl_weight_compute, nl_weight_init, nl_weight_parse, pn_refined_weight_compute,
+        pn_refined_weight_init, pn_refined_weight_parse, proof_weight_compute, proof_weight_init,
+        proof_weight_parse, sig_weight_compute, sig_weight_init, sig_weight_parse,
         staggered_weight_compute, staggered_weight_init, sym_type_weight_compute,
-        sym_type_weight_init, tptp_type_weight_compute, tptp_type_weight_init,
-        weight_less_depth_compute, weight_less_depth_init, VarWeightParam,
+        sym_type_weight_init, sym_type_weight_parse, tptp_type_weight_compute,
+        tptp_type_weight_init, tptp_type_weight_parse, weight_less_depth_compute,
+        weight_less_depth_init, weight_less_depth_parse, VarWeightParam,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -904,6 +1443,46 @@ mod tests {
     }
 
     #[test]
+    fn type_signature_and_proof_weight_parsers_wrap_existing_cores() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let mut type_clause = unit_clause(&mut bank, &a, &b, true);
+        type_clause.set_tptp_type(CP_TYPE_CONJECTURE);
+        let sig_clause = unit_clause(&mut bank, &a, &b, true);
+        let mut proof_clause = unit_clause(&mut bank, &a, &b, true);
+        proof_clause.set_proof_depth(2);
+        proof_clause.set_proof_size(3);
+        let mut type_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,1.0,1.0,1.0,7.0,5.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut sig_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,1.0,1.0,1.0,3.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut proof_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,1.0,1.0,1.0,8.0,6.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut type_wfcb =
+            tptp_type_weight_parse(&mut type_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut sig_wfcb = sig_weight_parse(&mut sig_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut proof_wfcb =
+            proof_weight_parse(&mut proof_scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(type_wfcb.compute_eval(&bank, &type_clause), 42.0);
+        assert_close(sig_wfcb.compute_eval(&bank, &sig_clause), 24.0);
+        assert_close(proof_wfcb.compute_eval(&bank, &proof_clause), 54.0);
+        assert_eq!(type_wfcb.compute_priority(&bank, &type_clause), PRIO_NORMAL);
+        assert_eq!(sig_wfcb.compute_priority(&bank, &sig_clause), PRIO_NORMAL);
+        assert_eq!(
+            proof_wfcb.compute_priority(&bank, &proof_clause),
+            PRIO_NORMAL
+        );
+        assert_eq!(type_scanner.current_token().literal(), "tail");
+        assert_eq!(sig_scanner.current_token().literal(), "tail");
+        assert_eq!(proof_scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
     fn depth_and_weight_less_depth_follow_c_literal_formulas() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a");
@@ -948,6 +1527,48 @@ mod tests {
         assert_eq!(nl_param.vlweight(), 7);
         assert_eq!(sym_param.cweight(), 3);
         assert_eq!(sym_param.pweight(), 11);
+    }
+
+    #[test]
+    fn structural_varweight_parsers_wrap_existing_cores() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let clause = unit_clause(&mut bank, &a, &b, true);
+        let mut depth_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,1.0,7.0,11.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut less_depth_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,1.0,7.0,0.5) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut nl_scanner = Scanner::from_user_string("(ConstPrio,2,7,1,1.0,1.0,1.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut sym_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3,11,1.0,1.0,1.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut depth_wfcb =
+            depth_weight_parse(&mut depth_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut less_depth_wfcb =
+            weight_less_depth_parse(&mut less_depth_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut nl_wfcb = nl_weight_parse(&mut nl_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut sym_wfcb =
+            sym_type_weight_parse(&mut sym_scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(depth_wfcb.compute_eval(&bank, &clause), 966.0);
+        assert_close(less_depth_wfcb.compute_eval(&bank, &clause), 63.0);
+        assert_close(nl_wfcb.compute_eval(&bank, &clause), 6.0);
+        assert_close(sym_wfcb.compute_eval(&bank, &clause), 6.0);
+        assert_eq!(depth_wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(
+            less_depth_wfcb.compute_priority(&bank, &clause),
+            PRIO_NORMAL
+        );
+        assert_eq!(nl_wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(sym_wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(depth_scanner.current_token().literal(), "tail");
+        assert_eq!(less_depth_scanner.current_token().literal(), "tail");
+        assert_eq!(nl_scanner.current_token().literal(), "tail");
+        assert_eq!(sym_scanner.current_token().literal(), "tail");
     }
 
     #[test]
@@ -998,6 +1619,22 @@ mod tests {
         assert_eq!(param.vweight(), 1);
         assert_close(param.max_term_multiplier(), 0.0);
         assert_close(param.max_literal_multiplier(), 0.0);
+    }
+
+    #[test]
+    fn clause_weight_age_parse_wraps_age_adjusted_weight() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let mut clause = unit_clause(&mut bank, &a, &b, true);
+        clause.set_create_date(17);
+        let mut scanner = Scanner::from_user_string("(ConstPrio,2,1,1.0,4.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = clause_weight_age_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 41.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]

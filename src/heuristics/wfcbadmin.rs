@@ -11,7 +11,11 @@ use crate::heuristics::fifo::fifo_eval_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::random::rand_weight_parse;
 use crate::heuristics::refinedweight::{clause_refined_weight2_parse, clause_refined_weight_parse};
-use crate::heuristics::varweights::pn_refined_weight_parse;
+use crate::heuristics::varweights::{
+    clause_weight_age_parse, depth_weight_parse, nl_weight_parse, pn_refined_weight_parse,
+    proof_weight_parse, sig_weight_parse, sym_type_weight_parse, tptp_type_weight_parse,
+    weight_less_depth_parse,
+};
 use crate::heuristics::wfcb::BoxedWfcb;
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 
@@ -212,6 +216,14 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "Refinedweight2"
             | "Diversityweight"
             | "PNRefinedweight"
+            | "TPTPTypeweight"
+            | "Sigweight"
+            | "NLweight"
+            | "SymbolTypeweight"
+            | "Depthweight"
+            | "WLessDWeight"
+            | "Proofweight"
+            | "ClauseWeightAge"
             | "RandomWeight"
             | "FIFOWeight"
             | "LIFOWeight"
@@ -249,6 +261,14 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
         "Refinedweight2" => Ok(Box::new(clause_refined_weight2_parse(scanner)?)),
         "Diversityweight" => Ok(Box::new(diversity_weight_parse(scanner)?)),
         "PNRefinedweight" => Ok(Box::new(pn_refined_weight_parse(scanner)?)),
+        "TPTPTypeweight" => Ok(Box::new(tptp_type_weight_parse(scanner)?)),
+        "Sigweight" => Ok(Box::new(sig_weight_parse(scanner)?)),
+        "NLweight" => Ok(Box::new(nl_weight_parse(scanner)?)),
+        "SymbolTypeweight" => Ok(Box::new(sym_type_weight_parse(scanner)?)),
+        "Depthweight" => Ok(Box::new(depth_weight_parse(scanner)?)),
+        "WLessDWeight" => Ok(Box::new(weight_less_depth_parse(scanner)?)),
+        "Proofweight" => Ok(Box::new(proof_weight_parse(scanner)?)),
+        "ClauseWeightAge" => Ok(Box::new(clause_weight_age_parse(scanner)?)),
         "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
         "LIFOWeight" => Ok(Box::new(lifo_eval_parse(scanner)?)),
@@ -401,7 +421,15 @@ mod tests {
         assert!(weight_fun_parser_is_ported("Refinedweight2"));
         assert!(weight_fun_parser_is_ported("Diversityweight"));
         assert!(weight_fun_parser_is_ported("PNRefinedweight"));
-        assert!(!weight_fun_parser_is_ported("TPTPTypeweight"));
+        assert!(weight_fun_parser_is_ported("TPTPTypeweight"));
+        assert!(weight_fun_parser_is_ported("Sigweight"));
+        assert!(weight_fun_parser_is_ported("NLweight"));
+        assert!(weight_fun_parser_is_ported("SymbolTypeweight"));
+        assert!(weight_fun_parser_is_ported("Depthweight"));
+        assert!(weight_fun_parser_is_ported("WLessDWeight"));
+        assert!(weight_fun_parser_is_ported("Proofweight"));
+        assert!(weight_fun_parser_is_ported("ClauseWeightAge"));
+        assert!(!weight_fun_parser_is_ported("StaggeredWeight"));
     }
 
     #[test]
@@ -525,6 +553,34 @@ mod tests {
     }
 
     #[test]
+    fn weight_fun_parse_dispatches_var_weight_family_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let specs = [
+            "TPTPTypeweight(ConstPrio,2,1,1.0,1.0,1.0,7.0,5.0) tail",
+            "Sigweight(ConstPrio,2,1,1.0,1.0,1.0,3.0) tail",
+            "NLweight(ConstPrio,2,7,1,1.0,1.0,1.0) tail",
+            "SymbolTypeweight(ConstPrio,2,1,3,11,1.0,1.0,1.0) tail",
+            "Depthweight(ConstPrio,2,1,3.0,1.0,7.0,11.0) tail",
+            "WLessDWeight(ConstPrio,2,1,3.0,1.0,7.0,0.5) tail",
+            "Proofweight(ConstPrio,2,1,1.0,1.0,1.0,8.0,6.0) tail",
+            "ClauseWeightAge(ConstPrio,2,1,1.0,4.0) tail",
+        ];
+
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let mut wfcb = weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+            let mut evaluations = evals_alloc(1);
+
+            wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
     fn weight_fun_parse_rejects_unknown_or_unported_names() {
         let mut unknown = Scanner::from_user_string("NoSuchWeight(ConstPrio)", false)
             .unwrap_or_else(|err| {
@@ -535,7 +591,7 @@ mod tests {
         };
         assert!(err.to_string().contains("Not a valid weight function"));
 
-        let mut unported = Scanner::from_user_string("TPTPTypeweight(ConstPrio)", false)
+        let mut unported = Scanner::from_user_string("StaggeredWeight(ConstPrio,1)", false)
             .unwrap_or_else(|err| {
                 panic!("{err}");
             });
