@@ -19,7 +19,7 @@ use crate::terms::termbanks::{
 use crate::terms::termfunc::{
     term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
     term_add_symbol_features, term_add_symbol_features_limited, term_add_type_distribution,
-    term_collect_fcodes, term_collect_ground_terms, term_collect_prop_variables,
+    term_app_encode, term_collect_fcodes, term_collect_ground_terms, term_collect_prop_variables,
     term_collect_variables, term_compute_function_ranks, term_dag_weight, term_depth,
     term_fsum_weight, term_has_f_code, term_is_def_term, term_is_untyped, term_lex_compare,
     term_non_linear_weight, term_standard_weight, term_struct_equal_deref,
@@ -1738,6 +1738,51 @@ pub fn eqn_write_deref(
     bank.write_term(output, &right, true)
 }
 
+/// Writes the C `EqnAppEncode` shape without mutating the source literal.
+///
+/// # Errors
+///
+/// Returns a diagnostic if app-encoding/type inference fails, or if the output
+/// writer reports a formatting error.
+///
+/// # Panics
+///
+/// Panics if the app-encoded term printer sees an uninitialized argument,
+/// matching the C term printing preconditions.
+pub fn eqn_write_app_encode(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    eqn: &Eqn,
+    negated: bool,
+) -> Result<(), Diagnostic> {
+    let positive = eqn.is_positive() ^ negated;
+    let left = term_app_encode(eqn.left(), bank.signature_mut())?;
+    if eqn.is_equ_lit(bank) {
+        let right = term_app_encode(eqn.right(), bank.signature_mut())?;
+        bank.write_term(output, &left, true)
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        if !positive {
+            output
+                .write_char('!')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        }
+        output
+            .write_char('=')
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        bank.write_term(output, &right, true)
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+    } else {
+        if !positive {
+            output
+                .write_char('~')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        }
+        bank.write_term(output, &left, true)
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+    }
+    Ok(())
+}
+
 /// Writes the C `EqnTSTPPrint` shape.
 ///
 /// # Panics
@@ -1791,6 +1836,26 @@ pub fn eqn_deref_string(bank: &TermBank, eqn: &Eqn, deref: DerefType) -> String 
     output
 }
 
+/// Returns the C `EqnAppEncode` rendering without mutating the source literal.
+///
+/// # Errors
+///
+/// Returns a diagnostic if app-encoding/type inference fails.
+///
+/// # Panics
+///
+/// Panics if the app-encoded term printer sees an uninitialized argument,
+/// matching the C term printing preconditions.
+pub fn eqn_app_encode_string(
+    bank: &mut TermBank,
+    eqn: &Eqn,
+    negated: bool,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    eqn_write_app_encode(&mut output, bank, eqn, negated)?;
+    Ok(output)
+}
+
 #[must_use]
 pub fn eqn_tstp_string(
     bank: &TermBank,
@@ -1812,7 +1877,9 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 
 #[cfg(test)]
 mod tests {
-    use super::{eqn_deref_string, eqn_string, eqn_tstp_string, Eqn, EqnPrintOptions};
+    use super::{
+        eqn_app_encode_string, eqn_deref_string, eqn_string, eqn_tstp_string, Eqn, EqnPrintOptions,
+    };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -2026,6 +2093,63 @@ mod tests {
         assert_eq!(
             eqn_deref_string(&bank, &positive, DerefType::Always),
             "deref_a=deref_b"
+        );
+    }
+
+    #[test]
+    fn eqn_app_encode_string_prints_temporary_encoded_terms() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "app_a");
+        let b = typed_const(&mut bank, "app_b");
+        let f_ab = typed_binary(&mut bank, "app_f", &a, &b);
+        let declared_f_type = bank
+            .signature()
+            .get_type(f_ab.f_code())
+            .expect("typed function has a type")
+            .clone();
+        let individual = bank.signature().type_bank().default_type();
+        let f_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(declared_f_type);
+        let prefix_type =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                ]));
+        let inner_app = format!(
+            "app_{}_{}_{}",
+            f_type.type_uid(),
+            individual.type_uid(),
+            prefix_type.type_uid()
+        );
+        let outer_app = format!(
+            "app_{}_{}_{}",
+            prefix_type.type_uid(),
+            individual.type_uid(),
+            individual.type_uid()
+        );
+        let encoded_left = format!("{outer_app}({inner_app}(app_f,app_a),app_b)");
+        let equality = Eqn::alloc(f_ab.clone(), a.clone(), &mut bank, true).unwrap();
+
+        assert_eq!(
+            eqn_app_encode_string(&mut bank, &equality, false).unwrap(),
+            format!("{encoded_left}=app_a")
+        );
+        assert_eq!(
+            eqn_app_encode_string(&mut bank, &equality, true).unwrap(),
+            format!("{encoded_left}!=app_a")
+        );
+        assert_eq!(bank.term_string(&f_ab, true), "app_f(app_a,app_b)");
+
+        let predicate = typed_pred_const(&mut bank, "app_p");
+        let true_term = bank.true_term().clone();
+        let pred_lit = Eqn::alloc(predicate, true_term, &mut bank, true).unwrap();
+        assert_eq!(
+            eqn_app_encode_string(&mut bank, &pred_lit, true).unwrap(),
+            "~app_p"
         );
     }
 
