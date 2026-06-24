@@ -9,6 +9,7 @@ pub mod fifo;
 pub mod funweights;
 pub mod gdweight;
 pub mod hcb;
+pub mod learning;
 pub mod levweight;
 pub mod lifo;
 pub mod normsubst;

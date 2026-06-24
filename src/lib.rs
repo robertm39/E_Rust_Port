@@ -6,5 +6,6 @@ pub mod basics;
 pub mod clauses;
 pub mod heuristics;
 pub mod inout;
+pub mod learn;
 pub mod prover;
 pub mod terms;
