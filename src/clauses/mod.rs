@@ -22,6 +22,7 @@ pub mod grounding;
 pub mod neweval;
 pub mod propclauses;
 pub mod relevance;
+pub mod sine;
 pub mod subsumption;
 pub mod subterm_index;
 pub mod subterm_tree;

@@ -144,6 +144,10 @@ Source files reviewed: `CLAUSES/ccl_sine.h`, `CLAUSES/ccl_sine.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `PStackClausePrintTSTP` prints clauses in increasing stack-index order, calls `ClauseTSTPPrint(out, clause, true, true)`, and appends one newline after each clause. Rust preserves the clause-stack text shape with explicit `ProblemType` and propagates diagnostics for the currently deferred typed/higher-order formula-closure branch; `PStackFormulaPrintTSTP` remains deferred until `WFormula` printing is ported.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
