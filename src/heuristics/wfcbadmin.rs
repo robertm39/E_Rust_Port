@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::clauseweight::{
     clause_weight_parse, cmax_weight_parse, default_weight_parse, lmax_weight_parse,
     uniq_weight_parse,
@@ -8,6 +9,7 @@ use crate::heuristics::dagweight::{
 };
 use crate::heuristics::diversityweight::diversity_weight_parse;
 use crate::heuristics::fifo::fifo_eval_parse;
+use crate::heuristics::gdweight::gd_clause_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
 use crate::heuristics::random::rand_weight_parse;
@@ -15,8 +17,8 @@ use crate::heuristics::refinedweight::{clause_refined_weight2_parse, clause_refi
 use crate::heuristics::simweight::sim_weight_parse;
 use crate::heuristics::varweights::{
     clause_weight_age_parse, depth_weight_parse, nl_weight_parse, pn_refined_weight_parse,
-    proof_weight_parse, sig_weight_parse, sym_type_weight_parse, tptp_type_weight_parse,
-    weight_less_depth_parse,
+    proof_weight_parse, sig_weight_parse, staggered_weight_parse, sym_type_weight_parse,
+    tptp_type_weight_parse, weight_less_depth_parse,
 };
 use crate::heuristics::wfcb::BoxedWfcb;
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
@@ -69,6 +71,39 @@ pub const WEIGHT_FUN_PARSE_FUN_NAMES: [&str; 46] = [
     "ConjectureStrucDistanceWeight",
     "GDWeight",
 ];
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WeightParseContext<'a> {
+    axioms: Option<&'a ClauseSet>,
+}
+
+impl<'a> WeightParseContext<'a> {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { axioms: None }
+    }
+
+    #[must_use]
+    pub const fn new(axioms: &'a ClauseSet) -> Self {
+        Self {
+            axioms: Some(axioms),
+        }
+    }
+
+    #[must_use]
+    pub const fn axioms(self) -> Option<&'a ClauseSet> {
+        self.axioms
+    }
+
+    fn require_axioms(self, scanner: &Scanner, name: &str) -> Result<&'a ClauseSet, Diagnostic> {
+        self.axioms.ok_or_else(|| {
+            weight_fun_error(
+                scanner,
+                &format!("Weight function parser requires proof-state axioms: {name}"),
+            )
+        })
+    }
+}
 
 pub struct WfcbAdmin {
     entries: Vec<WfcbAdminEntry>,
@@ -151,6 +186,15 @@ impl WfcbAdmin {
     }
 
     pub fn weight_fun_def_parse(&mut self, scanner: &mut Scanner) -> Result<String, Diagnostic> {
+        let context = WeightParseContext::empty();
+        self.weight_fun_def_parse_with_context(scanner, context)
+    }
+
+    pub fn weight_fun_def_parse_with_context(
+        &mut self,
+        scanner: &mut Scanner,
+        context: WeightParseContext<'_>,
+    ) -> Result<String, Diagnostic> {
         let name = if scanner
             .look_token(1)
             .kind()
@@ -165,7 +209,7 @@ impl WfcbAdmin {
             self.next_anonymous_name()
         };
 
-        let wfcb = weight_fun_parse(scanner)?;
+        let wfcb = weight_fun_parse_with_context(scanner, context)?;
         let stored_name = name.clone();
         self.add_wfcb(name, wfcb);
         Ok(stored_name)
@@ -175,6 +219,15 @@ impl WfcbAdmin {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<usize, Diagnostic> {
+        let context = WeightParseContext::empty();
+        self.weight_fun_def_list_parse_with_context(scanner, context)
+    }
+
+    pub fn weight_fun_def_list_parse_with_context(
+        &mut self,
+        scanner: &mut Scanner,
+        context: WeightParseContext<'_>,
+    ) -> Result<usize, Diagnostic> {
         let mut parsed = 0;
         while scanner.test_tok(TokenType::IDENTIFIER)
             && scanner
@@ -182,7 +235,7 @@ impl WfcbAdmin {
                 .kind()
                 .intersects(TokenType::EQUAL_SIGN | TokenType::OPEN_BRACKET)
         {
-            self.weight_fun_def_parse(scanner)?;
+            self.weight_fun_def_parse_with_context(scanner, context)?;
             parsed += 1;
         }
         Ok(parsed)
@@ -229,6 +282,8 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "OrientLMaxWeight"
             | "Simweight"
             | "ClauseWeightAge"
+            | "StaggeredWeight"
+            | "GDWeight"
             | "RandomWeight"
             | "FIFOWeight"
             | "LIFOWeight"
@@ -236,6 +291,14 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
 }
 
 pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> {
+    let context = WeightParseContext::empty();
+    weight_fun_parse_with_context(scanner, context)
+}
+
+pub fn weight_fun_parse_with_context(
+    scanner: &mut Scanner,
+    context: WeightParseContext<'_>,
+) -> Result<BoxedWfcb, Diagnostic> {
     scanner.check_tok(TokenType::IDENTIFIER)?;
     let name = scanner.current_token().literal();
     if get_weight_fun_parse_fun_index(&name).is_none() {
@@ -277,6 +340,14 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
         "OrientLMaxWeight" => Ok(Box::new(orient_lmax_weight_parse(scanner)?)),
         "Simweight" => Ok(Box::new(sim_weight_parse(scanner)?)),
         "ClauseWeightAge" => Ok(Box::new(clause_weight_age_parse(scanner)?)),
+        "StaggeredWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(staggered_weight_parse(scanner, axioms)?))
+        }
+        "GDWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(gd_clause_weight_parse(scanner, axioms)?))
+        }
         "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
         "LIFOWeight" => Ok(Box::new(lifo_eval_parse(scanner)?)),
@@ -298,10 +369,12 @@ fn weight_fun_error(scanner: &Scanner, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_weight_fun_parse_fun_index, weight_fun_parse, weight_fun_parser_is_ported,
-        wfcb_admin_alloc, WfcbAdmin, WEIGHT_FUN_PARSE_FUN_NAMES,
+        get_weight_fun_parse_fun_index, weight_fun_parse, weight_fun_parse_with_context,
+        weight_fun_parser_is_ported, wfcb_admin_alloc, WeightParseContext, WfcbAdmin,
+        WEIGHT_FUN_PARSE_FUN_NAMES,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::neweval::{evals_alloc, PRIO_NORMAL};
     use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
     use crate::inout::scanner::Scanner;
@@ -440,7 +513,9 @@ mod tests {
         assert!(weight_fun_parser_is_ported("OrientLMaxWeight"));
         assert!(weight_fun_parser_is_ported("Simweight"));
         assert!(weight_fun_parser_is_ported("ClauseWeightAge"));
-        assert!(!weight_fun_parser_is_ported("StaggeredWeight"));
+        assert!(weight_fun_parser_is_ported("StaggeredWeight"));
+        assert!(weight_fun_parser_is_ported("GDWeight"));
+        assert!(!weight_fun_parser_is_ported("TSMWeight"));
     }
 
     #[test]
@@ -615,6 +690,32 @@ mod tests {
     }
 
     #[test]
+    fn weight_fun_parse_with_context_dispatches_axiom_backed_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let axioms = ClauseSet::new();
+        let context = WeightParseContext::new(&axioms);
+        let specs = [
+            "StaggeredWeight(ConstPrio,1.0) tail",
+            "GDWeight(ConstPrio,2,1,1.0,0.0,5) tail",
+        ];
+
+        assert_eq!(context.axioms().map(ClauseSet::len), Some(0));
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let mut wfcb = weight_fun_parse_with_context(&mut scanner, context)
+                .unwrap_or_else(|err| panic!("{err}"));
+            let mut evaluations = evals_alloc(1);
+
+            wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
     fn weight_fun_parse_rejects_unknown_or_unported_names() {
         let mut unknown = Scanner::from_user_string("NoSuchWeight(ConstPrio)", false)
             .unwrap_or_else(|err| {
@@ -625,8 +726,17 @@ mod tests {
         };
         assert!(err.to_string().contains("Not a valid weight function"));
 
-        let mut unported = Scanner::from_user_string("StaggeredWeight(ConstPrio,1)", false)
+        let mut no_context = Scanner::from_user_string("StaggeredWeight(ConstPrio,1)", false)
             .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let Err(err) = weight_fun_parse(&mut no_context) else {
+            panic!("context-backed weight function should fail without axioms");
+        };
+        assert!(err.to_string().contains("requires proof-state axioms"));
+
+        let mut unported =
+            Scanner::from_user_string("TSMWeight(ConstPrio)", false).unwrap_or_else(|err| {
                 panic!("{err}");
             });
         let Err(err) = weight_fun_parse(&mut unported) else {

@@ -1184,8 +1184,46 @@ pub fn staggered_weight_init(stagger_factor: f64, axioms: &ClauseSet) -> VarWeig
 }
 
 #[must_use]
+pub fn staggered_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    stagger_factor: f64,
+    axioms: &ClauseSet,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        staggered_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(staggered_weight_init(stagger_factor, axioms)),
+    )
+}
+
+pub fn staggered_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let stagger_factor = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(staggered_weight_wfcb_init(prio_fun, stagger_factor, axioms))
+}
+
+#[must_use]
 pub fn staggered_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
     i64_to_f64(clause.standard_weight() / param.stagger_limit)
+}
+
+fn staggered_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    _bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    staggered_weight_compute(
+        data.unwrap_or_else(|| panic!("StaggeredWeight WFCB requires initialized parameters")),
+        clause,
+    )
 }
 
 #[must_use]
@@ -1310,10 +1348,10 @@ mod tests {
         nl_weight_compute, nl_weight_init, nl_weight_parse, pn_refined_weight_compute,
         pn_refined_weight_init, pn_refined_weight_parse, proof_weight_compute, proof_weight_init,
         proof_weight_parse, sig_weight_compute, sig_weight_init, sig_weight_parse,
-        staggered_weight_compute, staggered_weight_init, sym_type_weight_compute,
-        sym_type_weight_init, sym_type_weight_parse, tptp_type_weight_compute,
-        tptp_type_weight_init, tptp_type_weight_parse, weight_less_depth_compute,
-        weight_less_depth_init, weight_less_depth_parse, VarWeightParam,
+        staggered_weight_compute, staggered_weight_init, staggered_weight_parse,
+        sym_type_weight_compute, sym_type_weight_init, sym_type_weight_parse,
+        tptp_type_weight_compute, tptp_type_weight_init, tptp_type_weight_parse,
+        weight_less_depth_compute, weight_less_depth_init, weight_less_depth_parse, VarWeightParam,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -1655,6 +1693,26 @@ mod tests {
         let empty_param = staggered_weight_init(10.0, &ClauseSet::new());
         assert_eq!(empty_param.stagger_limit(), 1);
         assert_close(staggered_weight_compute(&empty_param, &target), 8.0);
+    }
+
+    #[test]
+    fn staggered_weight_parse_uses_axiom_set_limit() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let f_of_a = typed_unary(&mut bank, "f", &a);
+        let g_of_b = typed_unary(&mut bank, "g", &b);
+        let axiom = unit_clause(&mut bank, &a, &b, true);
+        let axioms = ClauseSet::from_clauses([axiom]);
+        let target = unit_clause(&mut bank, &f_of_a, &g_of_b, true);
+        let mut scanner = Scanner::from_user_string("(ConstPrio,0.5) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb =
+            staggered_weight_parse(&mut scanner, &axioms).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &target), 4.0);
+        assert_eq!(wfcb.compute_priority(&bank, &target), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]

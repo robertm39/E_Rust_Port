@@ -1,12 +1,18 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_ground, term_weight_compute};
 use crate::terms::termtypes::{Term, TP_IS_CONJECTURE_TERM};
 
 pub const DEFAULT_POS_MULT: f64 = 1.0;
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GdWeightEvaluator {
@@ -80,6 +86,29 @@ impl GdWeightEvaluator {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct GdWeightWfcbData {
+    evaluator: GdWeightEvaluator,
+    axioms: ClauseSet,
+}
+
+impl GdWeightWfcbData {
+    #[must_use]
+    pub fn new(evaluator: GdWeightEvaluator, axioms: ClauseSet) -> Self {
+        Self { evaluator, axioms }
+    }
+
+    #[must_use]
+    pub const fn evaluator(&self) -> &GdWeightEvaluator {
+        &self.evaluator
+    }
+
+    #[must_use]
+    pub const fn axioms(&self) -> &ClauseSet {
+        &self.axioms
+    }
+}
+
 #[must_use]
 pub const fn gd_clause_weight_init(
     fweight: i64,
@@ -97,6 +126,75 @@ pub const fn gd_clause_weight_init(
         goal_const,
         app_var_mult,
     )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors GDClauseWeightInit parameters without OCB"
+)]
+pub fn gd_clause_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    fweight: i64,
+    vweight: i64,
+    pos_multiplier: f64,
+    goal_multiplier: f64,
+    goal_const: i64,
+    app_var_mult: f64,
+) -> Wfcb<GdWeightWfcbData> {
+    wfcb_alloc(
+        gd_clause_weight_wfcb_compute,
+        prio_fun,
+        gd_clause_weight_exit,
+        Some(GdWeightWfcbData::new(
+            gd_clause_weight_init(
+                fweight,
+                vweight,
+                pos_multiplier,
+                goal_multiplier,
+                goal_const,
+                app_var_mult,
+            ),
+            axioms.clone(),
+        )),
+    )
+}
+
+pub fn gd_clause_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<GdWeightWfcbData>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let goal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let goal_const = parse_int(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(gd_clause_weight_wfcb_init(
+        prio_fun,
+        axioms,
+        fweight,
+        vweight,
+        pos_multiplier,
+        goal_multiplier,
+        goal_const,
+        app_var_mult,
+    ))
 }
 
 #[must_use]
@@ -197,6 +295,17 @@ pub fn gd_clause_weight_compute(
     gd_clause_weight(evaluator, bank, clause)
 }
 
+fn gd_clause_weight_wfcb_compute(
+    data: Option<&mut GdWeightWfcbData>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    let data = data.unwrap_or_else(|| panic!("GDWeight WFCB requires initialized parameters"));
+    data.evaluator.compute(&data.axioms, bank, clause)
+}
+
+fn gd_clause_weight_exit(_data: GdWeightWfcbData) {}
+
 fn apply_app_var_mult(weight: f64, term: &Term, app_var_mult: f64) -> f64 {
     if term.is_applied_free_var() {
         weight * app_var_mult
@@ -218,13 +327,16 @@ fn f64_to_i64(value: f64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        gd_clause_weight_compute, gd_clause_weight_init, gd_term_weight, DEFAULT_POS_MULT,
+        gd_clause_weight_compute, gd_clause_weight_init, gd_clause_weight_parse, gd_term_weight,
+        DEFAULT_POS_MULT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -299,6 +411,28 @@ mod tests {
         assert_eq!(evaluator.goal_const(), 5);
         assert_close(evaluator.app_var_mult(), 1.0);
         assert_close(DEFAULT_POS_MULT, 1.0);
+    }
+
+    #[test]
+    fn gd_weight_parse_initializes_goal_terms_from_axiom_context() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let mut goal_clause = unit_clause(&mut bank, &a, &b, false);
+        goal_clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let axioms = ClauseSet::from_clauses([goal_clause]);
+        let target = unit_clause(&mut bank, &a, &b, true);
+        let mut scanner = Scanner::from_user_string("(ConstPrio,2,1,3.0,0.0,5) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb =
+            gd_clause_weight_parse(&mut scanner, &axioms).unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!a.query_prop(TP_IS_CONJECTURE_TERM));
+        assert_close(wfcb.compute_eval(&bank, &target), 36.0);
+        assert!(a.query_prop(TP_IS_CONJECTURE_TERM));
+        assert!(b.query_prop(TP_IS_CONJECTURE_TERM));
+        assert_eq!(wfcb.compute_priority(&bank, &target), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]
