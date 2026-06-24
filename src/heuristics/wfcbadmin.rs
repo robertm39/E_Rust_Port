@@ -9,6 +9,7 @@ use crate::heuristics::dagweight::{
 };
 use crate::heuristics::diversityweight::diversity_weight_parse;
 use crate::heuristics::fifo::fifo_eval_parse;
+use crate::heuristics::funweights::{fun_weight_parse, sym_offset_weight_parse};
 use crate::heuristics::gdweight::gd_clause_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
@@ -284,6 +285,8 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ClauseWeightAge"
             | "StaggeredWeight"
             | "GDWeight"
+            | "FunWeight"
+            | "SymOffsetWeight"
             | "RandomWeight"
             | "FIFOWeight"
             | "LIFOWeight"
@@ -348,6 +351,8 @@ pub fn weight_fun_parse_with_context(
             let axioms = context.require_axioms(scanner, &name)?;
             Ok(Box::new(gd_clause_weight_parse(scanner, axioms)?))
         }
+        "FunWeight" => Ok(Box::new(fun_weight_parse(scanner)?)),
+        "SymOffsetWeight" => Ok(Box::new(sym_offset_weight_parse(scanner)?)),
         "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
         "LIFOWeight" => Ok(Box::new(lifo_eval_parse(scanner)?)),
@@ -515,6 +520,8 @@ mod tests {
         assert!(weight_fun_parser_is_ported("ClauseWeightAge"));
         assert!(weight_fun_parser_is_ported("StaggeredWeight"));
         assert!(weight_fun_parser_is_ported("GDWeight"));
+        assert!(weight_fun_parser_is_ported("FunWeight"));
+        assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
         assert!(!weight_fun_parser_is_ported("TSMWeight"));
     }
 
@@ -706,6 +713,28 @@ mod tests {
                 Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
             let mut wfcb = weight_fun_parse_with_context(&mut scanner, context)
                 .unwrap_or_else(|err| panic!("{err}"));
+            let mut evaluations = evals_alloc(1);
+
+            wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
+    fn weight_fun_parse_dispatches_fun_weight_family_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let specs = [
+            "FunWeight(ConstPrio,2,1,1.0,1.0,1.0) tail",
+            "SymOffsetWeight(ConstPrio,2,1,1.0,1.0,1.0) tail",
+        ];
+
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let mut wfcb = weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
             let mut evaluations = evals_alloc(1);
 
             wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
