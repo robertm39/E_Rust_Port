@@ -141,7 +141,7 @@ Source files reviewed: `ORDERINGS/cto_ocb.h`, `ORDERINGS/cto_ocb.c`.
 - On transitive-closure failure, `OCBPrecedenceAddTuple` pops and clears only the most recent stored pair instead of rolling the matrix all the way back to the saved old state. Keep this compatibility hazard visible before changing rollback semantics.
 - `OCBFindMinConst` is named/commented as finding a minimal constant, but the scan replaces the candidate when `OCBFunCompare(i, cand) == to_greater`. Rust therefore records the precedence-greater matching constant as the designated one.
 - `OCBSetMinConst` is declared in the header but has no implementation in `cto_ocb.c`; Rust provides an explicit setter for internal use, but C-linkage compatibility should treat the missing C definition as a source inconsistency.
-- `OCBTermMaxFunCode` skips argument zero in its recursive scan (`for(i=1; i<term->arity; i++)`). The Rust OCB slice has not ported term traversal yet; decide later whether to preserve this exactly or gate a corrected traversal behind reference tests.
+- `OCBTermMaxFunCode` skips argument zero in its recursive scan (`for(i=1; i<term->arity; i++)`). Rust preserves this exactly; decide later whether a corrected traversal belongs behind a compatibility switch once ordering reference tests cover the affected callers.
 
 ### Porting Focus
 

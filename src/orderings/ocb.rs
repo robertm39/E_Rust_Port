@@ -1,5 +1,6 @@
 //! Ordering-control block basics from `cto_ocb`.
 
+use crate::basics::error::Diagnostic;
 use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
 use crate::basics::pstacks::PStackPointer;
 use crate::heuristics::to_params::{
@@ -8,6 +9,8 @@ use crate::heuristics::to_params::{
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::simpletypes::{Type, TypeUniqueId};
+use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::{term_deref, DerefType, Term};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -420,6 +423,61 @@ impl OrderControlBlock {
         candidate
     }
 
+    /// Return the designated minimum term for `type_` from a term bank.
+    ///
+    /// # Errors
+    ///
+    /// Returns any term-bank diagnostic produced while creating or retrieving
+    /// the minimum term.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same Skolem type-declaration failure as
+    /// [`Self::find_min_const`].
+    pub fn designated_min_term(
+        &mut self,
+        terms: &mut TermBank,
+        type_: &Type,
+    ) -> Result<Term, Diagnostic> {
+        let min_const = self.find_min_const(terms.signature_mut(), type_);
+        terms.create_min_term(min_const)
+    }
+
+    /// Return one maximal function symbol occurring in `term`.
+    ///
+    /// This intentionally preserves the C loop bound that starts traversal at
+    /// argument index 1, so argument zero is not inspected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this OCB has no precedence storage, if an inspected argument
+    /// slot is uninitialized, or if a variable appears in an inspected
+    /// non-root argument and triggers the C-shaped positive-f-code assertion.
+    #[must_use]
+    pub fn term_max_fun_code(&self, signature: &Signature, term: &Term) -> FunCode {
+        assert!(
+            self.precedence.is_some() || self.prec_weights.is_some(),
+            "term maximum lookup requires OCB precedence storage"
+        );
+        let mut deref = DerefType::Once;
+        let term = term_deref(term, &mut deref);
+        if term.is_any_var() {
+            return 0;
+        }
+
+        let mut result = term.f_code();
+        for index in 1..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument slot must be initialized"));
+            let candidate = self.term_max_fun_code(signature, &arg);
+            if self.fun_compare(signature, candidate, result) == CompareResult::Greater {
+                result = candidate;
+            }
+        }
+        result
+    }
+
     pub fn reset_ho_var_map(&mut self) {}
 
     #[must_use]
@@ -537,6 +595,8 @@ mod tests {
         Signature, FP_IS_INTEGER, FP_IS_OBJECT, SIG_FALSE_CODE, SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_simple_sort, Type};
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
 
     fn signature() -> Signature {
@@ -779,6 +839,53 @@ mod tests {
         assert!(skolem > before);
         assert_eq!(signature.get_type(skolem), Some(&animal));
         assert_eq!(ocb.min_const(&animal), skolem);
+    }
+
+    #[test]
+    fn designated_min_term_uses_term_bank_min_term_cache() {
+        let mut bank = TermBank::new(signature()).unwrap_or_else(|err| panic!("{err}"));
+        let individual = bank.signature().type_bank().i_type();
+        let constant = typed_symbol(bank.signature_mut(), "a", &individual);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Lpo,
+            false,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+
+        let first = ocb
+            .designated_min_term(&mut bank, &individual)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let second = ocb
+            .designated_min_term(&mut bank, &individual)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(first.f_code(), constant);
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn term_max_fun_code_preserves_c_argument_zero_skip_and_deref_once() {
+        let mut signature = signature();
+        let root = signature.insert_id("f", 2, false);
+        let skipped = signature.insert_id("a", 0, false);
+        let inspected = signature.insert_id("b", 0, false);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, false, &signature, HoOrderKind::LfhoOrder);
+        ocb.precedence_add_tuple(&signature, root, inspected, CompareResult::Lesser);
+        ocb.precedence_add_tuple(&signature, inspected, skipped, CompareResult::Lesser);
+        let term = Term::top_alloc(root, 2);
+        term.set_argument(0, Term::const_cell_alloc(skipped));
+        term.set_argument(1, Term::const_cell_alloc(inspected));
+        let variable = Term::const_cell_alloc(-2);
+        variable.set_binding(Some(term.clone()));
+
+        assert_eq!(ocb.term_max_fun_code(&signature, &term), inspected);
+        assert_eq!(ocb.term_max_fun_code(&signature, &variable), inspected);
+        assert_eq!(
+            ocb.term_max_fun_code(&signature, &Term::const_cell_alloc(-4)),
+            0
+        );
     }
 
     #[test]
