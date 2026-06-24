@@ -1,10 +1,15 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::PatEqnDirection;
+use crate::clauses::eqn_props::{PatEqnDirection, EQUAL_PREDICATE};
 use crate::clauses::eqnlist::EqnList;
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::terms::functypes::func_symb_start_token;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::Term;
+use crate::terms::typecheck::{
+    type_declare_is_not_predicate, type_declare_is_predicate, TypeInferOptions,
+};
 
 /// Ordered literal/direction entries used by the C `PStack` clause-list shape.
 pub type ClauseListRep<'a> = [(&'a Eqn, PatEqnDirection)];
@@ -82,6 +87,30 @@ pub fn term_encode_eqn_list(
     }
 }
 
+/// Parses the C `ParseClauseTermRep` literal-list input and encodes it.
+///
+/// The accepted grammar follows the C call sequence:
+/// `EqnListParse(..., Semicolon)` followed by `<-.`, where the hyphen must be
+/// adjacent to `<` because C uses `AcceptInpTokNoSkip`.
+pub fn parse_clause_term_rep(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    flat: bool,
+) -> Result<Term, Diagnostic> {
+    if scanner.format() != IoFormat::Lop {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Clause term representations require LOP scanner format",
+        ));
+    }
+
+    let list = parse_lop_eqn_list(scanner, bank, TokenType::SEMICOLON)?;
+    scanner.accept_tok(TokenType::LESSER_SIGN)?;
+    scanner.accept_tok_no_skip(TokenType::HYPHEN)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    term_encode_eqn_list(bank, &list, flat)
+}
+
 /// Recodes a recursive `$or(..., $cnil)` clause representation as a flat one.
 pub fn flat_recode_rec_clause_rep(
     bank: &mut TermBank,
@@ -125,6 +154,76 @@ fn encoded_eqn_polarity(bank: &mut TermBank, encoded: &Term) -> Result<bool, Dia
     }
 }
 
+fn parse_lop_eqn_list(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    sep: TokenType,
+) -> Result<EqnList, Diagnostic> {
+    let mut list = EqnList::new();
+    if lop_eqn_list_starts(scanner) {
+        list.push(parse_lop_eqn(scanner, bank)?);
+        while scanner.test_tok(sep) {
+            scanner.next_token()?;
+            list.push(parse_lop_eqn(scanner, bank)?);
+        }
+    }
+    Ok(list)
+}
+
+fn lop_eqn_list_starts(scanner: &Scanner) -> bool {
+    scanner.test_tok(lop_term_start_token() | TokenType::TILDE_SIGN)
+}
+
+fn lop_term_start_token() -> TokenType {
+    func_symb_start_token() | TokenType::MULT
+}
+
+fn parse_lop_eqn(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Eqn, Diagnostic> {
+    let mut negate = false;
+    if scanner.test_tok(TokenType::TILDE_SIGN) {
+        negate = true;
+        scanner.next_token()?;
+    }
+
+    let (left, right, mut positive) = if scanner.test_id(EQUAL_PREDICATE) {
+        scanner.next_token()?;
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let left = bank.parse_term_simple(scanner)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        let right = bank.parse_term_simple(scanner)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        (left, right, true)
+    } else {
+        let left = bank.parse_term_simple(scanner)?;
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+            let positive = !scanner.test_tok(TokenType::NEG_EQUAL_SIGN);
+            scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+            let right = bank.parse_term_simple(scanner)?;
+            type_declare_is_not_predicate(
+                bank.signature_mut(),
+                &left,
+                TypeInferOptions::default(),
+            )?;
+            type_declare_is_not_predicate(
+                bank.signature_mut(),
+                &right,
+                TypeInferOptions::default(),
+            )?;
+            (left, right, positive)
+        } else {
+            if !left.is_free_var() {
+                type_declare_is_predicate(bank.signature_mut(), &left)?;
+            }
+            (left, bank.true_term().clone(), true)
+        }
+    };
+
+    if negate {
+        positive = !positive;
+    }
+    Eqn::alloc(left, right, bank, positive)
+}
+
 fn required_argument(term: &Term, index: usize) -> Result<Term, Diagnostic> {
     term.argument(index).ok_or_else(recursive_clause_error)
 }
@@ -152,13 +251,14 @@ fn recursive_clause_error() -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        flat_encode_clause_list_rep, flat_recode_rec_clause_rep, rec_encode_clause_list_rep,
-        term_encode_eqn_list,
+        flat_encode_clause_list_rep, flat_recode_rec_clause_rep, parse_clause_term_rep,
+        rec_encode_clause_list_rep, term_encode_eqn_list,
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::PatEqnDirection;
     use crate::clauses::eqnlist::EqnList;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
@@ -319,6 +419,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_clause_term_rep_preserves_order_and_lop_signs() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("a=b;~p<-.", false).unwrap();
+
+        let flat = parse_clause_term_rep(&mut scanner, &mut bank, true).unwrap();
+
+        assert_eq!(flat.f_code(), bank.signature_mut().get_or_n_code(2));
+        assert_encoded_names(
+            &bank,
+            &flat.argument(0).expect("first encoded literal"),
+            bank.signature().eqn_code(),
+            "a",
+            "b",
+        );
+        assert_encoded_names(
+            &bank,
+            &flat.argument(1).expect("second encoded literal"),
+            bank.signature().neqn_code(),
+            "p",
+            "$true",
+        );
+    }
+
+    #[test]
+    fn parse_clause_term_rep_accepts_empty_recursive_list() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("<-.", false).unwrap();
+
+        let rec = parse_clause_term_rep(&mut scanner, &mut bank, false).unwrap();
+
+        assert_eq!(rec.f_code(), bank.signature().cnil_code());
+    }
+
+    #[test]
+    fn parse_clause_term_rep_requires_no_skip_before_terminator_hyphen() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("a=b< -.", false).unwrap();
+
+        let error = parse_clause_term_rep(&mut scanner, &mut bank, true).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Hyphen"));
+    }
+
     fn test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation")
     }
@@ -345,6 +490,21 @@ mod tests {
         assert_eq!(encoded.f_code(), f_code);
         assert_eq!(encoded.argument(0).as_ref(), Some(left));
         assert_eq!(encoded.argument(1).as_ref(), Some(right));
+        assert!(encoded.is_shared());
+    }
+
+    fn assert_encoded_names(
+        bank: &TermBank,
+        encoded: &Term,
+        f_code: i64,
+        left_name: &str,
+        right_name: &str,
+    ) {
+        assert_eq!(encoded.f_code(), f_code);
+        let left = encoded.argument(0).expect("left encoded argument");
+        let right = encoded.argument(1).expect("right encoded argument");
+        assert_eq!(bank.signature().find_name(left.f_code()), Some(left_name));
+        assert_eq!(bank.signature().find_name(right.f_code()), Some(right_name));
         assert!(encoded.is_shared());
     }
 }
