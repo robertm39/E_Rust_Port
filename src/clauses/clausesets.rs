@@ -7,6 +7,7 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::eqn_props::EqnSide;
+use crate::clauses::tautologies::clause_is_tautology;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -249,6 +250,30 @@ impl ClauseSet {
         self.clauses = kept;
         self.recompute_literals();
         removed
+    }
+
+    /// Removes clauses proved tautological by E's ground-completion check.
+    ///
+    /// This plain `ClauseSet` currently has no demodulator index, matching the
+    /// C precondition asserted by `ClauseSetFilterTautologies`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if copying a candidate clause into `work_bank` or
+    /// inserting normalized terms fails.
+    pub fn filter_tautologies(&mut self, work_bank: &mut TermBank) -> Result<i64, Diagnostic> {
+        let mut removed = 0;
+        let mut kept = VecDeque::with_capacity(self.clauses.len());
+        while let Some(clause) = self.clauses.pop_front() {
+            if clause_is_tautology(work_bank, &clause)? {
+                removed += 1;
+            } else {
+                kept.push_back(clause);
+            }
+        }
+        self.clauses = kept;
+        self.recompute_literals();
+        Ok(removed)
     }
 
     #[must_use]
@@ -717,6 +742,35 @@ mod tests {
 
         assert_eq!(set.members(), 1);
         assert_eq!(set.literals(), 1);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![kept_id]
+        );
+    }
+
+    #[test]
+    fn filter_tautologies_removes_ground_completion_tautologies() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+        let kept = clause_from(vec![
+            literal(&mut bank, &a, &c, true),
+            literal(&mut bank, &a, &b, false),
+        ]);
+        let kept_id = kept.ident();
+        let tautology = clause_from(vec![
+            literal(&mut bank, &a, &c, true),
+            literal(&mut bank, &a, &b, false),
+            literal(&mut bank, &b, &c, false),
+        ]);
+        let mut set = ClauseSet::from_clauses([kept, tautology]);
+        let mut work_bank = TermBank::new(bank.signature().clone()).unwrap();
+
+        assert_eq!(set.filter_tautologies(&mut work_bank).unwrap(), 1);
+
+        assert_eq!(set.members(), 1);
+        assert_eq!(set.literals(), 2);
         assert_eq!(
             set.iter().map(Clause::ident).collect::<Vec<_>>(),
             vec![kept_id]

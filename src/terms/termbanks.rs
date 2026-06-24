@@ -13,8 +13,8 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
-    term_apply_arg as term_apply_arg_unshared, term_is_ground_compute, term_parse_operator,
-    term_sig_insert, term_standard_weight, var_print_string,
+    term_apply_arg as term_apply_arg_unshared, term_copy, term_is_ground_compute,
+    term_parse_operator, term_sig_insert, term_standard_weight, var_print_string,
 };
 use crate::terms::termtypes::{
     term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
@@ -105,6 +105,11 @@ impl TermBank {
     #[must_use]
     pub const fn vars(&self) -> &VarBank {
         &self.vars
+    }
+
+    #[must_use]
+    pub(crate) fn copy_term(&mut self, source: &Term, deref: DerefType) -> Term {
+        term_copy(source, &self.vars, Some(&mut self.db_vars), deref)
     }
 
     #[must_use]

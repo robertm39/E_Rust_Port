@@ -544,6 +544,14 @@ impl Eqn {
         std::mem::swap(&mut self.lterm, &mut self.rterm);
     }
 
+    pub(crate) fn set_left_raw(&mut self, term: Term) {
+        self.lterm = term;
+    }
+
+    pub(crate) fn set_right_raw(&mut self, term: Term) {
+        self.rterm = term;
+    }
+
     pub fn swap_sides(&mut self) {
         self.del_prop(EP_IS_ORIENTED);
         self.del_prop(EP_MAX_IS_UP_TO_DATE);

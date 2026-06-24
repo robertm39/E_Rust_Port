@@ -23,3 +23,4 @@ pub mod propclauses;
 pub mod subsumption;
 pub mod subterm_index;
 pub mod subterm_tree;
+pub mod tautologies;
