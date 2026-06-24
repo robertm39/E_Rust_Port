@@ -111,6 +111,17 @@ impl WfcbAdmin {
             .map(|entry| entry.wfcb.as_ref())
     }
 
+    pub fn find_wfcb_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut (dyn crate::heuristics::wfcb::WfcbOps + 'static)> {
+        self.entries
+            .iter_mut()
+            .rev()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.wfcb.as_mut())
+    }
+
     #[must_use]
     pub fn next_anonymous_name(&mut self) -> String {
         let name = format!("~${:09}", self.anon_counter);
@@ -147,7 +158,7 @@ mod tests {
         exit_count: Rc<Cell<i32>>,
     }
 
-    fn eval(data: Option<&TestData>, _clause: &Clause) -> f64 {
+    fn eval(data: Option<&mut TestData>, _clause: &Clause) -> f64 {
         data.map_or(0.0, |data| data.weight)
     }
 
@@ -198,7 +209,7 @@ mod tests {
         assert_eq!(admin.name(second), Some("other"));
         assert_eq!(
             admin
-                .find_wfcb("weight")
+                .find_wfcb_mut("weight")
                 .expect("duplicate name should be found")
                 .compute_eval(&clause)
                 .to_bits(),

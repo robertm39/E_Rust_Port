@@ -1,15 +1,21 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::neweval::{EvalCell, EvalPriority, PRIO_BEST};
 
-pub type ClauseEvalFun<Data> = fn(Option<&Data>, &Clause) -> f64;
+pub type ClauseEvalFun<Data> = fn(Option<&mut Data>, &Clause) -> f64;
 pub type ClausePrioFun = fn(&Clause) -> EvalPriority;
 pub type GenericExitFun<Data> = fn(Data);
 pub type BoxedWfcb = Box<dyn WfcbOps>;
 
 pub trait WfcbOps {
-    fn compute_eval(&self, clause: &Clause) -> f64;
+    fn compute_eval(&mut self, clause: &Clause) -> f64;
     fn compute_priority(&self, clause: &Clause) -> EvalPriority;
-    fn add_evaluation(&self, evaluations: &mut EvalCell, clause: &Clause, pos: usize, empty: bool);
+    fn add_evaluation(
+        &mut self,
+        evaluations: &mut EvalCell,
+        clause: &Clause,
+        pos: usize,
+        empty: bool,
+    );
 }
 
 pub struct Wfcb<Data> {
@@ -41,8 +47,8 @@ impl<Data> Wfcb<Data> {
     }
 
     #[must_use]
-    pub fn compute_eval(&self, clause: &Clause) -> f64 {
-        (self.eval_fun)(self.data.as_ref(), clause)
+    pub fn compute_eval(&mut self, clause: &Clause) -> f64 {
+        (self.eval_fun)(self.data.as_mut(), clause)
     }
 
     #[must_use]
@@ -60,7 +66,7 @@ impl<Data> Drop for Wfcb<Data> {
 }
 
 impl<Data> WfcbOps for Wfcb<Data> {
-    fn compute_eval(&self, clause: &Clause) -> f64 {
+    fn compute_eval(&mut self, clause: &Clause) -> f64 {
         Self::compute_eval(self, clause)
     }
 
@@ -68,7 +74,13 @@ impl<Data> WfcbOps for Wfcb<Data> {
         Self::compute_priority(self, clause)
     }
 
-    fn add_evaluation(&self, evaluations: &mut EvalCell, clause: &Clause, pos: usize, empty: bool) {
+    fn add_evaluation(
+        &mut self,
+        evaluations: &mut EvalCell,
+        clause: &Clause,
+        pos: usize,
+        empty: bool,
+    ) {
         clause_add_evaluation(self, evaluations, clause, pos, empty);
     }
 }
@@ -91,7 +103,7 @@ pub const fn wfcb_alloc<Data>(
 /// unchecked `clause->evaluations->evals[pos]` access after its non-null
 /// evaluation-list assertion.
 pub fn clause_add_evaluation<Data>(
-    wfcb: &Wfcb<Data>,
+    wfcb: &mut Wfcb<Data>,
     evaluations: &mut EvalCell,
     clause: &Clause,
     pos: usize,
@@ -121,7 +133,7 @@ mod tests {
         exit_count: Rc<Cell<i32>>,
     }
 
-    fn eval_with_data(data: Option<&EvalData>, _clause: &Clause) -> f64 {
+    fn eval_with_data(data: Option<&mut EvalData>, _clause: &Clause) -> f64 {
         data.map_or(0.0, |data| data.base)
     }
 
@@ -140,7 +152,7 @@ mod tests {
     #[test]
     fn allocation_preserves_callbacks_and_data_until_drop() {
         let exit_count = Rc::new(Cell::new(0));
-        let wfcb = wfcb_alloc(
+        let mut wfcb = wfcb_alloc(
             eval_with_data,
             constant_priority,
             record_exit,
@@ -174,7 +186,7 @@ mod tests {
     #[test]
     fn clause_add_evaluation_writes_heuristic_and_priority() {
         let exit_count = Rc::new(Cell::new(0));
-        let wfcb = wfcb_alloc(
+        let mut wfcb = wfcb_alloc(
             eval_with_data,
             constant_priority,
             record_exit,
@@ -186,7 +198,7 @@ mod tests {
         let clause = Clause::empty();
         let mut evaluations = evals_alloc(2);
 
-        clause_add_evaluation(&wfcb, &mut evaluations, &clause, 1, false);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &clause, 1, false);
 
         assert_eq!(
             evaluations.eval(1).heuristic().to_bits(),
@@ -198,7 +210,7 @@ mod tests {
     #[test]
     fn empty_clause_evaluation_uses_best_priority_but_still_computes_weight() {
         let exit_count = Rc::new(Cell::new(0));
-        let wfcb: Wfcb<EvalData> = wfcb_alloc(
+        let mut wfcb: Wfcb<EvalData> = wfcb_alloc(
             eval_with_data,
             constant_priority,
             record_exit,
@@ -210,7 +222,7 @@ mod tests {
         let clause = Clause::empty();
         let mut evaluations = evals_alloc(1);
 
-        clause_add_evaluation(&wfcb, &mut evaluations, &clause, 0, true);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &clause, 0, true);
 
         assert_eq!(evaluations.eval(0).heuristic().to_bits(), 3.5_f32.to_bits());
         assert_eq!(evaluations.eval(0).priority(), PRIO_BEST);
