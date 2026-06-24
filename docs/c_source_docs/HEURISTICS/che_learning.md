@@ -101,6 +101,12 @@ Source files reviewed: `HEURISTICS/che_learning.h`, `HEURISTICS/che_learning.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TSMWeightCompute` and `TSMRWeightCompute` lazily construct the expensive TSM on first clause evaluation, not during parsing. Rust preserves that lazy boundary; callers should not rely on KB files being opened before the WFCB is actually scored.
+- The C evaluator stores `ProofState_p` and reuses `state->terms` both for `TSMFromKB` signature mutation and for per-clause flat/recursive representations. Rust currently owns a private cloned evaluation bank and copies each scored clause into it before pattern encoding. Revisit this once proof-state term banks are shared session owners.
+- `TSMWeightExit` frees `local->tsmadmin->subst` and `local->pat_subst` only after the lazy TSM was created. Rust models this with owned evaluator state; cleanup remains tied to WFCB drop rather than a public manual free.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

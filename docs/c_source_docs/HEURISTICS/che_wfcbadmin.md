@@ -117,6 +117,11 @@ Source files reviewed: `HEURISTICS/che_wfcbadmin.h`, `HEURISTICS/che_wfcbadmin.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 
+### Compatibility Notes
+
+- `WeightFunParse` dispatches by a compile-time table of names and parser function pointers; Rust keeps the table order and now wires `TSMWeight`/`TSMRWeight` as axiom-backed parsers rather than staging them behind a not-ported diagnostic.
+- C parser failures are fatal diagnostics from the current scanner position. Rust returns `Diagnostic` values but keeps the token-consumption boundary explicit so strategy parsing can later choose whether to abort like C.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -16,6 +16,7 @@ use crate::heuristics::funweights::{
     relevance_level_weight_parse, sym_offset_weight_parse,
 };
 use crate::heuristics::gdweight::gd_clause_weight_parse;
+use crate::heuristics::learning::{tsm_weight_parse, tsmr_weight_parse};
 use crate::heuristics::levweight::conjecture_lev_distance_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
@@ -294,6 +295,8 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "OrientLMaxWeight"
             | "Simweight"
             | "ClauseWeightAge"
+            | "TSMWeight"
+            | "TSMRWeight"
             | "StaggeredWeight"
             | "GDWeight"
             | "ConjectureSymbolWeight"
@@ -371,6 +374,14 @@ pub fn weight_fun_parse_with_context(
         "OrientLMaxWeight" => Ok(Box::new(orient_lmax_weight_parse(scanner)?)),
         "Simweight" => Ok(Box::new(sim_weight_parse(scanner)?)),
         "ClauseWeightAge" => Ok(Box::new(clause_weight_age_parse(scanner)?)),
+        "TSMWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(tsm_weight_parse(scanner, axioms)?))
+        }
+        "TSMRWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(tsmr_weight_parse(scanner, axioms)?))
+        }
         "StaggeredWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
             Ok(Box::new(staggered_weight_parse(scanner, axioms)?))
@@ -639,7 +650,8 @@ mod tests {
         assert!(weight_fun_parser_is_ported("ConjectureTermTfIdfWeight"));
         assert!(weight_fun_parser_is_ported("FunWeight"));
         assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
-        assert!(!weight_fun_parser_is_ported("TSMWeight"));
+        assert!(weight_fun_parser_is_ported("TSMWeight"));
+        assert!(weight_fun_parser_is_ported("TSMRWeight"));
     }
 
     #[test]
@@ -853,6 +865,28 @@ mod tests {
     }
 
     #[test]
+    fn weight_fun_parse_with_context_dispatches_lazy_tsm_parsers() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let axioms = ClauseSet::new();
+        let context = WeightParseContext::new(&axioms);
+        let specs = [
+            "TSMWeight(ConstPrio,2,3,0.5,rec,kb,1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0) tail",
+            "TSMRWeight(ConstPrio,2,3,4.0,5.0,6.0,0.5,rec,kb,1,1.0,1.0,Flat,IndexArity,0,1,0,0,0,0,0) tail",
+        ];
+
+        for spec in specs {
+            let mut scanner =
+                Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));
+            let wfcb = weight_fun_parse_with_context(&mut scanner, context)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+            assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+            assert_eq!(scanner.current_token().literal(), "tail");
+        }
+    }
+
+    #[test]
     fn weight_fun_parse_dispatches_fun_weight_family_parsers() {
         let clause = Clause::empty();
         let bank = term_bank();
@@ -904,14 +938,14 @@ mod tests {
         };
         assert!(err.to_string().contains("requires proof-state axioms"));
 
-        let mut unported =
-            Scanner::from_user_string("TSMWeight(ConstPrio)", false).unwrap_or_else(|err| {
+        let mut tsm_without_context = Scanner::from_user_string("TSMWeight(ConstPrio)", false)
+            .unwrap_or_else(|err| {
                 panic!("{err}");
             });
-        let Err(err) = weight_fun_parse(&mut unported) else {
-            panic!("unported weight function should fail");
+        let Err(err) = weight_fun_parse(&mut tsm_without_context) else {
+            panic!("TSM weight function should fail without axioms");
         };
-        assert!(err.to_string().contains("not ported yet"));
+        assert!(err.to_string().contains("requires proof-state axioms"));
     }
 
     #[test]
