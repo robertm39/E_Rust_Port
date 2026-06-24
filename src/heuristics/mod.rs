@@ -4,3 +4,4 @@ pub mod fifo;
 pub mod lifo;
 pub mod orientweight;
 pub mod random;
+pub mod refinedweight;
