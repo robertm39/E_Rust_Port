@@ -1,5 +1,5 @@
 use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_pcl_string, clause_print_lop_format_string, Clause};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
 use crate::heuristics::varweights::clause_count_ext_symbols as varweight_clause_count_ext_symbols;
@@ -196,6 +196,12 @@ pub fn clause_line_string(
 }
 
 #[must_use]
+pub fn clause_line_print_string(bank: &TermBank, clause: &Clause, print_info: bool) -> String {
+    let clause_text = clause_print_lop_format_string(bank, clause, true);
+    clause_line_string(bank, &clause_text, clause, print_info)
+}
+
+#[must_use]
 pub fn clause_line_string_with_comment(
     bank: &TermBank,
     clause_text: &str,
@@ -222,6 +228,12 @@ pub fn clause_prop_info_stats_string(clause: &Clause) -> String {
 #[must_use]
 pub fn clause_prop_info_string(pcl_text: &str, clause: &Clause) -> String {
     clause_prop_info_string_with_comment(pcl_text, clause, DEFAULT_COMCHAR_RAW)
+}
+
+#[must_use]
+pub fn clause_prop_info_print_string(bank: &TermBank, clause: &Clause) -> String {
+    let pcl_text = clause_pcl_string(bank, clause, true);
+    clause_prop_info_string(&pcl_text, clause)
 }
 
 #[must_use]
@@ -355,11 +367,11 @@ mod tests {
     use super::{
         clause_add_var_distribution, clause_count_ext_symbols, clause_count_maximal_literals,
         clause_count_maximal_terms, clause_count_singleton_set, clause_count_unorientable_literals,
-        clause_count_variable_set, clause_info_string, clause_line_string,
-        clause_line_string_with_comment, clause_prop_info_stats_string,
-        clause_prop_info_stats_string_with_comment, clause_prop_info_string,
-        clause_prop_info_string_with_comment, clause_tptp_depth_info_add, eqn_add_var_distribution,
-        eqn_list_add_var_distribution, term_add_var_distribution,
+        clause_count_variable_set, clause_info_string, clause_line_print_string,
+        clause_line_string, clause_line_string_with_comment, clause_prop_info_print_string,
+        clause_prop_info_stats_string, clause_prop_info_stats_string_with_comment,
+        clause_prop_info_string, clause_prop_info_string_with_comment, clause_tptp_depth_info_add,
+        eqn_add_var_distribution, eqn_list_add_var_distribution, term_add_var_distribution,
     };
     use crate::basics::pdarrays::PDIntArray;
     use crate::clauses::clause::Clause;
@@ -615,6 +627,27 @@ mod tests {
     }
 
     #[test]
+    fn clause_line_print_string_uses_default_lop_clause_rendering() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "line_print_a");
+        let b = typed_const(&mut bank, "line_print_b");
+        let mut clause = clause_from(vec![
+            equation(&mut bank, &a, &b, true),
+            equation(&mut bank, &b, &a, false),
+        ]);
+        clause.set_ident(12);
+
+        assert_eq!(
+            clause_line_print_string(&bank, &clause, false),
+            "line_print_a=line_print_b <- line_print_b=line_print_a.\n"
+        );
+        assert_eq!(
+            clause_line_print_string(&bank, &clause, true),
+            "line_print_a=line_print_b <- line_print_b=line_print_a. % info(12, 0, 0, 6, 1, 2, 2, 0)\n"
+        );
+    }
+
+    #[test]
     fn clause_prop_info_stats_string_matches_c_stat_block_format() {
         let mut bank = term_bank();
         let x = typed_var(&bank, -2);
@@ -694,6 +727,20 @@ mod tests {
                 "#    ...negative:      0\n",
             )
         );
+    }
+
+    #[test]
+    fn clause_prop_info_print_string_uses_default_pcl_clause_rendering() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "prop_print_a");
+        let b = typed_const(&mut bank, "prop_print_b");
+        let clause = clause_from(vec![equation(&mut bank, &a, &b, true)]);
+
+        let rendered = clause_prop_info_print_string(&bank, &clause);
+
+        assert!(rendered.starts_with("% [++equal(prop_print_a, prop_print_b)]\n"));
+        assert!(rendered.contains("% Standardweight:"));
+        assert!(rendered.contains("% Literals      :      1\n"));
     }
 
     #[test]

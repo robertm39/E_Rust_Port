@@ -5,8 +5,8 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
 use crate::heuristics::clausefeatures::{
     clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
-    clause_count_unorientable_literals, clause_count_variable_set, clause_line_string,
-    clause_tptp_depth_info_add,
+    clause_count_unorientable_literals, clause_count_variable_set, clause_line_print_string,
+    clause_line_string, clause_tptp_depth_info_add,
 };
 use crate::inout::basicparser::{parse_float, parse_int, parse_plain_filename};
 use crate::inout::scanner::{Scanner, TokenType};
@@ -772,6 +772,35 @@ where
     )
 }
 
+#[must_use]
+pub fn clause_set_print_pos_units_default_string(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+) -> String {
+    clause_set_print_filtered_default_string(bank, set, print_info, Clause::is_demodulator)
+}
+
+#[must_use]
+pub fn clause_set_print_neg_units_default_string(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+) -> String {
+    clause_set_print_filtered_default_string(bank, set, print_info, |clause| {
+        clause.is_unit() && clause.is_goal()
+    })
+}
+
+#[must_use]
+pub fn clause_set_print_non_units_default_string(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+) -> String {
+    clause_set_print_filtered_default_string(bank, set, print_info, |clause| !clause.is_unit())
+}
+
 pub fn spec_features_parse(
     scanner: &mut Scanner,
     features: &mut SpecFeatureCell,
@@ -1057,6 +1086,24 @@ where
     result
 }
 
+fn clause_set_print_filtered_default_string<P>(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    mut predicate: P,
+) -> String
+where
+    P: FnMut(&Clause) -> bool,
+{
+    let mut result = String::new();
+    for clause in set.iter() {
+        if predicate(clause) {
+            result.push_str(&clause_line_print_string(bank, clause, print_info));
+        }
+    }
+    result
+}
+
 fn arity_feature_class(arity: i32) -> SpecFeatureClass {
     match arity {
         0 => SpecFeatureClass::Arity0,
@@ -1229,13 +1276,14 @@ mod tests {
         clause_set_is_equational, clause_set_is_equational_set, clause_set_is_ground,
         clause_set_is_horn_set, clause_set_is_pure_equational_set, clause_set_is_unit_set,
         clause_set_max_literal_number, clause_set_max_standard_weight,
-        clause_set_non_ground_axiom_part, clause_set_print_neg_units_string,
-        clause_set_print_non_units_string, clause_set_print_pos_units_string,
-        clause_set_term_cells, clause_set_tptp_depth_info_add, create_default_spec_limits,
-        spec_features_add_basic_eval, spec_features_add_eval, spec_features_parse,
-        spec_features_print_string, spec_limits_print_string, spec_type_print_string,
-        spec_type_string_for_problem, SpecFeatureCell, SpecFeatureClass, SpecLimits,
-        DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
+        clause_set_non_ground_axiom_part, clause_set_print_neg_units_default_string,
+        clause_set_print_neg_units_string, clause_set_print_non_units_default_string,
+        clause_set_print_non_units_string, clause_set_print_pos_units_default_string,
+        clause_set_print_pos_units_string, clause_set_term_cells, clause_set_tptp_depth_info_add,
+        create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
+        spec_features_parse, spec_features_print_string, spec_limits_print_string,
+        spec_type_print_string, spec_type_string_for_problem, SpecFeatureCell, SpecFeatureClass,
+        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1554,6 +1602,34 @@ mod tests {
         assert_eq!(
             clause_set_print_non_units_string(&bank, &set, false, render),
             "c_13\n"
+        );
+    }
+
+    #[test]
+    fn selective_clause_set_default_line_helpers_render_lop_clauses() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "default_selective_a");
+        let b = typed_const(&mut bank, "default_selective_b");
+        let c = typed_const(&mut bank, "default_selective_c");
+        let positive_unit = clause_from(vec![equation(&mut bank, &a, &b, true)]);
+        let negative_unit = clause_from(vec![equation(&mut bank, &b, &a, false)]);
+        let non_unit = clause_from(vec![
+            equation(&mut bank, &a, &b, true),
+            equation(&mut bank, &b, &c, false),
+        ]);
+        let set = ClauseSet::from_clauses([positive_unit, negative_unit, non_unit]);
+
+        assert_eq!(
+            clause_set_print_pos_units_default_string(&bank, &set, false),
+            "default_selective_a=default_selective_b <- .\n"
+        );
+        assert_eq!(
+            clause_set_print_neg_units_default_string(&bank, &set, false),
+            " <- default_selective_b=default_selective_a.\n"
+        );
+        assert_eq!(
+            clause_set_print_non_units_default_string(&bank, &set, false),
+            "default_selective_a=default_selective_b <- default_selective_b=default_selective_c.\n"
         );
     }
 
