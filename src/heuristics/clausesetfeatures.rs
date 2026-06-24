@@ -5,7 +5,8 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
 use crate::heuristics::clausefeatures::{
     clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
-    clause_count_unorientable_literals, clause_count_variable_set, clause_tptp_depth_info_add,
+    clause_count_unorientable_literals, clause_count_variable_set, clause_line_string,
+    clause_tptp_depth_info_add,
 };
 use crate::inout::basicparser::{parse_float, parse_int, parse_plain_filename};
 use crate::inout::scanner::{Scanner, TokenType};
@@ -720,6 +721,57 @@ pub fn spec_type_print_string(features: &SpecFeatureCell, mask: &str) -> String 
     spec_type_string(features, mask)
 }
 
+#[must_use]
+pub fn clause_set_print_pos_units_string<F>(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    render_clause: F,
+) -> String
+where
+    F: FnMut(&Clause) -> String,
+{
+    clause_set_print_filtered_string(bank, set, print_info, Clause::is_demodulator, render_clause)
+}
+
+#[must_use]
+pub fn clause_set_print_neg_units_string<F>(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    render_clause: F,
+) -> String
+where
+    F: FnMut(&Clause) -> String,
+{
+    clause_set_print_filtered_string(
+        bank,
+        set,
+        print_info,
+        |clause| clause.is_unit() && clause.is_goal(),
+        render_clause,
+    )
+}
+
+#[must_use]
+pub fn clause_set_print_non_units_string<F>(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    render_clause: F,
+) -> String
+where
+    F: FnMut(&Clause) -> String,
+{
+    clause_set_print_filtered_string(
+        bank,
+        set,
+        print_info,
+        |clause| !clause.is_unit(),
+        render_clause,
+    )
+}
+
 pub fn spec_features_parse(
     scanner: &mut Scanner,
     features: &mut SpecFeatureCell,
@@ -984,6 +1036,27 @@ where
     usize_to_i64(set.iter().filter(|clause| predicate(clause)).count())
 }
 
+fn clause_set_print_filtered_string<P, R>(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    mut predicate: P,
+    mut render_clause: R,
+) -> String
+where
+    P: FnMut(&Clause) -> bool,
+    R: FnMut(&Clause) -> String,
+{
+    let mut result = String::new();
+    for clause in set.iter() {
+        if predicate(clause) {
+            let rendered = render_clause(clause);
+            result.push_str(&clause_line_string(bank, &rendered, clause, print_info));
+        }
+    }
+    result
+}
+
 fn arity_feature_class(arity: i32) -> SpecFeatureClass {
     match arity {
         0 => SpecFeatureClass::Arity0,
@@ -1156,11 +1229,13 @@ mod tests {
         clause_set_is_equational, clause_set_is_equational_set, clause_set_is_ground,
         clause_set_is_horn_set, clause_set_is_pure_equational_set, clause_set_is_unit_set,
         clause_set_max_literal_number, clause_set_max_standard_weight,
-        clause_set_non_ground_axiom_part, clause_set_term_cells, clause_set_tptp_depth_info_add,
-        create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
-        spec_features_parse, spec_features_print_string, spec_limits_print_string,
-        spec_type_print_string, spec_type_string_for_problem, SpecFeatureCell, SpecFeatureClass,
-        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
+        clause_set_non_ground_axiom_part, clause_set_print_neg_units_string,
+        clause_set_print_non_units_string, clause_set_print_pos_units_string,
+        clause_set_term_cells, clause_set_tptp_depth_info_add, create_default_spec_limits,
+        spec_features_add_basic_eval, spec_features_add_eval, spec_features_parse,
+        spec_features_print_string, spec_limits_print_string, spec_type_print_string,
+        spec_type_string_for_problem, SpecFeatureCell, SpecFeatureClass, SpecLimits,
+        DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1447,6 +1522,38 @@ mod tests {
         assert_eq!(
             spec_limits_print_string(&SpecLimits::alloc()),
             "[ 1 | 1 | 3 | 1 | 2 | 5 | 1000 | 10000 | 400 | 4000 | 200 | 1500 | 4 | 29 | 0 | 6 |  100 | 1000 | 0 | 2 | 1225 | 4000 | 8 | 110 | 360 | 400 | 2 | 3 | 2 | 8 | 8 | 64 |  0.15 | 0.15 | 0.1 | 0.5 ]\n"
+        );
+    }
+
+    #[test]
+    fn selective_clause_set_line_helpers_preserve_c_filters_and_order() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "selective_a");
+        let b = typed_const(&mut bank, "selective_b");
+        let c = typed_const(&mut bank, "selective_c");
+        let mut positive_unit = clause_from(vec![equation(&mut bank, &a, &b, true)]);
+        positive_unit.set_ident(11);
+        let mut negative_unit = clause_from(vec![equation(&mut bank, &b, &a, false)]);
+        negative_unit.set_ident(12);
+        let mut non_unit = clause_from(vec![
+            equation(&mut bank, &a, &b, true),
+            equation(&mut bank, &b, &c, false),
+        ]);
+        non_unit.set_ident(13);
+        let set = ClauseSet::from_clauses([positive_unit, negative_unit, non_unit]);
+        let render = |clause: &Clause| format!("c_{}", clause.ident());
+
+        assert_eq!(
+            clause_set_print_pos_units_string(&bank, &set, false, render),
+            "c_11\n"
+        );
+        assert_eq!(
+            clause_set_print_neg_units_string(&bank, &set, false, render),
+            "c_12\n"
+        );
+        assert_eq!(
+            clause_set_print_non_units_string(&bank, &set, false, render),
+            "c_13\n"
         );
     }
 
