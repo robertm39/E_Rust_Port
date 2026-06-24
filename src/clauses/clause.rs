@@ -1,6 +1,7 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_IS_D_INDEXED, CP_IS_SOS, CP_TYPE_AXIOM,
@@ -8,7 +9,7 @@ use crate::clauses::clause_props::{
     CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
-use crate::clauses::eqn::{eqn_write, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{EqnProperties, EqnSide, EP_PSEUDO_LIT};
 use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
@@ -1260,6 +1261,30 @@ pub fn clause_pcl_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> 
     output
 }
 
+pub fn clause_write_debug(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    write!(output, "thf({}, plain, ", clause_debug_identifier(clause))?;
+    if let Some((first, rest)) = clause.literals().as_slice().split_first() {
+        eqn_write_debug(output, bank, first, problem_type)?;
+        for literal in rest {
+            output.write_str(" | ")?;
+            eqn_write_debug(output, bank, literal, problem_type)?;
+        }
+    }
+    output.write_str(" ).")
+}
+
+#[must_use]
+pub fn clause_debug_string(bank: &TermBank, clause: &Clause, problem_type: ProblemType) -> String {
+    let mut output = String::new();
+    let _ = clause_write_debug(&mut output, bank, clause, problem_type);
+    output
+}
+
 fn write_literal_tail(
     output: &mut impl fmt::Write,
     bank: &TermBank,
@@ -1283,6 +1308,15 @@ fn clause_tptp_identifier(clause: &Clause) -> String {
     } else {
         let offset = i128::from(clause.ident()) - i128::from(i64::MIN);
         format!("i_{source}_{offset}")
+    }
+}
+
+fn clause_debug_identifier(clause: &Clause) -> String {
+    if clause.ident() >= 0 {
+        format!("cl{}", clause.ident())
+    } else {
+        let offset = i128::from(clause.ident()) - i128::from(i64::MIN);
+        format!("cl{offset}")
     }
 }
 
@@ -1344,12 +1378,14 @@ fn is_key_subset(left: &BTreeMap<usize, Term>, right: &BTreeMap<usize, Term>) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_pcl_string, clause_print_axiom_string, clause_print_goal_string,
-        clause_print_lop_format_string, clause_print_query_string, clause_print_rule_string,
-        clause_print_tptp_format_string, clause_print_tstp_core_string, Clause,
+        clause_debug_string, clause_pcl_string, clause_print_axiom_string,
+        clause_print_goal_string, clause_print_lop_format_string, clause_print_query_string,
+        clause_print_rule_string, clause_print_tptp_format_string, clause_print_tstp_core_string,
+        Clause,
     };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM,
@@ -1516,6 +1552,29 @@ mod tests {
         assert_eq!(
             clause_print_tstp_core_string(&bank, &Clause::empty(), true, false),
             "($false)"
+        );
+    }
+
+    #[test]
+    fn clause_debug_string_matches_c_dbg_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "dbg_a");
+        let b = typed_const(&mut bank, "dbg_b");
+        let positive = eqn(&mut bank, &a, &b, true);
+        let negative = eqn(&mut bank, &b, &a, false);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![negative, positive]));
+        clause.set_ident(42);
+
+        assert_eq!(
+            clause_debug_string(&bank, &clause, ProblemType::FirstOrder),
+            "thf(cl42, plain, dbg_a=dbg_b%% | dbg_b!=dbg_a%% )."
+        );
+
+        let mut long_min_clause = Clause::empty();
+        long_min_clause.set_ident(i64::MIN + 3);
+        assert_eq!(
+            clause_debug_string(&bank, &long_min_clause, ProblemType::FirstOrder),
+            "thf(cl3, plain,  )."
         );
     }
 
