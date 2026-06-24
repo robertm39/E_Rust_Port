@@ -1,3 +1,4 @@
+use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
 use crate::clauses::clausefunc::clause_remove_literal_index;
@@ -103,11 +104,11 @@ pub fn unit_clause_subsumes_clause(unit: &Clause, clause: &Clause) -> bool {
     literal_subsumes_clause(&unit.literals().as_slice()[0], clause)
 }
 
-#[must_use]
 /// Returns a unit clause from `set` that subsumes one literal of `clause`.
 ///
 /// This plain-set path mirrors `UnitClauseSetSubsumesClause` without using the
 /// C demodulator index.
+#[must_use]
 pub fn unit_clause_set_subsumes_clause<'set>(
     set: &'set ClauseSet,
     clause: &Clause,
@@ -260,6 +261,93 @@ pub fn clause_subsumes_clause(subsumer: &Clause, sub_candidate: &Clause, bank: &
     result
 }
 
+/// Returns the first clause in `set` that subsumes `sub_candidate`.
+///
+/// This is the plain clause-set path used by `ClauseSetSubsumesClause` when no
+/// feature-vector index is attached.
+///
+/// # Panics
+///
+/// Panics if `sub_candidate` is unit, if the candidate or any checked set
+/// clause is not subsumption-ordered, or if any checked clause has stale cached
+/// standard weight, matching the C fallback preconditions.
+#[must_use]
+pub fn clause_set_subsumes_clause<'set>(
+    set: &'set ClauseSet,
+    sub_candidate: &Clause,
+    bank: &TermBank,
+) -> Option<&'set Clause> {
+    assert!(
+        sub_candidate.literal_number() > 1,
+        "plain ClauseSetSubsumesClause expects a non-unit candidate"
+    );
+    assert_eq!(sub_candidate.weight(), sub_candidate.standard_weight());
+    set.iter()
+        .find(|candidate| clause_subsumes_clause(candidate, sub_candidate, bank))
+}
+
+/// Returns the first clause at or after `start_index` subsumed by `subsumer`.
+///
+/// The index models C's linked-list `set_position` until stable clause handles
+/// replace the plain owner.
+///
+/// # Panics
+///
+/// Panics if `subsumer` or any checked set clause is not subsumption-ordered, or
+/// if any checked clause has stale cached standard weight.
+#[must_use]
+pub fn clause_set_find_subsumed_clause<'set>(
+    set: &'set ClauseSet,
+    start_index: usize,
+    subsumer: &Clause,
+    bank: &TermBank,
+) -> Option<&'set Clause> {
+    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+    set.iter()
+        .skip(start_index)
+        .find(|candidate| clause_subsumes_clause(subsumer, candidate, bank))
+}
+
+/// Pushes every clause in `set` subsumed by `subsumer` onto `result`.
+///
+/// Returns the number of newly pushed clauses, matching
+/// `ClauseSetFindSubsumedClauses`' stack-pointer delta.
+///
+/// # Panics
+///
+/// Panics if `subsumer` or any checked set clause is not subsumption-ordered, or
+/// if any checked clause has stale cached standard weight.
+pub fn clause_set_find_subsumed_clauses<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    result: &mut PStack<&'set Clause>,
+    bank: &TermBank,
+) -> i64 {
+    let old_len = result.len();
+    assert_eq!(subsumer.weight(), subsumer.standard_weight());
+    for candidate in set.iter() {
+        if clause_subsumes_clause(subsumer, candidate, bank) {
+            result.push(candidate);
+        }
+    }
+    usize_to_i64(result.len() - old_len)
+}
+
+/// Returns the first clause in `set` subsumed by `subsumer`.
+///
+/// # Panics
+///
+/// Panics if `subsumer` or any checked set clause is not subsumption-ordered, or
+/// if any checked clause has stale cached standard weight.
+#[must_use]
+pub fn clause_set_find_first_subsumed_clause<'set>(
+    set: &'set ClauseSet,
+    subsumer: &Clause,
+    bank: &TermBank,
+) -> Option<&'set Clause> {
+    clause_set_find_subsumed_clause(set, 0, subsumer, bank)
+}
+
 fn check_subsumption_possibility(
     subsumer: &Clause,
     sub_candidate: &Clause,
@@ -340,6 +428,10 @@ fn literal_matches_with_subst(pattern: &Eqn, candidate: &Eqn, subst: &mut Substi
     pattern.subsume(candidate, subst)
 }
 
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 fn find_positive_unit_simplifier<'set>(
     set: &'set ClauseSet,
     left: &Term,
@@ -380,11 +472,14 @@ fn find_negative_top_unit_simplifier<'set>(
 mod tests {
     use super::{
         clause_is_subsume_ordered, clause_negative_simplify_reflect,
-        clause_positive_simplify_reflect, clause_set_find_unit_subsumed_clause,
+        clause_positive_simplify_reflect, clause_set_find_first_subsumed_clause,
+        clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
+        clause_set_find_unit_subsumed_clause, clause_set_subsumes_clause,
         clause_subsume_order_sort_lits, clause_subsumes_clause, eqn_subsumes_termpair,
         eqn_topsubsumes_termpair, literal_subsumes_clause, unit_clause_set_subsumes_clause,
         unit_clause_subsumes_clause,
     };
+    use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
@@ -520,6 +615,137 @@ mod tests {
 
         assert!(unit_clause_subsumes_clause(&unit, &candidate));
         assert!(clause_subsumes_clause(&unit, &candidate, &bank));
+    }
+
+    #[test]
+    fn clause_set_subsumes_clause_returns_first_plain_subsumer() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let other = typed_const(&mut bank, "b");
+        let expected_right = typed_const(&mut bank, "c");
+        let mismatch_left = typed_const(&mut bank, "d");
+        let mut non_matching = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &mismatch_left, &expected_right, true),
+        ]);
+        let mut matching = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &variable, &expected_right, true),
+        ]);
+        let mut candidate = clause_from(vec![
+            literal(&mut bank, &other, &constant, true),
+            literal(&mut bank, &other, &expected_right, true),
+        ]);
+        prepare(&mut non_matching, &bank);
+        prepare(&mut matching, &bank);
+        prepare(&mut candidate, &bank);
+        let matching_id = matching.ident();
+        let set = ClauseSet::from_clauses([non_matching, matching]);
+
+        assert_eq!(
+            clause_set_subsumes_clause(&set, &candidate, &bank).map(Clause::ident),
+            Some(matching_id)
+        );
+    }
+
+    #[test]
+    fn clause_set_find_subsumed_clause_honors_start_index() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let expected_right = typed_const(&mut bank, "b");
+        let first_witness = typed_const(&mut bank, "c");
+        let second_witness = typed_const(&mut bank, "d");
+        let mismatch_left = typed_const(&mut bank, "e");
+        let mut subsumer = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &variable, &expected_right, true),
+        ]);
+        let mut non_matching = clause_from(vec![
+            literal(&mut bank, &mismatch_left, &constant, true),
+            literal(&mut bank, &second_witness, &expected_right, true),
+        ]);
+        let mut first = clause_from(vec![
+            literal(&mut bank, &first_witness, &constant, true),
+            literal(&mut bank, &first_witness, &expected_right, true),
+        ]);
+        let mut second = clause_from(vec![
+            literal(&mut bank, &second_witness, &constant, true),
+            literal(&mut bank, &second_witness, &expected_right, true),
+        ]);
+        prepare(&mut subsumer, &bank);
+        prepare(&mut non_matching, &bank);
+        prepare(&mut first, &bank);
+        prepare(&mut second, &bank);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let set = ClauseSet::from_clauses([non_matching, first, second]);
+
+        assert_eq!(
+            clause_set_find_subsumed_clause(&set, 0, &subsumer, &bank).map(Clause::ident),
+            Some(first_id)
+        );
+        assert_eq!(
+            clause_set_find_subsumed_clause(&set, 2, &subsumer, &bank).map(Clause::ident),
+            Some(second_id)
+        );
+        assert!(clause_set_find_subsumed_clause(&set, 3, &subsumer, &bank).is_none());
+        assert_eq!(
+            clause_set_find_first_subsumed_clause(&set, &subsumer, &bank).map(Clause::ident),
+            Some(first_id)
+        );
+    }
+
+    #[test]
+    fn clause_set_find_subsumed_clauses_pushes_all_and_returns_new_count() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let expected_right = typed_const(&mut bank, "b");
+        let first_witness = typed_const(&mut bank, "c");
+        let second_witness = typed_const(&mut bank, "d");
+        let mismatch_left = typed_const(&mut bank, "e");
+        let mut subsumer = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &variable, &expected_right, true),
+        ]);
+        let mut non_matching = clause_from(vec![
+            literal(&mut bank, &mismatch_left, &constant, true),
+            literal(&mut bank, &second_witness, &expected_right, true),
+        ]);
+        let mut first = clause_from(vec![
+            literal(&mut bank, &first_witness, &constant, true),
+            literal(&mut bank, &first_witness, &expected_right, true),
+        ]);
+        let mut second = clause_from(vec![
+            literal(&mut bank, &second_witness, &constant, true),
+            literal(&mut bank, &second_witness, &expected_right, true),
+        ]);
+        prepare(&mut subsumer, &bank);
+        prepare(&mut non_matching, &bank);
+        prepare(&mut first, &bank);
+        prepare(&mut second, &bank);
+        let non_matching_id = non_matching.ident();
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let set = ClauseSet::from_clauses([non_matching, first, second]);
+        let mut result = PStack::new();
+        result.push(set.iter().next().unwrap());
+
+        assert_eq!(
+            clause_set_find_subsumed_clauses(&set, &subsumer, &mut result, &bank),
+            2
+        );
+
+        assert_eq!(
+            result
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![non_matching_id, first_id, second_id]
+        );
     }
 
     #[test]
