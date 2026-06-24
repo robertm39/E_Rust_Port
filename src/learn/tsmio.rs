@@ -1,17 +1,22 @@
+use crate::basics::dstrings::DynamicString;
+use crate::basics::error::Diagnostic;
 use crate::basics::pdarrays::PDArrayIndex;
 use crate::basics::pstacks::PStack;
 use crate::clauses::clausesets::ClauseSet;
+use crate::inout::scanner::Scanner;
 use crate::learn::annotations::Annotation;
-use crate::learn::annoterms::AnnoSet;
-use crate::learn::examplerep::{example_set_select_by_dist, ExampleSet};
+use crate::learn::annoterms::{anno_set_rec_to_flat_enc, AnnoSet};
+use crate::learn::examplerep::{example_set_parse, example_set_select_by_dist, ExampleSet};
 use crate::learn::flatannoterms::{flat_anno_set_translate, FlatAnnoSet};
-use crate::learn::kbdesc::KB_ANNOTATION_NO;
+use crate::learn::kbdesc::{kb_file_name, KB_ANNOTATION_NO};
 use crate::learn::numfeatures::{
     compute_clause_set_num_features, Features, SEL_FEATURE_WEIGHTS, SEL_FUNC_WEIGHT,
     SEL_PRED_WEIGHT,
 };
 use crate::learn::tsm::{Tsm, TsmAdmin, TsmId, TsmType};
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
+use std::path::Path;
 
 const LARGE_TSM_WEIGHT: f64 = 1_000_000_000_000.0;
 const LARGE_ADMIN_WEIGHT: f64 = 100_000_000.0;
@@ -100,6 +105,58 @@ pub fn example_set_prepare(
     flat_anno_set_translate(flatset, annoset, eval_weights);
 
     i64_to_f64(c_double_to_long(result))
+}
+
+/// Create a flat annotated example set from a knowledge-base directory.
+///
+/// # Errors
+///
+/// Returns scanner, parser, or recursive-to-flat recoding diagnostics from the
+/// `signature`, `problems`, or annotation conversion steps.
+///
+/// # Panics
+///
+/// Panics under the same in-memory preparation conditions as
+/// [`example_set_prepare`].
+#[allow(clippy::too_many_arguments)]
+pub fn example_set_from_kb(
+    annoset: &mut AnnoSet,
+    flatset: &mut FlatAnnoSet,
+    flat_patterns: bool,
+    bank: &mut TermBank,
+    eval_weights: &[f64],
+    kb: &str,
+    sig: &mut Signature,
+    target: &ClauseSet,
+    sel_no: i64,
+    set_part: f64,
+    dist_part: f64,
+) -> Result<f64, Diagnostic> {
+    let mut filename = DynamicString::new();
+    let signature_name = kb_file_name(&mut filename, kb, "signature");
+    let mut signature_scanner = Scanner::from_file(Path::new(&signature_name), true)?;
+    sig.parse_declarations(&mut signature_scanner, true)?;
+
+    let problems_name = kb_file_name(&mut filename, kb, "problems");
+    let mut problems_scanner = Scanner::from_file(Path::new(&problems_name), true)?;
+    let mut proof_examples = ExampleSet::new();
+    example_set_parse(&mut problems_scanner, &mut proof_examples)?;
+
+    if flat_patterns {
+        anno_set_rec_to_flat_enc(bank, annoset)?;
+    }
+
+    Ok(example_set_prepare(
+        flatset,
+        annoset,
+        eval_weights,
+        &mut proof_examples,
+        sig,
+        target,
+        sel_no,
+        set_part,
+        dist_part,
+    ))
 }
 
 /// Return C's post-build TSM "highest" weight value.
@@ -200,7 +257,10 @@ fn i64_to_f64(value: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{example_set_prepare, get_default_eval, tsm_get_highest_weight, LARGE_TSM_WEIGHT};
+    use super::{
+        example_set_from_kb, example_set_prepare, get_default_eval, tsm_get_highest_weight,
+        LARGE_TSM_WEIGHT,
+    };
     use crate::clauses::clausesets::ClauseSet;
     use crate::inout::scanner::Scanner;
     use crate::learn::annotations::{Annotation, AnnotationTree};
@@ -209,13 +269,14 @@ mod tests {
     use crate::learn::flatannoterms::{flat_anno_set_add_term, flat_anno_set_alloc, FlatAnnoTerm};
     use crate::learn::indexfunctions::IndexType;
     use crate::learn::kbdesc::KB_ANNOTATION_NO;
-    use crate::learn::numfeatures::Features;
+    use crate::learn::numfeatures::{Features, FEATURE_NUMBER};
     use crate::learn::patterns::{pattern_term_compute, PatternSubst};
     use crate::learn::tsm::{tsm_admin_alloc, tsm_admin_build_tsm, TsmType};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
+    use std::path::{Path, PathBuf};
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
@@ -258,6 +319,25 @@ mod tests {
             pattern_term_compute(&mut subst, term);
         }
         subst
+    }
+
+    fn zero_feature_source() -> String {
+        let mut result = String::from("PA: () FA: () (0");
+        for _ in 1..FEATURE_NUMBER {
+            result.push_str(", 0");
+        }
+        result.push(')');
+        result
+    }
+
+    fn temp_kb_dir(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join("e-rust-port-tests")
+            .join(format!("tsmio-{name}-{}", std::process::id()))
+    }
+
+    fn remove_dir_if_present(path: &Path) {
+        let _ = std::fs::remove_dir_all(path);
     }
 
     #[test]
@@ -347,6 +427,66 @@ mod tests {
         assert_close(right_flat.eval(), 7.0);
         assert_close(left_flat.eval_weight(), 1.0);
         assert_close(right_flat.eval_weight(), 1.0);
+    }
+
+    #[test]
+    fn example_set_from_kb_loads_signature_and_problem_examples() {
+        let kb_dir = temp_kb_dir("example-set-from-kb");
+        remove_dir_if_present(&kb_dir);
+        std::fs::create_dir_all(&kb_dir).expect("create temporary KB directory");
+        std::fs::write(kb_dir.join("signature"), "left_sym:0 right_sym:0")
+            .expect("write signature file");
+        let features = zero_feature_source();
+        std::fs::write(
+            kb_dir.join("problems"),
+            format!("1: \"left\" {features} 2: \"right\" {features}"),
+        )
+        .expect("write problems file");
+
+        let left = term(10);
+        let right = term(20);
+        let removed = term(30);
+        let mut annos = AnnoSet::new();
+        annos.add_term(AnnoTerm::new(
+            left.clone(),
+            annotation_tree(annotation(1, 1.0, &[(2, 1.0), (3, 2.0)])),
+        ));
+        annos.add_term(AnnoTerm::new(
+            right.clone(),
+            annotation_tree(annotation(2, 1.0, &[(2, 3.0), (3, 4.0)])),
+        ));
+        annos.add_term(AnnoTerm::new(
+            removed,
+            annotation_tree(annotation(99, 1.0, &[(2, 10.0), (3, 20.0)])),
+        ));
+        let mut flat = flat_anno_set_alloc();
+        let mut signature = Signature::new(TypeBank::new());
+        let mut bank =
+            TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation");
+        let target = ClauseSet::new();
+        let kb_name = kb_dir.to_string_lossy();
+
+        let result = example_set_from_kb(
+            &mut annos,
+            &mut flat,
+            false,
+            &mut bank,
+            &[0.0, 2.0, 5.0, 0.0, 0.0, 0.0],
+            &kb_name,
+            &mut signature,
+            &target,
+            2,
+            1.0,
+            1.0,
+        )
+        .expect("example set from KB");
+
+        assert_close(result, 7.0);
+        assert_ne!(signature.find_f_code("left_sym"), 0);
+        assert_eq!(flat.nodes(), 2);
+        assert!(annos.get(30).is_none());
+
+        remove_dir_if_present(&kb_dir);
     }
 
     #[test]
