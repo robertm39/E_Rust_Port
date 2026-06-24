@@ -1,4 +1,5 @@
 pub mod clausefeatures;
+pub mod clausesetfeatures;
 pub mod clauseweight;
 pub mod dagweight;
 pub mod diversityweight;
