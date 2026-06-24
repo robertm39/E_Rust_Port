@@ -1,6 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::clauses::clausesets::ClauseSet;
+use crate::heuristics::hcb::HeuristicParmsCell;
 use crate::heuristics::to_params::{
     ho_order_kind_name, LiteralCmp, OrderParmsCell, TOPrecGenMethod, TOWeightGenMethod,
     TermOrdering, DEFAULT_DB_WEIGHT, DEFAULT_LAMBDA_WEIGHT, W_CONST_NO_SPECIAL_WEIGHT,
@@ -280,6 +281,53 @@ pub fn to_create_ordering(
     Ok(handle)
 }
 
+/// Select and create the term ordering requested by C `HeuristicParmsCell`.
+///
+/// This ports the non-`Optimize` branch of `TOSelectOrdering`; the optimizing
+/// search still needs `OrderFindOptimal` and axiom maximality scoring.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`to_create_ordering`] or an explicit diagnostic
+/// for the still-pending optimize search.
+///
+/// # Panics
+///
+/// Panics under the same internal-invariant conditions as
+/// [`to_create_ordering`].
+pub fn to_select_ordering(
+    signature: &mut Signature,
+    axioms: &ClauseSet,
+    params: &HeuristicParmsCell,
+    higher_order_problem: bool,
+) -> Result<OrderControlBlock, Diagnostic> {
+    let mut tmp = params.order_params.clone();
+
+    if tmp.ordertype == TermOrdering::Optimize {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "OrderFindOptimal is not yet implemented",
+        ));
+    }
+    if tmp.ordertype == TermOrdering::NoOrdering {
+        tmp.ordertype = TermOrdering::Kbo;
+    }
+    if tmp.to_const_weight == W_CONST_NO_WEIGHT {
+        tmp.to_const_weight = W_CONST_NO_SPECIAL_WEIGHT;
+    }
+
+    let mut result = to_create_ordering(
+        signature,
+        axioms,
+        &tmp,
+        params.order_params.to_pre_prec.as_deref(),
+        params.order_params.to_pre_weights.as_deref(),
+        higher_order_problem,
+    )?;
+    result.rewrite_strong_rhs_inst = params.order_params.rewrite_strong_rhs_inst;
+    Ok(result)
+}
+
 fn literal_cmp_from_raw(value: i64) -> Result<LiteralCmp, Diagnostic> {
     i32::try_from(value)
         .ok()
@@ -297,13 +345,15 @@ mod tests {
     use super::{
         auto_ordering_analysis_string, describe_auto_ordering, init_oparms,
         order_next_const_weight, order_next_ordering, order_next_prec_gen, order_next_type,
-        order_next_weight_gen, print_oparms_string, to_create_ordering, KBO_BONUS,
-        MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
+        order_next_weight_gen, print_oparms_string, to_create_ordering, to_select_ordering,
+        KBO_BONUS, MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY,
+        UNORIENT_LITERAL_PENALTY,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::CompareResult;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::heuristics::hcb::HeuristicParmsCell;
     use crate::heuristics::to_params::{
         LiteralCmp, OrderParmsCell, TOPrecGenMethod, TOWeightGenMethod, TermOrdering,
         DEFAULT_DB_WEIGHT, DEFAULT_LAMBDA_WEIGHT, W_CONST_NO_SPECIAL_WEIGHT, W_CONST_NO_WEIGHT,
@@ -572,6 +622,77 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(error.message().contains("requires precedence order"));
+    }
+
+    #[test]
+    fn to_select_ordering_defaults_no_ordering_and_zero_const_weight_like_c() {
+        let mut signature = signature();
+        typed_symbol(&mut signature, "a", 0);
+        typed_symbol(&mut signature, "f", 1);
+        let params = HeuristicParmsCell {
+            order_params: OrderParmsCell {
+                ordertype: TermOrdering::NoOrdering,
+                to_weight_gen: TOWeightGenMethod::ConstantWeight,
+                to_prec_gen: TOPrecGenMethod::UnaryFirst,
+                to_const_weight: W_CONST_NO_WEIGHT,
+                rewrite_strong_rhs_inst: true,
+                ..OrderParmsCell::default()
+            },
+            ..HeuristicParmsCell::default()
+        };
+
+        let ocb = to_select_ordering(&mut signature, &ClauseSet::new(), &params, false)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.ordering_type, TermOrdering::Kbo);
+        assert!(ocb.weights.is_some());
+        assert_eq!(ocb.var_weight, 1);
+        assert!(ocb.rewrite_strong_rhs_inst);
+    }
+
+    #[test]
+    fn to_select_ordering_uses_original_predefined_strings() {
+        let mut signature = signature();
+        let constant = typed_symbol(&mut signature, "a", 0);
+        let unary = typed_symbol(&mut signature, "f", 1);
+        let params = HeuristicParmsCell {
+            order_params: OrderParmsCell {
+                ordertype: TermOrdering::Kbo,
+                to_weight_gen: TOWeightGenMethod::ConstantWeight,
+                to_prec_gen: TOPrecGenMethod::NoMethod,
+                to_pre_prec: Some("f > a".to_owned()),
+                to_pre_weights: Some("a:11".to_owned()),
+                ..OrderParmsCell::default()
+            },
+            ..HeuristicParmsCell::default()
+        };
+
+        let ocb = to_select_ordering(&mut signature, &ClauseSet::new(), &params, false)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            ocb.fun_compare(&signature, unary, constant),
+            CompareResult::Greater
+        );
+        assert_eq!(ocb.fun_weight(constant), 11);
+    }
+
+    #[test]
+    fn to_select_ordering_reports_pending_optimize_branch() {
+        let mut signature = signature();
+        let params = HeuristicParmsCell {
+            order_params: OrderParmsCell {
+                ordertype: TermOrdering::Optimize,
+                ..OrderParmsCell::default()
+            },
+            ..HeuristicParmsCell::default()
+        };
+
+        let error =
+            to_select_ordering(&mut signature, &ClauseSet::new(), &params, false).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("OrderFindOptimal"));
     }
 
     #[test]
