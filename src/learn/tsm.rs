@@ -1,10 +1,21 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::learn::flatannoterms::{flat_anno_set_add_term, FlatAnnoSet, FlatAnnoTerm};
-use crate::learn::indexfunctions::{tsm_index_insert, TSMIndex};
+use crate::learn::indexfunctions::{
+    tsm_index_alloc, tsm_index_insert, IndexType, TSMIndex, INDEX_DYNAMIC_DEPTH,
+};
+use crate::learn::patterns::PatternSubst;
 use crate::terms::termbanks::TermBank;
 
 pub type TsmPartition = Vec<Option<FlatAnnoTerm>>;
+
+struct TopIndexEval<'a, 'b> {
+    set: &'a FlatAnnoSet,
+    bank: &'b mut TermBank,
+    subst: &'a PatternSubst,
+    depth: i32,
+    limit: f64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -178,6 +189,128 @@ pub fn tsm_evaluate_index(
     }
 }
 
+/// Evaluates a temporary TSM index described by type and depth.
+///
+/// # Errors
+///
+/// Returns a diagnostic if partitioning needs to insert a representative term
+/// that the term bank rejects.
+///
+/// # Panics
+///
+/// Panics if `index_type` is not a concrete index type accepted by
+/// [`tsm_index_alloc`].
+pub fn tsm_evaluate_index_desc(
+    set: &FlatAnnoSet,
+    bank: &mut TermBank,
+    subst: &PatternSubst,
+    depth: i32,
+    index_type: IndexType,
+    limit: f64,
+) -> Result<f64, Diagnostic> {
+    let mut index = tsm_index_alloc(index_type, depth, subst.clone());
+    tsm_evaluate_index(set, &mut index, bank, None, limit)
+}
+
+/// Finds the best concrete TSM index among the requested bitmask.
+///
+/// # Errors
+///
+/// Returns a diagnostic if an evaluated temporary index needs to insert a term
+/// representative that the term bank rejects.
+///
+/// # Panics
+///
+/// Panics if `index_type` is `IndexNoIndex` or contains bits that do not map to
+/// supported concrete C index types.
+pub fn tsm_find_optimal_index(
+    set: &FlatAnnoSet,
+    bank: &mut TermBank,
+    subst: &PatternSubst,
+    depth: &mut i32,
+    index_type: IndexType,
+    limit: f64,
+) -> Result<IndexType, Diagnostic> {
+    assert_ne!(index_type, IndexType::NO_INDEX);
+    assert_known_index_mask(index_type);
+    let bits = index_type.bits();
+    let single_index = bits > 0 && (bits & (bits - 1)) == 0;
+    let mut best = -1.0;
+    let mut best_index = IndexType::NO_INDEX;
+    let mut best_depth = *depth;
+
+    if index_has(index_type, IndexType::ARITY) {
+        if single_index {
+            best_index = index_type;
+        } else {
+            let relgain = tsm_evaluate_index_desc(set, bank, subst, 0, IndexType::ARITY, limit)?;
+            if relgain > best {
+                best = relgain;
+                best_index = IndexType::ARITY;
+                best_depth = 0;
+            }
+        }
+    }
+    if index_has(index_type, IndexType::SYMBOL) {
+        if single_index {
+            best_index = index_type;
+        } else {
+            let relgain = tsm_evaluate_index_desc(set, bank, subst, 0, IndexType::SYMBOL, limit)?;
+            if relgain > best {
+                best = relgain;
+                best_index = IndexType::SYMBOL;
+                best_depth = 0;
+            }
+        }
+    }
+    if index_has(index_type, IndexType::IDENTITY) {
+        if single_index {
+            best_index = index_type;
+        } else {
+            let relgain = tsm_evaluate_index_desc(set, bank, subst, 0, IndexType::IDENTITY, limit)?;
+            if relgain > best {
+                best = relgain;
+                best_index = IndexType::IDENTITY;
+                best_depth = 0;
+            }
+        }
+    }
+
+    if *depth == INDEX_DYNAMIC_DEPTH {
+        for candidate_depth in 1..=TSM_MAX_TERMTOP {
+            let mut top_eval = TopIndexEval {
+                set,
+                bank,
+                subst,
+                depth: candidate_depth,
+                limit,
+            };
+            let relgain = evaluate_top_index(&mut top_eval, index_type, &mut best_index, best)?;
+            if relgain > best {
+                best_depth = candidate_depth;
+                best = relgain;
+            }
+        }
+    } else if single_index {
+        best_index = index_type;
+    } else {
+        let mut top_eval = TopIndexEval {
+            set,
+            bank,
+            subst,
+            depth: *depth,
+            limit,
+        };
+        let relgain = evaluate_top_index(&mut top_eval, index_type, &mut best_index, best)?;
+        if relgain > best {
+            best_depth = *depth;
+        }
+    }
+
+    *depth = best_depth;
+    Ok(best_index)
+}
+
 /// Inserts selected direct subterms from a linked flat-annotation list.
 ///
 /// # Panics
@@ -249,6 +382,58 @@ fn term_entry_pd_index(entry_no: i64) -> PDArrayIndex {
     PDArrayIndex::try_from(entry_no).expect("term entry number must fit PDArrayIndex")
 }
 
+fn evaluate_top_index(
+    context: &mut TopIndexEval<'_, '_>,
+    index_type: IndexType,
+    best_index: &mut IndexType,
+    mut to_beat: f64,
+) -> Result<f64, Diagnostic> {
+    if index_has(index_type, IndexType::TOP) {
+        to_beat = evaluate_top_candidate(context, IndexType::TOP, best_index, to_beat)?;
+    }
+    if index_has(index_type, IndexType::ALT_TOP) {
+        to_beat = evaluate_top_candidate(context, IndexType::ALT_TOP, best_index, to_beat)?;
+    }
+    if index_has(index_type, IndexType::CS_TOP) {
+        to_beat = evaluate_top_candidate(context, IndexType::CS_TOP, best_index, to_beat)?;
+    }
+    if index_has(index_type, IndexType::ES_TOP) {
+        to_beat = evaluate_top_candidate(context, IndexType::ES_TOP, best_index, to_beat)?;
+    }
+    Ok(to_beat)
+}
+
+fn evaluate_top_candidate(
+    context: &mut TopIndexEval<'_, '_>,
+    candidate: IndexType,
+    best_index: &mut IndexType,
+    to_beat: f64,
+) -> Result<f64, Diagnostic> {
+    let relgain = tsm_evaluate_index_desc(
+        context.set,
+        context.bank,
+        context.subst,
+        context.depth,
+        candidate,
+        context.limit,
+    )?;
+    if relgain > to_beat {
+        *best_index = candidate;
+        Ok(relgain)
+    } else {
+        Ok(to_beat)
+    }
+}
+
+fn index_has(index_type: IndexType, flag: IndexType) -> bool {
+    index_type.bits() & flag.bits() != 0
+}
+
+fn assert_known_index_mask(index_type: IndexType) {
+    let known = IndexType::DYNAMIC.bits() | IndexType::EMPTY.bits();
+    assert_eq!(index_type.bits() & !known, 0, "unknown TSM index type bit");
+}
+
 fn binary_entropy(pos: i64, neg: i64) -> f64 {
     if pos == 0 || neg == 0 {
         return 0.0;
@@ -269,13 +454,13 @@ fn i64_to_f64(value: i64) -> f64 {
 mod tests {
     use super::{
         get_tsm_type, tsm_create_subterm_set, tsm_distribution_entropy, tsm_eval_normalize,
-        tsm_evaluate_index, tsm_flat_anno_set_entropy, tsm_partition_set, tsm_remainder_entropy,
-        TsmPartition, TsmType, TSM_MAX_TERMTOP, TSM_TYPE_NAMES,
+        tsm_evaluate_index, tsm_find_optimal_index, tsm_flat_anno_set_entropy, tsm_partition_set,
+        tsm_remainder_entropy, TsmPartition, TsmType, TSM_MAX_TERMTOP, TSM_TYPE_NAMES,
     };
     use crate::basics::pdarrays::PDIntArray;
     use crate::inout::scanner::Scanner;
     use crate::learn::flatannoterms::{flat_anno_set_add_term, flat_anno_set_alloc, FlatAnnoTerm};
-    use crate::learn::indexfunctions::{tsm_index_alloc, IndexType};
+    use crate::learn::indexfunctions::{tsm_index_alloc, IndexType, INDEX_DYNAMIC_DEPTH};
     use crate::learn::patterns::{pattern_term_compute, PatternSubst};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -495,6 +680,66 @@ mod tests {
 
         assert!(gain.is_infinite());
         assert!(gain.is_sign_positive());
+    }
+
+    #[test]
+    fn find_optimal_single_non_top_index_preserves_input_depth() {
+        let mut bank =
+            TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation");
+        let first = parse_in_bank(&mut bank, "a");
+        let second = parse_in_bank(&mut bank, "b");
+        let subst = bound_subst(&bank, &[&first, &second]);
+        let mut set = flat_anno_set_alloc();
+        flat_anno_set_add_term(&mut set, FlatAnnoTerm::new(first, 0.0, 1.0, 1));
+        flat_anno_set_add_term(&mut set, FlatAnnoTerm::new(second, 2.0, 1.0, 1));
+        let mut depth = 3;
+
+        let selected =
+            tsm_find_optimal_index(&set, &mut bank, &subst, &mut depth, IndexType::ARITY, 1.0)
+                .expect("optimal index");
+
+        assert_eq!(selected, IndexType::ARITY);
+        assert_eq!(depth, 3);
+    }
+
+    #[test]
+    fn find_optimal_dynamic_mask_uses_c_evaluation_order_for_ties() {
+        let mut bank =
+            TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation");
+        let first = parse_in_bank(&mut bank, "a");
+        let second = parse_in_bank(&mut bank, "b");
+        let subst = bound_subst(&bank, &[&first, &second]);
+        let mut set = flat_anno_set_alloc();
+        flat_anno_set_add_term(&mut set, FlatAnnoTerm::new(first, 0.0, 1.0, 1));
+        flat_anno_set_add_term(&mut set, FlatAnnoTerm::new(second, 2.0, 1.0, 1));
+        let mut depth = INDEX_DYNAMIC_DEPTH;
+
+        let selected =
+            tsm_find_optimal_index(&set, &mut bank, &subst, &mut depth, IndexType::DYNAMIC, 1.0)
+                .expect("optimal dynamic index");
+
+        assert_eq!(selected, IndexType::SYMBOL);
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn find_optimal_single_top_with_dynamic_depth_searches_depths() {
+        let mut bank =
+            TermBank::new(Signature::new(TypeBank::new())).expect("term bank allocation");
+        let first = parse_in_bank(&mut bank, "a");
+        let second = parse_in_bank(&mut bank, "b");
+        let subst = bound_subst(&bank, &[&first, &second]);
+        let mut set = flat_anno_set_alloc();
+        flat_anno_set_add_term(&mut set, FlatAnnoTerm::new(first, 0.0, 1.0, 1));
+        flat_anno_set_add_term(&mut set, FlatAnnoTerm::new(second, 2.0, 1.0, 1));
+        let mut depth = INDEX_DYNAMIC_DEPTH;
+
+        let selected =
+            tsm_find_optimal_index(&set, &mut bank, &subst, &mut depth, IndexType::TOP, 1.0)
+                .expect("optimal top index");
+
+        assert_eq!(selected, IndexType::TOP);
+        assert_eq!(depth, 1);
     }
 
     #[test]

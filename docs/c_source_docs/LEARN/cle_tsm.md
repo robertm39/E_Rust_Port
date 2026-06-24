@@ -160,6 +160,8 @@ Source files reviewed: `LEARN/cle_tsm.h`, `LEARN/cle_tsm.c`.
 - `TSMPartitionSet` prepends each traversed flat annotation term to its bucket, so per-bucket list order is the reverse of `NumTree` traversal for terms with the same key.
 - Non-null partition caches store `key + 1` by `term->entry_no`; zero means "not cached". The caller must keep caches aligned with the index shape because a cached entry bypasses `TSMIndexInsert`.
 - `evaluate_index` returns zero for a single non-empty partition. For a perfect split, its denominator can become zero and the C double result is positive infinity.
+- `TSMFindOptimalIndex` updates the incumbent only on strict `>` gains, so earlier candidates win ties. With `IndexDynamic`, this means arity, symbol, identity, then top variants/depths are considered in C source order.
+- If only one concrete arity/symbol/identity index is requested, `TSMFindOptimalIndex` returns it without forcing the output depth to zero; the caller's incoming depth is preserved even though that depth is irrelevant to the selected index.
 - `TSMCreateSubtermSet` asserts that every listed term has the selected direct subterm, then inserts borrowed subterms as new flat annotations using the source term's eval, eval weight, and source count.
 - `cle_tsm.h` declares `TSMFindPartLimit`, but no implementation appears in this checkout. Treat it as header-only surface until a caller or reference implementation requires it.
 
