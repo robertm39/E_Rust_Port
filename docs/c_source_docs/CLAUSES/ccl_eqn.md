@@ -338,6 +338,7 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 - `EqnFOFPrint` chooses infix output only for `TSTPFormat` and non-PCL `LOPFormat`; `TPTPFormat` and LOP/PCL use prefix `equal(...)`, and unlike `EqnPrint` this helper does not emit external `++`/`--` signs. Rust preserves those branches through explicit FOF print options and keeps the higher-order parenthesis global as a caller-provided switch.
 - `EqnTSTPPrint` special-cases any negative `lterm == rterm` literal as `$false` before checking equational shape, and consults the process-global `EqnPrintOriented` for `->`/`!->` output. Rust preserves the same spellings through an explicit TSTP writer and a `print_oriented` argument; the C global is a good candidate to keep explicit in future Rust call paths.
 - `EqnOrient` trusts `EPMaxIsUpToDate` as a complete cache-validity guard and returns before checking whether the current side terms still match the stored orientation bit. Rust preserves that behavior; later side-mutation APIs should clear the flag explicitly instead of making orientation recompute defensively.
+- `compare_poseqn_negeqn` labels one mixed positive/negative lesser branch as `Buggy, changed by StS` and uses a broad disjunction over both equation sides. Rust preserves the implementation; defer cleanup until maximal-literal and proof-search comparisons can show the change is unobservable.
 
 ### Porting Focus
 

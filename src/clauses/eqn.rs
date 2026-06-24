@@ -6,6 +6,7 @@ use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT, EQUAL_PREDICATE,
 };
+use crate::heuristics::to_params::LiteralCmp;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::cto_orderings::to_compare;
 use crate::orderings::ocb::OrderControlBlock;
@@ -669,14 +670,7 @@ impl Eqn {
         } else if self.rterm == *bank.true_term() {
             CompareResult::Greater
         } else {
-            to_compare(
-                ocb,
-                bank.signature(),
-                &self.lterm,
-                &self.rterm,
-                DerefType::Always,
-                DerefType::Always,
-            )
+            compare_terms(ocb, bank, &self.lterm, &self.rterm)
         };
 
         let swapped = match relation {
@@ -701,6 +695,104 @@ impl Eqn {
         };
         self.set_prop(EP_MAX_IS_UP_TO_DATE);
         swapped
+    }
+
+    /// Compare two equations as multisets of terms, matching C `EqnCompare`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the equations do not have equivalent polarity, matching the C
+    /// assertion in the shared positive-equation comparison helper.
+    #[must_use]
+    pub fn order_compare(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        other: &Self,
+    ) -> CompareResult {
+        compare_pos_eqns(ocb, bank, self, other)
+    }
+
+    /// Return whether this equation is greater than `other` under `ocb`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Self::order_compare`].
+    #[must_use]
+    pub fn order_greater(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        other: &Self,
+    ) -> bool {
+        self.order_compare(ocb, bank, other) == CompareResult::Greater
+    }
+
+    /// Compare two signed literals under the selected literal comparison mode.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the selected term ordering's internal invariants, or if a
+    /// literal/equational property bit is inconsistent with its `$true` shape.
+    #[must_use]
+    pub fn literal_compare(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        other: &Self,
+    ) -> CompareResult {
+        let self_pseudo = self.query_prop(EP_PSEUDO_LIT);
+        let other_pseudo = other.query_prop(EP_PSEUDO_LIT);
+        if self_pseudo && !other_pseudo {
+            return CompareResult::Lesser;
+        }
+        if other_pseudo && !self_pseudo {
+            return CompareResult::Greater;
+        }
+
+        if !self.is_selected() {
+            if other.is_selected() {
+                return CompareResult::Lesser;
+            }
+        } else if !other.is_selected() {
+            return CompareResult::Greater;
+        } else if self.is_positive() != other.is_positive() {
+            return CompareResult::Uncomparable;
+        }
+
+        if ocb.lit_cmp == LiteralCmp::NoCmp {
+            return CompareResult::Uncomparable;
+        }
+
+        let tfo_result = tfo_literal_compare(ocb, bank, self, other);
+        if matches!(tfo_result, CompareResult::Greater | CompareResult::Lesser) {
+            return tfo_result;
+        }
+
+        if self.is_positive() == other.is_positive() {
+            compare_pos_eqns(ocb, bank, self, other)
+        } else if self.is_positive() {
+            compare_poseqn_negeqn(ocb, bank, self, other)
+        } else {
+            compare_poseqn_negeqn(ocb, bank, other, self)
+                .inverse()
+                .unwrap_or_else(|| panic!("literal comparison produced unknown inverse"))
+        }
+    }
+
+    /// Return whether this signed literal is greater than `other` under `ocb`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Self::literal_compare`].
+    #[must_use]
+    pub fn literal_greater(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        other: &Self,
+    ) -> bool {
+        self.literal_compare(ocb, bank, other) == CompareResult::Greater
     }
 
     pub fn copy_to_bank(&self, bank: &mut TermBank) -> Result<Self, Diagnostic> {
@@ -1759,6 +1851,180 @@ impl Eqn {
     }
 }
 
+fn compare_terms(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    left: &Term,
+    right: &Term,
+) -> CompareResult {
+    to_compare(
+        ocb,
+        bank.signature(),
+        left,
+        right,
+        DerefType::Always,
+        DerefType::Always,
+    )
+}
+
+fn is_greater_or_equal(relation: CompareResult) -> bool {
+    matches!(relation, CompareResult::Greater | CompareResult::Equal)
+}
+
+fn is_lesser_or_equal(relation: CompareResult) -> bool {
+    matches!(relation, CompareResult::Lesser | CompareResult::Equal)
+}
+
+fn compare_pos_eqns(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    left: &Eqn,
+    right: &Eqn,
+) -> CompareResult {
+    assert_eq!(
+        left.is_positive(),
+        right.is_positive(),
+        "EqnCompare requires equivalent literal polarity"
+    );
+
+    let left_left_relation = compare_terms(ocb, bank, left.left(), right.left());
+    let right_right_relation = compare_terms(ocb, bank, left.right(), right.right());
+
+    if left_left_relation == CompareResult::Equal && right_right_relation == CompareResult::Equal {
+        return CompareResult::Equal;
+    }
+    if is_greater_or_equal(left_left_relation) && is_greater_or_equal(right_right_relation) {
+        return CompareResult::Greater;
+    }
+    if is_lesser_or_equal(left_left_relation) && is_lesser_or_equal(right_right_relation) {
+        return CompareResult::Lesser;
+    }
+
+    let left_right_relation = compare_terms(ocb, bank, left.left(), right.right());
+
+    if left_left_relation == CompareResult::Greater && left_right_relation == CompareResult::Greater
+    {
+        return CompareResult::Greater;
+    }
+    if left_right_relation == CompareResult::Lesser && right_right_relation == CompareResult::Lesser
+    {
+        return CompareResult::Lesser;
+    }
+
+    let right_left_relation = compare_terms(ocb, bank, left.right(), right.left());
+
+    if left_right_relation == CompareResult::Equal && right_left_relation == CompareResult::Equal {
+        return CompareResult::Equal;
+    }
+    if is_greater_or_equal(right_left_relation) && is_greater_or_equal(left_right_relation) {
+        return CompareResult::Greater;
+    }
+    if right_left_relation == CompareResult::Greater
+        && right_right_relation == CompareResult::Greater
+    {
+        return CompareResult::Greater;
+    }
+    if left_left_relation == CompareResult::Lesser && right_left_relation == CompareResult::Lesser {
+        return CompareResult::Lesser;
+    }
+    if is_lesser_or_equal(right_left_relation) && is_lesser_or_equal(left_right_relation) {
+        return CompareResult::Lesser;
+    }
+
+    CompareResult::Uncomparable
+}
+
+fn compare_poseqn_negeqn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    positive: &Eqn,
+    negative: &Eqn,
+) -> CompareResult {
+    assert!(positive.is_positive(), "left literal must be positive");
+    assert!(negative.is_negative(), "right literal must be negative");
+
+    let left_left_relation = compare_terms(ocb, bank, positive.left(), negative.left());
+
+    if positive.is_oriented() {
+        if is_lesser_or_equal(left_left_relation) {
+            return CompareResult::Lesser;
+        }
+
+        let left_right_relation = compare_terms(ocb, bank, positive.left(), negative.right());
+
+        if is_lesser_or_equal(left_right_relation) {
+            return CompareResult::Lesser;
+        }
+        if left_left_relation == CompareResult::Greater
+            && left_right_relation == CompareResult::Greater
+        {
+            return CompareResult::Greater;
+        }
+    } else {
+        let left_right_relation = compare_terms(ocb, bank, positive.left(), negative.right());
+
+        if left_left_relation == CompareResult::Greater
+            && left_right_relation == CompareResult::Greater
+        {
+            return CompareResult::Greater;
+        }
+
+        let right_left_relation = compare_terms(ocb, bank, positive.right(), negative.left());
+        let right_right_relation = compare_terms(ocb, bank, positive.right(), negative.right());
+
+        if right_left_relation == CompareResult::Greater
+            && right_right_relation == CompareResult::Greater
+        {
+            return CompareResult::Greater;
+        }
+        if (is_lesser_or_equal(left_left_relation) || is_lesser_or_equal(left_right_relation))
+            && (is_lesser_or_equal(right_left_relation) || is_lesser_or_equal(right_right_relation))
+        {
+            return CompareResult::Lesser;
+        }
+    }
+
+    CompareResult::Uncomparable
+}
+
+fn tfo_literal_compare(
+    ocb: &OrderControlBlock,
+    bank: &TermBank,
+    left: &Eqn,
+    right: &Eqn,
+) -> CompareResult {
+    if ocb.lit_cmp == LiteralCmp::TfoEqMax {
+        if left.is_equ_lit(bank) && !right.is_equ_lit(bank) {
+            return CompareResult::Greater;
+        }
+        if !left.is_equ_lit(bank) && right.is_equ_lit(bank) {
+            return CompareResult::Lesser;
+        }
+        if !left.is_equ_lit(bank) && !left.left().is_free_var() && !right.left().is_free_var() {
+            return ocb.fun_compare(
+                bank.signature(),
+                left.left().f_code(),
+                right.left().f_code(),
+            );
+        }
+    } else if ocb.lit_cmp == LiteralCmp::TfoEqMin {
+        if left.is_equ_lit(bank) && !right.is_equ_lit(bank) {
+            return CompareResult::Lesser;
+        }
+        if !left.is_equ_lit(bank) && right.is_equ_lit(bank) {
+            return CompareResult::Greater;
+        }
+        if !left.is_equ_lit(bank) && !left.left().is_free_var() && !right.left().is_free_var() {
+            return ocb.fun_compare(
+                bank.signature(),
+                left.left().f_code(),
+                right.left().f_code(),
+            );
+        }
+    }
+    CompareResult::Unknown
+}
+
 /// Writes the C `EqnPrint` shape with explicit term-bank and format options.
 ///
 /// # Panics
@@ -2266,15 +2532,16 @@ mod tests {
         eqn_app_encode_string, eqn_debug_string, eqn_deref_string, eqn_fof_parse, eqn_fof_string,
         eqn_parse, eqn_string, eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
     };
-    use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn_props::{
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
         EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
+        EP_PSEUDO_LIT,
     };
-    use crate::heuristics::to_params::TermOrdering;
+    use crate::heuristics::to_params::{LiteralCmp, TermOrdering};
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::SIG_PHONY_APP_CODE;
@@ -2364,6 +2631,15 @@ mod tests {
         OrderControlBlock::alloc(
             TermOrdering::Kbo,
             true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn matrix_kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            false,
             bank.signature(),
             HoOrderKind::LfhoOrder,
         )
@@ -2906,6 +3182,144 @@ mod tests {
         assert_eq!(eq.right(), &f_a);
         assert!(!eq.is_oriented());
         assert!(eq.query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn order_compare_matches_c_equation_multiset_cases() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let greater = Eqn::alloc(f_a.clone(), a.clone(), &mut bank, true).unwrap();
+        let mut smaller = Eqn::alloc(a.clone(), a.clone(), &mut bank, true).unwrap();
+        let mut equal = Eqn::alloc(f_a.clone(), a, &mut bank, true).unwrap();
+        let mut ocb = kbo_ocb(&bank);
+
+        assert_eq!(
+            greater.order_compare(&mut ocb, &bank, &smaller),
+            CompareResult::Greater
+        );
+        assert!(greater.order_greater(&mut ocb, &bank, &smaller));
+        assert_eq!(
+            smaller.order_compare(&mut ocb, &bank, &greater),
+            CompareResult::Lesser
+        );
+        assert_eq!(
+            greater.order_compare(&mut ocb, &bank, &equal),
+            CompareResult::Equal
+        );
+
+        smaller.flip_prop(EP_IS_POSITIVE);
+        equal.flip_prop(EP_IS_POSITIVE);
+        assert_eq!(
+            smaller.order_compare(&mut ocb, &bank, &equal),
+            CompareResult::Lesser
+        );
+    }
+
+    #[test]
+    fn literal_compare_honors_pseudo_selected_and_no_cmp_priority() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let normal = Eqn::alloc(f_a.clone(), a.clone(), &mut bank, true).unwrap();
+        let mut pseudo = Eqn::alloc(f_a.clone(), a.clone(), &mut bank, true).unwrap();
+        let mut selected = Eqn::alloc(f_a.clone(), a.clone(), &mut bank, true).unwrap();
+        let mut selected_negative = Eqn::alloc(f_a.clone(), a.clone(), &mut bank, false).unwrap();
+        let mut ocb = kbo_ocb(&bank);
+
+        pseudo.set_prop(EP_PSEUDO_LIT);
+        assert_eq!(
+            pseudo.literal_compare(&mut ocb, &bank, &normal),
+            CompareResult::Lesser
+        );
+        assert_eq!(
+            normal.literal_compare(&mut ocb, &bank, &pseudo),
+            CompareResult::Greater
+        );
+
+        selected.set_prop(EP_IS_SELECTED);
+        assert_eq!(
+            normal.literal_compare(&mut ocb, &bank, &selected),
+            CompareResult::Lesser
+        );
+        assert!(selected.literal_greater(&mut ocb, &bank, &normal));
+
+        selected_negative.set_prop(EP_IS_SELECTED);
+        assert_eq!(
+            selected.literal_compare(&mut ocb, &bank, &selected_negative),
+            CompareResult::Uncomparable
+        );
+
+        ocb.lit_cmp = LiteralCmp::NoCmp;
+        assert_eq!(
+            normal.literal_compare(&mut ocb, &bank, &selected),
+            CompareResult::Lesser
+        );
+        let other = Eqn::alloc(a.clone(), a, &mut bank, true).unwrap();
+        assert_eq!(
+            normal.literal_compare(&mut ocb, &bank, &other),
+            CompareResult::Uncomparable
+        );
+    }
+
+    #[test]
+    fn literal_compare_ports_tfo_modes_and_signed_equation_cases() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let equality = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+        let predicate = typed_pred_const(&mut bank, "p");
+        let other_predicate = typed_pred_const(&mut bank, "q");
+        let p_lit =
+            Eqn::alloc(predicate.clone(), bank.true_term().clone(), &mut bank, true).unwrap();
+        let q_lit = Eqn::alloc(
+            other_predicate.clone(),
+            bank.true_term().clone(),
+            &mut bank,
+            true,
+        )
+        .unwrap();
+
+        let mut eq_max = kbo_ocb(&bank);
+        eq_max.lit_cmp = LiteralCmp::TfoEqMax;
+        assert_eq!(
+            equality.literal_compare(&mut eq_max, &bank, &p_lit),
+            CompareResult::Greater
+        );
+
+        let mut eq_min = kbo_ocb(&bank);
+        eq_min.lit_cmp = LiteralCmp::TfoEqMin;
+        assert_eq!(
+            equality.literal_compare(&mut eq_min, &bank, &p_lit),
+            CompareResult::Lesser
+        );
+
+        let mut pred_prec = matrix_kbo_ocb(&bank);
+        pred_prec.lit_cmp = LiteralCmp::TfoEqMax;
+        pred_prec.precedence_add_tuple(
+            bank.signature(),
+            predicate.f_code(),
+            other_predicate.f_code(),
+            CompareResult::Greater,
+        );
+        assert_eq!(
+            p_lit.literal_compare(&mut pred_prec, &bank, &q_lit),
+            CompareResult::Greater
+        );
+
+        let mut positive = Eqn::alloc(f_a, a.clone(), &mut bank, true).unwrap();
+        positive.set_prop(EP_IS_ORIENTED);
+        let negative = Eqn::alloc(a, b, &mut bank, false).unwrap();
+        let mut normal = kbo_ocb(&bank);
+        assert_eq!(
+            positive.literal_compare(&mut normal, &bank, &negative),
+            CompareResult::Greater
+        );
+        assert_eq!(
+            negative.literal_compare(&mut normal, &bank, &positive),
+            CompareResult::Lesser
+        );
     }
 
     #[test]
