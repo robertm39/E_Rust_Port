@@ -33,7 +33,7 @@ use crate::heuristics::varweights::{
     proof_weight_parse, sig_weight_parse, staggered_weight_parse, sym_type_weight_parse,
     tptp_type_weight_parse, weight_less_depth_parse,
 };
-use crate::heuristics::wfcb::BoxedWfcb;
+use crate::heuristics::wfcb::{BoxedWfcb, WfcbOps};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 
 pub const WEIGHT_FUN_PARSE_FUN_NAMES: [&str; 46] = [
@@ -172,7 +172,16 @@ impl WfcbAdmin {
     }
 
     #[must_use]
-    pub fn find_wfcb(&self, name: &str) -> Option<&dyn crate::heuristics::wfcb::WfcbOps> {
+    pub fn wfcb(&self, index: usize) -> Option<&dyn WfcbOps> {
+        self.entries.get(index).map(|entry| entry.wfcb.as_ref())
+    }
+
+    pub fn wfcb_mut(&mut self, index: usize) -> Option<&mut (dyn WfcbOps + 'static)> {
+        self.entries.get_mut(index).map(|entry| entry.wfcb.as_mut())
+    }
+
+    #[must_use]
+    pub fn find_wfcb(&self, name: &str) -> Option<&dyn WfcbOps> {
         self.entries
             .iter()
             .rev()
@@ -180,10 +189,7 @@ impl WfcbAdmin {
             .map(|entry| entry.wfcb.as_ref())
     }
 
-    pub fn find_wfcb_mut(
-        &mut self,
-        name: &str,
-    ) -> Option<&mut (dyn crate::heuristics::wfcb::WfcbOps + 'static)> {
+    pub fn find_wfcb_mut(&mut self, name: &str) -> Option<&mut (dyn WfcbOps + 'static)> {
         self.entries
             .iter_mut()
             .rev()
@@ -499,6 +505,10 @@ mod tests {
         assert_eq!(third, 2);
         assert_eq!(admin.name(first), Some("weight"));
         assert_eq!(admin.name(second), Some("other"));
+        assert!(admin.wfcb(first).is_some());
+        assert!(admin.wfcb(99).is_none());
+        assert!(admin.wfcb_mut(second).is_some());
+        assert!(admin.wfcb_mut(99).is_none());
         assert_eq!(
             admin
                 .find_wfcb_mut("weight")

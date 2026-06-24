@@ -159,6 +159,7 @@ Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 - `selection_strategy` is a function pointer initialized to `SelectNoLiterals`; the public strategy-file spelling for that function is `NoSelection`. Rust code that stores the name should convert through the literal-selection table before runtime selection is wired in.
 - `HCBFree` releases only the HCB's pointer arrays and optional HCB-local data; it intentionally does not free stored WFCBs because those come from `WFCBAdmin`. Rust should continue to store handles or borrows to admin-owned WFCBs rather than transferring ownership into HCB.
 - `HCBAddWFCB` converts each added `steps` value into a cumulative switch-count boundary and changes the selector from `HCBSingleWeightClauseSelect` to `HCBStandardClauseSelect` after the second WFCB. Preserve that cumulative representation before considering a clearer schedule data type.
+- `HCBClauseEvaluate` assumes `clause->evaluations == NULL`, allocates a fresh `EvalCell` sized to `wfcb_no`, and writes WFCB evaluations in list order. Until Rust clauses own that field directly, keep explicit evaluation storage adapters one-slot-per-WFCB.
 - `SplitAll` is the numeric mask `7`, so it does not include `SplitPositive` (`8`) or `SplitMixed` (`16`) despite the name. Keep that value until clause-splitting callers prove whether this is intentional legacy behavior or a cleanup candidate.
 
 ### Porting Focus

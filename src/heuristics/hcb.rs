@@ -1,4 +1,8 @@
+use crate::clauses::clause::Clause;
+use crate::clauses::neweval::EvalCell;
 use crate::heuristics::to_params::{order_parms_print_string, OrderParmsCell};
+use crate::heuristics::wfcbadmin::WfcbAdmin;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::RewriteLevel;
 
 pub const NO_EXT_SUP: i32 = -1;
@@ -656,6 +660,40 @@ pub fn hcb_add_wfcb<Data>(hcb: &mut HcbCell<Data>, wfcb: WfcbHandle, steps: i64)
     hcb.wfcb_no()
 }
 
+/// Evaluates a clause through every WFCB in `hcb` into an existing
+/// evaluation list.
+///
+/// The current Rust `Clause` type does not own the C `clause->evaluations`
+/// pointer yet, so this is the explicit storage adapter for
+/// `HCBClauseEvaluate`.
+///
+/// # Panics
+///
+/// Panics if `evaluations` does not have one slot per HCB WFCB, if an HCB
+/// WFCB handle does not exist in `admin`, or if a WFCB writes outside the
+/// evaluation cell.
+pub fn hcb_clause_evaluate_into<Data>(
+    hcb: &HcbCell<Data>,
+    admin: &mut WfcbAdmin,
+    evaluations: &mut EvalCell,
+    bank: &TermBank,
+    clause: &Clause,
+) {
+    assert_eq!(
+        evaluations.eval_no(),
+        hcb.wfcb_no(),
+        "evaluation width must match HCB WFCB count"
+    );
+
+    let empty = clause.is_sem_false();
+    for (pos, wfcb_handle) in hcb.wfcb_list.iter().copied().enumerate() {
+        let wfcb = admin
+            .wfcb_mut(wfcb_handle)
+            .unwrap_or_else(|| panic!("unknown WFCB handle {wfcb_handle}"));
+        wfcb.add_evaluation(evaluations, bank, clause, pos, empty);
+    }
+}
+
 pub fn default_exit_fun<Data>(_data: Data) {}
 
 #[must_use]
@@ -952,21 +990,28 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, heuristic_parms_alloc,
-        heuristic_parms_initialize, heuristic_parms_print_string, prim_enum_mode_name_raw,
-        str_to_ext_inference_type, str_to_prim_enum_mode, str_to_prim_enum_mode_raw,
-        str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw, AcHandling, ExtInferenceType,
-        GroundingStrategy, HcbCell, HcbSelectFunction, HeuristicParmsCell, ParamodulationType,
-        PrimEnumMode, SplitClassType, SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT,
-        DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT,
-        DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION,
-        DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT,
-        DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME,
-        DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC,
-        HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
+        bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate_into,
+        heuristic_parms_alloc, heuristic_parms_initialize, heuristic_parms_print_string,
+        prim_enum_mode_name_raw, str_to_ext_inference_type, str_to_prim_enum_mode,
+        str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw,
+        AcHandling, ExtInferenceType, GroundingStrategy, HcbCell, HcbSelectFunction,
+        HeuristicParmsCell, ParamodulationType, PrimEnumMode, SplitClassType, SplitType, UnifMode,
+        DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES,
+        DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT,
+        DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS,
+        DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME,
+        DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS,
+        HCB_DEFAULT_HEURISTIC, HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
+    use crate::clauses::clause::Clause;
+    use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
     use crate::heuristics::to_params::OrderParmsCell;
+    use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
+    use crate::heuristics::wfcbadmin::WfcbAdmin;
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::RewriteLevel;
+    use crate::terms::typebanks::TypeBank;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1430,6 +1475,74 @@ mod tests {
     fn record_hcb_exit(data: HcbDropData) {
         let HcbDropData { exit_count } = data;
         exit_count.set(exit_count.get() + 1);
+    }
+
+    #[test]
+    fn hcb_clause_evaluate_into_uses_admin_handles() {
+        let mut admin = WfcbAdmin::new();
+        let first = admin.add_wfcb("first", boxed_hcb_test_wfcb(2.5));
+        let second = admin.add_wfcb("second", boxed_hcb_test_wfcb(7.25));
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, first, 1);
+        hcb_add_wfcb(&mut hcb, second, 1);
+        let bank = hcb_test_bank();
+        let clause = Clause::empty();
+        let mut evaluations = evals_alloc(hcb.wfcb_no());
+
+        hcb_clause_evaluate_into(&hcb, &mut admin, &mut evaluations, &bank, &clause);
+
+        assert_eq!(evaluations.eval(0).heuristic().to_bits(), 2.5_f32.to_bits());
+        assert_eq!(
+            evaluations.eval(1).heuristic().to_bits(),
+            7.25_f32.to_bits()
+        );
+        assert_eq!(evaluations.eval(0).priority(), PRIO_BEST);
+        assert_eq!(evaluations.eval(1).priority(), PRIO_BEST);
+    }
+
+    #[test]
+    #[should_panic(expected = "evaluation width must match HCB WFCB count")]
+    fn hcb_clause_evaluate_into_requires_matching_eval_width() {
+        let mut admin = WfcbAdmin::new();
+        let first = admin.add_wfcb("first", boxed_hcb_test_wfcb(2.5));
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, first, 1);
+        let bank = hcb_test_bank();
+        let clause = Clause::empty();
+        let mut evaluations = evals_alloc(0);
+
+        hcb_clause_evaluate_into(&hcb, &mut admin, &mut evaluations, &bank, &clause);
+    }
+
+    #[derive(Clone, Copy)]
+    struct HcbEvalData {
+        weight: f64,
+    }
+
+    fn boxed_hcb_test_wfcb(weight: f64) -> BoxedWfcb {
+        Box::new(wfcb_alloc(
+            hcb_test_eval,
+            hcb_test_priority,
+            hcb_test_exit,
+            Some(HcbEvalData { weight }),
+        ))
+    }
+
+    fn hcb_test_eval(data: Option<&mut HcbEvalData>, _bank: &TermBank, _clause: &Clause) -> f64 {
+        data.map_or(0.0, |data| data.weight)
+    }
+
+    fn hcb_test_priority(_bank: &TermBank, _clause: &Clause) -> EvalPriority {
+        PRIO_NORMAL + 3
+    }
+
+    fn hcb_test_exit(data: HcbEvalData) {
+        let HcbEvalData { weight } = data;
+        assert!(weight.is_finite());
+    }
+
+    fn hcb_test_bank() -> TermBank {
+        TermBank::new(Signature::new(TypeBank::new())).unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn assert_substrings_in_order(text: &str, needles: &[&str]) {
