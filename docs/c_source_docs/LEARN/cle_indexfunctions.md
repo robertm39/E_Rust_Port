@@ -113,6 +113,13 @@ Source files reviewed: `LEARN/cle_indexfunctions.h`, `LEARN/cle_indexfunctions.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 
+### Compatibility Notes
+
+- `index_counter` is file-static and only used for debug identities in `TSMIndexPrint`; it is incremented on allocation and is not reset by `TSMIndexFree` or TSM admin cleanup.
+- `TSMIndexCell` and `IndexTermCell` store shared `PatternSubst_p` pointers. `IndexTermCompareFun` asserts total substitutions, and the object-tree ordering assumes those substitutions remain stable after insertion.
+- `IndexTermAlloc` only stores the term pointer and substitution pointer. Despite comments about references and bank mutation, `IndexTermFree` just asserts the bank pointer and frees the wrapper cell.
+- `IndexEmpty` can be allocated and found against, returning `-1`, but insertion asserts; higher-level parsers reject it for active TSM weight parameters.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
