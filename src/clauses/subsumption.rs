@@ -4,6 +4,8 @@ use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
 use crate::clauses::clausefunc::clause_remove_literal_index;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
+use crate::clauses::fcvindexing::FvIndex;
+use crate::clauses::freqvectors::FvPackedClause;
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -348,6 +350,110 @@ pub fn clause_set_find_first_subsumed_clause<'set>(
     clause_set_find_subsumed_clause(set, 0, subsumer, bank)
 }
 
+/// Returns the first indexed clause that subsumes `sub_candidate`.
+///
+/// This mirrors `clause_set_subsumes_clause_indexed` for callers that already
+/// own the `FvIndex` and a packed query clause.
+///
+/// # Panics
+///
+/// Panics if `sub_candidate` is unpacked, if the query or any checked indexed
+/// clause is not subsumption-ordered, or if any checked clause has stale cached
+/// standard weight.
+#[must_use]
+pub fn fv_index_subsumes_packed_clause<'index>(
+    index: &'index FvIndex,
+    sub_candidate: &FvPackedClause,
+    bank: &TermBank,
+) -> Option<&'index Clause> {
+    let vector = sub_candidate
+        .vector()
+        .expect("FV-index subsumption requires a packed frequency vector");
+    assert_eq!(
+        sub_candidate.clause().weight(),
+        sub_candidate.clause().standard_weight()
+    );
+    fv_index_subsumes_clause_rec(index, vector.as_slice(), 0, sub_candidate.clause(), bank)
+}
+
+/// Pushes every indexed clause subsumed by `subsumer` onto `result`.
+///
+/// Returns the number of newly pushed clauses, matching
+/// `ClauseSetFindFVSubsumedClauses`.
+///
+/// # Panics
+///
+/// Panics if `subsumer` is unpacked, if the query or any checked indexed clause
+/// is not subsumption-ordered, or if any checked clause has stale cached
+/// standard weight.
+pub fn fv_index_find_subsumed_clauses<'index>(
+    index: &'index FvIndex,
+    subsumer: &FvPackedClause,
+    result: &mut PStack<&'index Clause>,
+    bank: &TermBank,
+) -> i64 {
+    let old_len = result.len();
+    let vector = subsumer
+        .vector()
+        .expect("FV-index subsumed-clause lookup requires a packed frequency vector");
+    assert_eq!(
+        subsumer.clause().weight(),
+        subsumer.clause().standard_weight()
+    );
+    fv_index_find_subsumed_clauses_rec(
+        index,
+        vector.as_slice(),
+        0,
+        subsumer.clause(),
+        result,
+        bank,
+    );
+    usize_to_i64(result.len() - old_len)
+}
+
+/// Returns the first indexed clause subsumed by `subsumer`.
+///
+/// # Panics
+///
+/// Panics if `subsumer` is unpacked, if the query or any checked indexed clause
+/// is not subsumption-ordered, or if any checked clause has stale cached
+/// standard weight.
+#[must_use]
+pub fn fv_index_find_first_subsumed_clause<'index>(
+    index: &'index FvIndex,
+    subsumer: &FvPackedClause,
+    bank: &TermBank,
+) -> Option<&'index Clause> {
+    let vector = subsumer
+        .vector()
+        .expect("FV-index first-subsumed lookup requires a packed frequency vector");
+    assert_eq!(
+        subsumer.clause().weight(),
+        subsumer.clause().standard_weight()
+    );
+    fv_index_find_first_subsumed_clause_rec(index, vector.as_slice(), 0, subsumer.clause(), bank)
+}
+
+/// Returns the first indexed clause that is a variant of `clause`.
+///
+/// # Panics
+///
+/// Panics if `clause` is unpacked, if the query or any checked indexed clause
+/// is not subsumption-ordered, or if any checked clause has stale cached
+/// standard weight.
+#[must_use]
+pub fn fv_index_find_variant_clause<'index>(
+    index: &'index FvIndex,
+    clause: &FvPackedClause,
+    bank: &TermBank,
+) -> Option<&'index Clause> {
+    let vector = clause
+        .vector()
+        .expect("FV-index variant lookup requires a packed frequency vector");
+    assert_eq!(clause.clause().weight(), clause.clause().standard_weight());
+    fv_index_find_variant_clause_rec(index, vector.as_slice(), 0, clause.clause(), bank)
+}
+
 fn check_subsumption_possibility(
     subsumer: &Clause,
     sub_candidate: &Clause,
@@ -428,6 +534,126 @@ fn literal_matches_with_subst(pattern: &Eqn, candidate: &Eqn, subst: &mut Substi
     pattern.subsume(candidate, subst)
 }
 
+fn fv_index_subsumes_clause_rec<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    clause: &Clause,
+    bank: &TermBank,
+) -> Option<&'index Clause> {
+    if feature == vector.len() {
+        return index
+            .clauses()
+            .values()
+            .find(|candidate| clause_subsumes_clause(candidate, clause, bank));
+    }
+
+    for successor in index
+        .successors()
+        .range(..=vector[feature])
+        .map(|(_, node)| node)
+    {
+        if successor.clause_count() != 0 {
+            if let Some(result) =
+                fv_index_subsumes_clause_rec(successor, vector, feature + 1, clause, bank)
+            {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
+fn fv_index_find_subsumed_clauses_rec<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    subsumer: &Clause,
+    result: &mut PStack<&'index Clause>,
+    bank: &TermBank,
+) {
+    if feature == vector.len() {
+        for candidate in index.clauses().values() {
+            if clause_subsumes_clause(subsumer, candidate, bank) {
+                result.push(candidate);
+            }
+        }
+        return;
+    }
+
+    for successor in index
+        .successors()
+        .range(vector[feature]..)
+        .map(|(_, node)| node)
+    {
+        if successor.clause_count() != 0 {
+            fv_index_find_subsumed_clauses_rec(
+                successor,
+                vector,
+                feature + 1,
+                subsumer,
+                result,
+                bank,
+            );
+        }
+    }
+}
+
+fn fv_index_find_first_subsumed_clause_rec<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    subsumer: &Clause,
+    bank: &TermBank,
+) -> Option<&'index Clause> {
+    if feature == vector.len() {
+        return index
+            .clauses()
+            .values()
+            .find(|candidate| clause_subsumes_clause(subsumer, candidate, bank));
+    }
+
+    for successor in index
+        .successors()
+        .range(vector[feature]..)
+        .map(|(_, node)| node)
+    {
+        if successor.clause_count() != 0 {
+            if let Some(result) = fv_index_find_first_subsumed_clause_rec(
+                successor,
+                vector,
+                feature + 1,
+                subsumer,
+                bank,
+            ) {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
+fn fv_index_find_variant_clause_rec<'index>(
+    index: &'index FvIndex,
+    vector: &[i64],
+    feature: usize,
+    clause: &Clause,
+    bank: &TermBank,
+) -> Option<&'index Clause> {
+    if feature == vector.len() {
+        return index.clauses().values().find(|candidate| {
+            clause_subsumes_clause(candidate, clause, bank)
+                && clause_subsumes_clause(clause, candidate, bank)
+        });
+    }
+
+    let successor = index.successors().get(&vector[feature])?;
+    if successor.clause_count() == 0 {
+        return None;
+    }
+    fv_index_find_variant_clause_rec(successor, vector, feature + 1, clause, bank)
+}
+
 fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
@@ -476,7 +702,9 @@ mod tests {
         clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
         clause_set_find_unit_subsumed_clause, clause_set_subsumes_clause,
         clause_subsume_order_sort_lits, clause_subsumes_clause, eqn_subsumes_termpair,
-        eqn_topsubsumes_termpair, literal_subsumes_clause, unit_clause_set_subsumes_clause,
+        eqn_topsubsumes_termpair, fv_index_find_first_subsumed_clause,
+        fv_index_find_subsumed_clauses, fv_index_find_variant_clause,
+        fv_index_subsumes_packed_clause, literal_subsumes_clause, unit_clause_set_subsumes_clause,
         unit_clause_subsumes_clause,
     };
     use crate::basics::pstacks::PStack;
@@ -485,6 +713,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
+    use crate::clauses::freqvectors::{FvCollect, FvCollectLayout, FvIndexType};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -538,6 +768,12 @@ mod tests {
     fn prepare(clause: &mut Clause, bank: &TermBank) {
         clause.set_weight(clause.standard_weight());
         clause_subsume_order_sort_lits(clause, bank);
+    }
+
+    fn ac_anchor_for_bank(bank: &TermBank) -> FvIndexAnchor {
+        let mut cspec = FvCollect::new(FvCollectLayout::new(FvIndexType::AcFeatures, false, 0, 0));
+        cspec.set_max_symbols(usize::try_from(bank.signature().f_count()).unwrap() + 1);
+        FvIndexAnchor::new(cspec, None)
     }
 
     #[test]
@@ -745,6 +981,135 @@ mod tests {
                 .map(|clause| clause.ident())
                 .collect::<Vec<_>>(),
             vec![non_matching_id, first_id, second_id]
+        );
+    }
+
+    #[test]
+    fn fv_index_subsumes_packed_clause_uses_le_feature_ranges() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let expected_right = typed_const(&mut bank, "b");
+        let witness = typed_const(&mut bank, "c");
+        let mut indexed = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &variable, &expected_right, true),
+        ]);
+        let mut candidate = clause_from(vec![
+            literal(&mut bank, &witness, &constant, true),
+            literal(&mut bank, &witness, &expected_right, true),
+        ]);
+        prepare(&mut indexed, &bank);
+        prepare(&mut candidate, &bank);
+        let indexed_id = indexed.ident();
+        let mut anchor = ac_anchor_for_bank(&bank);
+        let mut packed_indexed = fv_index_pack_clause(indexed, Some(&anchor));
+        let packed_candidate = fv_index_pack_clause(candidate, Some(&anchor));
+
+        assert!(anchor.insert(&mut packed_indexed, &bank));
+
+        assert_eq!(
+            fv_index_subsumes_packed_clause(anchor.index(), &packed_candidate, &bank)
+                .map(Clause::ident),
+            Some(indexed_id)
+        );
+    }
+
+    #[test]
+    fn fv_index_find_subsumed_clauses_uses_ge_feature_ranges() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "a");
+        let expected_right = typed_const(&mut bank, "b");
+        let first_witness = typed_const(&mut bank, "c");
+        let second_witness = typed_const(&mut bank, "d");
+        let mismatch_left = typed_const(&mut bank, "e");
+        let mut subsumer = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &variable, &expected_right, true),
+        ]);
+        let mut first = clause_from(vec![
+            literal(&mut bank, &first_witness, &constant, true),
+            literal(&mut bank, &first_witness, &expected_right, true),
+        ]);
+        let mut second = clause_from(vec![
+            literal(&mut bank, &second_witness, &constant, true),
+            literal(&mut bank, &second_witness, &expected_right, true),
+        ]);
+        let mut non_matching = clause_from(vec![
+            literal(&mut bank, &mismatch_left, &constant, true),
+            literal(&mut bank, &second_witness, &expected_right, true),
+        ]);
+        prepare(&mut subsumer, &bank);
+        prepare(&mut first, &bank);
+        prepare(&mut second, &bank);
+        prepare(&mut non_matching, &bank);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let mut anchor = ac_anchor_for_bank(&bank);
+        let mut packed_first = fv_index_pack_clause(first, Some(&anchor));
+        let mut packed_second = fv_index_pack_clause(second, Some(&anchor));
+        let mut packed_non_matching = fv_index_pack_clause(non_matching, Some(&anchor));
+        let packed_subsumer = fv_index_pack_clause(subsumer, Some(&anchor));
+
+        assert!(anchor.insert(&mut packed_first, &bank));
+        assert!(anchor.insert(&mut packed_second, &bank));
+        assert!(anchor.insert(&mut packed_non_matching, &bank));
+
+        let first_match =
+            fv_index_find_first_subsumed_clause(anchor.index(), &packed_subsumer, &bank)
+                .map(Clause::ident);
+        assert!(matches!(first_match, Some(id) if id == first_id || id == second_id));
+
+        let mut result = PStack::new();
+        assert_eq!(
+            fv_index_find_subsumed_clauses(anchor.index(), &packed_subsumer, &mut result, &bank),
+            2
+        );
+        let mut ids = result
+            .as_slice()
+            .iter()
+            .map(|clause| clause.ident())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![first_id.min(second_id), first_id.max(second_id)]);
+    }
+
+    #[test]
+    fn fv_index_find_variant_clause_follows_exact_feature_path() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -10);
+        let y = typed_var(&bank, -11);
+        let z = typed_var(&bank, -12);
+        let constant = typed_const(&mut bank, "a");
+        let expected_right = typed_const(&mut bank, "b");
+        let mut query = clause_from(vec![
+            literal(&mut bank, &x, &constant, true),
+            literal(&mut bank, &x, &expected_right, true),
+        ]);
+        let mut non_variant = clause_from(vec![
+            literal(&mut bank, &y, &constant, true),
+            literal(&mut bank, &z, &expected_right, true),
+        ]);
+        let mut variant = clause_from(vec![
+            literal(&mut bank, &y, &constant, true),
+            literal(&mut bank, &y, &expected_right, true),
+        ]);
+        prepare(&mut query, &bank);
+        prepare(&mut non_variant, &bank);
+        prepare(&mut variant, &bank);
+        let variant_id = variant.ident();
+        let mut anchor = ac_anchor_for_bank(&bank);
+        let mut packed_non_variant = fv_index_pack_clause(non_variant, Some(&anchor));
+        let mut packed_variant = fv_index_pack_clause(variant, Some(&anchor));
+        let packed_query = fv_index_pack_clause(query, Some(&anchor));
+
+        assert!(anchor.insert(&mut packed_non_variant, &bank));
+        assert!(anchor.insert(&mut packed_variant, &bank));
+
+        assert_eq!(
+            fv_index_find_variant_clause(anchor.index(), &packed_query, &bank).map(Clause::ident),
+            Some(variant_id)
         );
     }
 
