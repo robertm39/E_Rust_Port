@@ -3,11 +3,12 @@ use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_IGNORE_PROPS, CP_IS_D_INDEXED, CP_IS_SOS, CP_TYPE_CONJECTURE,
-    CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
+    FormulaProperties, CP_IGNORE_PROPS, CP_IS_D_INDEXED, CP_IS_SOS, CP_TYPE_AXIOM,
+    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
+    CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
-use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn::{eqn_write, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{EqnProperties, EqnSide, EP_PSEUDO_LIT};
 use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
@@ -20,6 +21,7 @@ use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::TermWeightExtension;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 static GLOBAL_CLAUSE_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
@@ -965,6 +967,306 @@ impl Clause {
     }
 }
 
+pub fn clause_write_list(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    clause
+        .literals()
+        .write_print(output, bank, "; ", false, full_terms, options)?;
+    output.write_str(" <-.")
+}
+
+#[must_use]
+pub fn clause_print_list_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> String {
+    let mut output = String::new();
+    let _ = clause_write_list(
+        &mut output,
+        bank,
+        clause,
+        full_terms,
+        EqnPrintOptions::default(),
+    );
+    output
+}
+
+pub fn clause_write_axiom(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    let mut printed = 0;
+    for literal in clause
+        .literals()
+        .as_slice()
+        .iter()
+        .filter(|literal| literal.is_positive())
+    {
+        eqn_write(output, bank, literal, false, full_terms, options)?;
+        printed += 1;
+        if printed < clause.positive_literal_count() {
+            output.write_str("; ")?;
+        }
+    }
+
+    output.write_str(" <- ")?;
+
+    printed = 0;
+    for literal in clause
+        .literals()
+        .as_slice()
+        .iter()
+        .filter(|literal| literal.is_negative())
+    {
+        eqn_write(output, bank, literal, true, full_terms, options)?;
+        printed += 1;
+        if printed < clause.negative_literal_count() {
+            output.write_str(", ")?;
+        }
+    }
+
+    output.write_char('.')
+}
+
+#[must_use]
+pub fn clause_print_axiom_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> String {
+    clause_print_axiom_string_with_options(bank, clause, full_terms, EqnPrintOptions::default())
+}
+
+#[must_use]
+pub fn clause_print_axiom_string_with_options(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> String {
+    let mut output = String::new();
+    let _ = clause_write_axiom(&mut output, bank, clause, full_terms, options);
+    output
+}
+
+pub fn clause_write_rule(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    if let Some((first, rest)) = clause.literals().as_slice().split_first() {
+        eqn_write(output, bank, first, false, full_terms, options)?;
+        if !rest.is_empty() {
+            output.write_str(" <- ")?;
+            write_literal_tail(output, bank, rest, full_terms, options)?;
+        }
+    } else {
+        output.write_str(" <- ")?;
+    }
+    output.write_char('.')
+}
+
+#[must_use]
+pub fn clause_print_rule_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> String {
+    let mut output = String::new();
+    let _ = clause_write_rule(
+        &mut output,
+        bank,
+        clause,
+        full_terms,
+        EqnPrintOptions::default(),
+    );
+    output
+}
+
+pub fn clause_write_goal(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    output.write_str("<- ")?;
+    clause
+        .literals()
+        .write_print(output, bank, ", ", true, full_terms, options)?;
+    output.write_char('.')
+}
+
+#[must_use]
+pub fn clause_print_goal_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> String {
+    let mut output = String::new();
+    let _ = clause_write_goal(
+        &mut output,
+        bank,
+        clause,
+        full_terms,
+        EqnPrintOptions::default(),
+    );
+    output
+}
+
+/// # Panics
+///
+/// Panics if `clause` is empty, matching the C `ClausePrintQuery` assertion.
+pub fn clause_write_query(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    assert!(
+        !clause.is_empty(),
+        "ClausePrintQuery requires at least one literal"
+    );
+    output.write_str("?- ")?;
+    clause
+        .literals()
+        .write_print(output, bank, ", ", true, full_terms, options)?;
+    output.write_char('.')
+}
+
+/// # Panics
+///
+/// Panics if `clause` is empty, matching the C `ClausePrintQuery` assertion.
+#[must_use]
+pub fn clause_print_query_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> String {
+    let mut output = String::new();
+    let _ = clause_write_query(
+        &mut output,
+        bank,
+        clause,
+        full_terms,
+        EqnPrintOptions::default(),
+    );
+    output
+}
+
+pub fn clause_write_tptp_format(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+) -> fmt::Result {
+    write!(
+        output,
+        "input_clause({},{},[",
+        clause_tptp_identifier(clause),
+        clause_tptp_role(clause)
+    )?;
+    clause
+        .literals()
+        .write_print(output, bank, ",", false, true, EqnPrintOptions::tptp())?;
+    output.write_str("]).")
+}
+
+#[must_use]
+pub fn clause_print_tptp_format_string(bank: &TermBank, clause: &Clause) -> String {
+    let mut output = String::new();
+    let _ = clause_write_tptp_format(&mut output, bank, clause);
+    output
+}
+
+pub fn clause_write_lop_format(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    if matches!(
+        clause.query_tptp_type(),
+        CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE
+    ) && !clause.is_empty()
+    {
+        clause_write_query(output, bank, clause, full_terms, options)
+    } else {
+        clause_write_axiom(output, bank, clause, full_terms, options)
+    }
+}
+
+#[must_use]
+pub fn clause_print_lop_format_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+) -> String {
+    let mut output = String::new();
+    let _ = clause_write_lop_format(
+        &mut output,
+        bank,
+        clause,
+        full_terms,
+        EqnPrintOptions::default(),
+    );
+    output
+}
+
+pub fn clause_write_pcl(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+) -> fmt::Result {
+    output.write_char('[')?;
+    clause.literals().write_print(
+        output,
+        bank,
+        ",",
+        false,
+        full_terms,
+        EqnPrintOptions::tptp(),
+    )?;
+    output.write_char(']')
+}
+
+#[must_use]
+pub fn clause_pcl_string(bank: &TermBank, clause: &Clause, full_terms: bool) -> String {
+    let mut output = String::new();
+    let _ = clause_write_pcl(&mut output, bank, clause, full_terms);
+    output
+}
+
+fn write_literal_tail(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    literals: &[Eqn],
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    for (index, literal) in literals.iter().enumerate() {
+        if index != 0 {
+            output.write_str(", ")?;
+        }
+        eqn_write(output, bank, literal, true, full_terms, options)?;
+    }
+    Ok(())
+}
+
+fn clause_tptp_identifier(clause: &Clause) -> String {
+    let source = clause.query_csscpa_source();
+    if clause.ident() >= 0 {
+        format!("c_{source}_{}", clause.ident())
+    } else {
+        let offset = i128::from(clause.ident()) - i128::from(i64::MIN);
+        format!("i_{source}_{offset}")
+    }
+}
+
+fn clause_tptp_role(clause: &Clause) -> &'static str {
+    match clause.query_tptp_type() {
+        CP_TYPE_AXIOM => "axiom",
+        CP_TYPE_HYPOTHESIS => "hypothesis",
+        CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE => "conjecture",
+        CP_TYPE_LEMMA => "lemma",
+        CP_TYPE_WATCH_CLAUSE => "watchlist",
+        _ => "unknown",
+    }
+}
+
 fn next_clause_ident() -> i64 {
     GLOBAL_CLAUSE_COUNTER
         .fetch_add(1, AtomicOrdering::SeqCst)
@@ -1011,7 +1313,11 @@ fn is_key_subset(left: &BTreeMap<usize, Term>, right: &BTreeMap<usize, Term>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::Clause;
+    use super::{
+        clause_pcl_string, clause_print_axiom_string, clause_print_goal_string,
+        clause_print_lop_format_string, clause_print_query_string, clause_print_rule_string,
+        clause_print_tptp_format_string, Clause,
+    };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::sysdate::SysDate;
@@ -1063,6 +1369,17 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn typed_pred_const(bank: &mut TermBank, name: &str) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, bool_type.clone())
+            .unwrap();
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(bool_type));
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     fn typed_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         let term = Term::top_alloc(f_code, 2);
@@ -1107,6 +1424,56 @@ mod tests {
         assert!(clause.ident() > i64::MIN);
         assert_eq!(clause.date(), SysDate::creation_time());
         assert!(clause.evaluations().is_none());
+    }
+
+    #[test]
+    fn clause_print_strings_match_c_lop_tptp_and_pcl_shapes() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "print_a");
+        let b = typed_const(&mut bank, "print_b");
+        let p = typed_pred_const(&mut bank, "print_p");
+        let true_term = bank.true_term().clone();
+        let positive_equality = eqn(&mut bank, &a, &b, true);
+        let positive_predicate = eqn(&mut bank, &p, &true_term, true);
+        let negative_equality = eqn(&mut bank, &b, &a, false);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            negative_equality,
+            positive_equality,
+            positive_predicate,
+        ]));
+        clause.set_ident(77);
+        clause.set_csscpa_source(5);
+
+        assert_eq!(
+            clause_print_axiom_string(&bank, &clause, true),
+            "print_a=print_b; print_p <- print_b=print_a."
+        );
+        assert_eq!(
+            clause_print_rule_string(&bank, &clause, true),
+            "print_a=print_b <- ~print_p, print_b=print_a."
+        );
+        assert_eq!(
+            clause_print_goal_string(&bank, &clause, true),
+            "<- print_a!=print_b, ~print_p, print_b=print_a."
+        );
+        assert_eq!(
+            clause_print_query_string(&bank, &clause, true),
+            "?- print_a!=print_b, ~print_p, print_b=print_a."
+        );
+
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            clause_print_lop_format_string(&bank, &clause, true),
+            "?- print_a!=print_b, ~print_p, print_b=print_a."
+        );
+        assert_eq!(
+            clause_print_tptp_format_string(&bank, &clause),
+            "input_clause(c_5_77,conjecture,[++equal(print_a, print_b),++print_p,--equal(print_b, print_a)])."
+        );
+        assert_eq!(
+            clause_pcl_string(&bank, &clause, true),
+            "[++equal(print_a, print_b),++print_p,--equal(print_b, print_a)]"
+        );
     }
 
     #[test]

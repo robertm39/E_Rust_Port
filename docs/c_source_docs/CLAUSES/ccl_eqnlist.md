@@ -222,6 +222,10 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `EqnListPrint` has no format state of its own: it prints nothing for an empty list, writes the first literal without a leading separator, then writes the caller's separator before each remaining literal while forwarding `negated` and `fullterms` directly to `EqnPrint`. Rust preserves this exact list assembly over an owned vector.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

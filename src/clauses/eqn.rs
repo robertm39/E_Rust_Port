@@ -3,8 +3,9 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
-    EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT,
+    EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT, EQUAL_PREDICATE,
 };
+use crate::inout::scanner::IoFormat;
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
@@ -32,6 +33,7 @@ use crate::terms::termtypes::{
 use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::TermWeightExtension;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
     match (left, right) {
@@ -112,6 +114,46 @@ fn identity_ordered_terms<'term>(
         (left, right)
     } else {
         (right, left)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct EqnPrintOptions {
+    pub output_format: IoFormat,
+    pub use_infix: bool,
+    pub full_equational_rep: bool,
+    pub print_oriented: bool,
+    pub higher_order_parentheses: bool,
+}
+
+impl EqnPrintOptions {
+    #[must_use]
+    pub const fn lop() -> Self {
+        Self {
+            output_format: IoFormat::Lop,
+            use_infix: true,
+            full_equational_rep: false,
+            print_oriented: false,
+            higher_order_parentheses: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn tptp() -> Self {
+        Self {
+            output_format: IoFormat::Tptp,
+            use_infix: false,
+            full_equational_rep: false,
+            print_oriented: false,
+            higher_order_parentheses: false,
+        }
+    }
+}
+
+impl Default for EqnPrintOptions {
+    fn default() -> Self {
+        Self::lop()
     }
 }
 
@@ -1615,9 +1657,88 @@ impl Eqn {
     }
 }
 
+/// Writes the C `EqnPrint` shape with explicit term-bank and format options.
+///
+/// # Panics
+///
+/// Panics if the literal's equational-property bit and right-hand `$true`
+/// shape are inconsistent, or if a printed term has an uninitialized
+/// argument, matching the C preconditions.
+pub fn eqn_write(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
+    let positive = eqn.is_positive() ^ negated;
+    if options.output_format == IoFormat::Tptp {
+        output.write_str(if positive { "++" } else { "--" })?;
+        if eqn.is_equ_lit(bank) {
+            write!(output, "{EQUAL_PREDICATE}(")?;
+            bank.write_term(output, eqn.left(), full_terms)?;
+            output.write_str(", ")?;
+            bank.write_term(output, eqn.right(), full_terms)?;
+            output.write_char(')')
+        } else {
+            bank.write_term(output, eqn.left(), full_terms)
+        }
+    } else if options.use_infix && (options.full_equational_rep || eqn.right() != bank.true_term())
+    {
+        write_ho_paren(output, '(', options)?;
+        bank.write_term(output, eqn.left(), full_terms)?;
+        if !positive {
+            output.write_char('!')?;
+        }
+        output.write_str(if eqn.is_oriented() && options.print_oriented {
+            "->"
+        } else {
+            "="
+        })?;
+        bank.write_term(output, eqn.right(), full_terms)?;
+        write_ho_paren(output, ')', options)
+    } else {
+        if !positive {
+            output.write_char('~')?;
+        }
+        if eqn.right() != bank.true_term() || options.full_equational_rep {
+            write!(output, "{EQUAL_PREDICATE}(")?;
+            bank.write_term(output, eqn.left(), full_terms)?;
+            output.write_str(", ")?;
+            bank.write_term(output, eqn.right(), full_terms)?;
+            output.write_char(')')
+        } else {
+            write_ho_paren(output, '(', options)?;
+            bank.write_term(output, eqn.left(), full_terms)?;
+            write_ho_paren(output, ')', options)
+        }
+    }
+}
+
+#[must_use]
+pub fn eqn_string(
+    bank: &TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> String {
+    let mut output = String::new();
+    let _ = eqn_write(&mut output, bank, eqn, negated, full_terms, options);
+    output
+}
+
+fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptions) -> fmt::Result {
+    if options.higher_order_parentheses {
+        output.write_char(ch)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Eqn;
+    use super::{eqn_string, Eqn, EqnPrintOptions};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -1706,6 +1827,54 @@ mod tests {
         term.set_argument(0, variable.clone());
         term.set_argument(1, arg.clone());
         term
+    }
+
+    #[test]
+    fn eqn_print_string_matches_c_lop_tptp_and_option_shapes() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "print_a");
+        let b = typed_const(&mut bank, "print_b");
+        let equality = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+
+        assert_eq!(
+            eqn_string(&bank, &equality, false, true, EqnPrintOptions::default()),
+            "print_a=print_b"
+        );
+        assert_eq!(
+            eqn_string(&bank, &equality, true, true, EqnPrintOptions::default()),
+            "print_a!=print_b"
+        );
+        assert_eq!(
+            eqn_string(&bank, &equality, false, true, EqnPrintOptions::tptp()),
+            "++equal(print_a, print_b)"
+        );
+
+        let mut oriented = equality.clone();
+        oriented.set_prop(EP_IS_ORIENTED);
+        let oriented_options = EqnPrintOptions {
+            print_oriented: true,
+            ..EqnPrintOptions::default()
+        };
+        assert_eq!(
+            eqn_string(&bank, &oriented, false, true, oriented_options),
+            "print_a->print_b"
+        );
+
+        let atom = typed_pred_const(&mut bank, "print_p");
+        let true_term = bank.true_term().clone();
+        let predicate = Eqn::alloc(atom, true_term, &mut bank, true).unwrap();
+        assert_eq!(
+            eqn_string(&bank, &predicate, false, true, EqnPrintOptions::default()),
+            "print_p"
+        );
+        assert_eq!(
+            eqn_string(&bank, &predicate, true, true, EqnPrintOptions::default()),
+            "~print_p"
+        );
+        assert_eq!(
+            eqn_string(&bank, &predicate, false, true, EqnPrintOptions::tptp()),
+            "++print_p"
+        );
     }
 
     fn assert_f64_bits_eq(actual: f64, expected: f64) {

@@ -327,6 +327,11 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 
+### Compatibility Notes
+
+- `EqnPrint` reads mutable process-global `OutputFormat`, `EqnUseInfix`, `EqnFullEquationalRep`, and `EqnPrintOriented`. Rust keeps the rendered LOP/TPTP behavior but passes those choices through explicit `EqnPrintOptions`; prefer that explicit API unless executable-level compatibility requires recreating process globals.
+- In the `TPTPFormat` branch, `EqnPrint` ignores `EqnFullEquationalRep` and always prints an external `++`/`--` sign plus prefix `equal(...)` only for equational literals. Rust preserves that dialect split in the TPTP option.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

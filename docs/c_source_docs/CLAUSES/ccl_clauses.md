@@ -288,6 +288,8 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 
 - `ClauseAddEvalCell` stores the evaluation cell directly on the clause and sets `evaluation->object` to the owning clause pointer. Rust clause-owned evaluations should keep the object slot explicit until clause sets provide stable handles for eval-index lookups.
 - `ClauseCopy`, `ClauseFlatCopy`, `ClauseCopyOpt`, and `ClauseCopyDisjoint` copy metadata but intentionally do not copy evaluations or source info. Rust copy helpers should continue to drop optional evaluation storage.
+- `ClausePCLPrint` temporarily mutates the process-global `OutputFormat` to `TPTPFormat` to reuse `EqnListPrint`, then restores it. Rust preserves the bracketed PCL text with explicit TPTP equation-print options instead of hidden global mutation.
+- `ClausePrintTPTPFormat` maps both `CPTypeConjecture` and `CPTypeNegConjecture` to the old TPTP role string `conjecture`; TSTP printing distinguishes `negated_conjecture`. Rust preserves this dialect-specific role mapping in the first-order TPTP helper.
 
 ### Porting Focus
 

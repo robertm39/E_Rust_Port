@@ -1,6 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
-use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn::{eqn_write, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{EqnProperties, EP_IS_POSITIVE};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -9,6 +9,7 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term, TermProperties};
 use crate::terms::termvars::VarBank;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 pub const EQN_LIST_LONG_LIMIT: usize = 15;
 
@@ -143,6 +144,46 @@ impl EqnList {
         }
         literals.reverse();
         Self::from_vec(literals)
+    }
+
+    /// Writes the C `EqnListPrint` shape with an explicit separator and
+    /// negation flag.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any literal or term violates the C printing preconditions.
+    pub fn write_print(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        sep: &str,
+        negated: bool,
+        full_terms: bool,
+        options: EqnPrintOptions,
+    ) -> fmt::Result {
+        let mut iter = self.literals.iter();
+        if let Some(first) = iter.next() {
+            eqn_write(output, bank, first, negated, full_terms, options)?;
+            for literal in iter {
+                output.write_str(sep)?;
+                eqn_write(output, bank, literal, negated, full_terms, options)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn print_string(
+        &self,
+        bank: &TermBank,
+        sep: &str,
+        negated: bool,
+        full_terms: bool,
+        options: EqnPrintOptions,
+    ) -> String {
+        let mut output = String::new();
+        let _ = self.write_print(&mut output, bank, sep, negated, full_terms, options);
+        output
     }
 
     #[must_use]
