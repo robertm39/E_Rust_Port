@@ -1,4 +1,5 @@
 use crate::basics::numtrees::NumTree;
+use crate::learn::annoterms::AnnoSet;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 use std::fmt::Write as _;
@@ -145,6 +146,32 @@ pub fn flat_anno_set_flatten(set: &mut FlatAnnoSet, to_flatten: &FlatAnnoSet) ->
     result
 }
 
+/// Translate one-annotation annotated terms into flat annotated terms.
+///
+/// # Panics
+///
+/// Panics when an annotated term does not have exactly one annotation, or when
+/// the destination already contains a translated term with the same entry
+/// number. The C caller reaches this after `AnnoSetFlatten`, where both
+/// preconditions are expected to hold.
+pub fn flat_anno_set_translate(flatset: &mut FlatAnnoSet, set: &AnnoSet, weights: &[f64]) -> i64 {
+    let mut result = 0_i64;
+    for (_key, old) in set.iter() {
+        let annotation = old
+            .single_annotation()
+            .unwrap_or_else(|| panic!("flat annotation translation requires one annotation"));
+        let term = FlatAnnoTerm::new(
+            old.term().clone(),
+            annotation.eval(weights),
+            annotation.count(),
+            c_double_to_long(annotation.count()),
+        );
+        assert!(flat_anno_set_add_term(flatset, term));
+        result += 1;
+    }
+    result
+}
+
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn flat_anno_set_eval_average(set: &FlatAnnoSet) -> f64 {
@@ -176,15 +203,22 @@ pub fn flat_anno_set_eval_weighted_average(set: &FlatAnnoSet) -> f64 {
     result / weight
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn c_double_to_long(value: f64) -> i64 {
+    value as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         flat_anno_set_add_term, flat_anno_set_alloc, flat_anno_set_eval_average,
         flat_anno_set_eval_weighted_average, flat_anno_set_flatten, flat_anno_set_print_string,
-        flat_anno_set_size, flat_anno_term_flatten, flat_anno_term_print_string, FlatAnnoSet,
-        FlatAnnoTerm,
+        flat_anno_set_size, flat_anno_set_translate, flat_anno_term_flatten,
+        flat_anno_term_print_string, FlatAnnoSet, FlatAnnoTerm,
     };
     use crate::inout::scanner::Scanner;
+    use crate::learn::annotations::{Annotation, AnnotationTree};
+    use crate::learn::annoterms::{AnnoSet, AnnoTerm};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
@@ -208,6 +242,22 @@ mod tests {
             Scanner::from_user_string(source, false).unwrap_or_else(|err| panic!("{err}"));
         bank.parse_term_simple(&mut scanner)
             .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn annotation(key: i64, count: f64, values: &[f64]) -> Annotation {
+        let mut annotation = Annotation::with_key(key);
+        annotation.assign_value(0, count);
+        for (index, value) in values.iter().copied().enumerate() {
+            annotation.assign_value(i64::try_from(index + 1).unwrap(), value);
+        }
+        annotation.set_length(i64::try_from(values.len() + 1).unwrap());
+        annotation
+    }
+
+    fn annotation_tree(annotation: Annotation) -> AnnotationTree {
+        let mut tree = AnnotationTree::new();
+        tree.store(annotation.key(), annotation, ());
+        tree
     }
 
     fn find_term(set: &FlatAnnoSet, term: &Term) -> FlatAnnoTerm {
@@ -293,6 +343,35 @@ mod tests {
         );
         assert_close(flat_anno_set_eval_average(&set), 6.0);
         assert_close(flat_anno_set_eval_weighted_average(&set), 16.0);
+    }
+
+    #[test]
+    fn flat_anno_set_translate_evaluates_single_annotations() {
+        let mut bank = term_bank();
+        let left = parse_in_bank(&mut bank, "a");
+        let right = parse_in_bank(&mut bank, "b");
+        let mut annos = AnnoSet::new();
+        annos.add_term(AnnoTerm::new(
+            left.clone(),
+            annotation_tree(annotation(0, 2.0, &[3.0, 5.0])),
+        ));
+        annos.add_term(AnnoTerm::new(
+            right.clone(),
+            annotation_tree(annotation(0, 4.5, &[7.0, 11.0])),
+        ));
+
+        let mut flat = flat_anno_set_alloc();
+        assert_eq!(flat_anno_set_translate(&mut flat, &annos, &[2.0, 3.0]), 2);
+
+        let left_flat = find_term(&flat, &left);
+        assert_close(left_flat.eval(), 21.0);
+        assert_close(left_flat.eval_weight(), 2.0);
+        assert_eq!(left_flat.sources(), 2);
+
+        let right_flat = find_term(&flat, &right);
+        assert_close(right_flat.eval(), 47.0);
+        assert_close(right_flat.eval_weight(), 4.5);
+        assert_eq!(right_flat.sources(), 4);
     }
 
     #[test]
