@@ -161,7 +161,7 @@ Source files reviewed: `HEURISTICS/che_to_weightgen.h`, `HEURISTICS/che_to_weigh
 - The LFHO combined-frequency count method builds type counts by summing `FCodeFeatureArray` symbol frequencies by type, while inverse combined count and the combined rank variants use `ClauseSetAddTypeDistribution`. Preserve the inconsistency until reference strategy tests prove a cleanup is safe.
 - `generate_comb_freq_rank_weights` frees `type_counts` with `SizeFree(type_counts, sizeof(max_types*sizeof(long)))`, which passes the size of the expression rather than the allocated byte count. This is a C allocation-accounting hazard, not semantic weight behavior, and should be cleaned only after compatibility-sensitive memory tracing is out of scope.
 - `generate_precrank_weights` uses single-precision `float` division and assigns the result to `long`, truncating the bucket value. Rust should keep that conversion shape for byte-for-byte rank bucket compatibility.
-- `set_user_weights` parses a user string through `TOWeightsParse` after generated weights and prints `setting user weights` to stderr first. Rust should preserve that late override and stderr side effect when `TOWeightsParse` and OCB mutation are ported.
+- `set_user_weights` parses a user string through `TOWeightsParse` after generated weights and prints `setting user weights` to stderr first. Rust now preserves the late OCB override; the direct stderr side effect should be routed through the eventual executable output/warning layer rather than hard-coded in the reusable helper.
 
 ### Porting Focus
 

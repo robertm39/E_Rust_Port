@@ -128,7 +128,8 @@ Source files reviewed: `HEURISTICS/che_to_precgen.h`, `HEURISTICS/che_to_precgen
 
 ### Compatibility Notes
 
-- `TOGeneratePrecedence` builds an `FCodeFeatureArray`, applies occurrence/symbol key modifiers before method-specific keys, sorts from `SIG_TRUE_CODE + 1`, and then writes array positions to OCB precedence weights or tuple precedence. Rust currently ports the key generation and sorted low-to-high symbol order; OCB mutation remains a later integration step.
+- `TOGeneratePrecedence` builds an `FCodeFeatureArray`, applies occurrence/symbol key modifiers before method-specific keys, sorts from `SIG_TRUE_CODE + 1`, and then writes array positions to OCB precedence weights or tuple precedence. Rust ports both the pure key generation/sorted low-to-high symbol order and the OCB installation helper.
+- In precedence-weight mode, `compute_precedence_from_array` seeds `ocb->min_constants` while iterating raw f-codes `i`, not while iterating sorted `array->array[i].symbol`. This records the first suitable constant by f-code insertion order rather than by generated precedence; preserve until min-constant behavior is covered by reference ordering tests.
 - `PNoMethod` falls through to `PUnaryFirst` only when no predefined precedence string was supplied. If `predefined` is present, C parses it into the OCB first and then performs no generated-precedence pass.
 - `POrientAxioms` reports `Not yet implemented`; Rust should keep this as an explicit diagnostic until the C path exists.
 - `generate_invfreq_conjmin_precedence` has comments describing conjecture symbols as larger, but the implemented key puts conjecture symbols in the lower sorted class than non-conjecture symbols. Preserve the implementation before changing names or comments.

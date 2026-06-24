@@ -4,6 +4,9 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::fcode_featurearrays::{FCodeFeatureArray, FCodeFeatureSortCell};
 use crate::heuristics::to_params::{OrderParmsCell, TOWeightGenMethod, W_CONST_NO_SPECIAL_WEIGHT};
+use crate::inout::scanner::Scanner;
+use crate::orderings::cto_orderings::weights_parse;
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
 use std::cmp::Ordering;
@@ -88,6 +91,58 @@ pub fn generate_weights(
     }
 
     Ok(generated)
+}
+
+/// Generate term-ordering weights and install them into an OCB.
+///
+/// User `pre_weights`, when present, are parsed after generated weights and
+/// therefore override generated values just like C `TOGenerateWeights`.
+///
+/// # Errors
+///
+/// Returns diagnostics for unsupported weight methods, invalid precedence
+/// contexts, scanner creation, or user weight parsing.
+///
+/// # Panics
+///
+/// Panics if the OCB was allocated for a different signature snapshot, or if it
+/// has no function-weight vector.
+pub fn generate_weights_into_ocb(
+    signature: &mut Signature,
+    axioms: &ClauseSet,
+    oparms: &OrderParmsCell,
+    context: WeightGenerationContext<'_>,
+    ocb: &mut OrderControlBlock,
+) -> Result<(), Diagnostic> {
+    assert_eq!(
+        ocb.sig_size,
+        signature.f_count(),
+        "weight generation requires a current OCB signature snapshot"
+    );
+    assert!(
+        ocb.weights.is_some(),
+        "weight generation requires OCB function-weight storage"
+    );
+
+    let pre_weights = context.pre_weights;
+    let generation_context = WeightGenerationContext {
+        pre_weights: None,
+        ..context
+    };
+    let generated = generate_weights(signature, axioms, oparms, generation_context)?;
+    ocb.install_weights(&generated.weights);
+    ocb.var_weight = generated.var_weight;
+    ocb.lam_weight = generated.lam_weight;
+    ocb.db_weight = generated.db_weight;
+
+    if let Some(pre_weights) = pre_weights {
+        let mut scanner = Scanner::from_user_string(pre_weights, true)?;
+        weights_parse(&mut scanner, signature, ocb)?;
+    }
+
+    ocb.lam_weight = oparms.lam_w;
+    ocb.db_weight = oparms.db_w;
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -871,10 +926,11 @@ impl PrecedenceMap {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_weights, GeneratedWeights, WeightGenerationContext, W_DEFAULT_WEIGHT,
-        W_TO_BASEWEIGHT,
+        generate_weights, generate_weights_into_ocb, GeneratedWeights, WeightGenerationContext,
+        W_DEFAULT_WEIGHT, W_TO_BASEWEIGHT,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_TYPE_CONJECTURE;
     use crate::clauses::clausesets::ClauseSet;
@@ -882,8 +938,9 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::heuristics::fcode_featurearrays::FCodeFeatureArray;
     use crate::heuristics::to_params::{
-        OrderParmsCell, TOWeightGenMethod, W_CONST_NO_SPECIAL_WEIGHT,
+        OrderParmsCell, TOWeightGenMethod, TermOrdering, W_CONST_NO_SPECIAL_WEIGHT,
     };
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
@@ -1031,6 +1088,56 @@ mod tests {
         assert_eq!(weight(&result, SIG_TRUE_CODE), result.var_weight);
         assert_eq!(weight(&result, SIG_PHONY_APP_CODE), 0);
         assert_eq!(result.var_weight, 1);
+    }
+
+    #[test]
+    fn generated_weights_install_into_ocb() {
+        let mut signature = signature();
+        let constant = typed_symbol(&mut signature, "a", 0);
+        let unary = typed_symbol(&mut signature, "f", 1);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Kbo, true, &signature, HoOrderKind::LfhoOrder);
+        let params = params(TOWeightGenMethod::ArityWeight);
+
+        generate_weights_into_ocb(
+            &mut signature,
+            &ClauseSet::new(),
+            &params,
+            WeightGenerationContext::default(),
+            &mut ocb,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.fun_weight(constant), 1);
+        assert_eq!(ocb.fun_weight(unary), 2);
+        assert_eq!(ocb.var_weight, W_DEFAULT_WEIGHT);
+        assert_eq!(ocb.lam_weight, params.lam_w);
+        assert_eq!(ocb.db_weight, params.db_w);
+    }
+
+    #[test]
+    fn generated_weights_apply_user_overrides_last() {
+        let mut signature = signature();
+        let constant = typed_symbol(&mut signature, "a", 0);
+        let unary = typed_symbol(&mut signature, "f", 1);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Kbo, true, &signature, HoOrderKind::LfhoOrder);
+        let params = params(TOWeightGenMethod::ArityWeight);
+
+        generate_weights_into_ocb(
+            &mut signature,
+            &ClauseSet::new(),
+            &params,
+            WeightGenerationContext {
+                pre_weights: Some("a:9"),
+                ..WeightGenerationContext::default()
+            },
+            &mut ocb,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.fun_weight(constant), 9);
+        assert_eq!(ocb.fun_weight(unary), 2);
     }
 
     #[test]

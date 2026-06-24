@@ -1,11 +1,15 @@
 //! Precedence key generation from `che_to_precgen`.
 
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::partial_orderings::CompareResult;
 use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::fcode_featurearrays::{
     FCodeFeatureArray, FCodeFeatureKeyModifiers, FCodeFeatureSortCell,
 };
 use crate::heuristics::to_params::{OrderParmsCell, TOPrecGenMethod};
+use crate::inout::scanner::Scanner;
+use crate::orderings::cto_orderings::precedence_parse;
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 
@@ -69,6 +73,101 @@ pub fn generate_precedence_order(
 ) -> Result<Vec<FunCode>, Diagnostic> {
     let array = generate_precedence_array(signature, axioms, oparms)?;
     Ok(precedence_order_from_array(&array, signature.f_count()))
+}
+
+/// Install a generated or predefined precedence into an OCB.
+///
+/// # Errors
+///
+/// Returns scanner diagnostics for predefined precedence strings or generation
+/// diagnostics for unsupported precedence methods.
+///
+/// # Panics
+///
+/// Panics if the OCB was allocated for a different signature snapshot, or if it
+/// has neither precedence weights nor a precedence matrix.
+pub fn generate_precedence_into_ocb(
+    signature: &mut Signature,
+    axioms: &ClauseSet,
+    predefined: Option<&str>,
+    oparms: &OrderParmsCell,
+    ocb: &mut OrderControlBlock,
+) -> Result<(), Diagnostic> {
+    assert_eq!(
+        ocb.sig_size,
+        signature.f_count(),
+        "precedence generation requires a current OCB signature snapshot"
+    );
+    assert!(
+        ocb.prec_weights.is_some() || ocb.precedence.is_some(),
+        "precedence generation requires OCB precedence storage"
+    );
+
+    if let Some(predefined) = predefined {
+        let mut scanner = Scanner::from_user_string(predefined, true)?;
+        precedence_parse(&mut scanner, signature, ocb)?;
+        if oparms.to_prec_gen == TOPrecGenMethod::NoMethod {
+            return Ok(());
+        }
+    }
+
+    let array = generate_precedence_array(signature, axioms, oparms)?;
+    install_precedence_array(signature, &array, ocb);
+    Ok(())
+}
+
+/// Install a sorted precedence array into an OCB.
+///
+/// # Panics
+///
+/// Panics if the array size does not match the OCB signature snapshot, or if
+/// the OCB has neither precedence weights nor a precedence matrix.
+pub fn install_precedence_array(
+    signature: &Signature,
+    array: &FCodeFeatureArray,
+    ocb: &mut OrderControlBlock,
+) {
+    assert_eq!(
+        ocb.sig_size,
+        FunCode::try_from(array.size())
+            .unwrap_or_else(|_| panic!("feature-array size must fit f-code"))
+            - 1,
+        "precedence array must match OCB signature size"
+    );
+
+    if ocb.prec_weights.is_some() {
+        for index in fcode_index(SIG_TRUE_CODE + 1)
+            .unwrap_or_else(|| panic!("SIG_TRUE_CODE + 1 must fit array index"))
+            ..=fcode_index(ocb.sig_size).unwrap_or_else(|| panic!("sig_size must fit array index"))
+        {
+            let symbol = FunCode::try_from(index)
+                .unwrap_or_else(|_| panic!("feature-array index must fit f-code"));
+            if signature.find_arity(symbol) == Some(0)
+                && !signature.is_predicate(symbol)
+                && !signature.is_special(symbol)
+            {
+                if let Some(type_) = signature.get_type(symbol) {
+                    ocb.cond_set_min_const(type_, symbol);
+                }
+            }
+            let rank = i64::try_from(index)
+                .unwrap_or_else(|_| panic!("precedence rank must fit signed long"));
+            ocb.set_fun_prec_weight(array.entries()[index].symbol, rank);
+        }
+        ocb.set_fun_prec_weight(SIG_TRUE_CODE, i64::MIN / 2);
+    } else if ocb.precedence.is_some() {
+        let mut last = SIG_TRUE_CODE;
+        for index in fcode_index(SIG_TRUE_CODE + 1)
+            .unwrap_or_else(|| panic!("SIG_TRUE_CODE + 1 must fit array index"))
+            ..=fcode_index(ocb.sig_size).unwrap_or_else(|| panic!("sig_size must fit array index"))
+        {
+            let symbol = array.entries()[index].symbol;
+            ocb.precedence_add_tuple(signature, last, symbol, CompareResult::Lesser);
+            last = symbol;
+        }
+    } else {
+        panic!("precedence array installation requires OCB precedence storage");
+    }
 }
 
 /// C macro-compatible default precedence generation (`PUnaryFirst`).
@@ -447,18 +546,20 @@ fn fcode_index(f_code: FunCode) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_default_precedence_order, generate_precedence_array, generate_precedence_order,
-        FREQ_SEMI_INFTY,
+        generate_default_precedence_order, generate_precedence_array, generate_precedence_into_ocb,
+        generate_precedence_order, FREQ_SEMI_INFTY,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_TYPE_AXIOM, CP_TYPE_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
-    use crate::heuristics::to_params::{OrderParmsCell, TOPrecGenMethod};
+    use crate::heuristics::to_params::{OrderParmsCell, TOPrecGenMethod, TermOrdering};
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_TRUE_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -582,6 +683,101 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{err}"))
                 .len(),
             expected_default_len
+        );
+    }
+
+    #[test]
+    fn generated_precedence_installs_rank_weights_into_ocb() {
+        let mut signature = signature();
+        let individual = signature.type_bank().i_type();
+        let constant = typed_symbol(&mut signature, "a", 0);
+        let _unary = typed_symbol(&mut signature, "f", 1);
+        let _binary = typed_symbol(&mut signature, "g", 2);
+        let axioms = ClauseSet::new();
+        let params = OrderParmsCell {
+            to_prec_gen: TOPrecGenMethod::UnaryFirst,
+            ..OrderParmsCell::default()
+        };
+        let mut order_signature = signature.clone();
+        let order = generate_precedence_order(&mut order_signature, &axioms, &params)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Kbo, true, &signature, HoOrderKind::LfhoOrder);
+
+        generate_precedence_into_ocb(&mut signature, &axioms, None, &params, &mut ocb)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.fun_prec_weight(SIG_TRUE_CODE), i64::MIN / 2);
+        for (offset, symbol) in order.iter().copied().enumerate() {
+            let rank =
+                i64::try_from(offset).unwrap_or_else(|err| panic!("{err}")) + SIG_TRUE_CODE + 1;
+            assert_eq!(ocb.fun_prec_weight(symbol), rank);
+        }
+        assert_eq!(ocb.min_const(&individual), constant);
+    }
+
+    #[test]
+    fn generated_precedence_installs_matrix_chain_into_ocb() {
+        let mut signature = signature();
+        typed_symbol(&mut signature, "a", 0);
+        typed_symbol(&mut signature, "f", 1);
+        typed_symbol(&mut signature, "g", 2);
+        let axioms = ClauseSet::new();
+        let params = OrderParmsCell {
+            to_prec_gen: TOPrecGenMethod::UnaryFirst,
+            ..OrderParmsCell::default()
+        };
+        let mut order_signature = signature.clone();
+        let order = generate_precedence_order(&mut order_signature, &axioms, &params)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, false, &signature, HoOrderKind::LfhoOrder);
+
+        generate_precedence_into_ocb(&mut signature, &axioms, None, &params, &mut ocb)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            ocb.fun_compare(&signature, SIG_TRUE_CODE, order[0]),
+            CompareResult::Lesser
+        );
+        for pair in order.windows(2) {
+            assert_eq!(
+                ocb.fun_compare(&signature, pair[0], pair[1]),
+                CompareResult::Lesser
+            );
+        }
+        assert_eq!(
+            ocb.fun_compare(&signature, *order.last().unwrap_or(&0), order[0]),
+            CompareResult::Greater
+        );
+    }
+
+    #[test]
+    fn predefined_no_method_precedence_does_not_generate_fallthrough() {
+        let mut signature = signature();
+        let a = typed_symbol(&mut signature, "a", 0);
+        let b = typed_symbol(&mut signature, "b", 0);
+        let c = typed_symbol(&mut signature, "c", 0);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, false, &signature, HoOrderKind::LfhoOrder);
+        let params = OrderParmsCell {
+            to_prec_gen: TOPrecGenMethod::NoMethod,
+            ..OrderParmsCell::default()
+        };
+
+        generate_precedence_into_ocb(
+            &mut signature,
+            &ClauseSet::new(),
+            Some("a > b"),
+            &params,
+            &mut ocb,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.fun_compare(&signature, a, b), CompareResult::Greater);
+        assert_eq!(
+            ocb.fun_compare(&signature, a, c),
+            CompareResult::Uncomparable
         );
     }
 
