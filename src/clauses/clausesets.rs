@@ -389,6 +389,14 @@ impl ClauseSet {
         selected
     }
 
+    pub fn apply_fun(&self, mut fun: impl FnMut(&Clause) -> i64) -> i64 {
+        let mut result = false;
+        for clause in &self.clauses {
+            result = (i64::from(result) + fun(clause)) != 0;
+        }
+        i64::from(result)
+    }
+
     #[must_use]
     pub fn max_var_number(&self) -> i64 {
         self.clauses
@@ -464,6 +472,10 @@ impl ClauseSet {
             pushed += 1;
         }
         pushed
+    }
+
+    pub fn push_clauses<'a>(&'a self, stack: &mut PStack<&'a Clause>) -> i64 {
+        self.push_clause_refs(stack)
     }
 
     pub fn split_conjecture_refs<'a>(
@@ -555,6 +567,25 @@ pub fn clause_set_ref_stack_cardinality(stack: &PStack<&ClauseSet>) -> i64 {
     stack.as_slice().iter().map(|set| set.members()).sum()
 }
 
+/// Returns the maximum date among the first `limit` clause sets.
+///
+/// # Panics
+///
+/// Panics if `limit` exceeds `sets.len()`, matching the C caller contract for
+/// the demodulator array prefix.
+#[must_use]
+pub fn clause_set_list_get_max_date(sets: &[&ClauseSet], limit: usize) -> SysDate {
+    assert!(
+        limit <= sets.len(),
+        "ClauseSetListGetMaxDate limit must fit the set slice"
+    );
+    sets.iter()
+        .take(limit)
+        .fold(SysDate::creation_time(), |date, set| {
+            date.maximum(set.date())
+        })
+}
+
 fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
@@ -570,7 +601,10 @@ fn clause_weight_to_i64(weight: f64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{clause_set_ref_stack_cardinality, clause_set_stack_cardinality, ClauseSet};
+    use super::{
+        clause_set_list_get_max_date, clause_set_ref_stack_cardinality,
+        clause_set_stack_cardinality, ClauseSet,
+    };
     use crate::basics::pstacks::PStack;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
@@ -880,6 +914,17 @@ mod tests {
         let mut clause_stack = PStack::new();
         assert_eq!(set.push_clause_refs(&mut clause_stack), 2);
         assert_eq!(clause_stack.len(), 2);
+        let mut c_named_clause_stack = PStack::new();
+        assert_eq!(set.push_clauses(&mut c_named_clause_stack), 2);
+        assert_eq!(
+            c_named_clause_stack
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            set.iter().map(Clause::ident).collect::<Vec<_>>()
+        );
+        assert_eq!(set.apply_fun(|_| 1), 1);
 
         let default_type = bank.signature().type_bank().default_type();
         let arrow_type = bank
@@ -894,6 +939,25 @@ mod tests {
             true,
         )]));
         assert!(set.conjecture_order(bank.signature()) > 0);
+    }
+
+    #[test]
+    fn clause_set_list_get_max_date_scans_requested_prefix() {
+        let mut early = ClauseSet::new();
+        let mut latest = ClauseSet::new();
+        let mut ignored = ClauseSet::new();
+        early.set_date(SysDate::from_raw(3));
+        latest.set_date(SysDate::from_raw(7));
+        ignored.set_date(SysDate::from_raw(11));
+
+        assert_eq!(
+            clause_set_list_get_max_date(&[&early, &latest, &ignored], 2),
+            SysDate::from_raw(7)
+        );
+        assert_eq!(
+            clause_set_list_get_max_date(&[&early, &latest, &ignored], 0),
+            SysDate::creation_time()
+        );
     }
 
     #[test]
