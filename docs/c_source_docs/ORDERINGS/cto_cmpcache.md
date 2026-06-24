@@ -82,6 +82,7 @@ Source files reviewed: `ORDERINGS/cto_cmpcache.h`, `ORDERINGS/cto_cmpcache.c`.
 - Ordering code. Comparison outcomes, caching, precedence, and weight handling must match the C implementation because they drive simplification and inference eligibility.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
+- Cache keys are term-pointer identities plus deref counters, canonicalized so reverse lookups use inverse comparison results. Rust preserves identity keys, but exact raw-address ordering and splay-tree recent-access behavior are cleanup/performance questions to revisit with benchmarks.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
