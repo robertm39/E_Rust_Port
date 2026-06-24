@@ -1,15 +1,19 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::fixdarrays::FixedDArray;
 use crate::basics::numtrees::NumTree;
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
+use crate::inout::basicparser::parse_int;
+use crate::inout::scanner::{token_pos_rep, Scanner};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_copy_normalize_vars, VarNormStyle};
 use crate::terms::termtypes::{Term, TP_PRED_POS, TP_TOP_POS};
 use crate::terms::termvars::VarBank;
+use crate::terms::termweightext::TermWeightExtensionStyle;
 use std::fmt::Write as _;
 
 pub const TERM_MAX_GENS: usize = 1000;
@@ -303,6 +307,59 @@ fn push_normalized_term(
     var_norm: VarNormStyle,
 ) {
     related.push(term_copy_normalize_vars(vars, term, var_norm));
+}
+
+pub fn parse_var_norm_style(scanner: &mut Scanner) -> Result<VarNormStyle, Diagnostic> {
+    let token = scanner.current_token().clone();
+    let raw = parse_int(scanner)?;
+    VarNormStyle::from_c_value(i64_to_i32(raw)).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{} unsupported variable normalization style {raw}",
+                token_pos_rep(&token)
+            ),
+        )
+    })
+}
+
+pub fn parse_related_term_set(scanner: &mut Scanner) -> Result<RelatedTermSet, Diagnostic> {
+    let token = scanner.current_token().clone();
+    let raw = parse_int(scanner)?;
+    RelatedTermSet::from_c_value(i64_to_i32(raw)).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{} unsupported related term set {raw}",
+                token_pos_rep(&token)
+            ),
+        )
+    })
+}
+
+pub fn parse_term_weight_extension_style(
+    scanner: &mut Scanner,
+) -> Result<TermWeightExtensionStyle, Diagnostic> {
+    let token = scanner.current_token().clone();
+    let raw = parse_int(scanner)?;
+    TermWeightExtensionStyle::from_c_value(i64_to_i32(raw)).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{} unsupported term weight extension style {raw}",
+                token_pos_rep(&token)
+            ),
+        )
+    })
+}
+
+pub fn parse_c_int(scanner: &mut Scanner) -> Result<i32, Diagnostic> {
+    parse_int(scanner).map(i64_to_i32)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn i64_to_i32(value: i64) -> i32 {
+    value as i32
 }
 
 fn compute_subterms_generalizations_inner(

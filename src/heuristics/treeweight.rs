@@ -1,6 +1,22 @@
+use crate::basics::error::Diagnostic;
+use crate::clauses::clause::Clause;
+use crate::clauses::clausesets::ClauseSet;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::termweights::{
+    collect_related_conjecture_terms, parse_c_int, parse_related_term_set,
+    parse_term_weight_extension_style, parse_var_norm_style, RelatedTermSet,
+};
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::parse_float;
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_weight_compute;
+use crate::terms::termfunc::{term_copy_normalize_vars, VarNormStyle};
 use crate::terms::termtypes::Term;
+use crate::terms::termvars::VarBank;
+use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TreeDistanceCosts {
@@ -18,6 +34,216 @@ impl TreeDistanceCosts {
             ch_cost,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct TreeWeightParam {
+    axioms: ClauseSet,
+    var_norm: VarNormStyle,
+    rel_terms: RelatedTermSet,
+    costs: TreeDistanceCosts,
+    ext_style: TermWeightExtensionStyle,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vars: Option<VarBank>,
+    terms: Option<Vec<Term>>,
+}
+
+impl TreeWeightParam {
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible parameter cell mirrors ConjectureTreeDistanceWeightInit"
+    )]
+    pub fn new(
+        axioms: &ClauseSet,
+        var_norm: VarNormStyle,
+        rel_terms: RelatedTermSet,
+        costs: TreeDistanceCosts,
+        ext_style: TermWeightExtensionStyle,
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+    ) -> Self {
+        Self {
+            axioms: axioms.clone(),
+            var_norm,
+            rel_terms,
+            costs,
+            ext_style,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vars: None,
+            terms: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn costs(&self) -> TreeDistanceCosts {
+        self.costs
+    }
+
+    #[must_use]
+    pub const fn rel_terms(&self) -> RelatedTermSet {
+        self.rel_terms
+    }
+
+    #[must_use]
+    pub fn terms(&self) -> Option<&[Term]> {
+        self.terms.as_deref()
+    }
+
+    fn ensure_init(&mut self, signature: &Signature) {
+        if self.terms.is_some() {
+            return;
+        }
+
+        let vars = VarBank::new(signature.type_bank());
+        let terms = collect_related_conjecture_terms(
+            &self.axioms,
+            &vars,
+            signature,
+            self.var_norm,
+            self.rel_terms,
+        );
+        self.vars = Some(vars);
+        self.terms = Some(terms);
+    }
+
+    fn term_weight(&self, term: &Term) -> f64 {
+        let vars = self.vars.as_ref().unwrap_or_else(|| {
+            panic!("ConjectureTreeDistanceWeight variables must be initialized")
+        });
+        let terms = self
+            .terms
+            .as_deref()
+            .unwrap_or_else(|| panic!("ConjectureTreeDistanceWeight terms must be initialized"));
+        let norm = term_copy_normalize_vars(vars, term, self.var_norm);
+        ted_term_weight(&norm, terms, self.costs)
+    }
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors TreeWeightParamAlloc fields"
+)]
+pub fn tree_weight_param_alloc(
+    axioms: &ClauseSet,
+    var_norm: VarNormStyle,
+    rel_terms: RelatedTermSet,
+    costs: TreeDistanceCosts,
+    ext_style: TermWeightExtensionStyle,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+) -> TreeWeightParam {
+    TreeWeightParam::new(
+        axioms,
+        var_norm,
+        rel_terms,
+        costs,
+        ext_style,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ConjectureTreeDistanceWeightInit parameters without OCB"
+)]
+pub fn conjecture_tree_distance_weight_init(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    var_norm: VarNormStyle,
+    rel_terms: RelatedTermSet,
+    costs: TreeDistanceCosts,
+    ext_style: TermWeightExtensionStyle,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+) -> Wfcb<TreeWeightParam> {
+    wfcb_alloc(
+        conjecture_tree_distance_weight_wfcb_compute,
+        prio_fun,
+        tree_weight_exit,
+        Some(tree_weight_param_alloc(
+            axioms,
+            var_norm,
+            rel_terms,
+            costs,
+            ext_style,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+        )),
+    )
+}
+
+pub fn conjecture_tree_distance_weight_parse(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+) -> Result<Wfcb<TreeWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let var_norm = parse_var_norm_style(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let rel_terms = parse_related_term_set(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let ins_cost = parse_c_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let del_cost = parse_c_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let ch_cost = parse_c_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let ext_style = parse_term_weight_extension_style(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    Ok(conjecture_tree_distance_weight_init(
+        prio_fun,
+        axioms,
+        var_norm,
+        rel_terms,
+        TreeDistanceCosts::new(i64::from(ins_cost), i64::from(del_cost), i64::from(ch_cost)),
+        ext_style,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+    ))
+}
+
+#[must_use]
+/// # Panics
+///
+/// Panics if the lazy conjecture-term initialization fails, matching the C
+/// WFCB invariant that compute is only called with initialized data.
+pub fn conjecture_tree_distance_weight_compute(
+    param: &mut TreeWeightParam,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    param.ensure_init(bank.signature());
+    let extension = TermWeightExtension::new(
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.ext_style,
+        tree_weight_extension,
+        &*param,
+    );
+    clause.term_ext_weight(&extension)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,11 +402,48 @@ fn i64_to_f64(value: i64) -> f64 {
     value as f64
 }
 
+fn conjecture_tree_distance_weight_wfcb_compute(
+    data: Option<&mut TreeWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    conjecture_tree_distance_weight_compute(
+        data.unwrap_or_else(|| {
+            panic!("ConjectureTreeDistanceWeight WFCB requires initialized parameters")
+        }),
+        bank,
+        clause,
+    )
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn tree_weight_extension(term: &Term, data: &&TreeWeightParam) -> f64 {
+    data.term_weight(term)
+}
+
+fn tree_weight_exit(_data: TreeWeightParam) {}
+
 #[cfg(test)]
 mod tests {
-    use super::{ted_term_distance, ted_term_weight, ted_traversal, TreeDistanceCosts};
+    use super::{
+        conjecture_tree_distance_weight_compute, conjecture_tree_distance_weight_parse,
+        ted_term_distance, ted_term_weight, ted_traversal, tree_weight_param_alloc,
+        TreeDistanceCosts,
+    };
+    use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
+    use crate::heuristics::termweights::RelatedTermSet;
+    use crate::inout::scanner::Scanner;
     use crate::terms::functypes::FunCode;
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termfunc::VarNormStyle;
     use crate::terms::termtypes::{Term, TP_IS_DB_VAR};
+    use crate::terms::termweightext::TermWeightExtensionStyle;
+    use crate::terms::typebanks::TypeBank;
 
     fn costs(ins_cost: i64, del_cost: i64, ch_cost: i64) -> TreeDistanceCosts {
         TreeDistanceCosts::new(ins_cost, del_cost, ch_cost)
@@ -201,6 +464,26 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         term
+    }
+
+    fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        bank.parse_term_simple(&mut scanner).unwrap()
+    }
+
+    fn clause(bank: &mut TermBank, left: &str, right: &str, positive: bool) -> Clause {
+        let left = parse_in_bank(bank, left);
+        let right = parse_in_bank(bank, right);
+        Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+            left, right, bank, positive,
+        )
+        .unwrap()]))
+    }
+
+    fn negated_conjecture_axioms(bank: &mut TermBank) -> ClauseSet {
+        let mut clause = clause(bank, "f(a)", "b", false);
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        ClauseSet::from_clauses([clause])
     }
 
     #[test]
@@ -262,5 +545,43 @@ mod tests {
         db.set_prop(TP_IS_DB_VAR);
 
         let _ = ted_term_distance(&db, &Term::const_cell_alloc(1), costs(1, 1, 1));
+    }
+
+    #[test]
+    fn conjecture_tree_weight_compute_initializes_terms_and_scores_clause_terms() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let axioms = negated_conjecture_axioms(&mut bank);
+        let target = clause(&mut bank, "f(a)", "c", true);
+        let mut param = tree_weight_param_alloc(
+            &axioms,
+            VarNormStyle::Univar,
+            RelatedTermSet::ConjectureTerms,
+            costs(1, 1, 5),
+            TermWeightExtensionStyle::Simple,
+            1.0,
+            1.0,
+            1.0,
+        );
+
+        assert!(param.terms().is_none());
+        assert_f64_bits_eq(
+            conjecture_tree_distance_weight_compute(&mut param, &bank, &target),
+            2.0,
+        );
+        assert_eq!(param.terms().expect("terms should be initialized").len(), 2);
+    }
+
+    #[test]
+    fn conjecture_tree_weight_parse_wraps_wfcb_compute() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let axioms = negated_conjecture_axioms(&mut bank);
+        let target = clause(&mut bank, "f(a)", "c", true);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0) tail", false).unwrap();
+        let mut wfcb = conjecture_tree_distance_weight_parse(&mut scanner, &axioms)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_f64_bits_eq(wfcb.compute_eval(&bank, &target), 2.0);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 }
