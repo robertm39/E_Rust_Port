@@ -1,3 +1,4 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::Clause;
@@ -399,6 +400,21 @@ impl ClauseSet {
     ) -> Option<ClausePos> {
         let start = self.position_by_id(start_ident)?;
         self.find_eq_definition_from_index(bank, min_arity, start)
+    }
+
+    pub fn new_terms(&mut self, bank: &mut TermBank) -> Result<i64, Diagnostic> {
+        let mut stack = Vec::with_capacity(self.clauses.len());
+        while let Some(clause) = self.extract_first() {
+            stack.push(clause);
+        }
+
+        while let Some(clause) = stack.pop() {
+            let mut copy = clause.copy_to_bank(bank)?;
+            copy.set_weight(copy.standard_weight());
+            debug_assert_eq!(copy.weight(), copy.standard_weight());
+            self.insert(copy);
+        }
+        Ok(self.members())
     }
 
     pub fn push_clause_refs<'a>(&'a self, stack: &mut PStack<&'a Clause>) -> i64 {
@@ -824,6 +840,41 @@ mod tests {
             type_dist[usize::try_from(default_type.type_uid()).unwrap()],
             2
         );
+    }
+
+    #[test]
+    fn new_terms_copies_into_target_bank_and_reinserts_from_stack() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut second = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        first.set_weight(-10);
+        second.set_weight(-20);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let original_first_left = first.literals().as_slice()[0].left().clone();
+        let mut set = ClauseSet::from_clauses([first, second]);
+        let mut target = TermBank::new(bank.signature().clone()).unwrap();
+
+        assert_eq!(set.new_terms(&mut target).unwrap(), 2);
+
+        let copied = set.iter().collect::<Vec<_>>();
+        assert_eq!(
+            copied
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![second_id, first_id]
+        );
+        assert_eq!(set.literals(), 2);
+        assert!(copied
+            .iter()
+            .all(|clause| clause.weight() == clause.standard_weight()));
+        let copied_first_left = copied[1].literals().as_slice()[0].left();
+        assert_ne!(copied_first_left, &original_first_left);
+        assert_eq!(copied_first_left.f_code(), original_first_left.f_code());
     }
 
     #[test]
