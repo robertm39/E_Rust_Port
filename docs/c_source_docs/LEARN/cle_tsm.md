@@ -164,6 +164,12 @@ Source files reviewed: `LEARN/cle_tsm.h`, `LEARN/cle_tsm.c`.
 - If only one concrete arity/symbol/identity index is requested, `TSMFindOptimalIndex` returns it without forcing the output depth to zero; the caller's incoming depth is preserved even though that depth is irrelevant to the selected index.
 - `TSMCreateSubtermSet` asserts that every listed term has the selected direct subterm, then inserts borrowed subterms as new flat annotations using the source term's eval, eval weight, and source count.
 - `cle_tsm.h` declares `TSMFindPartLimit`, but no implementation appears in this checkout. Treat it as header-only surface until a caller or reference implementation requires it.
+- `TSMAdminAlloc` creates `emptytsm` before `admin->subst` is set, so `TSMIndexAlloc(IndexEmpty, ...)` receives a null substitution pointer even though the non-empty index kinds assume stable total substitutions.
+- `TSMAdminAlloc` only initializes `tsmstack`/`cachestack` for `TSMTypeRecurrentLocal`; the non-recurrent-local `cachestack` field is left unused. `TSMAdminBuildTSM` then appends the fixed recurrent-local arity/symbol/top stack and its caches in source order.
+- `TSACreate` shares child TSM pointers for flat, recurrent, and recurrent-local modes and allocates owned child TSMs only for recursive mode. `TSAFree` mirrors this by recursively freeing child maps only when `admin->tsmtype == TSMTypeRecursive`.
+- `TSMAdminAlloc` creates a private `TBAlloc(sig)` index bank that shares the live signature pointer, and `TSMAdminFree` nulls `index_bank->sig` before freeing that bank. Any cleanup should make this signature/session ownership explicit.
+- `tsm_rec_eval_no_weight` calls the weighted `tsm_rec_eval` for matched child nodes and for recurrent unmapped descent, so its unweighted behavior applies only to the current matched node.
+- `TSMPrintRek` calls `TSMIndexPrint(stdout, ...)` instead of using its `out` parameter for the index section, and it has no cycle guard for recurrent maps.
 
 ### Porting Focus
 
