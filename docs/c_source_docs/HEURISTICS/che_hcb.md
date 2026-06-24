@@ -152,6 +152,13 @@ Source files reviewed: `HEURISTICS/che_hcb.h`, `HEURISTICS/che_hcb.c`.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - SAT/propositional integration has a separate assignment/result vocabulary; keep conversions and ownership boundaries explicit.
 
+### Compatibility Notes
+
+- `HeuristicParmsInitialize` sets the BCE, predicate-elimination, and `lambda_demod` fields, but the current `HeuristicParmsPrint`/`HeuristicParmsParseInto` code deliberately omits those fields. Preserve the stored defaults, but treat strategy-file round-tripping for those settings as a later compatibility decision rather than an available C feature.
+- Parsing stores `sine`, `heuristic_name`, and `heuristic_def` through `PermaStringStore`, while `HeuristicParmsFree` releases only the cell. The Rust port can own these strings directly, but parser integration should decide whether the permanent-string allocation pattern has observable lifetime behavior before replacing it everywhere.
+- `selection_strategy` is a function pointer initialized to `SelectNoLiterals`; the public strategy-file spelling for that function is `NoSelection`. Rust code that stores the name should convert through the literal-selection table before runtime selection is wired in.
+- `SplitAll` is the numeric mask `7`, so it does not include `SplitPositive` (`8`) or `SplitMixed` (`16`) despite the name. Keep that value until clause-splitting callers prove whether this is intentional legacy behavior or a cleanup candidate.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
