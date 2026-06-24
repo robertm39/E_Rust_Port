@@ -186,6 +186,35 @@ pub fn clause_info_string(bank: &TermBank, clause: &Clause) -> String {
 }
 
 #[must_use]
+pub fn clause_line_string(
+    bank: &TermBank,
+    clause_text: &str,
+    clause: &Clause,
+    print_info: bool,
+) -> String {
+    clause_line_string_with_comment(bank, clause_text, clause, print_info, DEFAULT_COMCHAR_RAW)
+}
+
+#[must_use]
+pub fn clause_line_string_with_comment(
+    bank: &TermBank,
+    clause_text: &str,
+    clause: &Clause,
+    print_info: bool,
+    comment: &str,
+) -> String {
+    let mut result = String::from(clause_text);
+    if print_info {
+        result.push(' ');
+        result.push_str(comment);
+        result.push(' ');
+        result.push_str(&clause_info_string(bank, clause));
+    }
+    result.push('\n');
+    result
+}
+
+#[must_use]
 pub fn clause_prop_info_stats_string(clause: &Clause) -> String {
     clause_prop_info_stats_string_with_comment(DEFAULT_COMCHAR_RAW, clause)
 }
@@ -307,7 +336,8 @@ mod tests {
     use super::{
         clause_add_var_distribution, clause_count_ext_symbols, clause_count_maximal_literals,
         clause_count_maximal_terms, clause_count_singleton_set, clause_count_unorientable_literals,
-        clause_count_variable_set, clause_info_string, clause_prop_info_stats_string,
+        clause_count_variable_set, clause_info_string, clause_line_string,
+        clause_line_string_with_comment, clause_prop_info_stats_string,
         clause_prop_info_stats_string_with_comment, clause_tptp_depth_info_add,
         eqn_add_var_distribution, eqn_list_add_var_distribution, term_add_var_distribution,
     };
@@ -533,6 +563,34 @@ mod tests {
         assert_eq!(
             clause_info_string(&bank, &clause),
             "info(7, 0, 0, 3, 1, 1, 1, 0)"
+        );
+    }
+
+    #[test]
+    fn clause_line_string_appends_optional_c_info_segment_and_newline() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "line_a");
+        let b = typed_const(&mut bank, "line_b");
+        let mut clause = clause_from(vec![equation(&mut bank, &a, &b, true)]);
+        clause.set_ident(9);
+
+        assert_eq!(
+            clause_line_string(&bank, "cnf(c_9,axiom,(line_a=line_b)).", &clause, false),
+            "cnf(c_9,axiom,(line_a=line_b)).\n"
+        );
+        assert_eq!(
+            clause_line_string(&bank, "cnf(c_9,axiom,(line_a=line_b)).", &clause, true),
+            "cnf(c_9,axiom,(line_a=line_b)). % info(9, 0, 0, 3, 1, 1, 1, 0)\n"
+        );
+        assert_eq!(
+            clause_line_string_with_comment(
+                &bank,
+                "cnf(c_9,axiom,(line_a=line_b)).",
+                &clause,
+                true,
+                "#",
+            ),
+            "cnf(c_9,axiom,(line_a=line_b)). # info(9, 0, 0, 3, 1, 1, 1, 0)\n"
         );
     }
 
