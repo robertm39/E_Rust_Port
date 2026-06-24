@@ -28,6 +28,58 @@ pub struct PatternSubst {
     sig: Signature,
 }
 
+#[derive(Clone, Debug)]
+pub struct PatternClauseResult<'a> {
+    tries: i64,
+    subst: PatternSubst,
+    listrep: Vec<(&'a Eqn, PatEqnDirection)>,
+}
+
+impl<'a> PatternClauseResult<'a> {
+    #[must_use]
+    pub const fn tries(&self) -> i64 {
+        self.tries
+    }
+
+    #[must_use]
+    pub const fn subst(&self) -> &PatternSubst {
+        &self.subst
+    }
+
+    #[must_use]
+    pub fn subst_mut(&mut self) -> &mut PatternSubst {
+        &mut self.subst
+    }
+
+    #[must_use]
+    pub fn listrep(&self) -> &[(&'a Eqn, PatEqnDirection)] {
+        &self.listrep
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (i64, PatternSubst, Vec<(&'a Eqn, PatEqnDirection)>) {
+        (self.tries, self.subst, self.listrep)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LiteralMinimal {
+    left: bool,
+    right: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PatternSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug)]
+struct PatternSearchFrame {
+    old_backtrack: usize,
+    choices: Vec<(usize, PatEqnDirection)>,
+}
+
 impl PatternSubst {
     #[must_use]
     pub fn new(sig: &Signature) -> Self {
@@ -354,6 +406,21 @@ pub fn debug_pattern_clause_to_list(clause: &Clause) -> Vec<(&Eqn, PatEqnDirecti
 
 /// # Panics
 ///
+/// Panics under the same internal-invariant conditions as the term, equation,
+/// and list pattern comparison helpers.
+#[must_use]
+pub fn pattern_clause_compute(clause: &Clause, subst: PatternSubst) -> PatternClauseResult<'_> {
+    let literals = clause.literals().as_slice();
+    let (tries, subst, order) = lit_list_rep_pattern(literals, subst);
+    PatternClauseResult {
+        tries,
+        subst,
+        listrep: order_to_listrep(literals, &order),
+    }
+}
+
+/// # Panics
+///
 /// Panics if traversed variables have no type, if variable-bank invariants are
 /// violated, if source argument slots are missing, or if normalized ids are
 /// malformed.
@@ -518,6 +585,26 @@ fn pat_symbol_compare(
     }
 }
 
+fn pat_symbol_compare_same_subst(
+    subst: &mut PatternSubst,
+    f1: FunCode,
+    f2: FunCode,
+) -> CompareResult {
+    let f1_bound = subst.symbol_is_bound(f1);
+    let f2_bound = subst.symbol_is_bound(f2);
+    if f1_bound && f2_bound {
+        let f1_value = subst.comparison_value(f1);
+        let f2_value = subst.comparison_value(f2);
+        q_to_part_i64(f1_value - f2_value)
+    } else if f1_bound {
+        CompareResult::Lesser
+    } else if f2_bound {
+        CompareResult::Greater
+    } else {
+        CompareResult::Uncomparable
+    }
+}
+
 fn pat_term_size_compare(left: &Term, right: &Term) -> CompareResult {
     if left.f_code() == crate::terms::signature::SIG_TRUE_CODE
         && right.f_code() == crate::terms::signature::SIG_TRUE_CODE
@@ -559,6 +646,330 @@ fn pat_term_size_compare(left: &Term, right: &Term) -> CompareResult {
                 required_argument(&left, index),
                 required_argument(&right, index),
             ));
+        }
+    }
+    CompareResult::Equal
+}
+
+fn pattern_term_compare_same_subst(
+    subst: &mut PatternSubst,
+    left: &Term,
+    right: &Term,
+) -> CompareResult {
+    let size_result = pat_term_size_compare(left, right);
+    assert_ne!(size_result, CompareResult::Uncomparable);
+    assert_ne!(size_result, CompareResult::Unknown);
+    if size_result != CompareResult::Equal {
+        return size_result;
+    }
+
+    let mut stack = vec![(left.clone(), right.clone())];
+    while let Some((left, right)) = stack.pop() {
+        assert_eq!(left.arity(), right.arity());
+        let result = pat_symbol_compare_same_subst(subst, left.f_code(), right.f_code());
+        if result != CompareResult::Equal {
+            return result;
+        }
+        for index in 0..left.arity() {
+            stack.push((
+                required_argument(&left, index),
+                required_argument(&right, index),
+            ));
+        }
+    }
+    CompareResult::Equal
+}
+
+fn pattern_term_pair_compare_same_subst(
+    subst: &mut PatternSubst,
+    eqn1: &Eqn,
+    dir1: PatEqnDirection,
+    eqn2: &Eqn,
+    dir2: PatEqnDirection,
+) -> CompareResult {
+    let weight_cmp = eqn2.standard_weight() - eqn1.standard_weight();
+    if weight_cmp != 0 {
+        return q_to_part_i64(weight_cmp);
+    }
+
+    let (left1, right1) = pat_eqn_terms(eqn1, dir1);
+    let (left2, right2) = pat_eqn_terms(eqn2, dir2);
+
+    let result = pat_term_size_compare(left1, left2);
+    if result != CompareResult::Equal {
+        return result;
+    }
+    let result = pat_term_size_compare(right1, right2);
+    if result != CompareResult::Equal {
+        return result;
+    }
+
+    if eqn1.is_positive() && eqn2.is_negative() {
+        return CompareResult::Greater;
+    }
+    if eqn1.is_negative() && eqn2.is_positive() {
+        return CompareResult::Lesser;
+    }
+
+    let result = pattern_term_compare_same_subst(subst, left1, left2);
+    if result != CompareResult::Equal {
+        return result;
+    }
+    pattern_term_compare_same_subst(subst, right1, right2)
+}
+
+fn initialize_lit_list(
+    subst: &mut PatternSubst,
+    literals: &[Eqn],
+    used: &[bool],
+) -> Vec<LiteralMinimal> {
+    let mut minimal = vec![LiteralMinimal::default(); literals.len()];
+    for (index, literal) in literals.iter().enumerate() {
+        if used[index] {
+            continue;
+        }
+        match pattern_term_compare_same_subst(subst, literal.left(), literal.right()) {
+            CompareResult::Equal | CompareResult::Lesser => minimal[index].left = true,
+            CompareResult::Greater => minimal[index].right = true,
+            CompareResult::Uncomparable => {
+                minimal[index].left = true;
+                minimal[index].right = true;
+            }
+            CompareResult::Unknown
+            | CompareResult::NotGreaterEqual
+            | CompareResult::NotLessEqual => {
+                panic!("pattern term comparison returned non-C result")
+            }
+        }
+    }
+    minimal
+}
+
+fn mark_minimal_literals(
+    subst: &mut PatternSubst,
+    literals: &[Eqn],
+    used: &[bool],
+) -> Vec<LiteralMinimal> {
+    let mut minimal = initialize_lit_list(subst, literals, used);
+
+    for handle in 0..literals.len() {
+        if used[handle] || !(minimal[handle].left || minimal[handle].right) {
+            continue;
+        }
+        for compare in handle + 1..literals.len() {
+            if used[compare] {
+                continue;
+            }
+            if minimal[handle].left {
+                if minimal[compare].left {
+                    let cmpres = pattern_term_pair_compare_same_subst(
+                        subst,
+                        &literals[handle],
+                        PatEqnDirection::Normal,
+                        &literals[compare],
+                        PatEqnDirection::Normal,
+                    );
+                    apply_minimal_compare(
+                        &mut minimal,
+                        cmpres,
+                        (handle, PatternSide::Left),
+                        (compare, PatternSide::Left),
+                    );
+                }
+                if minimal[compare].right {
+                    let cmpres = pattern_term_pair_compare_same_subst(
+                        subst,
+                        &literals[handle],
+                        PatEqnDirection::Normal,
+                        &literals[compare],
+                        PatEqnDirection::Reverse,
+                    );
+                    apply_minimal_compare(
+                        &mut minimal,
+                        cmpres,
+                        (handle, PatternSide::Left),
+                        (compare, PatternSide::Right),
+                    );
+                }
+            }
+            if minimal[handle].right {
+                if minimal[compare].left {
+                    let cmpres = pattern_term_pair_compare_same_subst(
+                        subst,
+                        &literals[handle],
+                        PatEqnDirection::Reverse,
+                        &literals[compare],
+                        PatEqnDirection::Normal,
+                    );
+                    apply_minimal_compare(
+                        &mut minimal,
+                        cmpres,
+                        (handle, PatternSide::Right),
+                        (compare, PatternSide::Left),
+                    );
+                }
+                if minimal[compare].right {
+                    let cmpres = pattern_term_pair_compare_same_subst(
+                        subst,
+                        &literals[handle],
+                        PatEqnDirection::Reverse,
+                        &literals[compare],
+                        PatEqnDirection::Reverse,
+                    );
+                    apply_minimal_compare(
+                        &mut minimal,
+                        cmpres,
+                        (handle, PatternSide::Right),
+                        (compare, PatternSide::Right),
+                    );
+                }
+            }
+        }
+    }
+    minimal
+}
+
+fn apply_minimal_compare(
+    minimal: &mut [LiteralMinimal],
+    cmpres: CompareResult,
+    first: (usize, PatternSide),
+    second: (usize, PatternSide),
+) {
+    match cmpres {
+        CompareResult::Equal | CompareResult::Lesser => clear_minimal(minimal, second),
+        CompareResult::Greater => clear_minimal(minimal, first),
+        CompareResult::Uncomparable => {}
+        CompareResult::Unknown | CompareResult::NotGreaterEqual | CompareResult::NotLessEqual => {
+            panic!("pattern literal comparison returned non-C result")
+        }
+    }
+}
+
+fn clear_minimal(minimal: &mut [LiteralMinimal], target: (usize, PatternSide)) {
+    match target.1 {
+        PatternSide::Left => minimal[target.0].left = false,
+        PatternSide::Right => minimal[target.0].right = false,
+    }
+}
+
+fn collect_choices(
+    subst: &mut PatternSubst,
+    literals: &[Eqn],
+    used: &[bool],
+) -> Vec<(usize, PatEqnDirection)> {
+    let minimal = mark_minimal_literals(subst, literals, used);
+    let mut choices = Vec::new();
+    for (index, marks) in minimal.into_iter().enumerate() {
+        if used[index] {
+            continue;
+        }
+        if marks.left {
+            choices.push((index, PatEqnDirection::Normal));
+        }
+        if marks.right {
+            choices.push((index, PatEqnDirection::Reverse));
+        }
+    }
+    choices
+}
+
+fn complete_state(
+    subst: &mut PatternSubst,
+    literals: &[Eqn],
+    used: &mut [bool],
+    order: &mut Vec<(usize, PatEqnDirection)>,
+    state: &mut Vec<PatternSearchFrame>,
+) -> bool {
+    let mut choices = collect_choices(subst, literals, used);
+    let mut choice_nr = choices.len();
+
+    while choice_nr != 0 && choice_nr <= PATTERN_SEARCH_BRANCHLIMIT {
+        let (picked, direction) = choices.pop().expect("choice stack is non-empty");
+
+        state.push(PatternSearchFrame {
+            old_backtrack: subst.backtrack_len(),
+            choices,
+        });
+        used[picked] = true;
+        pattern_term_pair_compute(subst, &literals[picked], direction);
+        order.push((picked, direction));
+
+        choices = collect_choices(subst, literals, used);
+        choice_nr = choices.len();
+    }
+
+    choice_nr == 0
+}
+
+fn lit_list_rep_pattern(
+    literals: &[Eqn],
+    mut subst: PatternSubst,
+) -> (i64, PatternSubst, Vec<(usize, PatEqnDirection)>) {
+    let mut used = vec![false; literals.len()];
+    let mut order = Vec::new();
+    let mut state = Vec::new();
+    let mut count = 1;
+    let mut affordable = complete_state(&mut subst, literals, &mut used, &mut order, &mut state);
+    let mut best_subst = subst.clone();
+    let mut best_order = order.clone();
+
+    while !state.is_empty() && affordable {
+        let (picked, _direction) = order.pop().expect("state implies a picked literal");
+        used[picked] = false;
+
+        let frame = state.last_mut().expect("state is non-empty");
+        subst.backtrack_to(frame.old_backtrack);
+        if let Some((picked, direction)) = frame.choices.pop() {
+            count += 1;
+            used[picked] = true;
+            pattern_term_pair_compute(&mut subst, &literals[picked], direction);
+            order.push((picked, direction));
+            affordable = complete_state(&mut subst, literals, &mut used, &mut order, &mut state);
+
+            if affordable
+                && pattern_lit_order_compare(
+                    &mut subst,
+                    literals,
+                    &order,
+                    &mut best_subst,
+                    &best_order,
+                ) == CompareResult::Lesser
+            {
+                best_subst = subst.clone();
+                best_order = order.clone();
+            }
+        } else {
+            state.pop();
+        }
+    }
+
+    (if affordable { count } else { 0 }, best_subst, best_order)
+}
+
+fn pattern_lit_order_compare(
+    subst1: &mut PatternSubst,
+    literals: &[Eqn],
+    order1: &[(usize, PatEqnDirection)],
+    subst2: &mut PatternSubst,
+    order2: &[(usize, PatEqnDirection)],
+) -> CompareResult {
+    let len_cmp = i64::try_from(order1.len()).unwrap_or(i64::MAX)
+        - i64::try_from(order2.len()).unwrap_or(i64::MAX);
+    if len_cmp != 0 {
+        return q_to_part_i64(len_cmp);
+    }
+
+    for ((left_index, left_dir), (right_index, right_dir)) in order1.iter().zip(order2) {
+        let result = pattern_term_pair_compare(
+            subst1,
+            &literals[*left_index],
+            *left_dir,
+            subst2,
+            &literals[*right_index],
+            *right_dir,
+        );
+        if result != CompareResult::Equal {
+            return result;
         }
     }
     CompareResult::Equal
@@ -634,6 +1045,16 @@ fn push_arguments(term: &Term, stack: &mut Vec<Term>) {
     }
 }
 
+fn order_to_listrep<'a>(
+    literals: &'a [Eqn],
+    order: &[(usize, PatEqnDirection)],
+) -> Vec<(&'a Eqn, PatEqnDirection)> {
+    order
+        .iter()
+        .map(|(index, direction)| (&literals[*index], *direction))
+        .collect()
+}
+
 fn required_argument(term: &Term, index: usize) -> Term {
     match term.argument(index) {
         Some(arg) => arg,
@@ -664,13 +1085,13 @@ fn usize_to_f_code(index: usize) -> FunCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_pattern_clause_to_list, pat_id_is_norm_id, pattern_clause_print_string,
-        pattern_eqn_print_string, pattern_id_get_arity, pattern_id_get_ident,
-        pattern_lit_list_compare, pattern_lit_list_compute, pattern_norm_code, pattern_print_rep,
-        pattern_term_compare, pattern_term_compute, pattern_term_pair_compare,
-        pattern_term_pair_compute, pattern_term_print_string, pattern_translate_sig, PatternSubst,
-        DEFAULT_LITERAL_NO, NORM_ARITY_LIMIT, NORM_SYMBOL_LIMIT, NORM_VAR_INIT,
-        PATTERN_SEARCH_BRANCHLIMIT,
+        debug_pattern_clause_to_list, pat_id_is_norm_id, pattern_clause_compute,
+        pattern_clause_print_string, pattern_eqn_print_string, pattern_id_get_arity,
+        pattern_id_get_ident, pattern_lit_list_compare, pattern_lit_list_compute,
+        pattern_norm_code, pattern_print_rep, pattern_term_compare, pattern_term_compute,
+        pattern_term_pair_compare, pattern_term_pair_compute, pattern_term_print_string,
+        pattern_translate_sig, PatternSubst, DEFAULT_LITERAL_NO, NORM_ARITY_LIMIT,
+        NORM_SYMBOL_LIMIT, NORM_VAR_INIT, PATTERN_SEARCH_BRANCHLIMIT,
     };
     use crate::basics::partial_orderings::CompareResult;
     use crate::clauses::clause::Clause;
@@ -914,6 +1335,43 @@ mod tests {
         let debug = debug_pattern_clause_to_list(&clause);
         assert_eq!(debug.len(), 1);
         assert_eq!(debug[0].1, PatEqnDirection::Normal);
+    }
+
+    #[test]
+    fn clause_compute_uses_c_stack_choice_order_for_single_literal() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let eqn = Eqn::alloc(a, b, &mut bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn]));
+        let result = pattern_clause_compute(&clause, PatternSubst::new(bank.signature()));
+
+        assert_eq!(result.tries(), 2);
+        assert_eq!(result.listrep().len(), 1);
+        assert_eq!(result.listrep()[0].1, PatEqnDirection::Reverse);
+
+        let mut subst = result.subst().clone();
+        assert_eq!(
+            pattern_clause_print_string(&mut subst, result.listrep(), &bank),
+            "f0_1=f0_2 <- ."
+        );
+    }
+
+    #[test]
+    fn clause_compute_returns_zero_when_initial_choices_exceed_branch_limit() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+        let d = typed_const(&mut bank, "d");
+        let first = Eqn::alloc(a, b, &mut bank, true).unwrap();
+        let second = Eqn::alloc(c, d, &mut bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+
+        let result = pattern_clause_compute(&clause, PatternSubst::new(bank.signature()));
+
+        assert_eq!(result.tries(), 0);
+        assert!(result.listrep().is_empty());
     }
 
     #[test]

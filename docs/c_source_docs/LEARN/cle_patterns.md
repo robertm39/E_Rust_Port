@@ -164,6 +164,7 @@ Source files reviewed: `LEARN/cle_patterns.h`, `LEARN/cle_patterns.c`.
 - `PatternSubstGetOriginalSymbol` checks `VarFCodeIsAltCode(f)` before scanning `var_subst`, so normalized variable ids that look like alternate variables are returned unchanged. For other normalized variables, the scan uses `fun_subst->size` as the bound while reading `var_subst`, and returns the positive array index rather than the original negative variable f-code.
 - `PatternTranslateSig` temporarily installs bindings on source-term variables, calls `TermCopy(..., DEREF_ONCE)`, then clears every traversed source variable binding to `NULL`. This can clobber pre-existing bindings if the caller violates the "uninstantiated term" assumption.
 - `PatternTranslateSig` inserts translated function symbols into the destination signature with `SigInsertId(..., false)` but does not declare corresponding types, even though copied terms still carry type pointers.
+- The representative pattern search uses `EPIsUsed`, `EPLPatMinimal`, and `EPRPatMinimal` as scratch flags on original literals while exploring choices. If a choice set exceeds `PATTERN_SEARCH_BRANCHLIMIT`, the C routine returns `0` after a partial search state; audit whether any caller can observe leftover scratch flags before treating this as cleanup-only.
 
 ### Porting Focus
 
