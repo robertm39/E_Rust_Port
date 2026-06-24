@@ -22,6 +22,277 @@ pub struct ClauseSetArityInformation {
     pub fun_const_count: i64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum SpecFeatureClass {
+    #[default]
+    Unit = 0,
+    Horn = 1,
+    General = 2,
+    NoEq = 3,
+    SomeEq = 4,
+    PureEq = 5,
+    FewPosNonGroundUnits = 6,
+    SomePosNonGroundUnits = 7,
+    ManyPosNonGroundUnits = 8,
+    FewPosGround = 9,
+    SomePosGround = 10,
+    ManyPosGround = 11,
+    FewAxioms = 12,
+    SomeAxioms = 13,
+    ManyAxioms = 14,
+    FewLiterals = 15,
+    SomeLiterals = 16,
+    ManyLiterals = 17,
+    SmallTerms = 18,
+    MediumTerms = 19,
+    LargeTerms = 20,
+    Arity0 = 21,
+    Arity1 = 22,
+    Arity2 = 23,
+    Arity3Plus = 24,
+    AritySumSmall = 25,
+    AritySumMedium = 26,
+    AritySumLarge = 27,
+    DepthShallow = 28,
+    DepthMedium = 29,
+    DepthDeep = 30,
+    Fo = 31,
+    So = 32,
+    Ho = 33,
+    FewDefs = 34,
+    MediumDefs = 35,
+    ManyDefs = 36,
+    FewFormDefs = 37,
+    MediumFormDefs = 38,
+    ManyFormDefs = 39,
+    FewApplits = 40,
+    MediumApplits = 41,
+    ManyApplits = 42,
+}
+
+pub const NGU_ABSOLUTE: bool = true;
+pub const NGU_FEW_DEFAULT: f64 = 0.25;
+pub const NGU_MANY_DEFAULT: f64 = 0.75;
+pub const NGU_FEW_ABSDEFAULT: f64 = 1.0;
+pub const NGU_MANY_ABSDEFAULT: f64 = 3.0;
+pub const GPC_ABSOLUTE: bool = true;
+pub const GPC_FEW_DEFAULT: f64 = 0.25;
+pub const GPC_MANY_DEFAULT: f64 = 0.75;
+pub const GPC_FEW_ABSDEFAULT: f64 = 2.0;
+pub const GPC_MANY_ABSDEFAULT: f64 = 5.0;
+pub const AX_SOME_DEFAULT: i64 = 1_000;
+pub const AX_MANY_DEFAULT: i64 = 10_000;
+pub const LIT_SOME_DEFAULT: i64 = 400;
+pub const LIT_MANY_DEFAULT: i64 = 4_000;
+pub const TERM_MED_DEFAULT: i64 = 200;
+pub const TERM_LARGE_DEFAULT: i64 = 1_500;
+pub const FAR_SUM_MED_DEFAULT: i32 = 4;
+pub const FAR_SUM_LARGE_DEFAULT: i32 = 29;
+pub const DEPTH_MEDIUM_DEFAULT: i64 = 0;
+pub const DEPTH_DEEP_DEFAULT: i64 = 6;
+pub const SYMBOLS_MEDIUM_DEFAULT: i32 = 100;
+pub const SYMBOLS_LARGE_DEFAULT: i32 = 1_000;
+pub const PREDC_MEDIUM_DEFAULT: i32 = 0;
+pub const PREDC_LARGE_DEFAULT: i32 = 2;
+pub const PRED_MEDIUM_DEFAULT: i32 = 1_225;
+pub const PRED_LARGE_DEFAULT: i32 = 4_000;
+pub const FUNC_MEDIUM_DEFAULT: i32 = 8;
+pub const FUNC_LARGE_DEFAULT: i32 = 110;
+pub const FUN_MEDIUM_DEFAULT: i32 = 360;
+pub const FUN_LARGE_DEFAULT: i32 = 400;
+pub const NUM_LAMS_MEDIUM_DEFAULT: i32 = 2;
+pub const NUM_LAMS_LARGE_DEFAULT: i32 = 8;
+pub const ORDER_MEDIUM_DEFAULT: i32 = 2;
+pub const ORDER_LARGE_DEFAULT: i32 = 3;
+pub const DEFS_MEDIUM_DEFAULT: i32 = 8;
+pub const DEFS_LARGE_DEFAULT: i32 = 64;
+pub const DEFS_PERC_MEDIUM_DEFAULT: f64 = 0.15;
+pub const DEFS_PERC_LARGE_DEFAULT: f64 = 0.5;
+pub const PERC_APPLIT_MEDIUM_DEFAULT: f64 = 0.1;
+pub const PERC_APPLIT_LARGE_DEFAULT: f64 = 0.5;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpecLimits {
+    pub ngu_absolute: bool,
+    pub ngu_few_limit: f64,
+    pub ngu_many_limit: f64,
+    pub gpc_absolute: bool,
+    pub gpc_few_limit: f64,
+    pub gpc_many_limit: f64,
+    pub ax_some_limit: i64,
+    pub ax_many_limit: i64,
+    pub lit_some_limit: i64,
+    pub lit_many_limit: i64,
+    pub term_medium_limit: i64,
+    pub term_large_limit: i64,
+    pub far_sum_medium_limit: i32,
+    pub far_sum_large_limit: i32,
+    pub depth_medium_limit: i64,
+    pub depth_deep_limit: i64,
+    pub symbols_medium_limit: i32,
+    pub symbols_large_limit: i32,
+    pub predc_medium_limit: i32,
+    pub predc_large_limit: i32,
+    pub pred_medium_limit: i32,
+    pub pred_large_limit: i32,
+    pub func_medium_limit: i32,
+    pub func_large_limit: i32,
+    pub fun_medium_limit: i32,
+    pub fun_large_limit: i32,
+    pub order_medium_limit: i32,
+    pub order_large_limit: i32,
+    pub num_of_lams_medium_limit: i32,
+    pub num_of_lams_large_limit: i32,
+    pub num_of_defs_medium_limit: i32,
+    pub num_of_defs_large_limit: i32,
+    pub perc_form_defs_medium_limit: f64,
+    pub perc_form_defs_large_limit: f64,
+    pub perc_app_lits_medium_limit: f64,
+    pub perc_app_lits_large_limit: f64,
+}
+
+impl Default for SpecLimits {
+    fn default() -> Self {
+        Self::alloc()
+    }
+}
+
+impl SpecLimits {
+    #[must_use]
+    pub const fn alloc() -> Self {
+        Self {
+            ngu_absolute: NGU_ABSOLUTE,
+            ngu_few_limit: if NGU_ABSOLUTE {
+                NGU_FEW_ABSDEFAULT
+            } else {
+                NGU_FEW_DEFAULT
+            },
+            ngu_many_limit: if NGU_ABSOLUTE {
+                NGU_MANY_ABSDEFAULT
+            } else {
+                NGU_MANY_DEFAULT
+            },
+            gpc_absolute: GPC_ABSOLUTE,
+            gpc_few_limit: if GPC_ABSOLUTE {
+                GPC_FEW_ABSDEFAULT
+            } else {
+                GPC_FEW_DEFAULT
+            },
+            gpc_many_limit: if GPC_ABSOLUTE {
+                GPC_MANY_ABSDEFAULT
+            } else {
+                GPC_MANY_DEFAULT
+            },
+            ax_some_limit: AX_SOME_DEFAULT,
+            ax_many_limit: AX_MANY_DEFAULT,
+            lit_some_limit: LIT_SOME_DEFAULT,
+            lit_many_limit: LIT_MANY_DEFAULT,
+            term_medium_limit: TERM_MED_DEFAULT,
+            term_large_limit: TERM_LARGE_DEFAULT,
+            far_sum_medium_limit: FAR_SUM_MED_DEFAULT,
+            far_sum_large_limit: FAR_SUM_LARGE_DEFAULT,
+            depth_medium_limit: DEPTH_MEDIUM_DEFAULT,
+            depth_deep_limit: DEPTH_DEEP_DEFAULT,
+            symbols_medium_limit: SYMBOLS_MEDIUM_DEFAULT,
+            symbols_large_limit: SYMBOLS_LARGE_DEFAULT,
+            predc_medium_limit: PREDC_MEDIUM_DEFAULT,
+            predc_large_limit: PREDC_LARGE_DEFAULT,
+            pred_medium_limit: PRED_MEDIUM_DEFAULT,
+            pred_large_limit: PRED_LARGE_DEFAULT,
+            func_medium_limit: FUNC_MEDIUM_DEFAULT,
+            func_large_limit: FUNC_LARGE_DEFAULT,
+            fun_medium_limit: FUN_MEDIUM_DEFAULT,
+            fun_large_limit: FUN_LARGE_DEFAULT,
+            order_medium_limit: ORDER_MEDIUM_DEFAULT,
+            order_large_limit: ORDER_LARGE_DEFAULT,
+            num_of_lams_medium_limit: NUM_LAMS_MEDIUM_DEFAULT,
+            num_of_lams_large_limit: NUM_LAMS_LARGE_DEFAULT,
+            num_of_defs_medium_limit: DEFS_MEDIUM_DEFAULT,
+            num_of_defs_large_limit: DEFS_LARGE_DEFAULT,
+            perc_form_defs_medium_limit: DEFS_PERC_MEDIUM_DEFAULT,
+            perc_form_defs_large_limit: DEFS_PERC_MEDIUM_DEFAULT,
+            perc_app_lits_medium_limit: PERC_APPLIT_MEDIUM_DEFAULT,
+            perc_app_lits_large_limit: PERC_APPLIT_LARGE_DEFAULT,
+        }
+    }
+
+    #[must_use]
+    pub const fn default_auto() -> Self {
+        Self {
+            ax_many_limit: 100_000,
+            depth_medium_limit: 4,
+            depth_deep_limit: 7,
+            perc_form_defs_large_limit: DEFS_PERC_LARGE_DEFAULT,
+            ..Self::alloc()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "C-compatible feature cell mirrors che_clausesetfeatures fields"
+)]
+pub struct SpecFeatureCell {
+    pub axiomtypes: SpecFeatureClass,
+    pub goaltypes: SpecFeatureClass,
+    pub eq_content: SpecFeatureClass,
+    pub ng_unit_content: SpecFeatureClass,
+    pub ground_positive_content: SpecFeatureClass,
+    pub goals_are_ground: bool,
+    pub set_clause_size: SpecFeatureClass,
+    pub set_literal_size: SpecFeatureClass,
+    pub set_termcell_size: SpecFeatureClass,
+    pub max_fun_ar_class: SpecFeatureClass,
+    pub avg_fun_ar_class: SpecFeatureClass,
+    pub sum_fun_ar_class: SpecFeatureClass,
+    pub max_depth_class: SpecFeatureClass,
+    pub has_ho_features: bool,
+    pub quantifies_booleans: bool,
+    pub has_defined_choice: bool,
+    pub order_class: SpecFeatureClass,
+    pub goal_order_class: SpecFeatureClass,
+    pub defs_class: SpecFeatureClass,
+    pub form_defs_class: SpecFeatureClass,
+    pub appvar_lits_class: SpecFeatureClass,
+    pub clauses: i64,
+    pub goals: i64,
+    pub axioms: i64,
+    pub literals: i64,
+    pub term_cells: i64,
+    pub clause_max_depth: i64,
+    pub clause_avg_depth: i64,
+    pub unit: i64,
+    pub unitgoals: i64,
+    pub unitaxioms: i64,
+    pub horn: i64,
+    pub horngoals: i64,
+    pub hornaxioms: i64,
+    pub eq_clauses: i64,
+    pub peq_clauses: i64,
+    pub groundunitaxioms: i64,
+    pub positiveaxioms: i64,
+    pub groundpositiveaxioms: i64,
+    pub groundgoals: i64,
+    pub ng_unit_axioms_part: f64,
+    pub ground_positive_axioms_part: f64,
+    pub max_fun_arity: i32,
+    pub avg_fun_arity: i32,
+    pub sum_fun_arity: i32,
+    pub max_pred_arity: i32,
+    pub avg_pred_arity: i32,
+    pub sum_pred_arity: i32,
+    pub fun_const_count: i32,
+    pub fun_nonconst_count: i32,
+    pub pred_nonconst_count: i32,
+    pub order: i32,
+    pub goal_order: i32,
+    pub num_of_definitions: i32,
+    pub perc_of_form_defs: f64,
+    pub perc_of_appvar_lits: f64,
+}
+
 #[must_use]
 pub fn clause_set_count_goals(set: &ClauseSet) -> i64 {
     count_clauses(set, Clause::is_goal)
@@ -176,6 +447,146 @@ pub fn clause_set_non_ground_axiom_part(set: &ClauseSet) -> f64 {
     } else {
         (unit_axioms - clause_set_count_ground_unit_axioms(set)) as f64 / unit_axioms as f64
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub fn spec_features_add_basic_eval(features: &mut SpecFeatureCell) {
+    features.goals_are_ground = features.groundgoals == features.goals;
+    features.axiomtypes = if features.unitaxioms == features.axioms {
+        SpecFeatureClass::Unit
+    } else if features.hornaxioms == features.axioms {
+        SpecFeatureClass::Horn
+    } else {
+        SpecFeatureClass::General
+    };
+    features.goaltypes = if features.unitgoals == features.goals {
+        SpecFeatureClass::Unit
+    } else if features.horngoals == features.goals {
+        SpecFeatureClass::Horn
+    } else {
+        SpecFeatureClass::General
+    };
+    features.eq_content = if features.peq_clauses == features.clauses {
+        SpecFeatureClass::PureEq
+    } else if features.eq_clauses != 0 {
+        SpecFeatureClass::SomeEq
+    } else {
+        SpecFeatureClass::NoEq
+    };
+    features.max_fun_ar_class = arity_feature_class(features.max_fun_arity);
+    features.avg_fun_ar_class = arity_feature_class(features.avg_fun_arity);
+    features.ng_unit_axioms_part = if features.unitaxioms == 0 {
+        0.0
+    } else {
+        (features.unitaxioms - features.groundunitaxioms) as f64 / features.unitaxioms as f64
+    };
+    features.ground_positive_axioms_part = if features.positiveaxioms == 0 {
+        0.0
+    } else {
+        features.groundpositiveaxioms as f64 / features.positiveaxioms as f64
+    };
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub fn spec_features_add_eval(features: &mut SpecFeatureCell, limits: &SpecLimits) {
+    features.goals_are_ground = features.groundgoals == features.goals;
+
+    if limits.ngu_absolute {
+        features.ng_unit_content = SpecFeatureClass::FewPosNonGroundUnits;
+        if (features.unitaxioms - features.groundunitaxioms) as f64 > limits.ngu_few_limit {
+            features.ng_unit_content = SpecFeatureClass::SomePosNonGroundUnits;
+        }
+        if (features.unitaxioms - features.groundunitaxioms) as f64 > limits.ngu_many_limit {
+            features.ng_unit_content = SpecFeatureClass::ManyPosNonGroundUnits;
+        }
+    } else if features.ng_unit_axioms_part <= limits.ngu_few_limit {
+        features.ng_unit_content = SpecFeatureClass::FewPosNonGroundUnits;
+    } else if features.ng_unit_axioms_part >= limits.ngu_many_limit {
+        features.ng_unit_content = SpecFeatureClass::ManyPosNonGroundUnits;
+    } else {
+        features.ng_unit_content = SpecFeatureClass::SomePosNonGroundUnits;
+    }
+
+    if limits.gpc_absolute {
+        features.ground_positive_content = SpecFeatureClass::FewPosGround;
+        if features.groundpositiveaxioms as f64 > limits.gpc_few_limit {
+            features.ground_positive_content = SpecFeatureClass::SomePosGround;
+        }
+        if features.groundpositiveaxioms as f64 > limits.gpc_many_limit {
+            features.ground_positive_content = SpecFeatureClass::ManyPosGround;
+        }
+    } else if features.ground_positive_axioms_part <= limits.gpc_few_limit {
+        features.ground_positive_content = SpecFeatureClass::FewPosGround;
+    } else if features.ground_positive_axioms_part >= limits.gpc_many_limit {
+        features.ground_positive_content = SpecFeatureClass::ManyPosGround;
+    } else {
+        features.ground_positive_content = SpecFeatureClass::SomePosGround;
+    }
+
+    features.set_clause_size =
+        size_feature_class_i64(features.clauses, limits.ax_some_limit, limits.ax_many_limit);
+    features.set_literal_size = literal_feature_class(
+        features.literals,
+        limits.lit_some_limit,
+        limits.lit_many_limit,
+    );
+    features.set_termcell_size = term_feature_class(
+        features.term_cells,
+        limits.term_medium_limit,
+        limits.term_large_limit,
+    );
+    features.max_fun_ar_class = arity_feature_class(features.max_fun_arity);
+    features.avg_fun_ar_class = arity_feature_class(features.avg_fun_arity);
+
+    features.ng_unit_axioms_part = if features.unitaxioms == 0 {
+        0.0
+    } else {
+        (features.unitaxioms - features.groundunitaxioms) as f64 / features.unitaxioms as f64
+    };
+    features.ground_positive_axioms_part = if features.positiveaxioms == 0 {
+        0.0
+    } else {
+        features.groundpositiveaxioms as f64 / features.positiveaxioms as f64
+    };
+
+    features.sum_fun_ar_class = if features.sum_fun_arity < limits.far_sum_medium_limit {
+        SpecFeatureClass::AritySumSmall
+    } else if features.sum_fun_arity < limits.far_sum_large_limit {
+        SpecFeatureClass::AritySumMedium
+    } else {
+        SpecFeatureClass::AritySumLarge
+    };
+    features.max_depth_class = if features.clause_max_depth < limits.depth_medium_limit {
+        SpecFeatureClass::DepthShallow
+    } else if features.clause_max_depth < limits.depth_deep_limit {
+        SpecFeatureClass::DepthMedium
+    } else {
+        SpecFeatureClass::DepthDeep
+    };
+    features.order_class = order_feature_class(features.order);
+    features.goal_order_class = order_feature_class(features.goal_order);
+    features.defs_class = if features.num_of_definitions < limits.num_of_defs_medium_limit {
+        SpecFeatureClass::FewDefs
+    } else if features.num_of_definitions < limits.num_of_defs_large_limit {
+        SpecFeatureClass::MediumDefs
+    } else {
+        SpecFeatureClass::ManyDefs
+    };
+    features.form_defs_class = if features.perc_of_form_defs < limits.perc_form_defs_medium_limit {
+        SpecFeatureClass::FewFormDefs
+    } else if features.perc_of_form_defs < limits.perc_form_defs_large_limit {
+        SpecFeatureClass::MediumFormDefs
+    } else {
+        SpecFeatureClass::ManyFormDefs
+    };
+    features.appvar_lits_class = if features.perc_of_appvar_lits < limits.perc_app_lits_medium_limit
+    {
+        SpecFeatureClass::FewApplits
+    } else if features.perc_of_appvar_lits < limits.perc_app_lits_large_limit {
+        SpecFeatureClass::MediumApplits
+    } else {
+        SpecFeatureClass::ManyApplits
+    };
 }
 
 /// Collects the arity statistics used by the C strategy feature extractor.
@@ -339,6 +750,56 @@ where
     usize_to_i64(set.iter().filter(|clause| predicate(clause)).count())
 }
 
+fn arity_feature_class(arity: i32) -> SpecFeatureClass {
+    match arity {
+        0 => SpecFeatureClass::Arity0,
+        1 => SpecFeatureClass::Arity1,
+        2 => SpecFeatureClass::Arity2,
+        _ => SpecFeatureClass::Arity3Plus,
+    }
+}
+
+fn size_feature_class_i64(value: i64, some_limit: i64, many_limit: i64) -> SpecFeatureClass {
+    if value < some_limit {
+        SpecFeatureClass::FewAxioms
+    } else if value < many_limit {
+        SpecFeatureClass::SomeAxioms
+    } else {
+        SpecFeatureClass::ManyAxioms
+    }
+}
+
+fn literal_feature_class(value: i64, some_limit: i64, many_limit: i64) -> SpecFeatureClass {
+    if value < some_limit {
+        SpecFeatureClass::FewLiterals
+    } else if value < many_limit {
+        SpecFeatureClass::SomeLiterals
+    } else {
+        SpecFeatureClass::ManyLiterals
+    }
+}
+
+fn term_feature_class(value: i64, medium_limit: i64, large_limit: i64) -> SpecFeatureClass {
+    if value < medium_limit {
+        SpecFeatureClass::SmallTerms
+    } else if value < large_limit {
+        SpecFeatureClass::MediumTerms
+    } else {
+        SpecFeatureClass::LargeTerms
+    }
+}
+
+fn order_feature_class(order: i32) -> SpecFeatureClass {
+    match order.cmp(&2) {
+        std::cmp::Ordering::Less => SpecFeatureClass::Fo,
+        std::cmp::Ordering::Equal => SpecFeatureClass::So,
+        std::cmp::Ordering::Greater => {
+            assert!(order >= 3, "higher-order feature class requires order >= 3");
+            SpecFeatureClass::Ho
+        }
+    }
+}
+
 fn fcode_index(f_code: FunCode) -> usize {
     usize::try_from(f_code).unwrap_or_else(|_| panic!("f-code must fit feature-array index"))
 }
@@ -372,6 +833,8 @@ mod tests {
         clause_set_is_horn_set, clause_set_is_pure_equational_set, clause_set_is_unit_set,
         clause_set_max_literal_number, clause_set_max_standard_weight,
         clause_set_non_ground_axiom_part, clause_set_term_cells, clause_set_tptp_depth_info_add,
+        spec_features_add_basic_eval, spec_features_add_eval, SpecFeatureCell, SpecFeatureClass,
+        SpecLimits,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -478,6 +941,171 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    fn assert_f64_eq(left: f64, right: f64) {
+        assert!((left - right).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn spec_feature_class_discriminants_match_c_enum() {
+        assert_eq!(SpecFeatureClass::Unit as i32, 0);
+        assert_eq!(SpecFeatureClass::PureEq as i32, 5);
+        assert_eq!(SpecFeatureClass::ManyPosGround as i32, 11);
+        assert_eq!(SpecFeatureClass::LargeTerms as i32, 20);
+        assert_eq!(SpecFeatureClass::AritySumLarge as i32, 27);
+        assert_eq!(SpecFeatureClass::Ho as i32, 33);
+        assert_eq!(SpecFeatureClass::ManyApplits as i32, 42);
+    }
+
+    #[test]
+    fn spec_limits_allocation_and_auto_defaults_match_c_values() {
+        let allocated = SpecLimits::alloc();
+        assert!(allocated.ngu_absolute);
+        assert_f64_eq(allocated.ngu_few_limit, 1.0);
+        assert_f64_eq(allocated.ngu_many_limit, 3.0);
+        assert!(allocated.gpc_absolute);
+        assert_f64_eq(allocated.gpc_few_limit, 2.0);
+        assert_f64_eq(allocated.gpc_many_limit, 5.0);
+        assert_eq!(allocated.ax_some_limit, 1000);
+        assert_eq!(allocated.ax_many_limit, 10000);
+        assert_eq!(allocated.depth_medium_limit, 0);
+        assert_eq!(allocated.depth_deep_limit, 6);
+        assert_f64_eq(allocated.perc_form_defs_medium_limit, 0.15);
+        assert_f64_eq(allocated.perc_form_defs_large_limit, 0.15);
+
+        let auto = SpecLimits::default_auto();
+        assert_eq!(auto.ax_some_limit, 1000);
+        assert_eq!(auto.ax_many_limit, 100_000);
+        assert_eq!(auto.lit_some_limit, 400);
+        assert_eq!(auto.lit_many_limit, 4000);
+        assert_eq!(auto.term_medium_limit, 200);
+        assert_eq!(auto.term_large_limit, 1500);
+        assert_eq!(auto.depth_medium_limit, 4);
+        assert_eq!(auto.depth_deep_limit, 7);
+        assert_f64_eq(auto.perc_form_defs_large_limit, 0.5);
+        assert_f64_eq(auto.perc_app_lits_medium_limit, 0.1);
+        assert_f64_eq(auto.perc_app_lits_large_limit, 0.5);
+    }
+
+    #[test]
+    fn spec_features_basic_eval_sets_shape_classes_and_ratios() {
+        let mut features = SpecFeatureCell {
+            clauses: 5,
+            goals: 2,
+            axioms: 3,
+            unitgoals: 2,
+            unitaxioms: 2,
+            horngoals: 2,
+            hornaxioms: 3,
+            eq_clauses: 3,
+            peq_clauses: 5,
+            groundgoals: 2,
+            groundunitaxioms: 1,
+            positiveaxioms: 4,
+            groundpositiveaxioms: 3,
+            max_fun_arity: 3,
+            avg_fun_arity: 1,
+            ..SpecFeatureCell::default()
+        };
+
+        spec_features_add_basic_eval(&mut features);
+
+        assert!(features.goals_are_ground);
+        assert_eq!(features.axiomtypes, SpecFeatureClass::Horn);
+        assert_eq!(features.goaltypes, SpecFeatureClass::Unit);
+        assert_eq!(features.eq_content, SpecFeatureClass::PureEq);
+        assert_eq!(features.max_fun_ar_class, SpecFeatureClass::Arity3Plus);
+        assert_eq!(features.avg_fun_ar_class, SpecFeatureClass::Arity1);
+        assert!((features.ng_unit_axioms_part - 0.5).abs() < f64::EPSILON);
+        assert!((features.ground_positive_axioms_part - 0.75).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn spec_features_add_eval_matches_c_thresholds() {
+        let limits = SpecLimits::default_auto();
+        let mut features = SpecFeatureCell {
+            clauses: 999,
+            goals: 2,
+            groundgoals: 2,
+            literals: 400,
+            term_cells: 1500,
+            unitaxioms: 5,
+            groundunitaxioms: 1,
+            positiveaxioms: 10,
+            groundpositiveaxioms: 6,
+            max_fun_arity: 3,
+            avg_fun_arity: 2,
+            sum_fun_arity: 4,
+            clause_max_depth: 7,
+            order: 3,
+            goal_order: 2,
+            num_of_definitions: 64,
+            perc_of_form_defs: 0.5,
+            perc_of_appvar_lits: 0.5,
+            ..SpecFeatureCell::default()
+        };
+
+        spec_features_add_eval(&mut features, &limits);
+
+        assert!(features.goals_are_ground);
+        assert_eq!(
+            features.ng_unit_content,
+            SpecFeatureClass::ManyPosNonGroundUnits
+        );
+        assert_eq!(
+            features.ground_positive_content,
+            SpecFeatureClass::ManyPosGround
+        );
+        assert_eq!(features.set_clause_size, SpecFeatureClass::FewAxioms);
+        assert_eq!(features.set_literal_size, SpecFeatureClass::SomeLiterals);
+        assert_eq!(features.set_termcell_size, SpecFeatureClass::LargeTerms);
+        assert_eq!(features.max_fun_ar_class, SpecFeatureClass::Arity3Plus);
+        assert_eq!(features.avg_fun_ar_class, SpecFeatureClass::Arity2);
+        assert!((features.ng_unit_axioms_part - 0.8).abs() < f64::EPSILON);
+        assert!((features.ground_positive_axioms_part - 0.6).abs() < f64::EPSILON);
+        assert_eq!(features.sum_fun_ar_class, SpecFeatureClass::AritySumMedium);
+        assert_eq!(features.max_depth_class, SpecFeatureClass::DepthDeep);
+        assert_eq!(features.order_class, SpecFeatureClass::Ho);
+        assert_eq!(features.goal_order_class, SpecFeatureClass::So);
+        assert_eq!(features.defs_class, SpecFeatureClass::ManyDefs);
+        assert_eq!(features.form_defs_class, SpecFeatureClass::ManyFormDefs);
+        assert_eq!(features.appvar_lits_class, SpecFeatureClass::ManyApplits);
+    }
+
+    #[test]
+    fn spec_features_relative_limits_use_existing_ratios_before_recomputing() {
+        let limits = SpecLimits {
+            ngu_absolute: false,
+            ngu_few_limit: 0.25,
+            ngu_many_limit: 0.75,
+            gpc_absolute: false,
+            gpc_few_limit: 0.25,
+            gpc_many_limit: 0.75,
+            ..SpecLimits::alloc()
+        };
+        let mut features = SpecFeatureCell {
+            ng_unit_axioms_part: 0.5,
+            ground_positive_axioms_part: 0.9,
+            unitaxioms: 4,
+            groundunitaxioms: 2,
+            positiveaxioms: 10,
+            groundpositiveaxioms: 4,
+            ..SpecFeatureCell::default()
+        };
+
+        spec_features_add_eval(&mut features, &limits);
+
+        assert_eq!(
+            features.ng_unit_content,
+            SpecFeatureClass::SomePosNonGroundUnits
+        );
+        assert_eq!(
+            features.ground_positive_content,
+            SpecFeatureClass::ManyPosGround
+        );
+        assert!((features.ng_unit_axioms_part - 0.5).abs() < f64::EPSILON);
+        assert!((features.ground_positive_axioms_part - 0.4).abs() < f64::EPSILON);
     }
 
     #[test]
