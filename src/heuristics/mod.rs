@@ -7,6 +7,7 @@ pub mod diversityweight;
 pub mod fcode_featurearrays;
 pub mod fifo;
 pub mod gdweight;
+pub mod hcb;
 pub mod levweight;
 pub mod lifo;
 pub mod normsubst;
