@@ -17,5 +17,6 @@ pub mod refinedweight;
 pub mod simweight;
 pub mod specsigfeatures;
 pub mod termweights;
+pub mod to_autoselect;
 pub mod to_params;
 pub mod varweights;
