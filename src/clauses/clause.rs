@@ -1461,6 +1461,80 @@ pub fn clause_print_tstp_core_string(
     output
 }
 
+/// Writes the C `ClauseTSTPPrint` shape for the currently ported core branch.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the clause needs the typed first-order or
+/// higher-order formula-closure path, which depends on the not-yet-ported
+/// `TFormulaClauseEncode`/`TFormulaClosure` printing pipeline, or if the
+/// output writer reports a formatting error.
+///
+/// # Panics
+///
+/// Panics if any literal or term violates the C printing preconditions.
+pub fn clause_write_tstp(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    complete: bool,
+    problem_type: ProblemType,
+) -> Result<(), Diagnostic> {
+    let is_untyped = clause.is_untyped();
+    write!(
+        output,
+        "{}({}, {}, ",
+        clause_tstp_kind(is_untyped, problem_type),
+        clause_tptp_identifier(clause),
+        clause_tstp_role(clause)
+    )
+    .map_err(tstp_write_error)?;
+
+    if clause.is_empty() || (is_untyped && problem_type != ProblemType::HigherOrder) {
+        clause_write_tstp_core(output, bank, clause, full_terms, false)
+            .map_err(tstp_write_error)?;
+    } else {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ClauseTSTPPrint formula rendering is not ported for typed or higher-order clauses",
+        ));
+    }
+
+    if complete {
+        output.write_str(").").map_err(tstp_write_error)?;
+    }
+    Ok(())
+}
+
+/// Returns the C `ClauseTSTPPrint` shape for the currently ported core branch.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`clause_write_tstp`].
+///
+/// # Panics
+///
+/// Panics if any literal or term violates the C printing preconditions.
+pub fn clause_tstp_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    complete: bool,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    clause_write_tstp(
+        &mut output,
+        bank,
+        clause,
+        full_terms,
+        complete,
+        problem_type,
+    )?;
+    Ok(output)
+}
+
 pub fn clause_write_lop_format(
     output: &mut impl fmt::Write,
     bank: &TermBank,
@@ -1591,6 +1665,32 @@ fn clause_tptp_role(clause: &Clause) -> &'static str {
     }
 }
 
+fn clause_tstp_kind(is_untyped: bool, problem_type: ProblemType) -> &'static str {
+    if !is_untyped && problem_type == ProblemType::FirstOrder {
+        "tcf"
+    } else if problem_type == ProblemType::HigherOrder {
+        "thf"
+    } else {
+        "cnf"
+    }
+}
+
+fn clause_tstp_role(clause: &Clause) -> &'static str {
+    match clause.query_tptp_type() {
+        CP_TYPE_AXIOM if clause.query_prop(CP_INPUT_FORMULA) => "axiom",
+        CP_TYPE_HYPOTHESIS => "hypothesis",
+        CP_TYPE_CONJECTURE => "conjecture",
+        CP_TYPE_LEMMA => "lemma",
+        CP_TYPE_WATCH_CLAUSE => "watchlist",
+        CP_TYPE_NEG_CONJECTURE => "negated_conjecture",
+        _ => "plain",
+    }
+}
+
+fn tstp_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause")
+}
+
 fn next_clause_ident() -> i64 {
     GLOBAL_CLAUSE_COUNTER
         .fetch_add(1, AtomicOrdering::SeqCst)
@@ -1641,8 +1741,9 @@ mod tests {
         clause_debug_string, clause_parse, clause_pcl_parse, clause_pcl_string,
         clause_print_axiom_string, clause_print_goal_string, clause_print_lop_format_string,
         clause_print_query_string, clause_print_rule_string, clause_print_tptp_format_string,
-        clause_print_tstp_core_string, clause_starts_maybe, Clause,
+        clause_print_tstp_core_string, clause_starts_maybe, clause_tstp_string, Clause,
     };
+    use crate::basics::error::ErrorCode;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -1837,6 +1938,48 @@ mod tests {
             clause_debug_string(&bank, &long_min_clause, ProblemType::FirstOrder),
             "thf(cl3, plain,  )."
         );
+    }
+
+    #[test]
+    fn clause_tstp_string_wraps_supported_core_branch_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "tstp_a");
+        let b = typed_const(&mut bank, "tstp_b");
+        let positive = eqn(&mut bank, &a, &b, true);
+        let negative = eqn(&mut bank, &b, &a, false);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![negative, positive]));
+        clause.set_ident(77);
+        clause.set_csscpa_source(5);
+        clause.set_tptp_type(CP_TYPE_AXIOM);
+
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::FirstOrder).unwrap(),
+            "cnf(c_5_77, plain, (tstp_a=tstp_b|tstp_b!=tstp_a))."
+        );
+
+        clause.set_prop(CP_INPUT_FORMULA);
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::FirstOrder).unwrap(),
+            "cnf(c_5_77, axiom, (tstp_a=tstp_b|tstp_b!=tstp_a))."
+        );
+
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, false, ProblemType::FirstOrder).unwrap(),
+            "cnf(c_5_77, negated_conjecture, (tstp_a=tstp_b|tstp_b!=tstp_a)"
+        );
+
+        let mut empty = Clause::empty();
+        empty.set_tptp_type(CP_TYPE_HYPOTHESIS);
+        assert_eq!(
+            clause_tstp_string(&bank, &empty, true, true, ProblemType::HigherOrder).unwrap(),
+            "thf(c_0_0, hypothesis, ($false))."
+        );
+
+        let error =
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("formula rendering is not ported"));
     }
 
     #[test]
