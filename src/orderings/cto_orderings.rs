@@ -3,9 +3,77 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::CompareResult;
 use crate::basics::pstacks::PStackPointer;
+use crate::heuristics::to_params::TermOrdering;
 use crate::inout::scanner::{token_pos_rep, Scanner, Token, TokenType};
+use crate::orderings::cto_kbo::{kbo_compare, kbo_greater};
+use crate::orderings::cto_kbolin::{kbo6_compare, kbo6_greater};
+use crate::orderings::cto_lpo::{lpo_compare, lpo_greater};
 use crate::orderings::ocb::{OrderControlBlock, W_DEFAULT_WEIGHT};
 use crate::terms::signature::Signature;
+use crate::terms::termtypes::{DerefType, Term};
+
+/// Test whether `s` is greater than `t` in the ordering described by `ocb`.
+///
+/// # Panics
+///
+/// Panics for ordering variants whose concrete comparison algorithm is not
+/// ported yet, or under the selected algorithm's internal invariants.
+pub fn to_greater(
+    ocb: &mut OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> bool {
+    match ocb.ordering_type {
+        TermOrdering::Lpo => lpo_greater(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Kbo => kbo_greater(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Kbo6 => kbo6_greater(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Empty => false,
+        TermOrdering::LpoCopy | TermOrdering::Lpo4 | TermOrdering::Lpo4Copy | TermOrdering::Rpo => {
+            panic!(
+                "term ordering {:?} comparison is not ported yet",
+                ocb.ordering_type
+            )
+        }
+        TermOrdering::NoOrdering | TermOrdering::Optimize => {
+            panic!("non-concrete term ordering cannot compare terms")
+        }
+    }
+}
+
+/// Compare `s` and `t` in the ordering described by `ocb`.
+///
+/// # Panics
+///
+/// Panics for ordering variants whose concrete comparison algorithm is not
+/// ported yet, or under the selected algorithm's internal invariants.
+#[must_use]
+pub fn to_compare(
+    ocb: &mut OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> CompareResult {
+    match ocb.ordering_type {
+        TermOrdering::Lpo => lpo_compare(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Kbo => kbo_compare(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Kbo6 => kbo6_compare(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Empty => CompareResult::Uncomparable,
+        TermOrdering::LpoCopy | TermOrdering::Lpo4 | TermOrdering::Lpo4Copy | TermOrdering::Rpo => {
+            panic!(
+                "term ordering {:?} comparison is not ported yet",
+                ocb.ordering_type
+            )
+        }
+        TermOrdering::NoOrdering | TermOrdering::Optimize => {
+            panic!("non-concrete term ordering cannot compare terms")
+        }
+    }
+}
 
 /// Parse `<`, `>`, or `=` into a comparison relation.
 pub fn compare_symbol_parse(scanner: &mut Scanner) -> Result<CompareResult, Diagnostic> {
@@ -172,14 +240,17 @@ fn weight_overflow_error(scanner: &Scanner) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        compare_symbol_parse, precedence_parse, symbol_comparison_chain_parse, weights_parse,
+        compare_symbol_parse, precedence_parse, symbol_comparison_chain_parse, to_compare,
+        to_greater, weights_parse,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
+    use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn signature() -> Signature {
@@ -195,6 +266,14 @@ mod tests {
 
     fn scanner(input: &str) -> Scanner {
         Scanner::from_option_string(input, true).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn app(symbol: FunCode, args: &[Term]) -> Term {
+        let term = Term::top_alloc(symbol, args.len());
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index, arg.clone());
+        }
+        term
     }
 
     #[test]
@@ -312,5 +391,94 @@ mod tests {
         let mut scanner = scanner("");
 
         assert_eq!(weights_parse(&mut scanner, &signature, &mut ocb), Ok(0));
+    }
+
+    #[test]
+    fn to_compare_dispatches_ported_orderings() {
+        let mut signature = signature();
+        let f = signature.insert_id("f", 1, false);
+        let x = Term::const_cell_alloc(-2);
+        let f_x = app(f, std::slice::from_ref(&x));
+
+        let mut kbo =
+            OrderControlBlock::alloc(TermOrdering::Kbo, true, &signature, HoOrderKind::LfhoOrder);
+        let mut kbo6 =
+            OrderControlBlock::alloc(TermOrdering::Kbo6, true, &signature, HoOrderKind::LfhoOrder);
+        let mut lpo =
+            OrderControlBlock::alloc(TermOrdering::Lpo, true, &signature, HoOrderKind::LfhoOrder);
+
+        assert_eq!(
+            to_compare(
+                &mut kbo,
+                &signature,
+                &f_x,
+                &x,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert_eq!(
+            to_compare(
+                &mut kbo6,
+                &signature,
+                &f_x,
+                &x,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert_eq!(
+            to_compare(
+                &mut lpo,
+                &signature,
+                &f_x,
+                &x,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Greater
+        );
+        assert!(to_greater(
+            &mut lpo,
+            &signature,
+            &f_x,
+            &x,
+            DerefType::Never,
+            DerefType::Never
+        ));
+    }
+
+    #[test]
+    fn to_compare_empty_ordering_matches_c_compare_surface() {
+        let signature = signature();
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Empty,
+            true,
+            &signature,
+            HoOrderKind::LfhoOrder,
+        );
+        let x = Term::const_cell_alloc(-2);
+
+        assert_eq!(
+            to_compare(
+                &mut ocb,
+                &signature,
+                &x,
+                &x,
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Uncomparable
+        );
+        assert!(!to_greater(
+            &mut ocb,
+            &signature,
+            &x,
+            &x,
+            DerefType::Never,
+            DerefType::Never
+        ));
     }
 }
