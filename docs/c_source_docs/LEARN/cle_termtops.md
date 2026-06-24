@@ -95,6 +95,13 @@ Source files reviewed: `LEARN/cle_termtops.h`, `LEARN/cle_termtops.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `AltTermTop`, `CSTermTop`, and `ESTermTop` use `term->binding` as a temporary cache on cutoff or marked subterms, not just variables, and only clear bindings they pushed during the current call.
+- `CSTermTop` and `ESTermTop` leave `TPOpFlag` markers on the original shared term graph after producing the top term. Later callers can observe those markers.
+- `term_set_prop_at_level` has no negative-depth guard. `CSTermTop(term, -1)` therefore clears nothing, sets no new markers on ordinary finite terms, and can still act on stale `TPOpFlag` markers.
+- Non-variable result cells are allocated with arity and f-code only; type, weight, and property fields are not copied from the source term.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
