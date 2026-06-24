@@ -149,6 +149,8 @@ Source files reviewed: `CLAUSES/ccl_grounding.h`, `CLAUSES/ccl_grounding.c`.
 - SAT/propositional integration has a separate assignment/result vocabulary; keep conversions and ownership boundaries explicit.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
+- `ClausePrintDimacs` takes a `FILE* out`, but the non-empty literal loop writes literal integers to `stdout` and only writes the trailing `0` line ending to `out`; preserve or intentionally fix that mixed-stream behavior only with DIMACS-output compatibility coverage.
+- `ClauseSetPrintDimacs` has no separate header or sorting step; it delegates to `ClausePrintDimacs` for each clause in set iteration order, including the empty-clause two-clause workaround.
 
 ### Porting Focus
 

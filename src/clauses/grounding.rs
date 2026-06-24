@@ -846,6 +846,15 @@ pub fn clause_print_dimacs_string(clause: &Clause) -> String {
 }
 
 #[must_use]
+pub fn clause_set_print_dimacs_string(clauses: &ClauseSet) -> String {
+    let mut result = String::new();
+    for clause in clauses.iter() {
+        result.push_str(&clause_print_dimacs_string(clause));
+    }
+    result
+}
+
+#[must_use]
 pub fn clause_get_max_lit(clause: &Clause) -> i64 {
     clause
         .literals()
@@ -924,10 +933,10 @@ mod tests {
     use super::{
         clause_cmp_by_len, clause_create_ground_instances, clause_eqlit_recode, clause_get_max_lit,
         clause_print_dimacs_string, clause_set_create_constrained_ground_instances,
-        clause_set_create_ground_instances, clause_slice_create_constrained_ground_instances,
-        clause_slice_create_ground_instances, eqn_eqlit_recode, print_dimacs_header_string,
-        GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState, VarSetInst,
-        DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        clause_set_create_ground_instances, clause_set_print_dimacs_string,
+        clause_slice_create_constrained_ground_instances, clause_slice_create_ground_instances,
+        eqn_eqlit_recode, print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome,
+        GroundSet, GroundSetState, VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -1222,6 +1231,25 @@ mod tests {
             " -1 0\n  1 0\n"
         );
         assert_eq!(clause_get_max_lit(&clause), pos_entry.max(neg_entry));
+    }
+
+    #[test]
+    fn clause_set_dimacs_string_concatenates_clause_outputs_in_set_order() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "dimacs_p", &[]);
+        let second = predicate_atom(&mut bank, "dimacs_q", &[]);
+        let first_entry = first.entry_no();
+        let second_entry = second.entry_no();
+        let set = ClauseSet::from_clauses([
+            clause_from(vec![predicate_literal(&mut bank, &first, true)]),
+            clause_from(vec![predicate_literal(&mut bank, &second, false)]),
+            Clause::empty(),
+        ]);
+
+        assert_eq!(
+            clause_set_print_dimacs_string(&set),
+            format!("  {first_entry} 0\n -{second_entry} 0\n -1 0\n  1 0\n")
+        );
     }
 
     #[test]
