@@ -247,6 +247,10 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
+### Compatibility Notes
+
+- `TermPrintDbg` is a macro: in first-order mode it is just `TermPrintFO`, while higher-order mode dispatches to `TermPrintDbgHO`, which prints space-separated application without interpreted-symbol pretty-printing. Rust exposes this as a problem-type-explicit term-bank debug writer so callers do not need to read process-global `problemType`.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

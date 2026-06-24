@@ -202,6 +202,31 @@ impl TermBank {
         output
     }
 
+    /// Writes the C `TermPrintDbg` shape for the selected problem type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_term_debug(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        if problem_type == ProblemType::HigherOrder {
+            self.write_ho_debug_term(output, term)
+        } else {
+            self.write_plain_term(output, term)
+        }
+    }
+
+    #[must_use]
+    pub fn term_debug_string(&self, term: &Term, problem_type: ProblemType) -> String {
+        let mut output = String::new();
+        let _ = self.write_term_debug(&mut output, term, problem_type);
+        output
+    }
+
     /// Writes the C `TBPrintTermCompact` form and sets `TPOutputFlag` on
     /// printed non-variable bank terms.
     ///
@@ -305,6 +330,31 @@ impl TermBank {
             self.write_plain_term(output, &arg)?;
         }
         write!(output, ")")
+    }
+
+    fn write_ho_debug_term(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        if term.is_db_var() {
+            write!(output, "db({})", term.f_code())?;
+        } else if term.is_free_var() {
+            write!(output, "{}", var_print_string(term.f_code()))?;
+        } else {
+            self.write_symbol(output, term.f_code())?;
+        }
+
+        for index in 0..term.arity() {
+            output.write_char(' ')?;
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            if arg.arity() != 0 {
+                output.write_char('(')?;
+                self.write_ho_debug_term(output, &arg)?;
+                output.write_char(')')?;
+            } else {
+                self.write_ho_debug_term(output, &arg)?;
+            }
+        }
+        Ok(())
     }
 
     fn write_compact_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
@@ -1452,6 +1502,20 @@ mod tests {
         assert_eq!(bank.term_string(&parsed, true), "f(a,X1,g(X2))");
         assert_eq!(bank.vars().ext_name_find("X").unwrap().f_code(), -2);
         assert_eq!(bank.vars().ext_name_find("Y").unwrap().f_code(), -4);
+    }
+
+    #[test]
+    fn term_debug_string_matches_first_order_and_higher_order_shapes() {
+        let (bank, parsed) = parse_simple("f(a,g(b),X)");
+
+        assert_eq!(
+            bank.term_debug_string(&parsed, ProblemType::FirstOrder),
+            "f(a,g(b),X1)"
+        );
+        assert_eq!(
+            bank.term_debug_string(&parsed, ProblemType::HigherOrder),
+            "f a (g b) X1"
+        );
     }
 
     #[test]

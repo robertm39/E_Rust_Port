@@ -35,6 +35,8 @@ use crate::terms::termweightext::TermWeightExtension;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+const DEFAULT_COMCHAR: &str = "%%";
+
 fn cmp_bool_as_c(left: bool, right: bool) -> i32 {
     match (left, right) {
         (true, false) => 1,
@@ -1780,6 +1782,32 @@ pub fn eqn_write_deref(
     bank.write_term(output, &right, true)
 }
 
+/// Writes the C `EqnPrintDBG` shape.
+///
+/// # Panics
+///
+/// Panics if a printed term violates the C debug term printing preconditions.
+pub fn eqn_write_debug(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    bank.write_term_debug(output, eqn.left(), problem_type)?;
+    output.write_str(if eqn.is_positive() { "=" } else { "!=" })?;
+    bank.write_term_debug(output, eqn.right(), problem_type)?;
+    if eqn.is_maximal() {
+        output.write_char('*')?;
+    }
+    if eqn.is_oriented() {
+        output.write_char('>')?;
+    }
+    if eqn.query_prop(EP_IS_EQU_LITERAL) {
+        output.write_str(DEFAULT_COMCHAR)?;
+    }
+    Ok(())
+}
+
 /// Writes the C `EqnAppEncode` shape without mutating the source literal.
 ///
 /// # Errors
@@ -1944,6 +1972,13 @@ pub fn eqn_deref_string(bank: &TermBank, eqn: &Eqn, deref: DerefType) -> String 
     output
 }
 
+#[must_use]
+pub fn eqn_debug_string(bank: &TermBank, eqn: &Eqn, problem_type: ProblemType) -> String {
+    let mut output = String::new();
+    let _ = eqn_write_debug(&mut output, bank, eqn, problem_type);
+    output
+}
+
 /// Returns the C `EqnAppEncode` rendering without mutating the source literal.
 ///
 /// # Errors
@@ -1999,8 +2034,8 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 #[cfg(test)]
 mod tests {
     use super::{
-        eqn_app_encode_string, eqn_deref_string, eqn_fof_string, eqn_string, eqn_tstp_string, Eqn,
-        EqnFofPrintOptions, EqnPrintOptions,
+        eqn_app_encode_string, eqn_debug_string, eqn_deref_string, eqn_fof_string, eqn_string,
+        eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
     };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
@@ -2270,6 +2305,35 @@ mod tests {
         assert_eq!(
             eqn_deref_string(&bank, &positive, DerefType::Always),
             "deref_a=deref_b"
+        );
+    }
+
+    #[test]
+    fn eqn_debug_print_string_matches_c_suffix_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "debug_a");
+        let b = typed_const(&mut bank, "debug_b");
+        let mut equality = Eqn::alloc(a.clone(), b, &mut bank, true).unwrap();
+        equality.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED);
+
+        assert_eq!(
+            eqn_debug_string(&bank, &equality, ProblemType::FirstOrder),
+            "debug_a=debug_b*>%%"
+        );
+
+        let predicate = typed_pred_const(&mut bank, "debug_p");
+        let true_term = bank.true_term().clone();
+        let negative = Eqn::alloc(predicate, true_term, &mut bank, false).unwrap();
+        assert_eq!(
+            eqn_debug_string(&bank, &negative, ProblemType::FirstOrder),
+            "debug_p!=$true"
+        );
+
+        let unary = typed_unary(&mut bank, "debug_f", &a);
+        let ho_equality = Eqn::alloc(unary, a, &mut bank, true).unwrap();
+        assert_eq!(
+            eqn_debug_string(&bank, &ho_equality, ProblemType::HigherOrder),
+            "debug_f debug_a=debug_a%%"
         );
     }
 
