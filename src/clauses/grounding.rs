@@ -536,6 +536,24 @@ pub fn clause_eqlit_recode(clause: &mut Clause, bank: &mut TermBank) -> Result<b
     Ok(recoded)
 }
 
+/// Recode all clauses in a clause set and return the number of changed clauses.
+///
+/// # Errors
+///
+/// Returns a diagnostic if any literal recoding fails.
+pub fn clause_set_eqlit_recode(
+    clauses: &mut ClauseSet,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let mut recoded = 0;
+    for clause in clauses.iter_mut() {
+        if clause_eqlit_recode(clause, bank)? {
+            recoded += 1;
+        }
+    }
+    Ok(recoded)
+}
+
 /// Creates all ground instances represented by `inst` and inserts them into `groundset`.
 ///
 /// Returns `false` when an empty ground clause is created, matching
@@ -933,10 +951,11 @@ mod tests {
     use super::{
         clause_cmp_by_len, clause_create_ground_instances, clause_eqlit_recode, clause_get_max_lit,
         clause_print_dimacs_string, clause_set_create_constrained_ground_instances,
-        clause_set_create_ground_instances, clause_set_print_dimacs_string,
-        clause_slice_create_constrained_ground_instances, clause_slice_create_ground_instances,
-        eqn_eqlit_recode, print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome,
-        GroundSet, GroundSetState, VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        clause_set_create_ground_instances, clause_set_eqlit_recode,
+        clause_set_print_dimacs_string, clause_slice_create_constrained_ground_instances,
+        clause_slice_create_ground_instances, eqn_eqlit_recode, print_dimacs_header_string,
+        GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState, VarSetInst,
+        DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -1206,6 +1225,31 @@ mod tests {
             .iter()
             .all(|literal| !literal.is_equ_lit(&bank)));
         assert!(!clause_eqlit_recode(&mut clause, &mut bank).unwrap());
+    }
+
+    #[test]
+    fn clause_set_recode_counts_changed_clauses_not_changed_literals() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "set_recode_a");
+        let second = typed_const(&mut bank, "set_recode_b");
+        let prop = predicate_atom(&mut bank, "set_recode_p", &[]);
+        let mut set = ClauseSet::from_clauses([
+            clause_from(vec![
+                literal(&mut bank, &first, &second, true),
+                literal(&mut bank, &second, &first, false),
+            ]),
+            clause_from(vec![predicate_literal(&mut bank, &prop, true)]),
+        ]);
+        let original_literals = set.literals();
+
+        assert_eq!(clause_set_eqlit_recode(&mut set, &mut bank).unwrap(), 1);
+        assert_eq!(set.literals(), original_literals);
+        assert!(set.iter().all(|clause| clause
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| !literal.is_equ_lit(&bank))));
+        assert_eq!(clause_set_eqlit_recode(&mut set, &mut bank).unwrap(), 0);
     }
 
     #[test]
