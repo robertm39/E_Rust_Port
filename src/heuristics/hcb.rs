@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::neweval::{evals_alloc, EvalCell};
 use crate::heuristics::to_params::{
     order_parms_parse_into_report, order_parms_print_string, OrderParmsCell,
@@ -939,6 +940,85 @@ pub fn hcb_standard_selection_eval_and_advance<Data>(hcb: &mut HcbCell<Data>) ->
         }
     }
     Some(selected_eval)
+}
+
+pub fn hcb_standard_clause_select<Data>(
+    hcb: &mut HcbCell<Data>,
+    set: &mut ClauseSet,
+) -> Option<Clause> {
+    hcb_standard_clause_select_with(hcb, set, |_| false)
+}
+
+/// Selects and extracts the next clause using the C `HCBStandardClauseSelect`
+/// schedule, deleting clauses reported as orphaned by `is_orphaned`.
+///
+/// The default `hcb_standard_clause_select` passes a predicate that always
+/// returns false until derivation-backed orphan detection is ported.
+///
+/// # Panics
+///
+/// Panics if a non-empty HCB has an invalid current evaluation index.
+pub fn hcb_standard_clause_select_with<Data>(
+    hcb: &mut HcbCell<Data>,
+    set: &mut ClauseSet,
+    mut is_orphaned: impl FnMut(&Clause) -> bool,
+) -> Option<Clause> {
+    if hcb.wfcb_no() == 0 {
+        return None;
+    }
+    assert!(
+        hcb.current_eval < hcb.wfcb_no(),
+        "current evaluation index must reference an HCB WFCB"
+    );
+    let selected_eval = hcb.current_eval;
+    let selected = select_best_non_orphan(set, selected_eval, &mut is_orphaned);
+    let _ = hcb_standard_selection_eval_and_advance(hcb);
+    selected
+}
+
+pub fn hcb_single_weight_clause_select<Data>(
+    hcb: &HcbCell<Data>,
+    set: &mut ClauseSet,
+) -> Option<Clause> {
+    hcb_single_weight_clause_select_with(hcb, set, |_| false)
+}
+
+/// Selects and extracts the best clause for the HCB's current evaluation index,
+/// deleting clauses reported as orphaned by `is_orphaned`.
+///
+/// # Panics
+///
+/// Panics if a non-empty HCB has an invalid current evaluation index.
+pub fn hcb_single_weight_clause_select_with<Data>(
+    hcb: &HcbCell<Data>,
+    set: &mut ClauseSet,
+    mut is_orphaned: impl FnMut(&Clause) -> bool,
+) -> Option<Clause> {
+    if hcb.wfcb_no() == 0 {
+        return None;
+    }
+    assert!(
+        hcb.current_eval < hcb.wfcb_no(),
+        "current evaluation index must reference an HCB WFCB"
+    );
+    select_best_non_orphan(set, hcb.current_eval, &mut is_orphaned)
+}
+
+fn select_best_non_orphan(
+    set: &mut ClauseSet,
+    eval_index: usize,
+    is_orphaned: &mut impl FnMut(&Clause) -> bool,
+) -> Option<Clause> {
+    loop {
+        let orphaned = {
+            let clause = set.find_best(eval_index)?;
+            is_orphaned(clause)
+        };
+        let clause = set.extract_best(eval_index)?;
+        if !orphaned {
+            return Some(clause);
+        }
+    }
 }
 
 pub fn default_exit_fun<Data>(_data: Data) {}
@@ -2281,23 +2361,25 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 mod tests {
     use super::{
         bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate,
-        hcb_clause_evaluate_into, hcb_standard_selection_eval_and_advance, heuristic_parms_alloc,
-        heuristic_parms_initialize, heuristic_parms_parse, heuristic_parms_parse_into,
-        heuristic_parms_parse_into_report, heuristic_parms_print_string, prim_enum_mode_name_raw,
-        str_to_ext_inference_type, str_to_prim_enum_mode, str_to_prim_enum_mode_raw,
-        str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw, AcHandling, ExtInferenceType,
-        GroundingStrategy, HcbCell, HcbSelectFunction, HeuristicParmsCell, ParamodulationType,
-        PrimEnumMode, SplitClassType, SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT,
-        DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT,
-        DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION,
-        DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT,
-        DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME,
-        DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC,
-        HCB_INITIAL_CAPACITY, LITERAL_SELECTION_NAMES, MAX_PM_INDEX_NAME_LEN, NO_ELIM_LEIBNIZ,
-        NO_EXT_SUP,
+        hcb_clause_evaluate_into, hcb_single_weight_clause_select_with, hcb_standard_clause_select,
+        hcb_standard_clause_select_with, hcb_standard_selection_eval_and_advance,
+        heuristic_parms_alloc, heuristic_parms_initialize, heuristic_parms_parse,
+        heuristic_parms_parse_into, heuristic_parms_parse_into_report,
+        heuristic_parms_print_string, prim_enum_mode_name_raw, str_to_ext_inference_type,
+        str_to_prim_enum_mode, str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw,
+        unif_mode_name_raw, AcHandling, ExtInferenceType, GroundingStrategy, HcbCell,
+        HcbSelectFunction, HeuristicParmsCell, ParamodulationType, PrimEnumMode, SplitClassType,
+        SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT,
+        DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT,
+        DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS,
+        DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME,
+        DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT,
+        DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC, HCB_INITIAL_CAPACITY, LITERAL_SELECTION_NAMES,
+        MAX_PM_INDEX_NAME_LEN, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
     use crate::basics::error::ErrorCode;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
     use crate::heuristics::to_params::{OrderParmsCell, TermOrdering};
     use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
@@ -2312,6 +2394,18 @@ mod tests {
 
     fn scanner(source: &str) -> Scanner {
         Scanner::from_user_string(source, false).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn clause_with_evaluations(ident: i64, values: &[(EvalPriority, f32)]) -> Clause {
+        let mut clause = Clause::empty();
+        clause.set_ident(ident);
+        let mut evaluations = evals_alloc(values.len());
+        for (pos, &(priority, heuristic)) in values.iter().enumerate() {
+            evaluations.eval_mut(pos).set_priority(priority);
+            evaluations.eval_mut(pos).set_heuristic(heuristic);
+        }
+        clause.add_eval_cell(evaluations);
+        clause
     }
 
     #[test]
@@ -2906,6 +3000,57 @@ mod tests {
         assert_eq!(hcb_standard_selection_eval_and_advance(&mut hcb), None);
         assert_eq!(hcb.select_count(), 0);
         assert_eq!(hcb.current_eval(), 0);
+    }
+
+    #[test]
+    fn standard_clause_select_extracts_best_and_discards_orphans() {
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, 10, 1);
+        hcb_add_wfcb(&mut hcb, 11, 1);
+        let orphan_id = 101;
+        let selected_id = 102;
+        let eval_one_best_id = 103;
+        let orphan = clause_with_evaluations(orphan_id, &[(PRIO_NORMAL, 1.0), (PRIO_NORMAL, 20.0)]);
+        let selected =
+            clause_with_evaluations(selected_id, &[(PRIO_NORMAL, 2.0), (PRIO_NORMAL, 30.0)]);
+        let eval_one_best =
+            clause_with_evaluations(eval_one_best_id, &[(PRIO_NORMAL, 3.0), (PRIO_NORMAL, 1.0)]);
+        let mut set = ClauseSet::from_clauses([orphan, selected, eval_one_best]);
+
+        let first = hcb_standard_clause_select_with(&mut hcb, &mut set, |clause| {
+            clause.ident() == orphan_id
+        })
+        .unwrap();
+
+        assert_eq!(first.ident(), selected_id);
+        assert!(set.find_by_id(orphan_id).is_none());
+        assert_eq!(hcb.select_count(), 1);
+        assert_eq!(hcb.current_eval(), 1);
+
+        let second = hcb_standard_clause_select(&mut hcb, &mut set).unwrap();
+
+        assert_eq!(second.ident(), eval_one_best_id);
+        assert_eq!(hcb.select_count(), 0);
+        assert_eq!(hcb.current_eval(), 0);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn single_weight_clause_select_does_not_advance_schedule() {
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, 10, 4);
+        let first_id = 201;
+        let second_id = 202;
+        let first = clause_with_evaluations(first_id, &[(PRIO_NORMAL, 5.0)]);
+        let second = clause_with_evaluations(second_id, &[(PRIO_NORMAL, 1.0)]);
+        let mut set = ClauseSet::from_clauses([first, second]);
+
+        let selected = hcb_single_weight_clause_select_with(&hcb, &mut set, |_| false).unwrap();
+
+        assert_eq!(selected.ident(), second_id);
+        assert_eq!(hcb.select_count(), 0);
+        assert_eq!(hcb.current_eval(), 0);
+        assert_eq!(set.find_best(0).map(Clause::ident), Some(first_id));
     }
 
     #[test]

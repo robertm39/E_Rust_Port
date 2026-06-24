@@ -246,7 +246,7 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 
 ### Compatibility Notes
 
-- `ClauseSetRemoveEvaluations` first clears every `eval_indices` root and then clears each clause's evaluation pointer. Rust currently ports the clause-owned clearing path; the index-root reset still belongs with the future clause-set evaluation index owner.
+- `ClauseSetInsert`, extraction, `ClauseSetFindBest`, and `ClauseSetRemoveEvaluations` keep the evaluation-index roots in sync with each clause's owned `EvalCell`. Rust preserves the root-clearing order and `EvalCompare` key semantics with safe sorted roots, but the C splay-tree locality profile should be benchmarked later before finalizing hot processed/unprocessed-set performance.
 
 ### Porting Focus
 

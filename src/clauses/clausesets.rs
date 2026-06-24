@@ -11,6 +11,7 @@ use crate::clauses::freqvectors::{
     fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
     FvIndexType, PermVector,
 };
+use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -18,7 +19,62 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_compute_order;
 use crate::terms::termtypes::TermProperties;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+#[derive(Clone, Copy, Debug)]
+struct EvalIndexEntry {
+    object: EvalObjectHandle,
+    priority: i64,
+    eval_count: i64,
+    heuristic: f32,
+}
+
+impl EvalIndexEntry {
+    fn from_eval(object: EvalObjectHandle, evaluations: &EvalCell, pos: usize) -> Self {
+        let eval = evaluations.eval(pos);
+        Self {
+            object,
+            priority: eval.priority(),
+            eval_count: evaluations.eval_count(),
+            heuristic: eval.heuristic(),
+        }
+    }
+}
+
+impl PartialEq for EvalIndexEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for EvalIndexEntry {}
+
+impl PartialOrd for EvalIndexEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EvalIndexEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.priority.cmp(&other.priority) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+
+        match self.eval_count.cmp(&other.eval_count) {
+            Ordering::Equal => Ordering::Equal,
+            ordering => {
+                let heuristic_order = cmp_f32_c(self.heuristic, other.heuristic);
+                if heuristic_order == Ordering::Equal {
+                    ordering
+                } else {
+                    heuristic_order
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClauseSet {
@@ -26,6 +82,9 @@ pub struct ClauseSet {
     literals: i64,
     date: SysDate,
     identifier: String,
+    eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
+    eval_no: usize,
+    next_eval_object: EvalObjectHandle,
 }
 
 impl Default for ClauseSet {
@@ -44,6 +103,9 @@ impl ClauseSet {
             literals: 0,
             date,
             identifier: String::new(),
+            eval_indices: Vec::new(),
+            eval_no: 0,
+            next_eval_object: 0,
         }
     }
 
@@ -95,6 +157,11 @@ impl ClauseSet {
     }
 
     #[must_use]
+    pub const fn eval_no(&self) -> usize {
+        self.eval_no
+    }
+
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.clauses.is_empty()
     }
@@ -107,8 +174,14 @@ impl ClauseSet {
         self.clauses.iter_mut()
     }
 
-    pub fn insert(&mut self, clause: Clause) {
+    pub fn insert(&mut self, mut clause: Clause) {
         self.literals += usize_to_i64(clause.literal_number());
+        index_clause_evaluations(
+            &mut self.eval_indices,
+            &mut self.eval_no,
+            &mut self.next_eval_object,
+            &mut clause,
+        );
         self.clauses.push_back(clause);
     }
 
@@ -122,16 +195,12 @@ impl ClauseSet {
     }
 
     pub fn extract_first(&mut self) -> Option<Clause> {
-        let clause = self.clauses.pop_front()?;
-        self.literals -= usize_to_i64(clause.literal_number());
-        Some(clause)
+        self.extract_at_position(0)
     }
 
     pub fn extract_by_id(&mut self, ident: i64) -> Option<Clause> {
         let position = self.position_by_id(ident)?;
-        let clause = self.clauses.remove(position)?;
-        self.literals -= usize_to_i64(clause.literal_number());
-        Some(clause)
+        self.extract_at_position(position)
     }
 
     pub fn delete_by_id(&mut self, ident: i64) -> bool {
@@ -156,7 +225,27 @@ impl ClauseSet {
             .find(|clause| clause.ident() == ident)
     }
 
+    #[must_use]
+    pub fn find_best(&self, idx: usize) -> Option<&Clause> {
+        let object = self.eval_indices.get(idx)?.first()?.object;
+        self.find_by_eval_object(object)
+    }
+
+    pub fn extract_best(&mut self, idx: usize) -> Option<Clause> {
+        let object = self.eval_indices.get(idx)?.first()?.object;
+        self.extract_by_eval_object(object)
+    }
+
+    pub fn extract_by_eval_object(&mut self, object: EvalObjectHandle) -> Option<Clause> {
+        let position = self.position_by_eval_object(object)?;
+        self.extract_at_position(position)
+    }
+
     pub fn remove_evaluations(&mut self) {
+        for root in &mut self.eval_indices {
+            root.clear();
+        }
+        self.next_eval_object = 0;
         for clause in &mut self.clauses {
             clause.remove_evaluations();
         }
@@ -216,16 +305,15 @@ impl ClauseSet {
 
     pub fn delete_marked_entries(&mut self) -> i64 {
         let mut deleted = 0;
-        let mut kept = VecDeque::with_capacity(self.clauses.len());
-        while let Some(clause) = self.clauses.pop_front() {
-            if clause.query_prop(CP_DELETE_CLAUSE) {
+        let mut index = 0;
+        while index < self.clauses.len() {
+            if self.clauses[index].query_prop(CP_DELETE_CLAUSE) {
+                let _ = self.extract_at_position(index);
                 deleted += 1;
             } else {
-                kept.push_back(clause);
+                index += 1;
             }
         }
-        self.clauses = kept;
-        self.recompute_literals();
         deleted
     }
 
@@ -249,16 +337,15 @@ impl ClauseSet {
 
     pub fn filter_trivial(&mut self, bank: &TermBank) -> i64 {
         let mut removed = 0;
-        let mut kept = VecDeque::with_capacity(self.clauses.len());
-        while let Some(clause) = self.clauses.pop_front() {
-            if clause.is_trivial(bank) {
+        let mut index = 0;
+        while index < self.clauses.len() {
+            if self.clauses[index].is_trivial(bank) {
+                let _ = self.extract_at_position(index);
                 removed += 1;
             } else {
-                kept.push_back(clause);
+                index += 1;
             }
         }
-        self.clauses = kept;
-        self.recompute_literals();
         removed
     }
 
@@ -273,16 +360,15 @@ impl ClauseSet {
     /// inserting normalized terms fails.
     pub fn filter_tautologies(&mut self, work_bank: &mut TermBank) -> Result<i64, Diagnostic> {
         let mut removed = 0;
-        let mut kept = VecDeque::with_capacity(self.clauses.len());
-        while let Some(clause) = self.clauses.pop_front() {
-            if clause_is_tautology(work_bank, &clause)? {
+        let mut index = 0;
+        while index < self.clauses.len() {
+            if clause_is_tautology(work_bank, &self.clauses[index])? {
+                let _ = self.extract_at_position(index);
                 removed += 1;
             } else {
-                kept.push_back(clause);
+                index += 1;
             }
         }
-        self.clauses = kept;
-        self.recompute_literals();
         Ok(removed)
     }
 
@@ -609,12 +695,89 @@ impl ClauseSet {
             .position(|clause| clause.ident() == ident)
     }
 
+    fn find_by_eval_object(&self, object: EvalObjectHandle) -> Option<&Clause> {
+        self.clauses.iter().find(|clause| {
+            clause
+                .evaluations()
+                .and_then(EvalCell::object)
+                .is_some_and(|candidate| candidate == object)
+        })
+    }
+
+    fn position_by_eval_object(&self, object: EvalObjectHandle) -> Option<usize> {
+        self.clauses.iter().position(|clause| {
+            clause
+                .evaluations()
+                .and_then(EvalCell::object)
+                .is_some_and(|candidate| candidate == object)
+        })
+    }
+
+    fn extract_at_position(&mut self, position: usize) -> Option<Clause> {
+        let entries = eval_index_entries(self.clauses.get(position)?);
+        for (pos, entry) in entries {
+            if let Some(root) = self.eval_indices.get_mut(pos) {
+                root.remove(&entry);
+            }
+        }
+        let clause = self.clauses.remove(position)?;
+        self.literals -= usize_to_i64(clause.literal_number());
+        Some(clause)
+    }
+
     pub(crate) fn recompute_literals(&mut self) {
         self.literals = self
             .clauses
             .iter()
             .map(|clause| usize_to_i64(clause.literal_number()))
             .sum();
+    }
+}
+
+fn index_clause_evaluations(
+    eval_indices: &mut Vec<BTreeSet<EvalIndexEntry>>,
+    eval_no: &mut usize,
+    next_eval_object: &mut EvalObjectHandle,
+    clause: &mut Clause,
+) {
+    let Some(evaluations) = clause.evaluations_mut() else {
+        return;
+    };
+    let object = *next_eval_object;
+    *next_eval_object += 1;
+    evaluations.set_object(Some(object));
+    *eval_no = (*eval_no).max(evaluations.eval_no());
+    while eval_indices.len() < evaluations.eval_no() {
+        eval_indices.push(BTreeSet::new());
+    }
+    for (pos, root) in eval_indices
+        .iter_mut()
+        .enumerate()
+        .take(evaluations.eval_no())
+    {
+        let _ = root.insert(EvalIndexEntry::from_eval(object, evaluations, pos));
+    }
+}
+
+fn eval_index_entries(clause: &Clause) -> Vec<(usize, EvalIndexEntry)> {
+    let Some(evaluations) = clause.evaluations() else {
+        return Vec::new();
+    };
+    let Some(object) = evaluations.object() else {
+        return Vec::new();
+    };
+    (0..evaluations.eval_no())
+        .map(|pos| (pos, EvalIndexEntry::from_eval(object, evaluations, pos)))
+        .collect()
+}
+
+fn cmp_f32_c(left: f32, right: f32) -> Ordering {
+    if left > right {
+        Ordering::Greater
+    } else if left < right {
+        Ordering::Less
+    } else {
+        Ordering::Equal
     }
 }
 
@@ -680,7 +843,7 @@ mod tests {
         fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
         FvCollectLayout, FvIndexType,
     };
-    use crate::clauses::neweval::evals_alloc;
+    use crate::clauses::neweval::{evals_alloc, EvalCell};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -730,6 +893,16 @@ mod tests {
     fn clause_from(literals: Vec<Eqn>) -> Clause {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
+        clause
+    }
+
+    fn clause_with_evaluations(mut clause: Clause, values: &[(i64, f32)]) -> Clause {
+        let mut evaluations = evals_alloc(values.len());
+        for (pos, &(priority, heuristic)) in values.iter().enumerate() {
+            evaluations.eval_mut(pos).set_priority(priority);
+            evaluations.eval_mut(pos).set_heuristic(heuristic);
+        }
+        clause.add_eval_cell(evaluations);
         clause
     }
 
@@ -804,6 +977,45 @@ mod tests {
             set.iter().map(Clause::ident).collect::<Vec<_>>(),
             expected_ids
         );
+        assert!(set.iter().all(|clause| clause.evaluations().is_none()));
+    }
+
+    #[test]
+    fn eval_indices_track_best_clause_extraction_and_root_clearing() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+        let first = clause_with_evaluations(
+            clause_from(vec![literal(&mut bank, &a, &b, true)]),
+            &[(40, 30.0), (40, 1.0)],
+        );
+        let second = clause_with_evaluations(
+            clause_from(vec![literal(&mut bank, &b, &c, true)]),
+            &[(40, 10.0), (40, 3.0)],
+        );
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let mut set = ClauseSet::from_clauses([first, second]);
+
+        assert_eq!(set.eval_no(), 2);
+        assert_eq!(set.find_best(0).map(Clause::ident), Some(second_id));
+        assert_eq!(set.find_best(1).map(Clause::ident), Some(first_id));
+        assert!(set
+            .iter()
+            .all(|clause| clause.evaluations().and_then(EvalCell::object).is_some()));
+
+        let extracted = set.extract_best(0).unwrap();
+
+        assert_eq!(extracted.ident(), second_id);
+        assert_eq!(set.find_best(0).map(Clause::ident), Some(first_id));
+        assert_eq!(set.members(), 1);
+        assert_eq!(set.literals(), 1);
+
+        set.remove_evaluations();
+
+        assert_eq!(set.eval_no(), 2);
+        assert_eq!(set.find_best(0).map(Clause::ident), None);
         assert!(set.iter().all(|clause| clause.evaluations().is_none()));
     }
 
