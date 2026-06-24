@@ -1,7 +1,13 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RefinedWeightParam {
@@ -84,6 +90,122 @@ pub const fn clause_refined_weight_init(
 }
 
 #[must_use]
+pub fn clause_refined_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<RefinedWeightParam> {
+    wfcb_alloc(
+        clause_refined_weight_wfcb_compute,
+        prio_fun,
+        refined_weight_exit,
+        Some(clause_refined_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+pub fn clause_refined_weight2_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<RefinedWeightParam> {
+    wfcb_alloc(
+        clause_refined_weight2_wfcb_compute,
+        prio_fun,
+        refined_weight_exit,
+        Some(clause_refined_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn clause_refined_weight_parse(
+    scanner: &mut Scanner,
+) -> Result<Wfcb<RefinedWeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_refined_weight_param(scanner)?;
+    Ok(clause_refined_weight_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.max_term_multiplier(),
+        param.max_literal_multiplier(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+pub fn clause_refined_weight2_parse(
+    scanner: &mut Scanner,
+) -> Result<Wfcb<RefinedWeightParam>, Diagnostic> {
+    let (prio_fun, param) = parse_refined_weight_param(scanner)?;
+    Ok(clause_refined_weight2_wfcb_init(
+        prio_fun,
+        param.fweight(),
+        param.vweight(),
+        param.max_term_multiplier(),
+        param.max_literal_multiplier(),
+        param.pos_multiplier(),
+        param.app_var_mult(),
+    ))
+}
+
+fn parse_refined_weight_param(
+    scanner: &mut Scanner,
+) -> Result<(ClausePrioFun, RefinedWeightParam), Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok((
+        prio_fun,
+        clause_refined_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        ),
+    ))
+}
+
+#[must_use]
 pub fn clause_refined_weight_compute(
     param: &RefinedWeightParam,
     bank: &TermBank,
@@ -119,16 +241,43 @@ pub fn clause_refined_weight2_compute(
     )
 }
 
+fn clause_refined_weight_wfcb_compute(
+    data: Option<&mut RefinedWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => clause_refined_weight_compute(data, bank, clause),
+        None => panic!("Refinedweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn clause_refined_weight2_wfcb_compute(
+    data: Option<&mut RefinedWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => clause_refined_weight2_compute(data, bank, clause),
+        None => panic!("Refinedweight2 WFCB requires initialized weight parameters"),
+    }
+}
+
+fn refined_weight_exit(_data: RefinedWeightParam) {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_refined_weight2_compute, clause_refined_weight_compute, clause_refined_weight_init,
+        clause_refined_weight2_compute, clause_refined_weight2_parse,
+        clause_refined_weight_compute, clause_refined_weight_init, clause_refined_weight_parse,
         DEFAULT_MAX_MULT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -194,5 +343,28 @@ mod tests {
             clause_refined_weight2_compute(&param, &bank, &clause),
             436.0,
         );
+    }
+
+    #[test]
+    fn refined_weight_parsers_wrap_existing_scoring_cores() {
+        let mut bank = test_bank();
+        let clause = marked_clause(&mut bank);
+        let mut standard_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut encoding_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0,2.5) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut refined = clause_refined_weight_parse(&mut standard_scanner)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut refined2 = clause_refined_weight2_parse(&mut encoding_scanner)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(refined.compute_eval(&bank, &clause), 468.0);
+        assert_close(refined2.compute_eval(&bank, &clause), 436.0);
+        assert_eq!(refined.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(refined2.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(standard_scanner.current_token().literal(), "tail");
+        assert_eq!(encoding_scanner.current_token().literal(), "tail");
     }
 }

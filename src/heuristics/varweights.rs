@@ -1,13 +1,20 @@
 use std::collections::BTreeSet;
 
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
 use crate::clauses::clausesets::ClauseSet;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_depth, term_weight_compute};
 use crate::terms::termtypes::Term;
+
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VarWeightParam {
@@ -468,6 +475,82 @@ pub const fn pn_refined_weight_init(
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::similar_names,
+    reason = "C-compatible helper mirrors PNRefinedWeightInit parameters without OCB"
+)]
+pub fn pn_refined_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    negative_fweight: i64,
+    negative_vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    app_var_mult: f64,
+) -> Wfcb<VarWeightParam> {
+    wfcb_alloc(
+        pn_refined_weight_wfcb_compute,
+        prio_fun,
+        var_weight_exit,
+        Some(pn_refined_weight_init(
+            fweight,
+            vweight,
+            negative_fweight,
+            negative_vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            app_var_mult,
+        )),
+    )
+}
+
+#[expect(
+    clippy::similar_names,
+    reason = "C-compatible parser keeps positive and negative weight names comparable"
+)]
+pub fn pn_refined_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<VarWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let nfweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let nvweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(pn_refined_weight_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        nfweight,
+        nvweight,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub fn pn_refined_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Clause) -> f64 {
     clause
         .literals()
@@ -500,6 +583,19 @@ pub fn pn_refined_weight_compute(param: &VarWeightParam, bank: &TermBank, clause
         })
         .sum()
 }
+
+fn pn_refined_weight_wfcb_compute(
+    data: Option<&mut VarWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => pn_refined_weight_compute(data, bank, clause),
+        None => panic!("PNRefinedweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn var_weight_exit(_data: VarWeightParam) {}
 
 #[must_use]
 #[expect(
@@ -674,10 +770,11 @@ mod tests {
     use super::{
         clause_count_ext_symbols, clause_weight_age_compute, clause_weight_age_init,
         depth_weight_compute, depth_weight_init, nl_weight_compute, nl_weight_init,
-        pn_refined_weight_compute, pn_refined_weight_init, proof_weight_compute, proof_weight_init,
-        sig_weight_compute, sig_weight_init, staggered_weight_compute, staggered_weight_init,
-        sym_type_weight_compute, sym_type_weight_init, tptp_type_weight_compute,
-        tptp_type_weight_init, weight_less_depth_compute, weight_less_depth_init, VarWeightParam,
+        pn_refined_weight_compute, pn_refined_weight_init, pn_refined_weight_parse,
+        proof_weight_compute, proof_weight_init, sig_weight_compute, sig_weight_init,
+        staggered_weight_compute, staggered_weight_init, sym_type_weight_compute,
+        sym_type_weight_init, tptp_type_weight_compute, tptp_type_weight_init,
+        weight_less_depth_compute, weight_less_depth_init, VarWeightParam,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -686,6 +783,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -864,6 +963,24 @@ mod tests {
         assert_close(pn_refined_weight_compute(&param, &bank, &clause), 45.0);
         assert_eq!(param.nfweight(), 13);
         assert_eq!(param.nvweight(), 17);
+    }
+
+    #[test]
+    fn pn_refined_weight_parse_wraps_positive_and_negative_weights() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let positive = literal(&mut bank, &a, &b, true);
+        let negative = literal(&mut bank, &a, &b, false);
+        let clause = Clause::alloc(EqnList::from_vec(vec![positive, negative]));
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,13,17,1.0,1.0,1.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = pn_refined_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 45.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]

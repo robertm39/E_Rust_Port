@@ -1,9 +1,15 @@
 use std::collections::BTreeMap;
 
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
+const APP_VAR_MULT_DEFAULT: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DiversityWeightParam {
@@ -134,6 +140,89 @@ pub const fn diversity_weight_init(
 }
 
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors DiversityWeightInit parameters without OCB"
+)]
+pub fn diversity_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    fweight: i64,
+    vweight: i64,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    fdiff1weight: f64,
+    fdiff2weight: f64,
+    vdiff1weight: f64,
+    vdiff2weight: f64,
+    app_var_mult: f64,
+) -> Wfcb<DiversityWeightParam> {
+    wfcb_alloc(
+        diversity_weight_wfcb_compute,
+        prio_fun,
+        diversity_weight_exit,
+        Some(diversity_weight_init(
+            fweight,
+            vweight,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            fdiff1weight,
+            fdiff2weight,
+            vdiff1weight,
+            vdiff2weight,
+            app_var_mult,
+        )),
+    )
+}
+
+pub fn diversity_weight_parse(
+    scanner: &mut Scanner,
+) -> Result<Wfcb<DiversityWeightParam>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vweight = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_term_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let max_literal_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let pos_multiplier = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fdiff1weight = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fdiff2weight = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vdiff1weight = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let vdiff2weight = parse_float(scanner)?;
+
+    let mut app_var_mult = APP_VAR_MULT_DEFAULT;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        app_var_mult = parse_float(scanner)?;
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(diversity_weight_wfcb_init(
+        prio_fun,
+        fweight,
+        vweight,
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        fdiff1weight,
+        fdiff2weight,
+        vdiff1weight,
+        vdiff2weight,
+        app_var_mult,
+    ))
+}
+
+#[must_use]
 pub fn diversity_weight_compute(
     param: &DiversityWeightParam,
     bank: &TermBank,
@@ -162,6 +251,19 @@ pub fn diversity_weight_compute(
     result
 }
 
+fn diversity_weight_wfcb_compute(
+    data: Option<&mut DiversityWeightParam>,
+    bank: &TermBank,
+    clause: &Clause,
+) -> f64 {
+    match data {
+        Some(data) => diversity_weight_compute(data, bank, clause),
+        None => panic!("Diversityweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn diversity_weight_exit(_data: DiversityWeightParam) {}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
@@ -169,11 +271,15 @@ fn i64_to_f64(value: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{diversity_weight_compute, diversity_weight_init, DEFAULT_MAX_MULT};
+    use super::{
+        diversity_weight_compute, diversity_weight_init, diversity_weight_parse, DEFAULT_MAX_MULT,
+    };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -246,5 +352,21 @@ mod tests {
         let param = diversity_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0, 1.0);
 
         assert_close(diversity_weight_compute(&param, &bank, &clause), 564.0);
+    }
+
+    #[test]
+    fn diversity_weight_parse_wraps_diversity_penalties() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "a");
+        let clause = unit_clause(&mut bank, &x, &a, true);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,2,3,1.0,1.0,1.0,10.0,1.0,20.0,2.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = diversity_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 40.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 }
