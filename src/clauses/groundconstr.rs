@@ -169,6 +169,19 @@ pub fn lit_occ_add_lit_alt(
     }
 }
 
+/// Header-compatible alias for [`lit_occ_add_lit_alt`].
+///
+/// # Panics
+///
+/// Panics under the same preconditions as [`lit_occ_add_lit_alt`].
+pub fn lit_occ_add_lit_add(
+    positive_table: &mut LitOccTable,
+    negative_table: &mut LitOccTable,
+    eqn: &Eqn,
+) {
+    lit_occ_add_lit_alt(positive_table, negative_table, eqn);
+}
+
 /// Adds constraints induced by every literal in one clause.
 ///
 /// # Panics
@@ -182,6 +195,19 @@ pub fn lit_occ_add_clause_alt(
     for literal in clause.literals().as_slice() {
         lit_occ_add_lit_alt(positive_table, negative_table, literal);
     }
+}
+
+/// Header-compatible alias for [`lit_occ_add_clause_alt`].
+///
+/// # Panics
+///
+/// Panics under the same preconditions as [`lit_occ_add_lit_alt`].
+pub fn lit_occ_add_clause_add(
+    positive_table: &mut LitOccTable,
+    negative_table: &mut LitOccTable,
+    clause: &Clause,
+) {
+    lit_occ_add_clause_alt(positive_table, negative_table, clause);
 }
 
 /// Adds constraints induced by a slice of clauses.
@@ -331,10 +357,10 @@ fn intersect_identity_sets(alternatives: &mut TermIdentitySet, allowed: &TermIde
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_collect_var_constr, eqn_collect_var_constr, lit_occ_add_clause_alt,
-        lit_occ_add_clause_set_alt, lit_occ_add_clause_slice_alt, lit_occ_add_lit_alt,
-        sig_collect_constant_terms, term_identity_set_from_terms, LitOccTable, TermIdentitySet,
-        VarConstraintMap,
+        clause_collect_var_constr, eqn_collect_var_constr, lit_occ_add_clause_add,
+        lit_occ_add_clause_alt, lit_occ_add_clause_set_alt, lit_occ_add_clause_slice_alt,
+        lit_occ_add_lit_add, lit_occ_add_lit_alt, sig_collect_constant_terms,
+        term_identity_set_from_terms, LitOccTable, TermIdentitySet, VarConstraintMap,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -493,6 +519,32 @@ mod tests {
 
         assert_eq!(positive_table.constraints(atom.f_code(), 0).len(), 1);
         assert!(negative_table.constraints(atom.f_code(), 0).is_empty());
+    }
+
+    #[test]
+    fn header_spelling_aliases_match_alt_literal_and_clause_addition() {
+        let mut bank = test_bank();
+        let ground = typed_const(&mut bank, "a");
+        let variable = typed_var(&bank, -2);
+        let positive_atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&ground));
+        let negative_atom = predicate_atom(&mut bank, "q", &[variable]);
+        let negative_clause =
+            clause_from(vec![predicate_literal(&mut bank, &negative_atom, false)]);
+        let mut positive_table = LitOccTable::alloc(bank.signature());
+        let mut negative_table = LitOccTable::alloc(bank.signature());
+
+        lit_occ_add_lit_add(
+            &mut positive_table,
+            &mut negative_table,
+            &predicate_literal(&mut bank, &positive_atom, true),
+        );
+        lit_occ_add_clause_add(&mut positive_table, &mut negative_table, &negative_clause);
+
+        assert_eq!(
+            positive_table.constraints(positive_atom.f_code(), 0).len(),
+            1
+        );
+        assert!(!negative_table.constr_state(negative_atom.f_code(), 0));
     }
 
     #[test]
