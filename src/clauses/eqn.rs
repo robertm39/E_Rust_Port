@@ -1573,7 +1573,10 @@ impl Eqn {
     }
 
     fn copy_properties_from(&mut self, source: &Self) {
-        self.properties = self.give_props(EP_IS_POSITIVE) | (source.properties & !EP_IS_POSITIVE);
+        let shape_props = EqnProperties::from_bits(
+            EP_IS_POSITIVE.bits() | EP_IS_EQU_LITERAL.bits() | EP_PSEUDO_LIT.bits(),
+        );
+        self.properties = self.give_props(shape_props) | (source.properties & !shape_props);
     }
 }
 
@@ -1862,6 +1865,26 @@ mod tests {
         assert_eq!(disjoint.right().f_code(), -3);
         assert_ne!(disjoint.left(), &x);
         assert_ne!(disjoint.right(), &y);
+    }
+
+    #[test]
+    fn copy_opt_preserves_recomputed_boolean_literal_shape() {
+        let mut bank = test_bank();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let x = bank.vars().var_assert_alloc(-2, &bool_type);
+        let y = bank.vars().var_assert_alloc(-4, &bool_type);
+        let eq = Eqn::alloc(y.clone(), x.clone(), &mut bank, true).unwrap();
+        assert!(eq.query_prop(EP_IS_EQU_LITERAL));
+
+        x.set_binding(Some(bank.false_term().clone()));
+        let opt = eq.copy_opt(&mut bank).unwrap();
+        x.set_binding(None);
+
+        assert!(!opt.query_prop(EP_IS_EQU_LITERAL));
+        assert!(!opt.is_equ_lit(&bank));
+        assert!(opt.is_negative());
+        assert_eq!(opt.left(), &y);
+        assert_eq!(opt.right(), bank.true_term());
     }
 
     #[test]

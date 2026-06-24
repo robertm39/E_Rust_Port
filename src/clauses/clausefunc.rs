@@ -1,7 +1,11 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_D_INDEXED, CP_IS_S_INDEXED, CP_LIMITED_RW};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn_props::EP_IS_POSITIVE;
+use crate::clauses::eqnlist::EqnList;
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use std::cmp::Ordering;
 
@@ -112,6 +116,93 @@ pub fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
         .any(|literal| (positive != literal.is_positive()) && simplifier_literal.subsume_p(literal))
 }
 
+/// Eliminates naked Boolean-variable literals by substituting the variable with
+/// the opposite truth value and simplifying the resulting clause.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding the substituted literal list through the
+/// term bank fails.
+///
+/// # Panics
+///
+/// Panics if a literal reports the C `EqnIsBoolVar` shape but does not have a
+/// free variable on the left-hand side, matching the C assertion.
+pub fn clause_eliminate_naked_boolean_variables(
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    if clause.is_empty() {
+        return Ok(false);
+    }
+
+    let true_term = bank.true_term().clone();
+    let false_term = bank.false_term().clone();
+    let mut substitution = Substitution::new();
+    let mut eliminated_var = false;
+    let mut became_tautology = false;
+
+    for literal in clause.literals_mut().as_mut_slice() {
+        if !literal.is_bool_var(bank) {
+            continue;
+        }
+
+        let variable = literal.left().clone();
+        assert!(
+            variable.is_free_var(),
+            "Boolean literal left side must be a free variable"
+        );
+
+        if literal.is_positive() {
+            if variable
+                .binding()
+                .as_ref()
+                .is_some_and(|binding| binding == &true_term)
+            {
+                became_tautology = true;
+                break;
+            }
+            if variable.binding().is_none() {
+                substitution.add_binding(&variable, &false_term);
+            }
+            literal.del_prop(EP_IS_POSITIVE);
+        } else {
+            if variable
+                .binding()
+                .as_ref()
+                .is_some_and(|binding| binding == &false_term)
+            {
+                became_tautology = true;
+                break;
+            }
+            if variable.binding().is_none() {
+                substitution.add_binding(&variable, &true_term);
+            }
+        }
+
+        literal.set_left_raw(true_term.clone());
+        eliminated_var = true;
+    }
+
+    if became_tautology {
+        clause.replace_literals(EqnList::from_vec(vec![Eqn::create_true_lit(bank)?]));
+    }
+
+    if eliminated_var {
+        let copied = clause.literals().copy_opt(bank)?;
+        clause.replace_literals(copied);
+        let _ = clause_remove_superfluous_literals(clause, bank);
+        clause.recompute_lit_counts();
+    }
+    if eliminated_var || became_tautology {
+        clause.set_weight(clause.standard_weight());
+    }
+
+    let result = clause.literals().find_true(bank).is_some();
+    substitution.delete();
+    Ok(result)
+}
+
 #[must_use]
 pub fn clause_canon_compare_ref(left: &Clause, right: &Clause, bank: &TermBank) -> i32 {
     left.cmp_by_struct_weight(right, bank)
@@ -128,9 +219,10 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_canon_compare_ref, clause_flip_literal_sign_index, clause_remove_ac_resolved,
-        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
-        clause_set_canonize, clause_set_remove_superfluous_literals, clause_unit_simplify_test,
+        clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
+        clause_flip_literal_sign_index, clause_remove_ac_resolved, clause_remove_literal,
+        clause_remove_literal_index, clause_remove_superfluous_literals, clause_set_canonize,
+        clause_set_remove_superfluous_literals, clause_unit_simplify_test,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_LIMITED_RW};
@@ -163,6 +255,11 @@ mod tests {
 
     fn typed_var(bank: &TermBank, code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(code, &type_)
+    }
+
+    fn bool_var(bank: &TermBank, code: i64) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
         bank.vars().var_assert_alloc(code, &type_)
     }
 
@@ -357,6 +454,66 @@ mod tests {
         let negative_clause = clause_from(vec![literal(&mut bank, &second, &first, false)]);
 
         let _ = clause_unit_simplify_test(&negative_clause, &oriented_unit);
+    }
+
+    #[test]
+    fn eliminate_naked_boolean_positive_literal_substitutes_false() {
+        let mut bank = test_bank();
+        let variable = bool_var(&bank, -20);
+        let other = bool_var(&bank, -21);
+        let true_term = bank.true_term().clone();
+        let naked = literal(&mut bank, &variable, &true_term, true);
+        let dependent = literal(&mut bank, &other, &variable, true);
+        let mut clause = clause_from(vec![naked, dependent]);
+
+        assert!(!clause_eliminate_naked_boolean_variables(&mut clause, &mut bank).unwrap());
+
+        assert_eq!(clause.literal_number(), 1);
+        let remaining = &clause.literals().as_slice()[0];
+        assert!(remaining.is_negative());
+        assert_eq!(remaining.left(), &other);
+        assert_eq!(remaining.right(), bank.true_term());
+        assert!(variable.binding().is_none());
+        assert_eq!(clause.weight(), clause.standard_weight());
+    }
+
+    #[test]
+    fn eliminate_naked_boolean_negative_literal_substitutes_true() {
+        let mut bank = test_bank();
+        let variable = bool_var(&bank, -22);
+        let other = bool_var(&bank, -23);
+        let true_term = bank.true_term().clone();
+        let naked = literal(&mut bank, &variable, &true_term, false);
+        let dependent = literal(&mut bank, &other, &variable, false);
+        let mut clause = clause_from(vec![naked, dependent]);
+
+        assert!(!clause_eliminate_naked_boolean_variables(&mut clause, &mut bank).unwrap());
+
+        assert_eq!(clause.literal_number(), 1);
+        let remaining = &clause.literals().as_slice()[0];
+        assert!(remaining.is_negative());
+        assert_eq!(remaining.left(), &other);
+        assert_eq!(remaining.right(), bank.true_term());
+        assert!(variable.binding().is_none());
+        assert_eq!(clause.weight(), clause.standard_weight());
+    }
+
+    #[test]
+    fn eliminate_naked_boolean_opposite_polarities_create_true_literal() {
+        let mut bank = test_bank();
+        let variable = bool_var(&bank, -24);
+        let true_term = bank.true_term().clone();
+        let positive = literal(&mut bank, &variable, &true_term, true);
+        let negative = literal(&mut bank, &variable, &true_term, false);
+        let mut clause = clause_from(vec![positive, negative]);
+
+        assert!(clause_eliminate_naked_boolean_variables(&mut clause, &mut bank).unwrap());
+
+        assert_eq!(clause.literal_number(), 1);
+        assert!(clause.literals().find_true(&bank).is_some());
+        assert!(clause.is_trivial(&bank));
+        assert!(variable.binding().is_none());
+        assert_eq!(clause.weight(), clause.standard_weight());
     }
 
     #[test]
