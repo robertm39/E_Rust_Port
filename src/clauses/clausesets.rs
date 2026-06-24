@@ -7,6 +7,10 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::eqn_props::EqnSide;
+use crate::clauses::freqvectors::{
+    fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
+    FvIndexType, PermVector,
+};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -355,6 +359,57 @@ impl ClauseSet {
         }
     }
 
+    pub fn find_char_freq_vectors(
+        &self,
+        fsum: &mut FreqVector,
+        fmax: &mut FreqVector,
+        fmin: &mut FreqVector,
+        cspec: &FvCollect,
+    ) -> i64 {
+        fsum.initialize(0);
+        fmax.initialize(0);
+        fmin.initialize(i64::MAX);
+
+        for clause in &self.clauses {
+            let current = var_freq_vector_compute(clause, cspec);
+            let old_sum = fsum.clone();
+            fsum.add_from(&old_sum, &current);
+            let old_max = fmax.clone();
+            fmax.max_from(&old_max, &current);
+            let old_min = fmin.clone();
+            fmin.min_from(&old_min, &current);
+        }
+        self.members()
+    }
+
+    #[must_use]
+    pub fn perm_vector_compute(
+        &self,
+        cspec: &FvCollect,
+        eliminate_uninformative: bool,
+    ) -> Option<PermVector> {
+        if cspec.features() == FvIndexType::NoFeatures {
+            return None;
+        }
+
+        let vector_len = if cspec.features() == FvIndexType::CollectFeatures {
+            cspec.result_len()
+        } else {
+            fv_size(cspec.max_symbols(), cspec.features())
+        };
+        let mut fsum = FreqVector::new(vector_len);
+        let mut fmax = FreqVector::new(vector_len);
+        let mut fmin = FreqVector::new(vector_len);
+        self.find_char_freq_vectors(&mut fsum, &mut fmax, &mut fmin, cspec);
+        Some(perm_vector_compute_internal(
+            &fmax,
+            &fmin,
+            &fsum,
+            cspec.max_symbols(),
+            eliminate_uninformative,
+        ))
+    }
+
     #[must_use]
     pub fn find_freq_symbol(&self, sig: &Signature, arity: i32, least: bool) -> FunCode {
         let Some(dist_size) = sig
@@ -615,6 +670,10 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EqnSide;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::freqvectors::{
+        fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
+        FvCollectLayout, FvIndexType,
+    };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -998,6 +1057,65 @@ mod tests {
             type_dist[usize::try_from(default_type.type_uid()).unwrap()],
             2
         );
+    }
+
+    #[test]
+    fn characteristic_freq_vectors_and_permutation_follow_clause_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let x = typed_var(&bank, -2);
+        let fx = typed_unary(&mut bank, "f", &x);
+        let first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let second = clause_from(vec![literal(&mut bank, &fx, &a, false)]);
+        let set = ClauseSet::from_clauses([first, second]);
+        let mut cspec = FvCollect::new(FvCollectLayout::new(FvIndexType::AcFeatures, false, 0, 0));
+        cspec.set_max_symbols(usize::try_from(bank.signature().f_count()).unwrap() + 1);
+        let vector_len = fv_size(cspec.max_symbols(), cspec.features());
+        let mut fsum = FreqVector::new(vector_len);
+        let mut fmax = FreqVector::new(vector_len);
+        let mut fmin = FreqVector::new(vector_len);
+
+        assert_eq!(
+            set.find_char_freq_vectors(&mut fsum, &mut fmax, &mut fmin, &cspec),
+            2
+        );
+
+        let vectors = set
+            .iter()
+            .map(|clause| var_freq_vector_compute(clause, &cspec))
+            .collect::<Vec<_>>();
+        let mut expected_sum = FreqVector::new(vector_len);
+        let mut expected_max = FreqVector::new(vector_len);
+        let mut expected_min = FreqVector::new(vector_len);
+        expected_min.initialize(i64::MAX);
+        for vector in &vectors {
+            let old_sum = expected_sum.clone();
+            expected_sum.add_from(&old_sum, vector);
+            let old_max = expected_max.clone();
+            expected_max.max_from(&old_max, vector);
+            let old_min = expected_min.clone();
+            expected_min.min_from(&old_min, vector);
+        }
+        assert_eq!(fsum, expected_sum);
+        assert_eq!(fmax, expected_max);
+        assert_eq!(fmin, expected_min);
+
+        let expected_perm = perm_vector_compute_internal(
+            &expected_max,
+            &expected_min,
+            &expected_sum,
+            cspec.max_symbols(),
+            false,
+        );
+        assert_eq!(
+            set.perm_vector_compute(&cspec, false).unwrap(),
+            expected_perm
+        );
+
+        let no_features =
+            FvCollect::new(FvCollectLayout::new(FvIndexType::NoFeatures, false, 0, 0));
+        assert!(set.perm_vector_compute(&no_features, false).is_none());
     }
 
     #[test]
