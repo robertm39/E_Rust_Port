@@ -3,7 +3,7 @@ use crate::clauses::clausecpos::CompactPos;
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClauseTPos {
     clause_key: usize,
     clause: Clause,
@@ -65,7 +65,7 @@ impl ClauseTPos {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClauseTPosTree {
     entries: BTreeMap<usize, ClauseTPos>,
 }

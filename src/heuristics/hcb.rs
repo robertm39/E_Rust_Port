@@ -1,5 +1,5 @@
 use crate::clauses::clause::Clause;
-use crate::clauses::neweval::EvalCell;
+use crate::clauses::neweval::{evals_alloc, EvalCell};
 use crate::heuristics::to_params::{order_parms_print_string, OrderParmsCell};
 use crate::heuristics::wfcbadmin::WfcbAdmin;
 use crate::terms::termbanks::TermBank;
@@ -694,6 +694,28 @@ pub fn hcb_clause_evaluate_into<Data>(
     }
 }
 
+/// Evaluates a clause through every WFCB in `hcb` and stores the resulting
+/// evaluation list on the clause.
+///
+/// # Panics
+///
+/// Panics if `clause` already has evaluations or if an HCB WFCB handle does
+/// not exist in `admin`.
+pub fn hcb_clause_evaluate<Data>(
+    hcb: &HcbCell<Data>,
+    admin: &mut WfcbAdmin,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    assert!(
+        clause.evaluations().is_none(),
+        "clause must not already have evaluations"
+    );
+    let mut evaluations = evals_alloc(hcb.wfcb_no());
+    hcb_clause_evaluate_into(hcb, admin, &mut evaluations, bank, clause);
+    clause.add_eval_cell(evaluations);
+}
+
 /// Returns the current evaluation index and advances the standard-selection
 /// schedule.
 ///
@@ -1024,18 +1046,19 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate_into,
-        hcb_standard_selection_eval_and_advance, heuristic_parms_alloc, heuristic_parms_initialize,
-        heuristic_parms_print_string, prim_enum_mode_name_raw, str_to_ext_inference_type,
-        str_to_prim_enum_mode, str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw,
-        unif_mode_name_raw, AcHandling, ExtInferenceType, GroundingStrategy, HcbCell,
-        HcbSelectFunction, HeuristicParmsCell, ParamodulationType, PrimEnumMode, SplitClassType,
-        SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT,
-        DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT,
-        DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS,
-        DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME,
-        DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT,
-        DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC, HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
+        bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate,
+        hcb_clause_evaluate_into, hcb_standard_selection_eval_and_advance, heuristic_parms_alloc,
+        heuristic_parms_initialize, heuristic_parms_print_string, prim_enum_mode_name_raw,
+        str_to_ext_inference_type, str_to_prim_enum_mode, str_to_prim_enum_mode_raw,
+        str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw, AcHandling, ExtInferenceType,
+        GroundingStrategy, HcbCell, HcbSelectFunction, HeuristicParmsCell, ParamodulationType,
+        PrimEnumMode, SplitClassType, SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT,
+        DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT,
+        DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION,
+        DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT,
+        DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME,
+        DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC,
+        HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
@@ -1569,6 +1592,40 @@ mod tests {
         );
         assert_eq!(evaluations.eval(0).priority(), PRIO_BEST);
         assert_eq!(evaluations.eval(1).priority(), PRIO_BEST);
+    }
+
+    #[test]
+    fn hcb_clause_evaluate_stores_clause_owned_evaluations() {
+        let mut admin = WfcbAdmin::new();
+        let first = admin.add_wfcb("first", boxed_hcb_test_wfcb(3.5));
+        let second = admin.add_wfcb("second", boxed_hcb_test_wfcb(9.0));
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, first, 1);
+        hcb_add_wfcb(&mut hcb, second, 1);
+        let bank = hcb_test_bank();
+        let mut clause = Clause::empty();
+
+        hcb_clause_evaluate(&hcb, &mut admin, &bank, &mut clause);
+
+        let evaluations = clause.evaluations().expect("HCB attaches evaluations");
+        assert_eq!(evaluations.eval_no(), hcb.wfcb_no());
+        assert_eq!(evaluations.eval(0).heuristic().to_bits(), 3.5_f32.to_bits());
+        assert_eq!(evaluations.eval(1).heuristic().to_bits(), 9.0_f32.to_bits());
+        assert_eq!(evaluations.object(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "clause must not already have evaluations")]
+    fn hcb_clause_evaluate_rejects_existing_clause_evaluations() {
+        let mut admin = WfcbAdmin::new();
+        let first = admin.add_wfcb("first", boxed_hcb_test_wfcb(3.5));
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, first, 1);
+        let bank = hcb_test_bank();
+        let mut clause = Clause::empty();
+
+        hcb_clause_evaluate(&hcb, &mut admin, &bank, &mut clause);
+        hcb_clause_evaluate(&hcb, &mut admin, &bank, &mut clause);
     }
 
     #[test]

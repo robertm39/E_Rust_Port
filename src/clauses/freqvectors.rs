@@ -295,7 +295,7 @@ impl FreqVector {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FvPackedClause {
     vector: Option<FreqVector>,
     clause: Clause,

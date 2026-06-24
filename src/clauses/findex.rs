@@ -5,7 +5,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::terms::functypes::FunCode;
 use std::collections::{btree_map::Entry, BTreeMap};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FIndex {
     index: BTreeMap<FunCode, BTreeMap<usize, Clause>>,
     plist_clause_index: BTreeMap<FunCode, BTreeMap<usize, PListHandle>>,

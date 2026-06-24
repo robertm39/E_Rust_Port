@@ -284,6 +284,11 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - SAT/propositional integration has a separate assignment/result vocabulary; keep conversions and ownership boundaries explicit.
 
+### Compatibility Notes
+
+- `ClauseAddEvalCell` stores the evaluation cell directly on the clause and sets `evaluation->object` to the owning clause pointer. Rust clause-owned evaluations should keep the object slot explicit until clause sets provide stable handles for eval-index lookups.
+- `ClauseCopy`, `ClauseFlatCopy`, `ClauseCopyOpt`, and `ClauseCopyDisjoint` copy metadata but intentionally do not copy evaluations or source info. Rust copy helpers should continue to drop optional evaluation storage.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -20,7 +20,7 @@ use crate::terms::termtypes::TermProperties;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClauseSet {
     clauses: VecDeque<Clause>,
     literals: i64,

@@ -10,6 +10,7 @@ use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnProperties, EqnSide, EP_PSEUDO_LIT};
 use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
+use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
@@ -23,7 +24,7 @@ use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 static GLOBAL_CLAUSE_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Clause {
     ident: i64,
     date: SysDate,
@@ -32,6 +33,7 @@ pub struct Clause {
     pos_lit_no: usize,
     properties: FormulaProperties,
     weight: i64,
+    evaluations: Option<EvalCell>,
     info: Option<ClauseInfo>,
     create_date: i64,
     proof_depth: i64,
@@ -49,6 +51,7 @@ impl Clause {
             pos_lit_no: 0,
             properties: CP_IGNORE_PROPS,
             weight: 0,
+            evaluations: None,
             info: None,
             create_date: 0,
             proof_depth: 0,
@@ -181,6 +184,36 @@ impl Clause {
 
     pub const fn set_weight(&mut self, weight: i64) {
         self.weight = weight;
+    }
+
+    #[must_use]
+    pub const fn evaluations(&self) -> Option<&EvalCell> {
+        self.evaluations.as_ref()
+    }
+
+    pub fn evaluations_mut(&mut self) -> Option<&mut EvalCell> {
+        self.evaluations.as_mut()
+    }
+
+    pub fn add_eval_cell(&mut self, evaluation: EvalCell) {
+        self.add_eval_cell_with_object(evaluation, None);
+    }
+
+    pub fn add_eval_cell_with_object(
+        &mut self,
+        mut evaluation: EvalCell,
+        object: Option<EvalObjectHandle>,
+    ) {
+        evaluation.set_object(object);
+        self.evaluations = Some(evaluation);
+    }
+
+    pub fn remove_evaluations(&mut self) {
+        self.evaluations = None;
+    }
+
+    pub fn take_evaluations(&mut self) -> Option<EvalCell> {
+        self.evaluations.take()
     }
 
     #[must_use]
@@ -908,6 +941,7 @@ impl Clause {
             pos_lit_no: self.pos_lit_no,
             properties: self.properties,
             weight: self.weight,
+            evaluations: None,
             info: None,
             create_date: self.create_date,
             proof_depth: self.proof_depth,
@@ -989,6 +1023,7 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_PSEUDO_LIT};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::evals_alloc;
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -1071,6 +1106,7 @@ mod tests {
         assert_eq!(clause.literals().as_slice(), &[positive, negative]);
         assert!(clause.ident() > i64::MIN);
         assert_eq!(clause.date(), SysDate::creation_time());
+        assert!(clause.evaluations().is_none());
     }
 
     #[test]
@@ -1105,6 +1141,33 @@ mod tests {
         assert!(!clause.query_prop(CP_INITIAL));
         clause.set_properties(CP_IS_SOS);
         assert!(clause.is_sos());
+    }
+
+    #[test]
+    fn evaluation_storage_attach_take_and_remove_match_clause_shape() {
+        let mut clause = Clause::empty();
+        let mut evaluations = evals_alloc(2);
+        evaluations.eval_mut(0).set_heuristic(1.5);
+        evaluations.eval_mut(1).set_heuristic(2.5);
+
+        clause.add_eval_cell_with_object(evaluations, Some(17));
+
+        let stored = clause.evaluations().expect("evaluation cell is attached");
+        assert_eq!(stored.eval_no(), 2);
+        assert_eq!(stored.object(), Some(17));
+        assert_eq!(stored.eval(1).heuristic().to_bits(), 2.5_f32.to_bits());
+
+        let mut taken = clause.take_evaluations().expect("evaluation cell is taken");
+        assert!(clause.evaluations().is_none());
+        taken.set_object(Some(19));
+        clause.add_eval_cell(taken);
+        assert!(matches!(
+            clause.evaluations(),
+            Some(evaluation) if evaluation.object().is_none()
+        ));
+
+        clause.remove_evaluations();
+        assert!(clause.evaluations().is_none());
     }
 
     #[test]
@@ -1208,17 +1271,21 @@ mod tests {
         clause.set_tptp_type(CP_TYPE_AXIOM);
         clause.set_info(Some(ClauseInfo::new(Some("input"), None, -1, -1)));
         clause.set_create_date(7);
+        clause.add_eval_cell_with_object(evals_alloc(1), Some(23));
 
         let flat = clause.flat_copy(&mut bank).unwrap();
         assert_eq!(flat.ident(), clause.ident());
         assert_eq!(flat.query_tptp_type(), CP_TYPE_AXIOM);
         assert!(flat.info().is_none());
+        assert!(flat.evaluations().is_none());
         assert_eq!(flat.literals(), clause.literals());
 
         let copied = clause.copy_opt(&mut bank).unwrap();
         assert_eq!(copied.literal_number(), clause.literal_number());
+        assert!(copied.evaluations().is_none());
         let disjoint = clause.copy_disjoint(&mut bank).unwrap();
         assert_ne!(disjoint.literals().as_slice()[1].left(), &x);
+        assert!(disjoint.evaluations().is_none());
     }
 
     #[test]

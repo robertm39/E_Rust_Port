@@ -60,7 +60,7 @@ impl FvIndexParams {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FvIndex {
     final_node: bool,
     clause_count: i64,
@@ -209,7 +209,7 @@ impl FvIndex {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FvIndexAnchor {
     cspec: FvCollect,
     perm_vector: Option<PermVector>,

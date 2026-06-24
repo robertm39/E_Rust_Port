@@ -12,7 +12,7 @@ pub enum RewriteSequenceEntry {
     Demodulator(RewriteDemodulator),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClausePos<T = ()> {
     clause: Option<Clause>,
     literal_index: Option<usize>,

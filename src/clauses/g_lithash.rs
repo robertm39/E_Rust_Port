@@ -7,7 +7,7 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, Term};
 use std::collections::{btree_map::Entry, BTreeMap};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LitDesc {
     lit_key: usize,
     lit: Term,
@@ -40,7 +40,7 @@ impl LitDesc {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LitHash {
     sig_size: usize,
     pos_lits: Vec<BTreeMap<usize, LitDesc>>,
