@@ -663,9 +663,8 @@ pub fn hcb_add_wfcb<Data>(hcb: &mut HcbCell<Data>, wfcb: WfcbHandle, steps: i64)
 /// Evaluates a clause through every WFCB in `hcb` into an existing
 /// evaluation list.
 ///
-/// The current Rust `Clause` type does not own the C `clause->evaluations`
-/// pointer yet, so this is the explicit storage adapter for
-/// `HCBClauseEvaluate`.
+/// This keeps an explicit storage adapter for callers that have not moved to
+/// clause-owned evaluation cells yet.
 ///
 /// # Panics
 ///

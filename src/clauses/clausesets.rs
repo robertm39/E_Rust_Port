@@ -156,6 +156,12 @@ impl ClauseSet {
             .find(|clause| clause.ident() == ident)
     }
 
+    pub fn remove_evaluations(&mut self) {
+        for clause in &mut self.clauses {
+            clause.remove_evaluations();
+        }
+    }
+
     pub fn sort_by<F>(&mut self, mut compare: F)
     where
         F: FnMut(&Clause, &Clause) -> Ordering,
@@ -674,6 +680,7 @@ mod tests {
         fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
         FvCollectLayout, FvIndexType,
     };
+    use crate::clauses::neweval::evals_alloc;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -771,6 +778,33 @@ mod tests {
             vec![first_id, second_id]
         );
         assert_eq!(target.literals(), 3);
+    }
+
+    #[test]
+    fn remove_evaluations_clears_all_clauses_without_changing_set_accounting() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut second = clause_from(vec![
+            literal(&mut bank, &b, &c, true),
+            literal(&mut bank, &c, &a, false),
+        ]);
+        first.add_eval_cell(evals_alloc(1));
+        second.add_eval_cell(evals_alloc(2));
+        let expected_ids = vec![first.ident(), second.ident()];
+        let mut set = ClauseSet::from_clauses([first, second]);
+
+        set.remove_evaluations();
+
+        assert_eq!(set.members(), 2);
+        assert_eq!(set.literals(), 3);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            expected_ids
+        );
+        assert!(set.iter().all(|clause| clause.evaluations().is_none()));
     }
 
     #[test]

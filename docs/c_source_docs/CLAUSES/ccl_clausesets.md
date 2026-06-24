@@ -244,6 +244,10 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `ClauseSetRemoveEvaluations` first clears every `eval_indices` root and then clears each clause's evaluation pointer. Rust currently ports the clause-owned clearing path; the index-root reset still belongs with the future clause-set evaluation index owner.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
