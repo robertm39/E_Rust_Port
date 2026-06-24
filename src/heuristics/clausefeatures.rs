@@ -220,6 +220,25 @@ pub fn clause_prop_info_stats_string(clause: &Clause) -> String {
 }
 
 #[must_use]
+pub fn clause_prop_info_string(pcl_text: &str, clause: &Clause) -> String {
+    clause_prop_info_string_with_comment(pcl_text, clause, DEFAULT_COMCHAR_RAW)
+}
+
+#[must_use]
+pub fn clause_prop_info_string_with_comment(
+    pcl_text: &str,
+    clause: &Clause,
+    comment: &str,
+) -> String {
+    let mut result = String::new();
+    result.push_str(comment);
+    result.push(' ');
+    result.push_str(pcl_text);
+    result.push_str(&clause_prop_info_stats_string_with_comment(comment, clause));
+    result
+}
+
+#[must_use]
 pub fn clause_prop_info_stats_string_with_comment(comment: &str, clause: &Clause) -> String {
     let standard_weight = clause.standard_weight();
     let symbol_count =
@@ -338,8 +357,9 @@ mod tests {
         clause_count_maximal_terms, clause_count_singleton_set, clause_count_unorientable_literals,
         clause_count_variable_set, clause_info_string, clause_line_string,
         clause_line_string_with_comment, clause_prop_info_stats_string,
-        clause_prop_info_stats_string_with_comment, clause_tptp_depth_info_add,
-        eqn_add_var_distribution, eqn_list_add_var_distribution, term_add_var_distribution,
+        clause_prop_info_stats_string_with_comment, clause_prop_info_string,
+        clause_prop_info_string_with_comment, clause_tptp_depth_info_add, eqn_add_var_distribution,
+        eqn_list_add_var_distribution, term_add_var_distribution,
     };
     use crate::basics::pdarrays::PDIntArray;
     use crate::clauses::clause::Clause;
@@ -620,6 +640,48 @@ mod tests {
         assert_eq!(
             clause_prop_info_stats_string_with_comment("#", &clause),
             concat!(
+                "\n# Standardweight:      5\n",
+                "# Symbol count  :      3\n",
+                "#    F. symbols :      1\n",
+                "#    Variables  :      1\n",
+                "#    Constants  :      1\n",
+                "#    P. symbols :      0\n",
+                "# Depth         :      2\n",
+                "# Literals      :      1\n",
+                "#    ...positive:      1\n",
+                "#    ...negative:      0\n",
+            )
+        );
+    }
+
+    #[test]
+    fn clause_prop_info_string_prefixes_pcl_text_and_appends_stats() {
+        let mut bank = term_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "prop_line_a");
+        let fx = typed_unary(&mut bank, "prop_line_f", &x);
+        let clause = clause_from(vec![equation(&mut bank, &fx, &a, true)]);
+
+        assert_eq!(
+            clause_prop_info_string("pcl(c_1,...)", &clause),
+            concat!(
+                "% pcl(c_1,...)",
+                "\n% Standardweight:      5\n",
+                "% Symbol count  :      3\n",
+                "%    F. symbols :      1\n",
+                "%    Variables  :      1\n",
+                "%    Constants  :      1\n",
+                "%    P. symbols :      0\n",
+                "% Depth         :      2\n",
+                "% Literals      :      1\n",
+                "%    ...positive:      1\n",
+                "%    ...negative:      0\n",
+            )
+        );
+        assert_eq!(
+            clause_prop_info_string_with_comment("pcl(c_1,...)", &clause, "#"),
+            concat!(
+                "# pcl(c_1,...)",
                 "\n# Standardweight:      5\n",
                 "# Symbol count  :      3\n",
                 "#    F. symbols :      1\n",
