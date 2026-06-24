@@ -3,10 +3,10 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::ClausePrioFun;
 use crate::inout::basicparser::{parse_filename, parse_float, parse_int};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::learn::annotations::ANNOTATION_DEFAULT_SIZE;
 use crate::learn::indexfunctions::{get_index_type, IndexType};
 use crate::learn::tsm::{get_tsm_type, TsmType};
 
-pub const ANNOTATION_DEFAULT_SIZE: usize = 7;
 pub const TSM_E_WEIGHT_COUNT: usize = ANNOTATION_DEFAULT_SIZE - 1;
 
 #[derive(Clone, Debug, PartialEq)]
