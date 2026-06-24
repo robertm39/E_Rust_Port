@@ -92,6 +92,12 @@ Source files reviewed: `LEARN/cle_kbdesc.h`, `LEARN/cle_kbdesc.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `KBDescParse` compares the parsed version against `KB_VERSION` with plain `strcmp`, so "newer" is lexicographic string ordering rather than semantic version ordering.
+- The "knowledge base is younger" diagnostic concatenates `" update from"` directly with `E_URL`, producing no space before the URL. Preserve the message shape unless user-facing diagnostics are intentionally cleaned up after compatibility is covered.
+- `KBFileName` appends `"/"` between `basename` and `file` unconditionally; do not replace it with a platform path separator while learned KB file layout compatibility matters.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

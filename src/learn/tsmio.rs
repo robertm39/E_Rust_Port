@@ -5,14 +5,13 @@ use crate::learn::annotations::Annotation;
 use crate::learn::annoterms::AnnoSet;
 use crate::learn::examplerep::{example_set_select_by_dist, ExampleSet};
 use crate::learn::flatannoterms::{flat_anno_set_translate, FlatAnnoSet};
+use crate::learn::kbdesc::KB_ANNOTATION_NO;
 use crate::learn::numfeatures::{
     compute_clause_set_num_features, Features, SEL_FEATURE_WEIGHTS, SEL_FUNC_WEIGHT,
     SEL_PRED_WEIGHT,
 };
 use crate::learn::tsm::{Tsm, TsmAdmin, TsmId, TsmType};
 use crate::terms::signature::Signature;
-
-pub const KB_ANNOTATION_NO: i64 = 7;
 
 const LARGE_TSM_WEIGHT: f64 = 1_000_000_000_000.0;
 const LARGE_ADMIN_WEIGHT: f64 = 100_000_000.0;
@@ -201,10 +200,7 @@ fn i64_to_f64(value: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        example_set_prepare, get_default_eval, tsm_get_highest_weight, KB_ANNOTATION_NO,
-        LARGE_TSM_WEIGHT,
-    };
+    use super::{example_set_prepare, get_default_eval, tsm_get_highest_weight, LARGE_TSM_WEIGHT};
     use crate::clauses::clausesets::ClauseSet;
     use crate::inout::scanner::Scanner;
     use crate::learn::annotations::{Annotation, AnnotationTree};
@@ -212,6 +208,7 @@ mod tests {
     use crate::learn::examplerep::{ExampleRep, ExampleSet};
     use crate::learn::flatannoterms::{flat_anno_set_add_term, flat_anno_set_alloc, FlatAnnoTerm};
     use crate::learn::indexfunctions::IndexType;
+    use crate::learn::kbdesc::KB_ANNOTATION_NO;
     use crate::learn::numfeatures::Features;
     use crate::learn::patterns::{pattern_term_compute, PatternSubst};
     use crate::learn::tsm::{tsm_admin_alloc, tsm_admin_build_tsm, TsmType};
