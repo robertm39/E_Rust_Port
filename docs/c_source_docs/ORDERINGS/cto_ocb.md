@@ -142,6 +142,7 @@ Source files reviewed: `ORDERINGS/cto_ocb.h`, `ORDERINGS/cto_ocb.c`.
 - `OCBFindMinConst` is named/commented as finding a minimal constant, but the scan replaces the candidate when `OCBFunCompare(i, cand) == to_greater`. Rust therefore records the precedence-greater matching constant as the designated one.
 - `OCBSetMinConst` is declared in the header but has no implementation in `cto_ocb.c`; Rust provides an explicit setter for internal use, but C-linkage compatibility should treat the missing C definition as a source inconsistency.
 - `OCBTermMaxFunCode` skips argument zero in its recursive scan (`for(i=1; i<term->arity; i++)`). Rust preserves this exactly; decide later whether a corrected traversal belongs behind a compatibility switch once ordering reference tests cover the affected callers.
+- `OCBDebugPrint` handles a null `ocb->sig` for the signature and weight sections, but the precedence-matrix section still calls `OCBFunCompare`, which uses `ocb->sig` for distinct-symbol checks. Rust keeps the signature outside the OCB and uses raw matrix cells when debug-printing without one; revisit only if null-signature OCB diagnostics become observable.
 
 ### Porting Focus
 

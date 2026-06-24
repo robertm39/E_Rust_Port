@@ -13,6 +13,7 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_deref, DerefType, Term};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 
 pub const OCB_FUN_DEFAULT_WEIGHT: i64 = 1;
 pub const W_DEFAULT_WEIGHT: i64 = 1;
@@ -480,6 +481,75 @@ impl OrderControlBlock {
 
     pub fn reset_ho_var_map(&mut self) {}
 
+    /// Print this OCB in C's debug-comment shape.
+    ///
+    /// C stores the signature pointer in the OCB. Rust keeps that ownership
+    /// outside the OCB, so callers pass the live signature explicitly when
+    /// they want symbol names and full `OCBFunCompare` behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error reported by the output writer or by signature
+    /// printing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stored precedence matrix contains a comparison relation
+    /// with no C debug symbol.
+    pub fn debug_print(
+        &self,
+        output: &mut impl Write,
+        signature: Option<&Signature>,
+    ) -> io::Result<()> {
+        writeln!(output, "% ==============OCB-Debug-Information============")?;
+        writeln!(output, "% ===============================================")?;
+        if let Some(signature) = signature {
+            signature.print(output)?;
+        } else {
+            writeln!(output, "% No sig!")?;
+        }
+        writeln!(output, "% -----------------------------------------------")?;
+        if self.weights.is_some() {
+            write!(output, "% Weights:")?;
+            for symbol in 1..=self.sig_size {
+                if (symbol - 1) % 8 == 0 {
+                    write!(output, "\n% ")?;
+                }
+                if let Some(signature) = signature {
+                    let name = signature.find_name(symbol).unwrap_or("<unnamed>");
+                    write!(output, " ({name} = {}) ", self.fun_weight(symbol))?;
+                } else {
+                    write!(output, " ({symbol} = {}) ", self.fun_weight(symbol))?;
+                }
+            }
+            writeln!(output, "\n")?;
+        } else {
+            writeln!(output, "% No weights!")?;
+        }
+        writeln!(output, "% -----------------------------------------------")?;
+        if self.precedence.is_some() {
+            write!(output, "% Precedence Matrix:\n%       ")?;
+            for symbol in 1..=self.sig_size {
+                write!(output, " {symbol:2} ")?;
+            }
+            writeln!(output)?;
+            for left in 1..=self.sig_size {
+                write!(output, "% {left:2}  | ")?;
+                for right in 1..=self.sig_size {
+                    let relation = self.debug_fun_compare(signature, left, right);
+                    let symbol = relation
+                        .symbol()
+                        .unwrap_or_else(|| panic!("relation {relation:?} has no debug symbol"));
+                    write!(output, " {symbol}")?;
+                }
+                writeln!(output)?;
+            }
+        } else {
+            writeln!(output, "% No precedence!")?;
+        }
+        writeln!(output, "% ===============================================")
+    }
+
     #[must_use]
     pub fn state_stack(&self) -> &[FunCode] {
         &self.state_stack
@@ -535,6 +605,24 @@ impl OrderControlBlock {
         precedence[matrix_index(self.sig_size, right, left)] = relation
             .inverse()
             .unwrap_or_else(|| panic!("inserted relation has an inverse"));
+    }
+
+    fn debug_fun_compare(
+        &self,
+        signature: Option<&Signature>,
+        left: FunCode,
+        right: FunCode,
+    ) -> CompareResult {
+        if let Some(signature) = signature {
+            self.fun_compare(signature, left, right)
+        } else if left == right {
+            CompareResult::Equal
+        } else {
+            self.precedence
+                .as_ref()
+                .unwrap_or_else(|| panic!("precedence matrix is not allocated for this ordering"))
+                [matrix_index(self.sig_size, left, right)]
+        }
     }
 }
 
@@ -903,6 +991,70 @@ mod tests {
 
         assert_eq!(ocb.fun_weight(SIG_FALSE_CODE), 11);
         assert_eq!(ocb.fun_prec_weight(SIG_FALSE_CODE), 22);
+    }
+
+    #[test]
+    fn debug_print_reports_signature_weights_and_absent_matrix() {
+        let mut signature = signature();
+        let a = signature.insert_id("a", 0, false);
+        let b = signature.insert_id("b", 0, false);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Kbo, true, &signature, HoOrderKind::LfhoOrder);
+        ocb.set_fun_weight(a, 7);
+        ocb.set_fun_weight(b, 3);
+
+        let mut output = Vec::new();
+        ocb.debug_print(&mut output, Some(&signature))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let printed = String::from_utf8(output).unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(printed.starts_with("% ==============OCB-Debug-Information============\n"));
+        assert!(printed.contains("% Signature"));
+        assert!(printed.contains(" (a = 7) "));
+        assert!(printed.contains(" (b = 3) "));
+        assert!(printed.contains("% No precedence!\n"));
+    }
+
+    #[test]
+    fn debug_print_reports_precedence_matrix_symbols() {
+        let mut signature = signature();
+        let a = signature.insert_id("a", 0, false);
+        let b = signature.insert_id("b", 0, false);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, false, &signature, HoOrderKind::LfhoOrder);
+        ocb.precedence_add_tuple(&signature, a, b, CompareResult::Greater);
+
+        let mut output = Vec::new();
+        ocb.debug_print(&mut output, Some(&signature))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let printed = String::from_utf8(output).unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(printed.contains("% No weights!\n"));
+        assert!(printed.contains("% Precedence Matrix:\n"));
+        assert!(printed.contains(" = "));
+        assert!(printed.contains(" > "));
+        assert!(printed.contains(" < "));
+        assert!(printed.contains("=/="));
+    }
+
+    #[test]
+    fn debug_print_can_render_without_signature_when_no_lookup_is_needed() {
+        let signature = signature();
+        let ocb = OrderControlBlock::alloc(
+            TermOrdering::Empty,
+            false,
+            &signature,
+            HoOrderKind::LfhoOrder,
+        );
+
+        let mut output = Vec::new();
+        ocb.debug_print(&mut output, None)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let printed = String::from_utf8(output).unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(printed.contains("% No sig!\n"));
+        assert!(printed.contains("% No weights!\n"));
+        assert!(printed.contains("% No precedence!\n"));
     }
 
     #[test]
