@@ -20,6 +20,9 @@ pub const DEFAULT_LITERAL_SELECTION: &str = "NoSelection";
 pub const DEFAULT_SAT_CHECK_DECISION_LIMIT: i32 = 10_000;
 pub const DEFAULT_MAX_UNIFIERS: i32 = 4;
 pub const DEFAULT_MAX_UNIF_STEPS: i32 = 256;
+pub const HCB_INITIAL_CAPACITY: usize = 4;
+
+pub type WfcbHandle = usize;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
@@ -527,6 +530,134 @@ impl Default for HeuristicParmsCell {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HcbSelectFunction {
+    #[default]
+    StandardClauseSelect,
+    SingleWeightClauseSelect,
+}
+
+pub struct HcbCell<Data = ()> {
+    wfcb_list: Vec<WfcbHandle>,
+    current_eval: usize,
+    select_switch: Vec<i64>,
+    select_count: i64,
+    hcb_select: HcbSelectFunction,
+    hcb_exit: fn(Data),
+    data: Option<Data>,
+}
+
+impl HcbCell<()> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_data(None, default_exit_fun)
+    }
+}
+
+impl Default for HcbCell<()> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<Data> HcbCell<Data> {
+    #[must_use]
+    pub fn with_data(data: Option<Data>, hcb_exit: fn(Data)) -> Self {
+        Self {
+            wfcb_list: Vec::with_capacity(HCB_INITIAL_CAPACITY),
+            current_eval: 0,
+            select_switch: Vec::with_capacity(HCB_INITIAL_CAPACITY),
+            select_count: 0,
+            hcb_select: HcbSelectFunction::StandardClauseSelect,
+            hcb_exit,
+            data,
+        }
+    }
+
+    #[must_use]
+    pub fn wfcb_no(&self) -> usize {
+        self.wfcb_list.len()
+    }
+
+    #[must_use]
+    pub fn wfcb_capacity(&self) -> usize {
+        self.wfcb_list.capacity()
+    }
+
+    #[must_use]
+    pub fn wfcb_handle(&self, pos: usize) -> Option<WfcbHandle> {
+        self.wfcb_list.get(pos).copied()
+    }
+
+    #[must_use]
+    pub const fn current_eval(&self) -> usize {
+        self.current_eval
+    }
+
+    #[must_use]
+    pub fn select_switch_capacity(&self) -> usize {
+        self.select_switch.capacity()
+    }
+
+    #[must_use]
+    pub fn select_switch(&self, pos: usize) -> Option<i64> {
+        self.select_switch.get(pos).copied()
+    }
+
+    #[must_use]
+    pub const fn select_count(&self) -> i64 {
+        self.select_count
+    }
+
+    #[must_use]
+    pub const fn hcb_select(&self) -> HcbSelectFunction {
+        self.hcb_select
+    }
+
+    #[must_use]
+    pub const fn data(&self) -> Option<&Data> {
+        self.data.as_ref()
+    }
+}
+
+impl<Data> Drop for HcbCell<Data> {
+    fn drop(&mut self) {
+        if let Some(data) = self.data.take() {
+            (self.hcb_exit)(data);
+        }
+    }
+}
+
+#[must_use]
+pub fn hcb_alloc() -> HcbCell<()> {
+    HcbCell::new()
+}
+
+/// Adds an admin-owned WFCB handle to an HCB schedule.
+///
+/// # Panics
+///
+/// Panics if `steps` is not positive, matching the C assertion in
+/// `HCBAddWFCB`.
+pub fn hcb_add_wfcb<Data>(hcb: &mut HcbCell<Data>, wfcb: WfcbHandle, steps: i64) -> usize {
+    assert!(steps > 0, "steps must be positive");
+
+    let cumulative_steps = hcb
+        .select_switch
+        .last()
+        .map_or(steps, |previous| previous + steps);
+    hcb.wfcb_list.push(wfcb);
+    hcb.select_switch.push(cumulative_steps);
+    hcb.hcb_select = if hcb.wfcb_no() == 1 {
+        HcbSelectFunction::SingleWeightClauseSelect
+    } else {
+        HcbSelectFunction::StandardClauseSelect
+    };
+    hcb.wfcb_no()
+}
+
+pub fn default_exit_fun<Data>(_data: Data) {}
+
 #[must_use]
 pub fn heuristic_parms_alloc() -> HeuristicParmsCell {
     HeuristicParmsCell::default()
@@ -821,20 +952,23 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_name, ext_inference_type_name_raw, heuristic_parms_alloc, heuristic_parms_initialize,
-        heuristic_parms_print_string, prim_enum_mode_name_raw, str_to_ext_inference_type,
-        str_to_prim_enum_mode, str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw,
-        unif_mode_name_raw, AcHandling, ExtInferenceType, GroundingStrategy, HeuristicParmsCell,
-        ParamodulationType, PrimEnumMode, SplitClassType, SplitType, UnifMode,
-        DEFAULT_DELETE_BAD_LIMIT, DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES,
-        DEFAULT_FILTER_ORPHANS_LIMIT, DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT,
-        DEFAULT_LITERAL_SELECTION, DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS,
-        DEFAULT_MINISCOPE_LIMIT, DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME,
-        DEFAULT_RW_BW_INDEX_NAME, DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS,
-        HCB_DEFAULT_HEURISTIC, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
+        bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, heuristic_parms_alloc,
+        heuristic_parms_initialize, heuristic_parms_print_string, prim_enum_mode_name_raw,
+        str_to_ext_inference_type, str_to_prim_enum_mode, str_to_prim_enum_mode_raw,
+        str_to_unif_mode, str_to_unif_mode_raw, unif_mode_name_raw, AcHandling, ExtInferenceType,
+        GroundingStrategy, HcbCell, HcbSelectFunction, HeuristicParmsCell, ParamodulationType,
+        PrimEnumMode, SplitClassType, SplitType, UnifMode, DEFAULT_DELETE_BAD_LIMIT,
+        DEFAULT_EQDEF_INCRLIMIT, DEFAULT_EQDEF_MAXCLAUSES, DEFAULT_FILTER_ORPHANS_LIMIT,
+        DEFAULT_FORMULA_DEF_LIMIT, DEFAULT_FORWARD_CONTRACT_LIMIT, DEFAULT_LITERAL_SELECTION,
+        DEFAULT_MAX_UNIFIERS, DEFAULT_MAX_UNIF_STEPS, DEFAULT_MINISCOPE_LIMIT,
+        DEFAULT_PM_FROM_INDEX_NAME, DEFAULT_PM_INTO_INDEX_NAME, DEFAULT_RW_BW_INDEX_NAME,
+        DEFAULT_SAT_CHECK_DECISION_LIMIT, DEFAULT_SYM_OCCS, HCB_DEFAULT_HEURISTIC,
+        HCB_INITIAL_CAPACITY, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
     use crate::heuristics::to_params::OrderParmsCell;
     use crate::terms::termtypes::RewriteLevel;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn hcb_default_constants_match_c_defines() {
@@ -1226,6 +1360,76 @@ mod tests {
         assert!(printed.contains("   prim_enum_mode:                full\n"));
         assert!(printed.contains("   unif_mode:                     multi\n"));
         assert!(printed.contains("   pattern_oracle:                false\n"));
+    }
+
+    #[test]
+    fn hcb_alloc_initializes_empty_control_block_like_c() {
+        let hcb = hcb_alloc();
+
+        assert_eq!(hcb.wfcb_no(), 0);
+        assert!(hcb.wfcb_capacity() >= HCB_INITIAL_CAPACITY);
+        assert_eq!(hcb.current_eval(), 0);
+        assert!(hcb.select_switch_capacity() >= HCB_INITIAL_CAPACITY);
+        assert_eq!(hcb.select_count(), 0);
+        assert_eq!(hcb.hcb_select(), HcbSelectFunction::StandardClauseSelect);
+        assert_eq!(hcb.wfcb_handle(0), None);
+        assert_eq!(hcb.select_switch(0), None);
+        assert_eq!(hcb.data(), None);
+    }
+
+    #[test]
+    fn hcb_add_wfcb_stores_cumulative_switch_counts() {
+        let mut hcb = hcb_alloc();
+
+        assert_eq!(hcb_add_wfcb(&mut hcb, 10, 3), 1);
+        assert_eq!(hcb.wfcb_handle(0), Some(10));
+        assert_eq!(hcb.select_switch(0), Some(3));
+        assert_eq!(
+            hcb.hcb_select(),
+            HcbSelectFunction::SingleWeightClauseSelect
+        );
+
+        assert_eq!(hcb_add_wfcb(&mut hcb, 11, 5), 2);
+        assert_eq!(hcb.wfcb_handle(1), Some(11));
+        assert_eq!(hcb.select_switch(1), Some(8));
+        assert_eq!(hcb.hcb_select(), HcbSelectFunction::StandardClauseSelect);
+    }
+
+    #[test]
+    #[should_panic(expected = "steps must be positive")]
+    fn hcb_add_wfcb_rejects_nonpositive_steps() {
+        let mut hcb = hcb_alloc();
+
+        hcb_add_wfcb(&mut hcb, 10, 0);
+    }
+
+    #[test]
+    fn hcb_drop_calls_exit_only_when_data_is_present() {
+        let exit_count = Rc::new(Cell::new(0));
+        let mut hcb = HcbCell::with_data(
+            Some(HcbDropData {
+                exit_count: Rc::clone(&exit_count),
+            }),
+            record_hcb_exit,
+        );
+
+        hcb_add_wfcb(&mut hcb, 1, 1);
+        assert_eq!(exit_count.get(), 0);
+        drop(hcb);
+        assert_eq!(exit_count.get(), 1);
+
+        let hcb = HcbCell::with_data(None, record_hcb_exit);
+        drop(hcb);
+        assert_eq!(exit_count.get(), 1);
+    }
+
+    struct HcbDropData {
+        exit_count: Rc<Cell<i32>>,
+    }
+
+    fn record_hcb_exit(data: HcbDropData) {
+        let HcbDropData { exit_count } = data;
+        exit_count.set(exit_count.get() + 1);
     }
 
     fn assert_substrings_in_order(text: &str, needles: &[&str]) {
