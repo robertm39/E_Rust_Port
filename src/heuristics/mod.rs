@@ -7,6 +7,7 @@ pub mod fcode_featurearrays;
 pub mod fifo;
 pub mod gdweight;
 pub mod lifo;
+pub mod normsubst;
 pub mod orientweight;
 pub mod prio_funs;
 pub mod random;
