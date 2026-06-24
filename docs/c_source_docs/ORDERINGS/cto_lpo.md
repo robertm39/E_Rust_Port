@@ -126,7 +126,8 @@ Source files reviewed: `ORDERINGS/cto_lpo.h`, `ORDERINGS/cto_lpo.c`.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - Standard `lpo_greater` returns the internal `to_notgteq` value for "not greater-or-equal"; public `LPOCompare` only then tries the reverse direction. Preserve that two-step result flow rather than collapsing it into ordinary incomparability too early.
 - `lpo_greater` uses a file-static `recursion_depth` counter with global `LPORecursionDepthLimit`, which makes the C helper non-reentrant. A Rust comparison-local depth counter is a sensible cleanup as long as the observable limit result is preserved.
-- Standard LPO and LPO4/copy variants are separate implementations. A standard-LPO port does not cover the polynomial LPO4 algorithm or copy wrappers.
+- Standard LPO and LPO4/copy variants are separate implementations. A standard-LPO port does not cover the polynomial LPO4 algorithm or copy wrappers; Rust now ports the first-order LPO4/copy behavior separately.
+- Context-term LPO4 interleaves first-order comparison with `ENABLE_LFHO` branches for WHNF dereferencing, beta/eta normalization, applied-variable instantiation, and head-class ordering. Keep those higher-order branches explicit as missing behavior until the shared higher-order normalization layer is ported.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.

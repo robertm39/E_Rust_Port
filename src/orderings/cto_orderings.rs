@@ -7,7 +7,10 @@ use crate::heuristics::to_params::TermOrdering;
 use crate::inout::scanner::{token_pos_rep, Scanner, Token, TokenType};
 use crate::orderings::cto_kbo::{kbo_compare, kbo_greater};
 use crate::orderings::cto_kbolin::{kbo6_compare, kbo6_greater};
-use crate::orderings::cto_lpo::{lpo_compare, lpo_greater};
+use crate::orderings::cto_lpo::{
+    lpo4_compare, lpo4_compare_copy, lpo4_greater, lpo4_greater_copy, lpo_compare,
+    lpo_compare_copy, lpo_greater, lpo_greater_copy,
+};
 use crate::orderings::ocb::{OrderControlBlock, W_DEFAULT_WEIGHT};
 use crate::terms::signature::Signature;
 use crate::terms::termtypes::{DerefType, Term};
@@ -28,15 +31,16 @@ pub fn to_greater(
 ) -> bool {
     match ocb.ordering_type {
         TermOrdering::Lpo => lpo_greater(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::LpoCopy => lpo_greater_copy(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Lpo4 => lpo4_greater(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Lpo4Copy => lpo4_greater_copy(ocb, signature, s, t, deref_s, deref_t),
         TermOrdering::Kbo => kbo_greater(ocb, signature, s, t, deref_s, deref_t),
         TermOrdering::Kbo6 => kbo6_greater(ocb, signature, s, t, deref_s, deref_t),
         TermOrdering::Empty => false,
-        TermOrdering::LpoCopy | TermOrdering::Lpo4 | TermOrdering::Lpo4Copy | TermOrdering::Rpo => {
-            panic!(
-                "term ordering {:?} comparison is not ported yet",
-                ocb.ordering_type
-            )
-        }
+        TermOrdering::Rpo => panic!(
+            "term ordering {:?} comparison is not ported yet",
+            ocb.ordering_type
+        ),
         TermOrdering::NoOrdering | TermOrdering::Optimize => {
             panic!("non-concrete term ordering cannot compare terms")
         }
@@ -60,15 +64,16 @@ pub fn to_compare(
 ) -> CompareResult {
     match ocb.ordering_type {
         TermOrdering::Lpo => lpo_compare(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::LpoCopy => lpo_compare_copy(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Lpo4 => lpo4_compare(ocb, signature, s, t, deref_s, deref_t),
+        TermOrdering::Lpo4Copy => lpo4_compare_copy(ocb, signature, s, t, deref_s, deref_t),
         TermOrdering::Kbo => kbo_compare(ocb, signature, s, t, deref_s, deref_t),
         TermOrdering::Kbo6 => kbo6_compare(ocb, signature, s, t, deref_s, deref_t),
         TermOrdering::Empty => CompareResult::Uncomparable,
-        TermOrdering::LpoCopy | TermOrdering::Lpo4 | TermOrdering::Lpo4Copy | TermOrdering::Rpo => {
-            panic!(
-                "term ordering {:?} comparison is not ported yet",
-                ocb.ordering_type
-            )
-        }
+        TermOrdering::Rpo => panic!(
+            "term ordering {:?} comparison is not ported yet",
+            ocb.ordering_type
+        ),
         TermOrdering::NoOrdering | TermOrdering::Optimize => {
             panic!("non-concrete term ordering cannot compare terms")
         }
@@ -400,46 +405,32 @@ mod tests {
         let x = Term::const_cell_alloc(-2);
         let f_x = app(f, std::slice::from_ref(&x));
 
-        let mut kbo =
-            OrderControlBlock::alloc(TermOrdering::Kbo, true, &signature, HoOrderKind::LfhoOrder);
-        let mut kbo6 =
-            OrderControlBlock::alloc(TermOrdering::Kbo6, true, &signature, HoOrderKind::LfhoOrder);
+        for ordering in [
+            TermOrdering::Kbo,
+            TermOrdering::Kbo6,
+            TermOrdering::Lpo,
+            TermOrdering::LpoCopy,
+            TermOrdering::Lpo4,
+            TermOrdering::Lpo4Copy,
+        ] {
+            let mut ocb =
+                OrderControlBlock::alloc(ordering, true, &signature, HoOrderKind::LfhoOrder);
+            assert_eq!(
+                to_compare(
+                    &mut ocb,
+                    &signature,
+                    &f_x,
+                    &x,
+                    DerefType::Never,
+                    DerefType::Never
+                ),
+                CompareResult::Greater,
+                "dispatch failed for {ordering:?}"
+            );
+        }
+
         let mut lpo =
             OrderControlBlock::alloc(TermOrdering::Lpo, true, &signature, HoOrderKind::LfhoOrder);
-
-        assert_eq!(
-            to_compare(
-                &mut kbo,
-                &signature,
-                &f_x,
-                &x,
-                DerefType::Never,
-                DerefType::Never
-            ),
-            CompareResult::Greater
-        );
-        assert_eq!(
-            to_compare(
-                &mut kbo6,
-                &signature,
-                &f_x,
-                &x,
-                DerefType::Never,
-                DerefType::Never
-            ),
-            CompareResult::Greater
-        );
-        assert_eq!(
-            to_compare(
-                &mut lpo,
-                &signature,
-                &f_x,
-                &x,
-                DerefType::Never,
-                DerefType::Never
-            ),
-            CompareResult::Greater
-        );
         assert!(to_greater(
             &mut lpo,
             &signature,
