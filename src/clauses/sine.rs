@@ -8,8 +8,11 @@ use crate::clauses::clause_props::FormulaProperties;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use std::fmt;
+
+const DEFAULT_COMCHAR_RAW: &str = "%";
 
 #[derive(Debug)]
 pub struct DRel<'a> {
@@ -49,6 +52,33 @@ impl<'a> DRel<'a> {
 
     pub fn d_clauses_mut(&mut self) -> &mut PStack<&'a Clause> {
         &mut self.d_clauses
+    }
+
+    pub fn write_debug(
+        &self,
+        output: &mut impl fmt::Write,
+        stderr: &mut impl fmt::Write,
+        signature: &Signature,
+    ) -> fmt::Result {
+        let name = signature.find_name(self.f_code).unwrap_or("<unknown>");
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} {f_code:6} {name:<15}: {clause_count:6} clauses, {formula_count:6} formulas",
+            f_code = self.f_code,
+            clause_count = self.d_clauses.len(),
+            formula_count = 0
+        )?;
+        output.write_str(DEFAULT_COMCHAR_RAW)?;
+        output.write_str("formulas: ")?;
+        stderr.write_char('\n')
+    }
+
+    #[must_use]
+    pub fn debug_string(&self, signature: &Signature) -> (String, String) {
+        let mut output = String::new();
+        let mut stderr = String::new();
+        let _ = self.write_debug(&mut output, &mut stderr, signature);
+        (output, stderr)
     }
 }
 
@@ -164,6 +194,26 @@ impl<'a> DRelation<'a> {
                 .map(|entry| entry.d_clauses().len())
                 .sum(),
         )
+    }
+
+    pub fn write_debug(
+        &self,
+        output: &mut impl fmt::Write,
+        stderr: &mut impl fmt::Write,
+        signature: &Signature,
+    ) -> fmt::Result {
+        for entry in self.relation.iter().skip(1).filter_map(Option::as_ref) {
+            entry.write_debug(output, stderr, signature)?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn debug_string(&self, signature: &Signature) -> (String, String) {
+        let mut output = String::new();
+        let mut stderr = String::new();
+        let _ = self.write_debug(&mut output, &mut stderr, signature);
+        (output, stderr)
     }
 }
 
@@ -320,6 +370,56 @@ mod tests {
         assert_eq!(relation.allocated_size(), 13);
         assert_eq!(relation.get_f_entry(12).f_code(), 12);
         assert_eq!(relation.total_entries(), 2);
+    }
+
+    #[test]
+    fn drel_debug_print_preserves_clause_counts_and_stderr_newline_quirk() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "debug_a");
+        let clause = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let mut rel = DRel::new(a.f_code());
+        rel.d_clauses_mut().push(&clause);
+
+        let (output, stderr) = rel.debug_string(bank.signature());
+
+        assert_eq!(
+            output,
+            format!(
+                "% {f_code:6} {name:<15}: {clauses:6} clauses, {formulas:6} formulas\n%formulas: ",
+                f_code = a.f_code(),
+                name = "debug_a",
+                clauses = 1,
+                formulas = 0
+            )
+        );
+        assert_eq!(stderr, "\n");
+    }
+
+    #[test]
+    fn drelation_debug_print_scans_entries_from_index_one_in_array_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "debug_rel_a");
+        let b = typed_const(&mut bank, "debug_rel_b");
+        let clause_a = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let clause_b = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        let zero_clause = Clause::empty();
+        let mut relation = DRelation::new();
+        relation
+            .get_f_entry(b.f_code())
+            .d_clauses_mut()
+            .push(&clause_b);
+        relation.get_f_entry(0).d_clauses_mut().push(&zero_clause);
+        relation
+            .get_f_entry(a.f_code())
+            .d_clauses_mut()
+            .push(&clause_a);
+
+        let (output, stderr) = relation.debug_string(bank.signature());
+
+        assert!(output.starts_with(&format!("% {:6} {:<15}", a.f_code(), "debug_rel_a")));
+        assert!(output.contains(&format!("% {:6} {:<15}", b.f_code(), "debug_rel_b")));
+        assert!(!output.contains("UNNAMED_DB"));
+        assert_eq!(stderr, "\n\n");
     }
 
     #[test]

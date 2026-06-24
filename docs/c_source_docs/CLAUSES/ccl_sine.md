@@ -151,6 +151,7 @@ Source files reviewed: `CLAUSES/ccl_sine.h`, `CLAUSES/ccl_sine.c`.
 - `PStackClausePrintTSTP` prints clauses in increasing stack-index order, calls `ClauseTSTPPrint(out, clause, true, true)`, and appends one newline after each clause. Rust preserves the clause-stack text shape with explicit `ProblemType` and propagates diagnostics for the currently deferred typed/higher-order formula-closure branch; `PStackFormulaPrintTSTP` remains deferred until `WFormula` printing is ported.
 - `PStackClauseDelProp` mutates every clause referenced by the stack without consuming or reordering the stack. Rust models this as a stack of mutable clause references; formula property deletion remains deferred until `WFormula` ownership exists.
 - `PQueueStoreClause` writes two adjacent queue entries, the raw `ATClause` integer tag followed by the borrowed clause pointer. `ClauseSetFindAxSelectionSeeds` scans clauses in set order and stores conjectures plus hypotheses only when requested. Rust preserves the clause-only queue layout with `IntOrP<&Clause>`; mixed formula queues remain deferred until formulas have stable Rust handles.
+- `DRelPrintDebug` writes the relation summary and `formulas:` label to its `out` stream, but sends the terminating newline to `stderr`. Rust preserves that split-stream behavior for compatibility by requiring a separate stderr writer; future cleaned diagnostics should avoid this stream mismatch. Formula names/counts remain effectively zero in the current Rust clause-side D-relation until `WFormula` ownership is ported.
 
 ### Porting Focus
 
