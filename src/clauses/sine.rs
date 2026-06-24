@@ -2,8 +2,15 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
+use crate::clauses::clause_props::FormulaProperties;
 use crate::terms::termbanks::TermBank;
 use std::fmt;
+
+pub fn pstack_clause_del_prop(stack: &mut PStack<&mut Clause>, prop: FormulaProperties) {
+    for clause in stack.as_mut_slice() {
+        (*clause).del_prop(prop);
+    }
+}
 
 /// Writes the C `PStackClausePrintTSTP` shape.
 ///
@@ -56,7 +63,7 @@ fn tstp_stack_write_error(_error: fmt::Error) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::pstack_clause_print_tstp_string;
+    use super::{pstack_clause_del_prop, pstack_clause_print_tstp_string};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -133,5 +140,22 @@ mod tests {
             pstack_clause_print_tstp_string(&bank, &stack, ProblemType::FirstOrder).unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn pstack_clause_del_prop_clears_property_on_each_stacked_clause() {
+        let mut first = Clause::empty();
+        first.set_prop(CP_INPUT_FORMULA);
+        let mut second = Clause::empty();
+        second.set_prop(CP_INPUT_FORMULA);
+        let mut stack = PStack::new();
+        stack.push(&mut first);
+        stack.push(&mut second);
+
+        pstack_clause_del_prop(&mut stack, CP_INPUT_FORMULA);
+        drop(stack);
+
+        assert!(!first.query_prop(CP_INPUT_FORMULA));
+        assert!(!second.query_prop(CP_INPUT_FORMULA));
     }
 }

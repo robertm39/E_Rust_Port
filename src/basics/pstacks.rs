@@ -71,6 +71,10 @@ impl<T> PStack<T> {
         &self.stack
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.stack
+    }
+
     pub fn reset(&mut self) {
         self.stack.clear();
     }

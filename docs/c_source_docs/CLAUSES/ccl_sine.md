@@ -147,6 +147,7 @@ Source files reviewed: `CLAUSES/ccl_sine.h`, `CLAUSES/ccl_sine.c`.
 ### Compatibility Notes
 
 - `PStackClausePrintTSTP` prints clauses in increasing stack-index order, calls `ClauseTSTPPrint(out, clause, true, true)`, and appends one newline after each clause. Rust preserves the clause-stack text shape with explicit `ProblemType` and propagates diagnostics for the currently deferred typed/higher-order formula-closure branch; `PStackFormulaPrintTSTP` remains deferred until `WFormula` printing is ported.
+- `PStackClauseDelProp` mutates every clause referenced by the stack without consuming or reordering the stack. Rust models this as a stack of mutable clause references; formula property deletion remains deferred until `WFormula` ownership exists.
 
 ### Porting Focus
 
