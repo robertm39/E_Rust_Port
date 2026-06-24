@@ -149,6 +149,7 @@ mod tests {
     };
     use crate::clauses::clause::Clause;
     use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
+    use crate::terms::termbanks::TermBank;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -162,7 +163,7 @@ mod tests {
         data.map_or(0.0, |data| data.weight)
     }
 
-    fn priority(_clause: &Clause) -> i64 {
+    fn priority(_bank: &TermBank, _clause: &Clause) -> i64 {
         40
     }
 

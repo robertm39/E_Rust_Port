@@ -1,17 +1,19 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::neweval::{EvalCell, EvalPriority, PRIO_BEST};
+use crate::terms::termbanks::TermBank;
 
 pub type ClauseEvalFun<Data> = fn(Option<&mut Data>, &Clause) -> f64;
-pub type ClausePrioFun = fn(&Clause) -> EvalPriority;
+pub use crate::heuristics::prio_funs::ClausePrioFun;
 pub type GenericExitFun<Data> = fn(Data);
 pub type BoxedWfcb = Box<dyn WfcbOps>;
 
 pub trait WfcbOps {
     fn compute_eval(&mut self, clause: &Clause) -> f64;
-    fn compute_priority(&self, clause: &Clause) -> EvalPriority;
+    fn compute_priority(&self, bank: &TermBank, clause: &Clause) -> EvalPriority;
     fn add_evaluation(
         &mut self,
         evaluations: &mut EvalCell,
+        bank: &TermBank,
         clause: &Clause,
         pos: usize,
         empty: bool,
@@ -52,8 +54,8 @@ impl<Data> Wfcb<Data> {
     }
 
     #[must_use]
-    pub fn compute_priority(&self, clause: &Clause) -> EvalPriority {
-        (self.priority_fun)(clause)
+    pub fn compute_priority(&self, bank: &TermBank, clause: &Clause) -> EvalPriority {
+        (self.priority_fun)(bank, clause)
     }
 }
 
@@ -70,18 +72,19 @@ impl<Data> WfcbOps for Wfcb<Data> {
         Self::compute_eval(self, clause)
     }
 
-    fn compute_priority(&self, clause: &Clause) -> EvalPriority {
-        Self::compute_priority(self, clause)
+    fn compute_priority(&self, bank: &TermBank, clause: &Clause) -> EvalPriority {
+        Self::compute_priority(self, bank, clause)
     }
 
     fn add_evaluation(
         &mut self,
         evaluations: &mut EvalCell,
+        bank: &TermBank,
         clause: &Clause,
         pos: usize,
         empty: bool,
     ) {
-        clause_add_evaluation(self, evaluations, clause, pos, empty);
+        clause_add_evaluation(self, evaluations, bank, clause, pos, empty);
     }
 }
 
@@ -105,6 +108,7 @@ pub const fn wfcb_alloc<Data>(
 pub fn clause_add_evaluation<Data>(
     wfcb: &mut Wfcb<Data>,
     evaluations: &mut EvalCell,
+    bank: &TermBank,
     clause: &Clause,
     pos: usize,
     empty: bool,
@@ -115,7 +119,7 @@ pub fn clause_add_evaluation<Data>(
     if empty {
         eval.set_priority(PRIO_BEST);
     } else {
-        eval.set_priority(wfcb.compute_priority(clause));
+        eval.set_priority(wfcb.compute_priority(bank, clause));
     }
 }
 
@@ -124,6 +128,9 @@ mod tests {
     use super::{clause_add_evaluation, wfcb_alloc, Wfcb};
     use crate::clauses::clause::Clause;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::typebanks::TypeBank;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -137,8 +144,12 @@ mod tests {
         data.map_or(0.0, |data| data.base)
     }
 
-    fn constant_priority(_clause: &Clause) -> EvalPriority {
+    fn constant_priority(_bank: &TermBank, _clause: &Clause) -> EvalPriority {
         PRIO_NORMAL + 7
+    }
+
+    fn term_bank() -> TermBank {
+        TermBank::new(Signature::new(TypeBank::new())).unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn record_exit(data: EvalData) {
@@ -165,7 +176,10 @@ mod tests {
 
         assert!(wfcb.data().is_some());
         assert_eq!(wfcb.compute_eval(&clause).to_bits(), 12.5_f64.to_bits());
-        assert_eq!(wfcb.compute_priority(&clause), PRIO_NORMAL + 7);
+        assert_eq!(
+            wfcb.compute_priority(&term_bank(), &clause),
+            PRIO_NORMAL + 7
+        );
         assert_eq!(exit_count.get(), 0);
 
         drop(wfcb);
@@ -196,9 +210,10 @@ mod tests {
             }),
         );
         let clause = Clause::empty();
+        let bank = term_bank();
         let mut evaluations = evals_alloc(2);
 
-        clause_add_evaluation(&mut wfcb, &mut evaluations, &clause, 1, false);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 1, false);
 
         assert_eq!(
             evaluations.eval(1).heuristic().to_bits(),
@@ -220,9 +235,10 @@ mod tests {
             }),
         );
         let clause = Clause::empty();
+        let bank = term_bank();
         let mut evaluations = evals_alloc(1);
 
-        clause_add_evaluation(&mut wfcb, &mut evaluations, &clause, 0, true);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 0, true);
 
         assert_eq!(evaluations.eval(0).heuristic().to_bits(), 3.5_f32.to_bits());
         assert_eq!(evaluations.eval(0).priority(), PRIO_BEST);

@@ -1,5 +1,8 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::scanner::{Scanner, TokenType};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LifoEvaluator {
@@ -48,6 +51,13 @@ pub fn lifo_eval_wfcb_init(prio_fun: ClausePrioFun) -> Wfcb<LifoEvaluator> {
     )
 }
 
+pub fn lifo_eval_parse(scanner: &mut Scanner) -> Result<Wfcb<LifoEvaluator>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(lifo_eval_wfcb_init(prio_fun))
+}
+
 fn lifo_eval_wfcb_compute(data: Option<&mut LifoEvaluator>, clause: &Clause) -> f64 {
     match data {
         Some(data) => data.compute(clause),
@@ -63,6 +73,10 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_NORMAL};
     use crate::heuristics::wfcb::clause_add_evaluation;
+    use crate::inout::scanner::Scanner;
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::typebanks::TypeBank;
 
     fn assert_close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < f64::EPSILON);
@@ -87,18 +101,23 @@ mod tests {
         assert_close(counter, 9.0);
     }
 
-    fn normal_priority(_clause: &Clause) -> EvalPriority {
+    fn normal_priority(_bank: &TermBank, _clause: &Clause) -> EvalPriority {
         PRIO_NORMAL
+    }
+
+    fn term_bank() -> TermBank {
+        TermBank::new(Signature::new(TypeBank::new())).unwrap_or_else(|err| panic!("{err}"))
     }
 
     #[test]
     fn lifo_wfcb_init_wraps_stateful_counter() {
         let clause = Clause::empty();
+        let bank = term_bank();
         let mut wfcb = lifo_eval_wfcb_init(normal_priority);
         let mut evaluations = evals_alloc(2);
 
-        clause_add_evaluation(&mut wfcb, &mut evaluations, &clause, 0, false);
-        clause_add_evaluation(&mut wfcb, &mut evaluations, &clause, 1, false);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 0, false);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 1, false);
 
         assert_eq!(
             evaluations.eval(0).heuristic().to_bits(),
@@ -110,5 +129,26 @@ mod tests {
         );
         assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
         assert_eq!(evaluations.eval(1).priority(), PRIO_NORMAL);
+    }
+
+    #[test]
+    fn lifo_eval_parse_accepts_priority_function_in_brackets() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio) rest", false).unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        let mut wfcb = super::lifo_eval_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut evaluations = evals_alloc(1);
+
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 0, false);
+
+        assert_eq!(
+            evaluations.eval(0).heuristic().to_bits(),
+            (-1.0_f32).to_bits()
+        );
+        assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "rest");
     }
 }
