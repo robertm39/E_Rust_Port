@@ -1,15 +1,57 @@
+use crate::basics::defines::IntOrP;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::pqueue::{PQueue, PQueueInt};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::FormulaProperties;
+use crate::clauses::clausesets::ClauseSet;
 use crate::terms::termbanks::TermBank;
 use std::fmt;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum AxiomType {
+    NoType = 0,
+    Clause = 1,
+    Formula = 2,
+}
+
+impl AxiomType {
+    #[must_use]
+    pub const fn queue_tag(self) -> PQueueInt {
+        match self {
+            Self::NoType => 0,
+            Self::Clause => 1,
+            Self::Formula => 2,
+        }
+    }
+}
 
 pub fn pstack_clause_del_prop(stack: &mut PStack<&mut Clause>, prop: FormulaProperties) {
     for clause in stack.as_mut_slice() {
         (*clause).del_prop(prop);
     }
+}
+
+pub fn pqueue_store_clause<'a>(axioms: &mut PQueue<IntOrP<&'a Clause>>, clause: &'a Clause) {
+    axioms.store_int(AxiomType::Clause.queue_tag());
+    axioms.store_pointer(clause);
+}
+
+pub fn clause_set_find_ax_selection_seeds<'a>(
+    set: &'a ClauseSet,
+    res: &mut PQueue<IntOrP<&'a Clause>>,
+    inc_hypos: bool,
+) -> i64 {
+    let mut found = 0;
+    for clause in set.iter() {
+        if clause.is_conjecture() || (inc_hypos && clause.is_hypothesis()) {
+            pqueue_store_clause(res, clause);
+            found += 1;
+        }
+    }
+    found
 }
 
 /// Writes the C `PStackClausePrintTSTP` shape.
@@ -63,11 +105,20 @@ fn tstp_stack_write_error(_error: fmt::Error) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::{pstack_clause_del_prop, pstack_clause_print_tstp_string};
+    use super::{
+        clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
+        pstack_clause_print_tstp_string, AxiomType,
+    };
+    use crate::basics::defines::IntOrP;
+    use crate::basics::pqueue::PQueue;
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE};
+    use crate::clauses::clause_props::{
+        CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+        CP_TYPE_NEG_CONJECTURE,
+    };
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -157,5 +208,80 @@ mod tests {
 
         assert!(!first.query_prop(CP_INPUT_FORMULA));
         assert!(!second.query_prop(CP_INPUT_FORMULA));
+    }
+
+    #[test]
+    fn pqueue_store_clause_writes_c_tag_pointer_tuple() {
+        let clause = Clause::empty();
+        let mut queue = PQueue::<IntOrP<&Clause>>::new();
+
+        pqueue_store_clause(&mut queue, &clause);
+
+        assert_eq!(queue.get_next_int(), Some(AxiomType::Clause.queue_tag()));
+        let stored = queue.get_next_pointer().expect("stored clause pointer");
+        assert_eq!(std::ptr::from_ref(stored), std::ptr::from_ref(&clause));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn clause_set_find_ax_selection_seeds_keeps_set_order_and_optional_hypotheses() {
+        let mut axiom = Clause::empty();
+        axiom.set_ident(1);
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut conjecture = Clause::empty();
+        conjecture.set_ident(2);
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut hypothesis = Clause::empty();
+        hypothesis.set_ident(3);
+        hypothesis.set_tptp_type(CP_TYPE_HYPOTHESIS);
+        let mut neg_conjecture = Clause::empty();
+        neg_conjecture.set_ident(4);
+        neg_conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let set = ClauseSet::from_clauses([axiom, conjecture, hypothesis, neg_conjecture]);
+
+        let mut without_hypotheses = PQueue::<IntOrP<&Clause>>::new();
+        assert_eq!(
+            clause_set_find_ax_selection_seeds(&set, &mut without_hypotheses, false),
+            2
+        );
+        assert_eq!(
+            without_hypotheses.get_next_int(),
+            Some(AxiomType::Clause.queue_tag())
+        );
+        assert_eq!(
+            without_hypotheses.get_next_pointer().map(Clause::ident),
+            Some(2)
+        );
+        assert_eq!(
+            without_hypotheses.get_next_int(),
+            Some(AxiomType::Clause.queue_tag())
+        );
+        assert_eq!(
+            without_hypotheses.get_next_pointer().map(Clause::ident),
+            Some(4)
+        );
+        assert!(without_hypotheses.is_empty());
+
+        let mut with_hypotheses = PQueue::<IntOrP<&Clause>>::new();
+        assert_eq!(
+            clause_set_find_ax_selection_seeds(&set, &mut with_hypotheses, true),
+            3
+        );
+        assert_eq!(with_hypotheses.get_next_int(), Some(1));
+        assert_eq!(
+            with_hypotheses.get_next_pointer().map(Clause::ident),
+            Some(2)
+        );
+        assert_eq!(with_hypotheses.get_next_int(), Some(1));
+        assert_eq!(
+            with_hypotheses.get_next_pointer().map(Clause::ident),
+            Some(3)
+        );
+        assert_eq!(with_hypotheses.get_next_int(), Some(1));
+        assert_eq!(
+            with_hypotheses.get_next_pointer().map(Clause::ident),
+            Some(4)
+        );
+        assert!(with_hypotheses.is_empty());
     }
 }
