@@ -5,6 +5,7 @@ pub mod fifo;
 pub mod gdweight;
 pub mod lifo;
 pub mod orientweight;
+pub mod prio_funs;
 pub mod random;
 pub mod refinedweight;
 pub mod simweight;
