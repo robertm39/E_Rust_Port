@@ -137,6 +137,11 @@ impl TermBank {
         self.term_store.entries()
     }
 
+    #[must_use]
+    pub(crate) fn stored_terms(&self) -> Vec<Term> {
+        self.term_store.terms()
+    }
+
     /// Returns non-variable term nodes plus bank-owned variables.
     ///
     /// # Panics
