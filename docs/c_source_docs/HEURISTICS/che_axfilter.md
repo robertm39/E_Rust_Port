@@ -126,6 +126,13 @@ Source files reviewed: `HEURISTICS/che_axfilter.h`, `HEURISTICS/che_axfilter.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `AxFilterAlloc` initializes all ordinary GSinE fields but leaves `threshold` unset; the C threshold parser assigns it before use. Rust initializes `threshold` to `0` so the safe allocation-shaped value is deterministic before parsing.
+- `GeneralityMeasureNames` contains the spellings `CoutPosFormulas` and `CoutNegFormulas`, and lookup returns `GMNoMeasure` for any unknown spelling. Rust preserves those spellings for lookup/printing; cleaned aliases should be added only as compatibility mappings.
+- `AxFilterPrintBuf` formats GSinE with `%f`-style six-decimal floats and prints `Threshold(<n>)`. Its `AFLambdaDefines` branch formats `LambdaDef` but then falls through to the default assertion because there is no `break`; Rust returns `LambdaDef` to keep filter-set printing usable until reference tests show the assertion itself is observable.
+- `AxFilterDefParse` uses a file-static unsigned counter for anonymous `axfilter_auto%4lu` names and does not check generated names against user-supplied names. Rust parser integration remains deferred; preserve the counter shape when anonymous definition parsing is added.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
