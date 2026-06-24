@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn_props::{
@@ -6,6 +7,8 @@ use crate::clauses::eqn_props::{
     EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT, EQUAL_PREDICATE,
 };
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::orderings::cto_orderings::to_compare;
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
@@ -644,6 +647,60 @@ impl Eqn {
         self.del_prop(EP_IS_ORIENTED);
         self.del_prop(EP_MAX_IS_UP_TO_DATE);
         self.swap_sides_simple();
+    }
+
+    /// Orient this equation with the selected term ordering.
+    ///
+    /// Returns `true` if the sides were swapped, matching C `EqnOrient`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the selected ordering cannot compare terms or if it returns an
+    /// internal cache-only relation where C asserts in the default switch arm.
+    pub fn orient(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> bool {
+        if self.query_prop(EP_MAX_IS_UP_TO_DATE) {
+            return false;
+        }
+
+        let relation = if self.lterm == self.rterm {
+            CompareResult::Equal
+        } else if self.lterm == *bank.true_term() {
+            CompareResult::Lesser
+        } else if self.rterm == *bank.true_term() {
+            CompareResult::Greater
+        } else {
+            to_compare(
+                ocb,
+                bank.signature(),
+                &self.lterm,
+                &self.rterm,
+                DerefType::Always,
+                DerefType::Always,
+            )
+        };
+
+        let swapped = match relation {
+            CompareResult::Uncomparable | CompareResult::Equal => {
+                self.del_prop(EP_IS_ORIENTED);
+                false
+            }
+            CompareResult::Greater => {
+                self.set_prop(EP_IS_ORIENTED);
+                false
+            }
+            CompareResult::Lesser => {
+                self.swap_sides();
+                self.set_prop(EP_IS_ORIENTED);
+                true
+            }
+            CompareResult::Unknown
+            | CompareResult::NotGreaterEqual
+            | CompareResult::NotLessEqual => {
+                panic!("unexpected equation orientation relation: {relation:?}")
+            }
+        };
+        self.set_prop(EP_MAX_IS_UP_TO_DATE);
+        swapped
     }
 
     pub fn copy_to_bank(&self, bank: &mut TermBank) -> Result<Self, Diagnostic> {
@@ -2209,6 +2266,7 @@ mod tests {
         eqn_app_encode_string, eqn_debug_string, eqn_deref_string, eqn_fof_parse, eqn_fof_string,
         eqn_parse, eqn_string, eqn_tstp_string, Eqn, EqnFofPrintOptions, EqnPrintOptions,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -2216,7 +2274,9 @@ mod tests {
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
         EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::SIG_PHONY_APP_CODE;
     use crate::terms::signature::{
         FunctionProperties, Signature, FP_CL_SPLIT_DEF, FP_IS_INTEGER, FP_PSEUDO_PRED,
@@ -2298,6 +2358,15 @@ mod tests {
         term.set_argument(0, variable.clone());
         term.set_argument(1, arg.clone());
         term
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     #[test]
@@ -2767,6 +2836,76 @@ mod tests {
         assert_eq!(eq.right(), &left);
         assert!(!eq.is_oriented());
         assert!(!eq.query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn orient_sets_and_swaps_sides_like_c_eqn_orient() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut greater = Eqn::alloc(f_a.clone(), a.clone(), &mut bank, true).unwrap();
+        let mut ocb = kbo_ocb(&bank);
+
+        assert!(!greater.orient(&mut ocb, &bank));
+        assert_eq!(greater.left(), &f_a);
+        assert_eq!(greater.right(), &a);
+        assert!(greater.is_oriented());
+        assert!(greater.query_prop(EP_MAX_IS_UP_TO_DATE));
+
+        let mut lesser = Eqn::alloc(a.clone(), f_a.clone(), &mut bank, true).unwrap();
+        assert!(lesser.orient(&mut ocb, &bank));
+        assert_eq!(lesser.left(), &f_a);
+        assert_eq!(lesser.right(), &a);
+        assert!(lesser.is_oriented());
+        assert!(lesser.query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn orient_preserves_c_true_and_equal_special_cases() {
+        let mut bank = test_bank();
+        let atom = typed_pred_const(&mut bank, "p");
+        let mut right_true =
+            Eqn::alloc(atom.clone(), bank.true_term().clone(), &mut bank, true).unwrap();
+        let mut ocb = kbo_ocb(&bank);
+
+        assert!(!right_true.orient(&mut ocb, &bank));
+        assert_eq!(right_true.left(), &atom);
+        assert_eq!(right_true.right(), bank.true_term());
+        assert!(right_true.is_oriented());
+        assert!(right_true.query_prop(EP_MAX_IS_UP_TO_DATE));
+
+        let mut left_true =
+            Eqn::alloc(atom.clone(), bank.true_term().clone(), &mut bank, true).unwrap();
+        left_true.set_left_raw(bank.true_term().clone());
+        left_true.set_right_raw(atom.clone());
+        assert!(left_true.orient(&mut ocb, &bank));
+        assert_eq!(left_true.left(), &atom);
+        assert_eq!(left_true.right(), bank.true_term());
+        assert!(left_true.is_oriented());
+
+        let a = typed_const(&mut bank, "a");
+        let mut equal = Eqn::alloc(a.clone(), a, &mut bank, true).unwrap();
+        equal.set_prop(EP_IS_ORIENTED);
+        assert!(!equal.orient(&mut ocb, &bank));
+        assert!(!equal.is_oriented());
+        assert!(equal.query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn orient_respects_max_up_to_date_cache_flag() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut eq = Eqn::alloc(a.clone(), f_a.clone(), &mut bank, true).unwrap();
+        let mut ocb = kbo_ocb(&bank);
+
+        eq.set_prop(EP_MAX_IS_UP_TO_DATE);
+
+        assert!(!eq.orient(&mut ocb, &bank));
+        assert_eq!(eq.left(), &a);
+        assert_eq!(eq.right(), &f_a);
+        assert!(!eq.is_oriented());
+        assert!(eq.query_prop(EP_MAX_IS_UP_TO_DATE));
     }
 
     #[test]
