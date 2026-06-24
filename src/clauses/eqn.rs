@@ -1716,6 +1716,39 @@ pub fn eqn_write(
     }
 }
 
+/// Writes the C `EqnTSTPPrint` shape.
+///
+/// # Panics
+///
+/// Panics if the literal's equational-property bit and right-hand `$true`
+/// shape are inconsistent, or if a printed term has an uninitialized
+/// argument, matching the C preconditions.
+pub fn eqn_write_tstp(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    full_terms: bool,
+    print_oriented: bool,
+) -> fmt::Result {
+    if eqn.is_prop_false() {
+        return output.write_str("$false");
+    }
+    if eqn.is_equ_lit(bank) {
+        bank.write_term(output, eqn.left(), full_terms)?;
+        if print_oriented && eqn.is_oriented() {
+            output.write_str(if eqn.is_negative() { "!->" } else { "->" })?;
+        } else {
+            output.write_str(if eqn.is_negative() { "!=" } else { "=" })?;
+        }
+        bank.write_term(output, eqn.right(), full_terms)
+    } else {
+        if eqn.is_negative() {
+            output.write_char('~')?;
+        }
+        bank.write_term(output, eqn.left(), full_terms)
+    }
+}
+
 #[must_use]
 pub fn eqn_string(
     bank: &TermBank,
@@ -1729,6 +1762,18 @@ pub fn eqn_string(
     output
 }
 
+#[must_use]
+pub fn eqn_tstp_string(
+    bank: &TermBank,
+    eqn: &Eqn,
+    full_terms: bool,
+    print_oriented: bool,
+) -> String {
+    let mut output = String::new();
+    let _ = eqn_write_tstp(&mut output, bank, eqn, full_terms, print_oriented);
+    output
+}
+
 fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptions) -> fmt::Result {
     if options.higher_order_parentheses {
         output.write_char(ch)?;
@@ -1738,7 +1783,7 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 
 #[cfg(test)]
 mod tests {
-    use super::{eqn_string, Eqn, EqnPrintOptions};
+    use super::{eqn_string, eqn_tstp_string, Eqn, EqnPrintOptions};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -1874,6 +1919,52 @@ mod tests {
         assert_eq!(
             eqn_string(&bank, &predicate, false, true, EqnPrintOptions::tptp()),
             "++print_p"
+        );
+    }
+
+    #[test]
+    fn eqn_tstp_print_string_matches_c_literal_shapes() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "tstp_a");
+        let b = typed_const(&mut bank, "tstp_b");
+        let positive = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+        let negative = Eqn::alloc(a.clone(), b.clone(), &mut bank, false).unwrap();
+
+        assert_eq!(
+            eqn_tstp_string(&bank, &positive, true, false),
+            "tstp_a=tstp_b"
+        );
+        assert_eq!(
+            eqn_tstp_string(&bank, &negative, true, false),
+            "tstp_a!=tstp_b"
+        );
+
+        let mut oriented_positive = positive.clone();
+        oriented_positive.set_prop(EP_IS_ORIENTED);
+        let mut oriented_negative = negative.clone();
+        oriented_negative.set_prop(EP_IS_ORIENTED);
+        assert_eq!(
+            eqn_tstp_string(&bank, &oriented_positive, true, true),
+            "tstp_a->tstp_b"
+        );
+        assert_eq!(
+            eqn_tstp_string(&bank, &oriented_negative, true, true),
+            "tstp_a!->tstp_b"
+        );
+        assert_eq!(
+            eqn_tstp_string(&bank, &oriented_positive, true, false),
+            "tstp_a=tstp_b"
+        );
+
+        let atom = typed_pred_const(&mut bank, "tstp_p");
+        let true_term = bank.true_term().clone();
+        let predicate = Eqn::alloc(atom, true_term, &mut bank, false).unwrap();
+        assert_eq!(eqn_tstp_string(&bank, &predicate, true, false), "~tstp_p");
+
+        let false_literal = Eqn::alloc(a.clone(), a, &mut bank, false).unwrap();
+        assert_eq!(
+            eqn_tstp_string(&bank, &false_literal, true, false),
+            "$false"
         );
     }
 

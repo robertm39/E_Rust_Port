@@ -331,6 +331,7 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 
 - `EqnPrint` reads mutable process-global `OutputFormat`, `EqnUseInfix`, `EqnFullEquationalRep`, and `EqnPrintOriented`. Rust keeps the rendered LOP/TPTP behavior but passes those choices through explicit `EqnPrintOptions`; prefer that explicit API unless executable-level compatibility requires recreating process globals.
 - In the `TPTPFormat` branch, `EqnPrint` ignores `EqnFullEquationalRep` and always prints an external `++`/`--` sign plus prefix `equal(...)` only for equational literals. Rust preserves that dialect split in the TPTP option.
+- `EqnTSTPPrint` special-cases any negative `lterm == rterm` literal as `$false` before checking equational shape, and consults the process-global `EqnPrintOriented` for `->`/`!->` output. Rust preserves the same spellings through an explicit TSTP writer and a `print_oriented` argument; the C global is a good candidate to keep explicit in future Rust call paths.
 
 ### Porting Focus
 

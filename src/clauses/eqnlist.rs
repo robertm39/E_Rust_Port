@@ -1,6 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
-use crate::clauses::eqn::{eqn_write, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{eqn_write, eqn_write_tstp, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{EqnProperties, EP_IS_POSITIVE};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -183,6 +183,43 @@ impl EqnList {
     ) -> String {
         let mut output = String::new();
         let _ = self.write_print(&mut output, bank, sep, negated, full_terms, options);
+        output
+    }
+
+    /// Writes the C `EqnListTSTPPrint` shape with an explicit separator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any literal or term violates the C printing preconditions.
+    pub fn write_tstp_print(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        sep: &str,
+        full_terms: bool,
+        print_oriented: bool,
+    ) -> fmt::Result {
+        let mut iter = self.literals.iter();
+        if let Some(first) = iter.next() {
+            eqn_write_tstp(output, bank, first, full_terms, print_oriented)?;
+            for literal in iter {
+                output.write_str(sep)?;
+                eqn_write_tstp(output, bank, literal, full_terms, print_oriented)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn tstp_print_string(
+        &self,
+        bank: &TermBank,
+        sep: &str,
+        full_terms: bool,
+        print_oriented: bool,
+    ) -> String {
+        let mut output = String::new();
+        let _ = self.write_tstp_print(&mut output, bank, sep, full_terms, print_oriented);
         output
     }
 
@@ -621,7 +658,7 @@ mod tests {
     use super::{EqnList, EQN_LIST_LONG_LIMIT};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
-    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{
         EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
@@ -758,6 +795,36 @@ mod tests {
             &[first.clone(), second, third, first.clone()]
         );
         assert!(list.delete_element(3));
+    }
+
+    #[test]
+    fn print_helpers_preserve_separator_order_and_tstp_literal_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "list_print_a");
+        let b = typed_const(&mut bank, "list_print_b");
+        let c = typed_const(&mut bank, "list_print_c");
+        let predicate = typed_pred_const(&mut bank, "list_print_p");
+        let true_term = bank.true_term().clone();
+        let mut oriented = eqn(&mut bank, &a, &b, true);
+        oriented.set_prop(EP_IS_ORIENTED);
+        let list = EqnList::from_vec(vec![
+            oriented,
+            eqn(&mut bank, &b, &c, false),
+            eqn(&mut bank, &predicate, &true_term, false),
+        ]);
+
+        assert_eq!(
+            EqnList::new().print_string(&bank, ";", false, true, EqnPrintOptions::default()),
+            ""
+        );
+        assert_eq!(
+            list.print_string(&bank, ";", true, true, EqnPrintOptions::default()),
+            "list_print_a!=list_print_b;list_print_b=list_print_c;list_print_p"
+        );
+        assert_eq!(
+            list.tstp_print_string(&bank, " | ", true, true),
+            "list_print_a->list_print_b | list_print_b!=list_print_c | ~list_print_p"
+        );
     }
 
     #[test]
