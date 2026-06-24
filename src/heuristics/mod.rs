@@ -13,6 +13,7 @@ pub mod levweight;
 pub mod lifo;
 pub mod normsubst;
 pub mod orientweight;
+pub mod prefixweight;
 pub mod prio_funs;
 pub mod random;
 pub mod rawspecfeatures;

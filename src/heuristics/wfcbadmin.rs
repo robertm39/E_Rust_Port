@@ -17,6 +17,7 @@ use crate::heuristics::gdweight::gd_clause_weight_parse;
 use crate::heuristics::levweight::conjecture_lev_distance_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
+use crate::heuristics::prefixweight::conjecture_term_prefix_weight_parse;
 use crate::heuristics::random::rand_weight_parse;
 use crate::heuristics::refinedweight::{clause_refined_weight2_parse, clause_refined_weight_parse};
 use crate::heuristics::simweight::sim_weight_parse;
@@ -299,6 +300,7 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ConjectureTreeDistanceWeight"
             | "ConjectureStrucDistanceWeight"
             | "ConjectureRelativeTermWeight"
+            | "ConjectureTermPrefixWeight"
             | "FunWeight"
             | "SymOffsetWeight"
             | "RandomWeight"
@@ -312,6 +314,10 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
     weight_fun_parse_with_context(scanner, context)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "C parser-table dispatch is kept as one explicit compatibility match"
+)]
 pub fn weight_fun_parse_with_context(
     scanner: &mut Scanner,
     context: WeightParseContext<'_>,
@@ -402,6 +408,12 @@ pub fn weight_fun_parse_with_context(
         "ConjectureRelativeTermWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
             Ok(Box::new(conjecture_relative_term_weight_parse(
+                scanner, axioms,
+            )?))
+        }
+        "ConjectureTermPrefixWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(conjecture_term_prefix_weight_parse(
                 scanner, axioms,
             )?))
         }
@@ -583,6 +595,7 @@ mod tests {
         assert!(weight_fun_parser_is_ported("ConjectureTreeDistanceWeight"));
         assert!(weight_fun_parser_is_ported("ConjectureStrucDistanceWeight"));
         assert!(weight_fun_parser_is_ported("ConjectureRelativeTermWeight"));
+        assert!(weight_fun_parser_is_ported("ConjectureTermPrefixWeight"));
         assert!(weight_fun_parser_is_ported("FunWeight"));
         assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
         assert!(!weight_fun_parser_is_ported(
@@ -778,6 +791,7 @@ mod tests {
             "ConjectureTreeDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0) tail",
             "ConjectureStrucDistanceWeight(ConstPrio,0,0,5.0,10.0,2.0,3.0,0,1.0,1.0,1.0) tail",
             "ConjectureRelativeTermWeight(ConstPrio,0,0,2.0,10,3,20,1,0,1.0,1.0,1.0) tail",
+            "ConjectureTermPrefixWeight(ConstPrio,0,0,0.5,5.0,0,1.0,1.0,1.0) tail",
         ];
 
         assert_eq!(context.axioms().map(ClauseSet::len), Some(0));
