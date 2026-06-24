@@ -97,6 +97,14 @@ Source files reviewed: `ORDERINGS/cto_orderings.h`, `ORDERINGS/cto_orderings.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TOGreater` and `TOCompare` are pure dispatchers over the concrete ordering implementation selected in `ocb->type`. They remain pending until the KBO/LPO/RPO term comparison modules are ported; do not expose a cleaned term-ordering API before the C branch behavior is covered.
+- `TOPrecedenceParse` and `TOWeightsParse` only start parsing when the first token is `Identifier`, even though `SigParseKnownOperator`/`FuncSymbParse` can parse quoted, string, or numeric function symbols. Later symbols inside a comparison chain or weight assignment still go through the broader known-operator parser.
+- `TOSymbolComparisonChainParse` reports precedence conflicts at the position of the left/previous symbol in the conflicting pair, not at the relation token or right symbol. Rust preserves that diagnostic anchor.
+- `TOSymbolComparisonChainParse` returns the last value returned by `OCBPrecedenceAddTuple`, so a successful newly inserted chain can return `1` rather than the actual matrix state-stack pointer. This follows the C `OCBPrecedenceAddTuple` return surface.
+- `TOSymbolWeightParse` accepts only positive integer weights, multiplies by `W_DEFAULT_WEIGHT`, and stores the result directly in the OCB weight vector. C copies the scanner's unsigned numeric value into `long`; Rust rejects values that do not fit signed `long` instead of importing implementation-defined unsigned-to-signed conversion.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
