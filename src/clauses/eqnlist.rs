@@ -3,6 +3,7 @@ use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnProperties, EP_IS_POSITIVE};
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term, TermProperties};
@@ -442,6 +443,12 @@ impl EqnList {
     pub fn add_symbol_distribution(&self, dist_array: &mut [i64]) {
         for literal in &self.literals {
             literal.add_symbol_distribution(dist_array);
+        }
+    }
+
+    pub fn add_type_distribution(&self, sig: &mut Signature, type_array: &mut [i64]) {
+        for literal in &self.literals {
+            literal.add_type_distribution(sig, type_array);
         }
     }
 

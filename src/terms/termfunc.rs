@@ -6,7 +6,7 @@ use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::signature::{
     Signature, FP_INTERPRETED, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
-    SIG_ITE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+    SIG_ITE_CODE, SIG_LET_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::{type_drop_first_arg, types_cmp, var_order};
 use crate::terms::termpos::TermPos;
@@ -915,6 +915,39 @@ pub fn term_add_symbol_distribution_limited(term: &Term, dist_array: &mut [i64],
     }
 }
 
+/// Adds occurrences of each visited term's head type to `type_array`.
+///
+/// Phony applications count the application head type but skip the hidden head
+/// cell while traversing children, matching `TermAddTypeDistribution`.
+///
+/// # Panics
+///
+/// Panics if a visited term has an unshared type with a negative UID, or if
+/// `type_array` cannot address a counted type UID.
+pub fn term_add_type_distribution(term: &Term, sig: &mut Signature, type_array: &mut [i64]) {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if let Some(type_) = term_head_type(sig, &current) {
+            let index = usize::try_from(type_.type_uid())
+                .expect("counted term type must have a non-negative UID");
+            assert!(
+                index < type_array.len(),
+                "type distribution array must cover all counted type UIDs"
+            );
+            type_array[index] += 1;
+        }
+
+        let first_visible_arg = usize::from(current.is_phony_app());
+        stack.extend(
+            current
+                .argument_clones()
+                .into_iter()
+                .skip(first_visible_arg)
+                .flatten(),
+        );
+    }
+}
+
 /// Adds symbol occurrences and records newly seen non-phony function symbols.
 ///
 /// # Panics
@@ -938,6 +971,34 @@ pub fn term_add_symbol_dist_exist(term: &Term, dist_array: &mut [i64], exists: &
             }
             stack.extend(current.argument_clones().into_iter().flatten());
         }
+    }
+}
+
+fn term_head_type(sig: &mut Signature, term: &Term) -> Option<crate::terms::simpletypes::Type> {
+    if term.f_code() == SIG_ITE_CODE {
+        debug_assert_eq!(term.arity(), 3);
+        term.type_()
+    } else if term.f_code() == SIG_LET_CODE {
+        term.type_()
+    } else if term.f_code() == sig.qex_code() || term.f_code() == sig.qall_code() {
+        Some(sig.type_bank().bool_type())
+    } else if term.is_applied_any_var() {
+        debug_assert_eq!(term.f_code(), SIG_PHONY_APP_CODE);
+        term.argument(0).and_then(|head| head.type_())
+    } else if term.is_any_var() || term.is_lambda() {
+        debug_assert!(!term.is_any_var() || term.arity() == 0);
+        term.type_()
+    } else if term.f_code() == SIG_PHONY_APP_CODE {
+        let head = term.argument(0)?;
+        let head_type = term_head_type(sig, &head)?;
+        debug_assert!(head_type.is_arrow());
+        debug_assert!(head_type.arity() >= 2);
+        Some(
+            sig.type_bank_mut()
+                .insert_type_shared(type_drop_first_arg(&head_type)),
+        )
+    } else {
+        sig.get_type(term.f_code()).cloned()
     }
 }
 
@@ -1438,19 +1499,20 @@ fn create_var_renaming_de_bruijn(vars: &VarBank, term: &Term) -> BTreeMap<FunCod
 mod tests {
     use super::{
         term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
-        term_add_symbol_features, term_add_symbol_features_limited, term_app_encode,
-        term_apply_arg, term_array_no_duplicates, term_collect_fcodes, term_collect_ground_terms,
-        term_collect_variables, term_compute_function_ranks, term_compute_order, term_copy,
-        term_copy_keep_vars, term_copy_normalize_vars, term_copy_normalize_vars_alpha,
-        term_copy_rename_vars, term_copy_unify_vars, term_create_prefix, term_dag_weight,
-        term_depth, term_find_ite_subterm, term_find_max_var_code, term_has_f_code,
-        term_has_unbound_variables, term_is_db_closed, term_is_def_term, term_is_flat,
-        term_is_ground, term_is_ground_compute, term_is_subterm, term_is_subterm_deref,
-        term_is_untyped, term_lex_compare, term_linearize, term_non_linear_weight, term_parse,
-        term_parse_arg_list, term_parse_operator, term_s_expr_string, term_sig_insert,
-        term_simple_string, term_standard_weight, term_struct_equal, term_struct_equal_deref,
-        term_struct_equal_no_deref, term_struct_prefix_equal, term_struct_weight_compare,
-        term_sym_type_weight, term_weight_compute, var_print_string, VarNormStyle,
+        term_add_symbol_features, term_add_symbol_features_limited, term_add_type_distribution,
+        term_app_encode, term_apply_arg, term_array_no_duplicates, term_collect_fcodes,
+        term_collect_ground_terms, term_collect_variables, term_compute_function_ranks,
+        term_compute_order, term_copy, term_copy_keep_vars, term_copy_normalize_vars,
+        term_copy_normalize_vars_alpha, term_copy_rename_vars, term_copy_unify_vars,
+        term_create_prefix, term_dag_weight, term_depth, term_find_ite_subterm,
+        term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
+        term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute, term_is_subterm,
+        term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
+        term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
+        term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
+        term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
+        term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
+        term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -1460,9 +1522,9 @@ mod tests {
     use crate::terms::functypes::FuncSymbType;
     use crate::terms::signature::{
         Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, FP_TYPED_APPLICATION,
-        SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_PHONY_APP_CODE,
+        SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
     };
-    use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg};
+    use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg, Type};
     use crate::terms::termpos::TermPos;
     use crate::terms::termtypes::{
         term_identity_id, DerefType, Term, TP_HAS_DB_SUBTERM, TP_IS_DB_VAR, TP_IS_GROUND,
@@ -1477,6 +1539,10 @@ mod tests {
         let term = Term::const_cell_alloc(code);
         term.set_type(Some(type_.clone()));
         term
+    }
+
+    fn type_uid_index(type_: &Type) -> usize {
+        usize::try_from(type_.type_uid()).unwrap()
     }
 
     fn parse_unshared(source: &str) -> (Signature, VarBank, Term) {
@@ -1938,6 +2004,58 @@ mod tests {
         term_add_symbol_dist_exist(&app, &mut dist, &mut exists);
         assert_eq!(dist[usize::try_from(SIG_PHONY_APP_CODE).unwrap()], 0);
         assert_eq!(exists, vec![30]);
+    }
+
+    #[test]
+    fn type_distribution_counts_head_types_and_skips_phony_heads() {
+        let mut sig = Signature::new(TypeBank::new());
+        let individual = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let unary_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let f_code = sig.insert_id("f", 1, true);
+        sig.declare_final_type(f_code, unary_type.clone()).unwrap();
+
+        let root = Term::top_alloc(f_code, 1);
+        root.set_type(Some(individual.clone()));
+        root.set_argument(0, typed_var(-2, &individual));
+        let mut type_dist = vec![0; usize::try_from(sig.type_bank().types_count() + 8).unwrap()];
+        term_add_type_distribution(&root, &mut sig, &mut type_dist);
+        assert_eq!(type_dist[type_uid_index(&unary_type)], 1);
+        assert_eq!(type_dist[type_uid_index(&individual)], 1);
+
+        let lambda_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                bool_type,
+            ]));
+        let lambda = Term::top_alloc(SIG_NAMED_LAMBDA_CODE, 0);
+        lambda.set_type(Some(lambda_type.clone()));
+        let argument = Term::top_alloc(f_code, 1);
+        argument.set_type(Some(individual.clone()));
+        argument.set_argument(0, typed_var(-4, &individual));
+        let phony_app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        phony_app.set_argument(0, lambda);
+        phony_app.set_argument(1, argument);
+
+        let before_drop_insert = sig.type_bank().types_count();
+        let mut type_dist = vec![0; usize::try_from(before_drop_insert + 8).unwrap()];
+        term_add_type_distribution(&phony_app, &mut sig, &mut type_dist);
+        let dropped_type = sig
+            .type_bank_mut()
+            .insert_type_shared(type_drop_first_arg(&lambda_type));
+
+        assert!(dropped_type.type_uid() > before_drop_insert);
+        assert_eq!(type_dist[type_uid_index(&dropped_type)], 1);
+        assert_eq!(type_dist[type_uid_index(&lambda_type)], 0);
+        assert_eq!(type_dist[type_uid_index(&unary_type)], 1);
+        assert_eq!(type_dist[type_uid_index(&individual)], 1);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnProperties, EqnSide, EP_PSEUDO_LIT};
 use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_OP_FLAG};
@@ -806,6 +807,10 @@ impl Clause {
 
     pub fn add_symbol_distribution(&self, dist_array: &mut [i64]) {
         self.literals.add_symbol_distribution(dist_array);
+    }
+
+    pub fn add_type_distribution(&self, sig: &mut Signature, type_array: &mut [i64]) {
+        self.literals.add_type_distribution(sig, type_array);
     }
 
     pub fn add_symbol_dist_exist(&self, dist_array: &mut [i64], exists: &mut Vec<FunCode>) {

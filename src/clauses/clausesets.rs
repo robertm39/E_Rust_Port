@@ -286,6 +286,12 @@ impl ClauseSet {
         }
     }
 
+    pub fn add_type_distribution(&self, sig: &mut Signature, type_array: &mut [i64]) {
+        for clause in &self.clauses {
+            clause.add_type_distribution(sig, type_array);
+        }
+    }
+
     pub fn add_conj_symbol_distribution(&self, dist_array: &mut [i64]) {
         for clause in &self.clauses {
             if clause.is_conjecture() {
@@ -778,6 +784,46 @@ mod tests {
             true,
         )]));
         assert!(set.conjecture_order(bank.signature()) > 0);
+    }
+
+    #[test]
+    fn type_distribution_forwards_clause_terms_to_signature_types() {
+        let mut bank = test_bank();
+        let default_type = bank.signature().type_bank().default_type();
+        let unary_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                default_type.clone(),
+                default_type.clone(),
+            ]));
+        let f_code = bank.signature_mut().insert_id("typed_f", 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, unary_type.clone())
+            .unwrap();
+        let a_code = bank.signature_mut().insert_id("typed_a", 0, false);
+        bank.signature_mut()
+            .declare_final_type(a_code, default_type.clone())
+            .unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let fa = Term::top_alloc(f_code, 1);
+        fa.set_type(Some(default_type.clone()));
+        fa.set_argument(0, a.clone());
+        let fa = bank.insert(&fa, DerefType::Never).unwrap();
+        let set = ClauseSet::from_clauses([clause_from(vec![literal(&mut bank, &fa, &a, true)])]);
+
+        let mut type_dist =
+            vec![0; usize::try_from(bank.signature().type_bank().types_count() + 1).unwrap()];
+        set.add_type_distribution(bank.signature_mut(), &mut type_dist);
+
+        assert_eq!(
+            type_dist[usize::try_from(unary_type.type_uid()).unwrap()],
+            1
+        );
+        assert_eq!(
+            type_dist[usize::try_from(default_type.type_uid()).unwrap()],
+            2
+        );
     }
 
     #[test]

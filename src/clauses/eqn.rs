@@ -8,7 +8,7 @@ use crate::clauses::eqn_props::{
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
-use crate::terms::signature::{FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
+use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
 use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::{
@@ -17,12 +17,12 @@ use crate::terms::termbanks::{
 };
 use crate::terms::termfunc::{
     term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
-    term_add_symbol_features, term_add_symbol_features_limited, term_collect_fcodes,
-    term_collect_ground_terms, term_collect_prop_variables, term_collect_variables,
-    term_compute_function_ranks, term_dag_weight, term_depth, term_fsum_weight, term_has_f_code,
-    term_is_def_term, term_is_untyped, term_lex_compare, term_non_linear_weight,
-    term_standard_weight, term_struct_equal_deref, term_struct_weight_compare,
-    term_sym_type_weight, term_weight_compute,
+    term_add_symbol_features, term_add_symbol_features_limited, term_add_type_distribution,
+    term_collect_fcodes, term_collect_ground_terms, term_collect_prop_variables,
+    term_collect_variables, term_compute_function_ranks, term_dag_weight, term_depth,
+    term_fsum_weight, term_has_f_code, term_is_def_term, term_is_untyped, term_lex_compare,
+    term_non_linear_weight, term_standard_weight, term_struct_equal_deref,
+    term_struct_weight_compare, term_sym_type_weight, term_weight_compute,
 };
 use crate::terms::termtypes::{
     term_del_prop, term_del_prop_opt, term_identity_cmp, term_set_prop, term_var_del_prop,
@@ -1453,6 +1453,11 @@ impl Eqn {
     pub fn add_symbol_distribution_limited(&self, dist_array: &mut [i64], limit: usize) {
         term_add_symbol_distribution_limited(&self.lterm, dist_array, limit);
         term_add_symbol_distribution_limited(&self.rterm, dist_array, limit);
+    }
+
+    pub fn add_type_distribution(&self, sig: &mut Signature, type_array: &mut [i64]) {
+        term_add_type_distribution(&self.lterm, sig, type_array);
+        term_add_type_distribution(&self.rterm, sig, type_array);
     }
 
     pub fn add_symbol_features_limited(
