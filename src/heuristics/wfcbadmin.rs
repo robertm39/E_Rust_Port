@@ -189,6 +189,11 @@ impl WfcbAdmin {
             .map(|entry| entry.wfcb.as_ref())
     }
 
+    #[must_use]
+    pub fn find_wfcb_handle(&self, name: &str) -> Option<usize> {
+        self.entries.iter().rposition(|entry| entry.name == name)
+    }
+
     pub fn find_wfcb_mut(&mut self, name: &str) -> Option<&mut (dyn WfcbOps + 'static)> {
         self.entries
             .iter_mut()
