@@ -26,9 +26,9 @@ use crate::terms::termfunc::{
     term_struct_weight_compare, term_sym_type_weight, term_weight_compute,
 };
 use crate::terms::termtypes::{
-    term_del_prop, term_del_prop_opt, term_identity_cmp, term_set_prop, term_var_del_prop,
-    term_var_search_prop, term_var_set_prop, DerefType, Term, TermProperties, TP_OP_FLAG,
-    TP_PRED_POS,
+    term_del_prop, term_del_prop_opt, term_deref, term_identity_cmp, term_set_prop,
+    term_var_del_prop, term_var_search_prop, term_var_set_prop, DerefType, Term, TermProperties,
+    TP_OP_FLAG, TP_PRED_POS,
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::TermWeightExtension;
@@ -1716,6 +1716,28 @@ pub fn eqn_write(
     }
 }
 
+/// Writes the C `EqnPrintDeref` shape.
+///
+/// # Panics
+///
+/// Panics if dereferencing reaches an unsupported applied-variable binding or
+/// if a printed term has an uninitialized argument, matching the current term
+/// dereference and printing preconditions.
+pub fn eqn_write_deref(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    deref: DerefType,
+) -> fmt::Result {
+    let mut left_deref = deref;
+    let left = term_deref(eqn.left(), &mut left_deref);
+    bank.write_term(output, &left, true)?;
+    output.write_str(if eqn.is_positive() { "=" } else { "!=" })?;
+    let mut right_deref = deref;
+    let right = term_deref(eqn.right(), &mut right_deref);
+    bank.write_term(output, &right, true)
+}
+
 /// Writes the C `EqnTSTPPrint` shape.
 ///
 /// # Panics
@@ -1763,6 +1785,13 @@ pub fn eqn_string(
 }
 
 #[must_use]
+pub fn eqn_deref_string(bank: &TermBank, eqn: &Eqn, deref: DerefType) -> String {
+    let mut output = String::new();
+    let _ = eqn_write_deref(&mut output, bank, eqn, deref);
+    output
+}
+
+#[must_use]
 pub fn eqn_tstp_string(
     bank: &TermBank,
     eqn: &Eqn,
@@ -1783,7 +1812,7 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 
 #[cfg(test)]
 mod tests {
-    use super::{eqn_string, eqn_tstp_string, Eqn, EqnPrintOptions};
+    use super::{eqn_deref_string, eqn_string, eqn_tstp_string, Eqn, EqnPrintOptions};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -1965,6 +1994,38 @@ mod tests {
         assert_eq!(
             eqn_tstp_string(&bank, &false_literal, true, false),
             "$false"
+        );
+    }
+
+    #[test]
+    fn eqn_deref_print_string_matches_c_infix_shape() {
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        let y = bank.vars().var_assert_alloc(-4, &type_);
+        let a = typed_const(&mut bank, "deref_a");
+        let b = typed_const(&mut bank, "deref_b");
+        x.set_binding(Some(y.clone()));
+        y.set_binding(Some(a.clone()));
+        let negative = Eqn::alloc(x.clone(), b.clone(), &mut bank, false).unwrap();
+
+        assert_eq!(
+            eqn_deref_string(&bank, &negative, DerefType::Never),
+            "X1!=deref_b"
+        );
+        assert_eq!(
+            eqn_deref_string(&bank, &negative, DerefType::Once),
+            "X2!=deref_b"
+        );
+        assert_eq!(
+            eqn_deref_string(&bank, &negative, DerefType::Always),
+            "deref_a!=deref_b"
+        );
+
+        let positive = Eqn::alloc(y.clone(), b, &mut bank, true).unwrap();
+        assert_eq!(
+            eqn_deref_string(&bank, &positive, DerefType::Always),
+            "deref_a=deref_b"
         );
     }
 

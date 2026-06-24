@@ -1,6 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
-use crate::clauses::eqn::{eqn_write, eqn_write_tstp, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{eqn_write, eqn_write_deref, eqn_write_tstp, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{EqnProperties, EP_IS_POSITIVE};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -183,6 +183,37 @@ impl EqnList {
     ) -> String {
         let mut output = String::new();
         let _ = self.write_print(&mut output, bank, sep, negated, full_terms, options);
+        output
+    }
+
+    /// Writes the C `EqnListPrintDeref` shape with an explicit separator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if dereferencing reaches an unsupported applied-variable binding
+    /// or if any printed term violates the C printing preconditions.
+    pub fn write_deref_print(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        sep: &str,
+        deref: DerefType,
+    ) -> fmt::Result {
+        let mut iter = self.literals.iter();
+        if let Some(first) = iter.next() {
+            eqn_write_deref(output, bank, first, deref)?;
+            for literal in iter {
+                output.write_str(sep)?;
+                eqn_write_deref(output, bank, literal, deref)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn deref_print_string(&self, bank: &TermBank, sep: &str, deref: DerefType) -> String {
+        let mut output = String::new();
+        let _ = self.write_deref_print(&mut output, bank, sep, deref);
         output
     }
 
@@ -818,12 +849,28 @@ mod tests {
             ""
         );
         assert_eq!(
+            EqnList::new().deref_print_string(&bank, ";", DerefType::Always),
+            ""
+        );
+        assert_eq!(
             list.print_string(&bank, ";", true, true, EqnPrintOptions::default()),
             "list_print_a!=list_print_b;list_print_b=list_print_c;list_print_p"
         );
         assert_eq!(
             list.tstp_print_string(&bank, " | ", true, true),
             "list_print_a->list_print_b | list_print_b!=list_print_c | ~list_print_p"
+        );
+
+        let type_ = bank.signature().type_bank().default_type();
+        let x = bank.vars().var_assert_alloc(-2, &type_);
+        x.set_binding(Some(a.clone()));
+        let deref_list = EqnList::from_vec(vec![
+            eqn(&mut bank, &x, &b, true),
+            eqn(&mut bank, &c, &x, false),
+        ]);
+        assert_eq!(
+            deref_list.deref_print_string(&bank, " / ", DerefType::Always),
+            "list_print_a=list_print_b / list_print_c!=list_print_a"
         );
     }
 

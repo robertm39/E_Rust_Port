@@ -225,6 +225,7 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 ### Compatibility Notes
 
 - `EqnListPrint` has no format state of its own: it prints nothing for an empty list, writes the first literal without a leading separator, then writes the caller's separator before each remaining literal while forwarding `negated` and `fullterms` directly to `EqnPrint`. Rust preserves this exact list assembly over an owned vector.
+- `EqnListPrintDeref` uses the same no-leading-separator loop and forwards one `DerefType` to every literal. Rust preserves the separator behavior while keeping dereference expansion explicit in the literal helper.
 - `EqnListTSTPPrint` reuses the same first-literal/no-leading-separator loop but always delegates to `EqnTSTPPrint` without a negation argument. Rust keeps the separator behavior and forwards explicit `fullterms` and oriented-output choices to the bank-explicit TSTP literal writer.
 
 ### Porting Focus
