@@ -157,6 +157,9 @@ Source files reviewed: `LEARN/cle_tsm.h`, `LEARN/cle_tsm.c`.
 - `TSMEvalNormalize(eval, limit)` uses a strict `< limit` comparison; values exactly equal to the limit classify as positive.
 - `TSMRemainderEntropy` computes a weighted average over non-empty partition buckets and divides by `global_count` without an empty-partition guard, so an empty partition yields NaN while `parts` remains zero.
 - `TSMPartitionSet` assigns `FlatAnnoTerm.next` links as scratch bucket chains. Any Rust implementation that keeps flat annotation terms shared must preserve or isolate this mutation carefully.
+- `TSMPartitionSet` prepends each traversed flat annotation term to its bucket, so per-bucket list order is the reverse of `NumTree` traversal for terms with the same key.
+- Non-null partition caches store `key + 1` by `term->entry_no`; zero means "not cached". The caller must keep caches aligned with the index shape because a cached entry bypasses `TSMIndexInsert`.
+- `evaluate_index` returns zero for a single non-empty partition. For a perfect split, its denominator can become zero and the C double result is positive infinity.
 - `TSMCreateSubtermSet` asserts that every listed term has the selected direct subterm, then inserts borrowed subterms as new flat annotations using the source term's eval, eval weight, and source count.
 - `cle_tsm.h` declares `TSMFindPartLimit`, but no implementation appears in this checkout. Treat it as header-only surface until a caller or reference implementation requires it.
 
