@@ -294,6 +294,11 @@ impl FvIndexAnchor {
 }
 
 #[must_use]
+pub fn fv_index_storage(index: Option<&FvIndexAnchor>) -> usize {
+    index.map_or(0, FvIndexAnchor::storage_estimate)
+}
+
+#[must_use]
 pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> FvPackedClause {
     match anchor {
         Some(anchor) => fv_pack_clause(clause, anchor.perm_vector(), Some(anchor.cspec())),
@@ -303,7 +308,7 @@ pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> F
 
 #[cfg(test)]
 mod tests {
-    use super::{fv_index_pack_clause, FvIndexAnchor, FvIndexParams};
+    use super::{fv_index_pack_clause, fv_index_storage, FvIndexAnchor, FvIndexParams};
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -401,6 +406,11 @@ mod tests {
         let vector_len = i64::try_from(packed.vector().unwrap().len()).unwrap();
 
         assert!(anchor.insert(&mut packed, &bank));
+        assert_eq!(
+            fv_index_storage(Some(&anchor)),
+            usize::try_from(vector_len).unwrap()
+        );
+        assert_eq!(fv_index_storage(None), 0);
         assert_eq!(anchor.index().clause_count(), 1);
         assert_eq!(anchor.count_nodes(true, false), 1);
         assert_eq!(anchor.count_nodes(false, false), vector_len + 1);
