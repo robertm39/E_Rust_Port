@@ -1,9 +1,15 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::HoOrderKind;
+use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::to_params::{
     ho_order_kind_name, LiteralCmp, OrderParmsCell, TOPrecGenMethod, TOWeightGenMethod,
     TermOrdering, DEFAULT_DB_WEIGHT, DEFAULT_LAMBDA_WEIGHT, W_CONST_NO_SPECIAL_WEIGHT,
     W_CONST_NO_WEIGHT,
 };
+use crate::heuristics::to_precgen::generate_precedence_into_ocb_with_order;
+use crate::heuristics::to_weightgen::{generate_weights_into_ocb, WeightGenerationContext};
+use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::signature::Signature;
 
 pub const KBO_BONUS: i64 = 1;
 pub const MAX_TERM_PENALTY: i64 = 2;
@@ -192,19 +198,147 @@ pub fn describe_auto_ordering(oparms: &OrderParmsCell) -> String {
     )
 }
 
+/// Create the OCB described by a fully specified C `OrderParmsCell`.
+///
+/// This mirrors `TOCreateOrdering`: allocate the concrete ordering, generate
+/// or parse precedence, generate KBO weights when needed, and then install the
+/// literal-comparison mode.
+///
+/// # Errors
+///
+/// Returns a diagnostic for incomplete order-parameter cells, unsupported
+/// precedence or weight generation, predefined parser errors, or invalid raw
+/// literal-comparison values.
+///
+/// # Panics
+///
+/// Panics for `RPO`, matching the C assertion that this ordering is not yet
+/// implemented.
+pub fn to_create_ordering(
+    signature: &mut Signature,
+    axioms: &ClauseSet,
+    params: &OrderParmsCell,
+    pre_precedence: Option<&str>,
+    pre_weights: Option<&str>,
+    higher_order_problem: bool,
+) -> Result<OrderControlBlock, Diagnostic> {
+    assert!(
+        matches!(
+            params.ho_order_kind,
+            HoOrderKind::LfhoOrder | HoOrderKind::LambdaOrder
+        ),
+        "TOCreateOrdering requires LFHO or Lambda ordering kind"
+    );
+
+    let prec_by_weight = pre_precedence.is_none();
+    let mut handle = match params.ordertype {
+        TermOrdering::Lpo
+        | TermOrdering::LpoCopy
+        | TermOrdering::Lpo4
+        | TermOrdering::Lpo4Copy
+        | TermOrdering::Kbo
+        | TermOrdering::Kbo6 => OrderControlBlock::alloc(
+            params.ordertype,
+            prec_by_weight,
+            signature,
+            params.ho_order_kind,
+        ),
+        TermOrdering::Rpo => panic!("RPO not yet implemented!"),
+        TermOrdering::NoOrdering | TermOrdering::Optimize | TermOrdering::Empty => {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                format!(
+                    "Incompletely specified OrderParamsCell: {}",
+                    params.ordertype.name()
+                ),
+            ));
+        }
+    };
+
+    let precedence_order = generate_precedence_into_ocb_with_order(
+        signature,
+        axioms,
+        pre_precedence,
+        params,
+        &mut handle,
+    )?;
+    if matches!(params.ordertype, TermOrdering::Kbo | TermOrdering::Kbo6) {
+        generate_weights_into_ocb(
+            signature,
+            axioms,
+            params,
+            WeightGenerationContext {
+                precedence_order: precedence_order.as_deref(),
+                pre_weights,
+                higher_order_problem,
+            },
+            &mut handle,
+        )?;
+    }
+
+    handle.lit_cmp = literal_cmp_from_raw(params.lit_cmp)?;
+    Ok(handle)
+}
+
+fn literal_cmp_from_raw(value: i64) -> Result<LiteralCmp, Diagnostic> {
+    i32::try_from(value)
+        .ok()
+        .and_then(LiteralCmp::from_c_value)
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                format!("Invalid literal comparison value {value}"),
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         auto_ordering_analysis_string, describe_auto_ordering, init_oparms,
         order_next_const_weight, order_next_ordering, order_next_prec_gen, order_next_type,
-        order_next_weight_gen, print_oparms_string, KBO_BONUS, MAX_CONST_WEIGHT,
-        MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
+        order_next_weight_gen, print_oparms_string, to_create_ordering, KBO_BONUS,
+        MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
     };
+    use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::CompareResult;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::heuristics::to_params::{
         LiteralCmp, OrderParmsCell, TOPrecGenMethod, TOWeightGenMethod, TermOrdering,
         DEFAULT_DB_WEIGHT, DEFAULT_LAMBDA_WEIGHT, W_CONST_NO_SPECIAL_WEIGHT, W_CONST_NO_WEIGHT,
     };
+    use crate::terms::functypes::FunCode;
+    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
+    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::typebanks::TypeBank;
+
+    fn signature() -> Signature {
+        let mut signature = Signature::new(TypeBank::new());
+        signature
+            .insert_internal_codes()
+            .unwrap_or_else(|err| panic!("{err}"));
+        signature
+    }
+
+    fn typed_symbol(signature: &mut Signature, name: &str, arity: i32) -> FunCode {
+        let code = signature.insert_id(name, arity, false);
+        let individual = signature.type_bank().i_type();
+        let type_ = if arity == 0 {
+            individual
+        } else {
+            let mut args = Vec::new();
+            for _ in 0..arity {
+                args.push(individual.clone());
+            }
+            args.push(individual);
+            alloc_arrow_type(args)
+        };
+        signature
+            .declare_final_type(code, type_)
+            .unwrap_or_else(|err| panic!("{err}"));
+        code
+    }
 
     #[test]
     fn evaluation_constants_match_c_defines() {
@@ -275,6 +409,169 @@ mod tests {
                 "%\n"
             )
         );
+    }
+
+    #[test]
+    fn to_create_ordering_builds_lpo_with_generated_precedence() {
+        let mut signature = signature();
+        let unary = typed_symbol(&mut signature, "f", 1);
+        let binary = typed_symbol(&mut signature, "g", 2);
+        let params = OrderParmsCell {
+            ordertype: TermOrdering::Lpo,
+            to_prec_gen: TOPrecGenMethod::UnaryFirst,
+            lit_cmp: i64::from(LiteralCmp::TfoEqMax.c_value()),
+            ..OrderParmsCell::default()
+        };
+
+        let ocb = to_create_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            &params,
+            None,
+            None,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.ordering_type, TermOrdering::Lpo);
+        assert!(ocb.weights.is_none());
+        assert!(ocb.prec_weights.is_some());
+        assert!(ocb.precedence.is_none());
+        assert_eq!(ocb.lit_cmp, LiteralCmp::TfoEqMax);
+        assert_eq!(
+            ocb.fun_compare(&signature, unary, binary),
+            CompareResult::Greater
+        );
+    }
+
+    #[test]
+    fn to_create_ordering_builds_kbo6_with_generated_weights() {
+        let mut signature = signature();
+        typed_symbol(&mut signature, "a", 0);
+        typed_symbol(&mut signature, "f", 1);
+        let mut params = OrderParmsCell::default();
+        init_oparms(&mut params);
+
+        let ocb = to_create_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            &params,
+            None,
+            None,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(ocb.ordering_type, TermOrdering::Kbo6);
+        assert!(ocb.weights.is_some());
+        assert!(ocb.prec_weights.is_some());
+        assert!(ocb.precedence.is_none());
+        assert_eq!(ocb.fun_weight(SIG_TRUE_CODE), ocb.var_weight);
+        assert_eq!(ocb.fun_weight(SIG_PHONY_APP_CODE), 0);
+        assert_eq!(ocb.lam_weight, params.lam_w);
+        assert_eq!(ocb.db_weight, params.db_w);
+        assert_eq!(ocb.lit_cmp, LiteralCmp::Normal);
+    }
+
+    #[test]
+    fn to_create_ordering_applies_predefined_precedence_and_weight_overrides() {
+        let mut signature = signature();
+        let constant = typed_symbol(&mut signature, "a", 0);
+        let unary = typed_symbol(&mut signature, "f", 1);
+        let params = OrderParmsCell {
+            ordertype: TermOrdering::Kbo,
+            to_weight_gen: TOWeightGenMethod::ConstantWeight,
+            to_prec_gen: TOPrecGenMethod::NoMethod,
+            lit_cmp: i64::from(LiteralCmp::TfoEqMin.c_value()),
+            ..OrderParmsCell::default()
+        };
+
+        let ocb = to_create_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            &params,
+            Some("f > a"),
+            Some("a:9"),
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(ocb.prec_weights.is_none());
+        assert!(ocb.precedence.is_some());
+        assert_eq!(
+            ocb.fun_compare(&signature, unary, constant),
+            CompareResult::Greater
+        );
+        assert_eq!(ocb.fun_weight(constant), 9);
+        assert_eq!(ocb.fun_weight(unary), 1);
+        assert_eq!(ocb.lit_cmp, LiteralCmp::TfoEqMin);
+    }
+
+    #[test]
+    fn to_create_ordering_reports_incomplete_or_invalid_parameter_cells() {
+        let mut signature = signature();
+        let incomplete = OrderParmsCell {
+            ordertype: TermOrdering::NoOrdering,
+            ..OrderParmsCell::default()
+        };
+
+        let error = to_create_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            &incomplete,
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("Incompletely specified"));
+
+        let invalid_literal_cmp = OrderParmsCell {
+            ordertype: TermOrdering::Lpo,
+            to_prec_gen: TOPrecGenMethod::UnaryFirst,
+            lit_cmp: 99,
+            ..OrderParmsCell::default()
+        };
+        let error = to_create_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            &invalid_literal_cmp,
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("Invalid literal comparison"));
+    }
+
+    #[test]
+    fn predefined_only_precedence_dependent_weights_stay_explicitly_unsupported() {
+        let mut signature = signature();
+        typed_symbol(&mut signature, "a", 0);
+        typed_symbol(&mut signature, "f", 1);
+        let params = OrderParmsCell {
+            ordertype: TermOrdering::Kbo,
+            to_weight_gen: TOWeightGenMethod::SelectMaximal,
+            to_prec_gen: TOPrecGenMethod::NoMethod,
+            ..OrderParmsCell::default()
+        };
+
+        let error = to_create_ordering(
+            &mut signature,
+            &ClauseSet::new(),
+            &params,
+            Some("f > a"),
+            None,
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("requires precedence order"));
     }
 
     #[test]

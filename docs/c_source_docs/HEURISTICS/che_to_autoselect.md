@@ -129,4 +129,9 @@ Source files reviewed: `HEURISTICS/che_to_autoselect.h`, `HEURISTICS/che_to_auto
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Observations
+
+- `TOCreateOrdering` selects matrix-backed precedence solely from `pre_precedence != NULL`. With `PNoMethod`, a predefined precedence can stay partial, and KBO weight generation can still query it through `OCBFunCompare`; revisit this only after reference tests cover first-maximal and rank-style weight methods under partial user precedence.
+- `TOCreateOrdering` assigns `params->lit_cmp` directly into `ocb->lit_cmp` as a raw enum value. A cleaned Rust boundary should validate it, but compatibility may require preserving arbitrary raw values if malformed strategy files are observable.
 <!-- END MANUAL REVIEW: c_source_docs -->

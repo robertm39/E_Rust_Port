@@ -93,6 +93,32 @@ pub fn generate_precedence_into_ocb(
     oparms: &OrderParmsCell,
     ocb: &mut OrderControlBlock,
 ) -> Result<(), Diagnostic> {
+    generate_precedence_into_ocb_with_order(signature, axioms, predefined, oparms, ocb).map(|_| ())
+}
+
+/// Install a generated or predefined precedence into an OCB and return the
+/// generated total order when one was produced.
+///
+/// A predefined-only precedence in C is matrix-backed and can be partial; this
+/// helper therefore returns `None` when `predefined` is present and
+/// `oparms.to_prec_gen` is `PNoMethod`.
+///
+/// # Errors
+///
+/// Returns scanner diagnostics for predefined precedence strings or generation
+/// diagnostics for unsupported precedence methods.
+///
+/// # Panics
+///
+/// Panics if the OCB was allocated for a different signature snapshot, or if it
+/// has neither precedence weights nor a precedence matrix.
+pub fn generate_precedence_into_ocb_with_order(
+    signature: &mut Signature,
+    axioms: &ClauseSet,
+    predefined: Option<&str>,
+    oparms: &OrderParmsCell,
+    ocb: &mut OrderControlBlock,
+) -> Result<Option<Vec<FunCode>>, Diagnostic> {
     assert_eq!(
         ocb.sig_size,
         signature.f_count(),
@@ -107,13 +133,14 @@ pub fn generate_precedence_into_ocb(
         let mut scanner = Scanner::from_user_string(predefined, true)?;
         precedence_parse(&mut scanner, signature, ocb)?;
         if oparms.to_prec_gen == TOPrecGenMethod::NoMethod {
-            return Ok(());
+            return Ok(None);
         }
     }
 
     let array = generate_precedence_array(signature, axioms, oparms)?;
+    let order = precedence_order_from_array(&array, signature.f_count());
     install_precedence_array(signature, &array, ocb);
-    Ok(())
+    Ok(Some(order))
 }
 
 /// Install a sorted precedence array into an OCB.
