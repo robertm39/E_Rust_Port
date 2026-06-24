@@ -1,5 +1,10 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::simple_stuff::{jkiss_rand_double, RandState};
 use crate::clauses::clause::Clause;
+use crate::heuristics::prio_funs::parse_prio_fun;
+use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::inout::basicparser::{parse_float, parse_int};
+use crate::inout::scanner::{Scanner, TokenType};
 
 const RANDOM_X_DEFAULT: u32 = 684_291_357;
 const RANDOM_Y_DEFAULT: u32 = 123_459_876;
@@ -88,6 +93,79 @@ pub fn rand_weight_compute(evaluator: &mut RandomWeightEvaluator, clause: &Claus
     rnd * f64::from(evaluator.rand_range) + sc * evaluator.sc_weight + fifo * evaluator.fifo_weight
 }
 
+#[must_use]
+pub fn rand_weight_wfcb_init(
+    prio_fun: ClausePrioFun,
+    rand_range: i64,
+    fifo_weight: f64,
+    sc_weight: f64,
+    seed1: u32,
+    seed2: u32,
+    seed3: u32,
+) -> Wfcb<RandomWeightEvaluator> {
+    wfcb_alloc(
+        rand_weight_wfcb_compute,
+        prio_fun,
+        rand_weight_exit,
+        Some(rand_weight_init(
+            rand_range,
+            fifo_weight,
+            sc_weight,
+            seed1,
+            seed2,
+            seed3,
+        )),
+    )
+}
+
+pub fn rand_weight_parse(scanner: &mut Scanner) -> Result<Wfcb<RandomWeightEvaluator>, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let prio_fun = parse_prio_fun(scanner)?;
+
+    scanner.accept_tok(TokenType::COMMA)?;
+    let rand_range = parse_int(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let fifo_weight = parse_float(scanner)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    let sc_weight = parse_float(scanner)?;
+
+    let mut seed1 = 0;
+    let mut seed2 = 0;
+    let mut seed3 = 0;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        seed1 = c_long_to_uint(parse_int(scanner)?);
+    }
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        seed2 = c_long_to_uint(parse_int(scanner)?);
+    }
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        seed3 = c_long_to_uint(parse_int(scanner)?);
+    }
+
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(rand_weight_wfcb_init(
+        prio_fun,
+        rand_range,
+        fifo_weight,
+        sc_weight,
+        seed1,
+        seed2,
+        seed3,
+    ))
+}
+
+fn rand_weight_wfcb_compute(data: Option<&mut RandomWeightEvaluator>, clause: &Clause) -> f64 {
+    match data {
+        Some(data) => data.compute(clause),
+        None => panic!("RandomWeight WFCB requires initialized evaluator data"),
+    }
+}
+
+fn rand_weight_exit(_data: RandomWeightEvaluator) {}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f64(value: i64) -> f64 {
     value as f64
@@ -102,12 +180,16 @@ fn c_long_to_uint(value: i64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        rand_weight_compute, rand_weight_init, RandState, RANDOM_C_DEFAULT, RANDOM_X_DEFAULT,
-        RANDOM_Y_DEFAULT, RANDOM_Z_DEFAULT,
+        c_long_to_uint, rand_weight_compute, rand_weight_init, rand_weight_parse,
+        rand_weight_wfcb_init, RandState, RANDOM_C_DEFAULT, RANDOM_X_DEFAULT, RANDOM_Y_DEFAULT,
+        RANDOM_Z_DEFAULT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_NORMAL};
+    use crate::heuristics::wfcb::clause_add_evaluation;
+    use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -145,6 +227,10 @@ mod tests {
         );
     }
 
+    fn normal_priority(_bank: &TermBank, _clause: &Clause) -> EvalPriority {
+        PRIO_NORMAL
+    }
+
     #[test]
     fn rand_weight_init_uses_c_defaults_and_nonzero_seed_overrides() {
         let defaulted = rand_weight_init(17, 2.5, 3.5, 0, 0, 0);
@@ -180,5 +266,43 @@ mod tests {
         assert_close(rand_weight_compute(&mut evaluator, &clause), 8.0);
         assert_close(evaluator.compute(&clause), 18.0);
         assert_close(evaluator.fifo_counter(), 2.0);
+    }
+
+    #[test]
+    fn rand_weight_wfcb_init_wraps_stateful_random_evaluator() {
+        let clause = unit_clause();
+        let bank = test_bank();
+        let mut wfcb = rand_weight_wfcb_init(normal_priority, 0, 10.0, 2.0, 0, 0, 0);
+        let mut evaluations = evals_alloc(2);
+
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 0, false);
+        clause_add_evaluation(&mut wfcb, &mut evaluations, &bank, &clause, 1, false);
+
+        assert_eq!(evaluations.eval(0).heuristic().to_bits(), 8.0_f32.to_bits());
+        assert_eq!(
+            evaluations.eval(1).heuristic().to_bits(),
+            18.0_f32.to_bits()
+        );
+        assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+        assert_eq!(evaluations.eval(1).priority(), PRIO_NORMAL);
+    }
+
+    #[test]
+    fn rand_weight_parse_accepts_optional_seeds_and_wraps_seed_values_like_c() {
+        let clause = unit_clause();
+        let bank = test_bank();
+        assert_eq!(c_long_to_uint(-1), u32::MAX);
+        let mut parsed_scanner =
+            Scanner::from_user_string("(ConstPrio,0,10.0,2.0,11,-1) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut parsed =
+            rand_weight_parse(&mut parsed_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut parsed_eval = evals_alloc(1);
+
+        clause_add_evaluation(&mut parsed, &mut parsed_eval, &bank, &clause, 0, false);
+
+        assert_eq!(parsed_eval.eval(0).heuristic().to_bits(), 8.0_f32.to_bits());
+        assert_eq!(parsed_eval.eval(0).priority(), PRIO_NORMAL);
+        assert_eq!(parsed_scanner.current_token().literal(), "tail");
     }
 }

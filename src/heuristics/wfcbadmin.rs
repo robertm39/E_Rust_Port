@@ -1,6 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::heuristics::fifo::fifo_eval_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
+use crate::heuristics::random::rand_weight_parse;
 use crate::heuristics::wfcb::BoxedWfcb;
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 
@@ -186,7 +187,7 @@ pub fn get_weight_fun_parse_fun_index(name: &str) -> Option<usize> {
 
 #[must_use]
 pub fn weight_fun_parser_is_ported(name: &str) -> bool {
-    matches!(name, "FIFOWeight" | "LIFOWeight")
+    matches!(name, "RandomWeight" | "FIFOWeight" | "LIFOWeight")
 }
 
 pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> {
@@ -207,6 +208,7 @@ pub fn weight_fun_parse(scanner: &mut Scanner) -> Result<BoxedWfcb, Diagnostic> 
 
     scanner.next_token()?;
     match name.as_str() {
+        "RandomWeight" => Ok(Box::new(rand_weight_parse(scanner)?)),
         "FIFOWeight" => Ok(Box::new(fifo_eval_parse(scanner)?)),
         "LIFOWeight" => Ok(Box::new(lifo_eval_parse(scanner)?)),
         _ => unreachable!("ported weight parser should be handled"),
@@ -344,6 +346,7 @@ mod tests {
         assert_eq!(get_weight_fun_parse_fun_index("NoSuchWeight"), None);
         assert!(weight_fun_parser_is_ported("FIFOWeight"));
         assert!(weight_fun_parser_is_ported("LIFOWeight"));
+        assert!(weight_fun_parser_is_ported("RandomWeight"));
         assert!(!weight_fun_parser_is_ported("Clauseweight"));
     }
 
@@ -379,6 +382,22 @@ mod tests {
     }
 
     #[test]
+    fn weight_fun_parse_dispatches_random_weight_parser() {
+        let clause = Clause::empty();
+        let bank = term_bank();
+        let mut scanner =
+            Scanner::from_user_string("RandomWeight(ConstPrio,0,10.0,2.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut evaluations = evals_alloc(1);
+
+        wfcb.add_evaluation(&mut evaluations, &bank, &clause, 0, false);
+
+        assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
     fn weight_fun_parse_rejects_unknown_or_unported_names() {
         let mut unknown = Scanner::from_user_string("NoSuchWeight(ConstPrio)", false)
             .unwrap_or_else(|err| {
@@ -403,7 +422,7 @@ mod tests {
     fn weight_fun_def_parse_adds_named_and_anonymous_definitions() {
         let mut admin = WfcbAdmin::new();
         let mut scanner = Scanner::from_user_string(
-            "fresh=FIFOWeight(ConstPrio) LIFOWeight(ConstPrio) done",
+            "fresh=FIFOWeight(ConstPrio) RandomWeight(ConstPrio,0,0,1) LIFOWeight(ConstPrio) done",
             false,
         )
         .unwrap_or_else(|err| panic!("{err}"));
@@ -412,13 +431,15 @@ mod tests {
             .weight_fun_def_list_parse(&mut scanner)
             .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(parsed, 2);
-        assert_eq!(admin.len(), 2);
+        assert_eq!(parsed, 3);
+        assert_eq!(admin.len(), 3);
         assert_eq!(admin.name(0), Some("fresh"));
         assert_eq!(admin.name(1), Some("~$000000000"));
-        assert_eq!(admin.anon_counter(), 1);
+        assert_eq!(admin.name(2), Some("~$000000001"));
+        assert_eq!(admin.anon_counter(), 2);
         assert!(admin.find_wfcb("fresh").is_some());
         assert!(admin.find_wfcb("~$000000000").is_some());
+        assert!(admin.find_wfcb("~$000000001").is_some());
         assert_eq!(scanner.current_token().literal(), "done");
     }
 }
