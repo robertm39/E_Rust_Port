@@ -7,6 +7,7 @@ use crate::learn::annotations::{
     AnnotationTree, ANNOTATION_DEFAULT_SIZE,
 };
 use crate::learn::clauseenc::flat_recode_rec_clause_rep;
+use crate::learn::patterns::{pattern_term_compute, PatternSubst};
 use crate::terms::functypes::func_symb_start_token;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
@@ -200,6 +201,14 @@ impl AnnoSet {
         }
         Ok(result)
     }
+
+    pub fn compute_pattern_subst(&self, subst: &mut PatternSubst) -> bool {
+        let mut result = false;
+        for (_key, term) in self.iter() {
+            result = pattern_term_compute(subst, term.term()) || result;
+        }
+        result
+    }
 }
 
 #[must_use]
@@ -267,6 +276,10 @@ pub fn anno_set_rec_to_flat_enc(bank: &mut TermBank, set: &mut AnnoSet) -> Resul
     set.rec_to_flat_enc(bank)
 }
 
+pub fn anno_set_compute_pattern_subst(subst: &mut PatternSubst, set: &AnnoSet) -> bool {
+    set.compute_pattern_subst(subst)
+}
+
 fn anno_term_starts(scanner: &Scanner) -> bool {
     scanner.test_tok(func_symb_start_token() | TokenType::MULT)
 }
@@ -312,14 +325,15 @@ fn dd_index(index: i64) -> DDArrayIndex {
 #[cfg(test)]
 mod tests {
     use super::{
-        anno_set_alloc, anno_set_parse, anno_set_print_string, anno_term_parse,
-        anno_term_print_string, anno_term_rec_to_flat_enc, AnnoSet, AnnoTerm,
+        anno_set_alloc, anno_set_compute_pattern_subst, anno_set_parse, anno_set_print_string,
+        anno_term_parse, anno_term_print_string, anno_term_rec_to_flat_enc, AnnoSet, AnnoTerm,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::PatEqnDirection;
     use crate::inout::scanner::{Scanner, TokenType};
     use crate::learn::annotations::{Annotation, AnnotationTree};
     use crate::learn::clauseenc::rec_encode_clause_list_rep;
+    use crate::learn::patterns::PatternSubst;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
@@ -527,6 +541,28 @@ mod tests {
         assert_ne!(bank.signature().neqn_code(), 0);
         assert_ne!(bank.signature().or_code(), 0);
         assert_ne!(bank.signature().cnil_code(), 0);
+    }
+
+    #[test]
+    fn anno_set_compute_pattern_subst_visits_all_terms() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "left");
+        let right = typed_const(&mut bank, "right");
+        let mut set = AnnoSet::new();
+        set.add_term(AnnoTerm::new(
+            left.clone(),
+            annotation_tree(vec![annotation(1, 1.0, &[2.0])]),
+        ));
+        set.add_term(AnnoTerm::new(
+            right.clone(),
+            annotation_tree(vec![annotation(1, 1.0, &[3.0])]),
+        ));
+        let mut subst = PatternSubst::new(bank.signature());
+
+        assert!(anno_set_compute_pattern_subst(&mut subst, &set));
+        assert!(subst.symbol_is_bound(left.f_code()));
+        assert!(subst.symbol_is_bound(right.f_code()));
+        assert!(!anno_set_compute_pattern_subst(&mut subst, &set));
     }
 
     #[test]
