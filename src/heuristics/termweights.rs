@@ -1,9 +1,13 @@
 use crate::basics::fixdarrays::FixedDArray;
 use crate::basics::numtrees::NumTree;
 use crate::basics::pstacks::PStack;
+use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+use crate::clauses::clausesets::ClauseSet;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::{term_copy_normalize_vars, VarNormStyle};
 use crate::terms::termtypes::{Term, TP_PRED_POS, TP_TOP_POS};
 use crate::terms::termvars::VarBank;
 use std::fmt::Write as _;
@@ -17,6 +21,19 @@ pub enum RelatedTermSet {
     ConjectureSubterms = 1,
     ConjectureSubtermsTopGens = 2,
     ConjectureSubtermsAllGens = 3,
+}
+
+impl RelatedTermSet {
+    #[must_use]
+    pub const fn from_c_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::ConjectureTerms),
+            1 => Some(Self::ConjectureSubterms),
+            2 => Some(Self::ConjectureSubtermsTopGens),
+            3 => Some(Self::ConjectureSubtermsAllGens),
+            _ => None,
+        }
+    }
 }
 
 pub type TermFrequencyTree = NumTree<i64, i64>;
@@ -190,6 +207,104 @@ pub fn tb_count_term_freqs(bank: &TermBank) -> TermFrequencyTree {
     freqs
 }
 
+/// Collects normalized terms related to negated conjecture clauses.
+///
+/// Unlike the term-frequency based C helper, this preserves duplicates and
+/// encounter order. That is the shape used by the Levenshtein/tree/structural
+/// distance initializers before any strategy-specific deduplication.
+///
+/// # Panics
+///
+/// Panics if related subterm traversal or generalization construction hits an
+/// uninitialized argument. This matches the C helper preconditions for valid
+/// clause terms.
+#[must_use]
+pub fn collect_related_conjecture_terms(
+    axioms: &ClauseSet,
+    vars: &VarBank,
+    sig: &Signature,
+    var_norm: VarNormStyle,
+    rel_terms: RelatedTermSet,
+) -> Vec<Term> {
+    let mut related = Vec::new();
+    for clause in axioms.iter() {
+        if clause.query_tptp_type() == CP_TYPE_NEG_CONJECTURE {
+            collect_clause_related_terms(clause, vars, sig, var_norm, rel_terms, &mut related);
+        }
+    }
+    related
+}
+
+fn collect_clause_related_terms(
+    clause: &Clause,
+    vars: &VarBank,
+    sig: &Signature,
+    var_norm: VarNormStyle,
+    rel_terms: RelatedTermSet,
+    related: &mut Vec<Term>,
+) {
+    for literal in clause.literals().as_slice() {
+        collect_term_related_terms(literal.left(), vars, sig, var_norm, rel_terms, related);
+        collect_term_related_terms(literal.right(), vars, sig, var_norm, rel_terms, related);
+    }
+}
+
+fn collect_term_related_terms(
+    term: &Term,
+    vars: &VarBank,
+    sig: &Signature,
+    var_norm: VarNormStyle,
+    rel_terms: RelatedTermSet,
+    related: &mut Vec<Term>,
+) {
+    match rel_terms {
+        RelatedTermSet::ConjectureTerms => push_normalized_term(related, vars, term, var_norm),
+        RelatedTermSet::ConjectureSubterms => {
+            collect_normalized_subterms(term, vars, var_norm, related);
+        }
+        RelatedTermSet::ConjectureSubtermsTopGens => {
+            collect_normalized_subterms(term, vars, var_norm, related);
+            let topgens = compute_top_generalizations(term, vars, sig);
+            for topgen in topgens.as_slice() {
+                push_normalized_term(related, vars, topgen, var_norm);
+            }
+            free_generalizations(topgens);
+        }
+        RelatedTermSet::ConjectureSubtermsAllGens => {
+            let subgens = compute_subterms_generalizations(term, vars);
+            for subgen in subgens.as_slice() {
+                push_normalized_term(related, vars, subgen, var_norm);
+            }
+            free_generalizations(subgens);
+        }
+    }
+}
+
+fn collect_normalized_subterms(
+    term: &Term,
+    vars: &VarBank,
+    var_norm: VarNormStyle,
+    related: &mut Vec<Term>,
+) {
+    let mut stack = vec![term.clone()];
+    while let Some(subterm) = stack.pop() {
+        if subterm.is_free_var() {
+            continue;
+        }
+        push_normalized_term(related, vars, &subterm, var_norm);
+        stack.extend(subterm.argument_clones().into_iter().flatten());
+    }
+}
+
+fn push_normalized_term(
+    related: &mut Vec<Term>,
+    vars: &VarBank,
+    term: &Term,
+    var_norm: VarNormStyle,
+) {
+    related.push(term_copy_normalize_vars(vars, term, var_norm));
+}
+
 fn compute_subterms_generalizations_inner(
     term: &Term,
     vars: &VarBank,
@@ -279,16 +394,24 @@ fn term_top_copy_with_all_properties(term: &Term) -> Term {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_subterms_generalizations, compute_top_generalizations, free_generalizations,
-        tb_count_term_freqs, tb_inc_subterms_freqs, tuple_init, tuple_next, tuple_print_string,
-        RelatedTermSet, TERM_MAX_GENS,
+        collect_related_conjecture_terms, compute_subterms_generalizations,
+        compute_top_generalizations, free_generalizations, tb_count_term_freqs,
+        tb_inc_subterms_freqs, tuple_init, tuple_next, tuple_print_string, RelatedTermSet,
+        TERM_MAX_GENS,
     };
     use crate::basics::fixdarrays::FixedDArray;
+    use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termfunc::VarNormStyle;
     use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG, TP_PRED_POS, TP_TOP_POS};
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
 
     fn array(values: &[i64]) -> FixedDArray {
@@ -304,6 +427,23 @@ mod tests {
         (bank, term)
     }
 
+    fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        bank.parse_term_simple(&mut scanner).unwrap()
+    }
+
+    fn term_names(bank: &TermBank, terms: &[Term]) -> Vec<String> {
+        terms
+            .iter()
+            .map(|term| {
+                bank.signature()
+                    .find_name(term.f_code())
+                    .unwrap_or("<var>")
+                    .to_owned()
+            })
+            .collect()
+    }
+
     #[test]
     fn constants_and_related_term_set_discriminants_match_c_header() {
         assert_eq!(TERM_MAX_GENS, 1000);
@@ -311,6 +451,55 @@ mod tests {
         assert_eq!(RelatedTermSet::ConjectureSubterms as i32, 1);
         assert_eq!(RelatedTermSet::ConjectureSubtermsTopGens as i32, 2);
         assert_eq!(RelatedTermSet::ConjectureSubtermsAllGens as i32, 3);
+        assert_eq!(
+            RelatedTermSet::from_c_value(0),
+            Some(RelatedTermSet::ConjectureTerms)
+        );
+        assert_eq!(
+            RelatedTermSet::from_c_value(3),
+            Some(RelatedTermSet::ConjectureSubtermsAllGens)
+        );
+        assert_eq!(RelatedTermSet::from_c_value(4), None);
+    }
+
+    #[test]
+    fn related_conjecture_term_collection_preserves_c_subterm_order() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let left = parse_in_bank(&mut bank, "f(a,g(b))");
+        let right = parse_in_bank(&mut bank, "h(c)");
+        let literal = Eqn::alloc(left, right, &mut bank, false).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let ignored = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+            parse_in_bank(&mut bank, "ignored"),
+            parse_in_bank(&mut bank, "a"),
+            &mut bank,
+            false,
+        )
+        .unwrap()]));
+        let axioms = ClauseSet::from_clauses([ignored, clause]);
+        let vars = VarBank::new(bank.signature().type_bank());
+
+        let top_terms = collect_related_conjecture_terms(
+            &axioms,
+            &vars,
+            bank.signature(),
+            VarNormStyle::None,
+            RelatedTermSet::ConjectureTerms,
+        );
+        assert_eq!(term_names(&bank, &top_terms), vec!["f", "h"]);
+
+        let subterms = collect_related_conjecture_terms(
+            &axioms,
+            &vars,
+            bank.signature(),
+            VarNormStyle::None,
+            RelatedTermSet::ConjectureSubterms,
+        );
+        assert_eq!(
+            term_names(&bank, &subterms),
+            vec!["f", "g", "b", "a", "h", "c"]
+        );
     }
 
     #[test]

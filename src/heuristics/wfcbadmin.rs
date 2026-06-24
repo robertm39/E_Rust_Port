@@ -14,6 +14,7 @@ use crate::heuristics::funweights::{
     conjecture_symbol_weight_parse, fun_weight_parse, sym_offset_weight_parse,
 };
 use crate::heuristics::gdweight::gd_clause_weight_parse;
+use crate::heuristics::levweight::conjecture_lev_distance_weight_parse;
 use crate::heuristics::lifo::lifo_eval_parse;
 use crate::heuristics::orientweight::{clause_orient_weight_parse, orient_lmax_weight_parse};
 use crate::heuristics::random::rand_weight_parse;
@@ -291,6 +292,7 @@ pub fn weight_fun_parser_is_ported(name: &str) -> bool {
             | "ConjectureSymbolWeight"
             | "ConjectureGeneralSymbolWeight"
             | "ConjectureRelativeSymbolWeight"
+            | "ConjectureLevDistanceWeight"
             | "FunWeight"
             | "SymOffsetWeight"
             | "RandomWeight"
@@ -370,6 +372,12 @@ pub fn weight_fun_parse_with_context(
         "ConjectureRelativeSymbolWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
             Ok(Box::new(conjecture_relative_symbol_weight_parse(
+                scanner, axioms,
+            )?))
+        }
+        "ConjectureLevDistanceWeight" => {
+            let axioms = context.require_axioms(scanner, &name)?;
+            Ok(Box::new(conjecture_lev_distance_weight_parse(
                 scanner, axioms,
             )?))
         }
@@ -547,6 +555,7 @@ mod tests {
         assert!(weight_fun_parser_is_ported(
             "ConjectureRelativeSymbolWeight"
         ));
+        assert!(weight_fun_parser_is_ported("ConjectureLevDistanceWeight"));
         assert!(weight_fun_parser_is_ported("FunWeight"));
         assert!(weight_fun_parser_is_ported("SymOffsetWeight"));
         assert!(!weight_fun_parser_is_ported(
@@ -738,6 +747,7 @@ mod tests {
             "ConjectureSymbolWeight(ConstPrio,10,99,1,88,1,1.0,1.0,1.0) tail",
             "ConjectureGeneralSymbolWeight(ConstPrio,10,3,99,1,2,88,1,1.0,1.0,1.0) tail",
             "ConjectureRelativeSymbolWeight(ConstPrio,0.5,10,4,99,1,1.0,1.0,1.0) tail",
+            "ConjectureLevDistanceWeight(ConstPrio,0,0,1,1,5,0,1.0,1.0,1.0) tail",
         ];
 
         assert_eq!(context.axioms().map(ClauseSet::len), Some(0));

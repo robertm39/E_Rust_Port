@@ -29,6 +29,18 @@ pub enum VarNormStyle {
     Alpha = 1,
 }
 
+impl VarNormStyle {
+    #[must_use]
+    pub const fn from_c_value(value: i32) -> Option<Self> {
+        match value {
+            -1 => Some(Self::None),
+            0 => Some(Self::Univar),
+            1 => Some(Self::Alpha),
+            _ => None,
+        }
+    }
+}
+
 /// Formats a free-variable code using E's `Xn`/`Yn` convention.
 ///
 /// # Panics
@@ -1819,6 +1831,10 @@ mod tests {
         assert_eq!(VarNormStyle::None as i32, -1);
         assert_eq!(VarNormStyle::Univar as i32, 0);
         assert_eq!(VarNormStyle::Alpha as i32, 1);
+        assert_eq!(VarNormStyle::from_c_value(-1), Some(VarNormStyle::None));
+        assert_eq!(VarNormStyle::from_c_value(0), Some(VarNormStyle::Univar));
+        assert_eq!(VarNormStyle::from_c_value(1), Some(VarNormStyle::Alpha));
+        assert_eq!(VarNormStyle::from_c_value(2), None);
         assert_eq!(var_print_string(-2), "X1");
         assert_eq!(var_print_string(-1), "Y1");
         assert_eq!(var_print_string(-4), "X2");
