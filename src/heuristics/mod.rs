@@ -1,5 +1,6 @@
 pub mod clauseweight;
 pub mod dagweight;
+pub mod diversityweight;
 pub mod fifo;
 pub mod gdweight;
 pub mod lifo;
