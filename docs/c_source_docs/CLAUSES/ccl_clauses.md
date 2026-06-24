@@ -290,6 +290,7 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 - `ClauseCopy`, `ClauseFlatCopy`, `ClauseCopyOpt`, and `ClauseCopyDisjoint` copy metadata but intentionally do not copy evaluations or source info. Rust copy helpers should continue to drop optional evaluation storage.
 - `ClausePCLPrint` temporarily mutates the process-global `OutputFormat` to `TPTPFormat` to reuse `EqnListPrint`, then restores it. Rust preserves the bracketed PCL text with explicit TPTP equation-print options instead of hidden global mutation.
 - `ClausePrintTPTPFormat` maps both `CPTypeConjecture` and `CPTypeNegConjecture` to the old TPTP role string `conjecture`; TSTP printing distinguishes `negated_conjecture`. Rust preserves this dialect-specific role mapping in the first-order TPTP helper.
+- `ClauseTSTPCorePrint` is only the parenthesized logical core: empty clauses become `($false)`, non-empty clauses use `EqnListTSTPPrint` with `|` and no spaces. Full `ClauseTSTPPrint` additionally depends on process-global `problemType` and formula closure for typed first-order and higher-order clauses; Rust ports the core explicitly and should keep the full wrapper's global-format decisions visible when formula printing lands.
 
 ### Porting Focus
 

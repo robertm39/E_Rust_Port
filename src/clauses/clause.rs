@@ -1170,6 +1170,36 @@ pub fn clause_print_tptp_format_string(bank: &TermBank, clause: &Clause) -> Stri
     output
 }
 
+pub fn clause_write_tstp_core(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    print_oriented: bool,
+) -> fmt::Result {
+    output.write_char('(')?;
+    if clause.is_empty() {
+        output.write_str("$false")?;
+    } else {
+        clause
+            .literals()
+            .write_tstp_print(output, bank, "|", full_terms, print_oriented)?;
+    }
+    output.write_char(')')
+}
+
+#[must_use]
+pub fn clause_print_tstp_core_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    print_oriented: bool,
+) -> String {
+    let mut output = String::new();
+    let _ = clause_write_tstp_core(&mut output, bank, clause, full_terms, print_oriented);
+    output
+}
+
 pub fn clause_write_lop_format(
     output: &mut impl fmt::Write,
     bank: &TermBank,
@@ -1316,7 +1346,7 @@ mod tests {
     use super::{
         clause_pcl_string, clause_print_axiom_string, clause_print_goal_string,
         clause_print_lop_format_string, clause_print_query_string, clause_print_rule_string,
-        clause_print_tptp_format_string, Clause,
+        clause_print_tptp_format_string, clause_print_tstp_core_string, Clause,
     };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
@@ -1471,8 +1501,21 @@ mod tests {
             "input_clause(c_5_77,conjecture,[++equal(print_a, print_b),++print_p,--equal(print_b, print_a)])."
         );
         assert_eq!(
+            clause_print_tstp_core_string(&bank, &clause, true, false),
+            "(print_a=print_b|print_p|print_b!=print_a)"
+        );
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_ORIENTED);
+        assert_eq!(
+            clause_print_tstp_core_string(&bank, &clause, true, true),
+            "(print_a->print_b|print_p|print_b!=print_a)"
+        );
+        assert_eq!(
             clause_pcl_string(&bank, &clause, true),
             "[++equal(print_a, print_b),++print_p,--equal(print_b, print_a)]"
+        );
+        assert_eq!(
+            clause_print_tstp_core_string(&bank, &Clause::empty(), true, false),
+            "($false)"
         );
     }
 
