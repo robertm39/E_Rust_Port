@@ -157,6 +157,48 @@ impl Default for EqnPrintOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EqnFofPrintOptions {
+    pub output_format: IoFormat,
+    pub pcl: bool,
+    pub higher_order_parentheses: bool,
+}
+
+impl EqnFofPrintOptions {
+    #[must_use]
+    pub const fn lop() -> Self {
+        Self {
+            output_format: IoFormat::Lop,
+            pcl: false,
+            higher_order_parentheses: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn tptp() -> Self {
+        Self {
+            output_format: IoFormat::Tptp,
+            pcl: false,
+            higher_order_parentheses: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn tstp() -> Self {
+        Self {
+            output_format: IoFormat::Tstp,
+            pcl: false,
+            higher_order_parentheses: false,
+        }
+    }
+}
+
+impl Default for EqnFofPrintOptions {
+    fn default() -> Self {
+        Self::lop()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Eqn {
     properties: EqnProperties,
@@ -1783,6 +1825,72 @@ pub fn eqn_write_app_encode(
     Ok(())
 }
 
+/// Writes the C `EqnFOFPrint` shape with explicit output-format switches.
+///
+/// # Panics
+///
+/// Panics if `output_format` is `IoFormat::Auto`, matching the C assertion
+/// that only concrete LOP/TPTP/TSTP output formats are supported here, or if a
+/// printed term violates the C term printing preconditions.
+pub fn eqn_write_fof(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    full_terms: bool,
+    fof_options: EqnFofPrintOptions,
+) -> fmt::Result {
+    let positive = eqn.is_positive() ^ negated;
+    let infix = match fof_options.output_format {
+        IoFormat::Tptp => false,
+        IoFormat::Tstp => true,
+        IoFormat::Lop => !fof_options.pcl,
+        IoFormat::Auto => panic!("format not supported"),
+    };
+    let options = EqnPrintOptions {
+        output_format: fof_options.output_format,
+        higher_order_parentheses: fof_options.higher_order_parentheses,
+        ..EqnPrintOptions::default()
+    };
+
+    if infix {
+        if eqn.is_equ_lit(bank) {
+            write_ho_paren(output, '(', options)?;
+            write_ho_paren(output, '(', options)?;
+            bank.write_term(output, eqn.left(), full_terms)?;
+            write_ho_paren(output, ')', options)?;
+            if !positive {
+                output.write_char('!')?;
+            }
+            output.write_char('=')?;
+            write_ho_paren(output, '(', options)?;
+            bank.write_term(output, eqn.right(), full_terms)?;
+            write_ho_paren(output, ')', options)?;
+            write_ho_paren(output, ')', options)
+        } else {
+            if !positive {
+                output.write_char('~')?;
+            }
+            write_ho_paren(output, '(', options)?;
+            bank.write_term(output, eqn.left(), full_terms)?;
+            write_ho_paren(output, ')', options)
+        }
+    } else {
+        if !positive {
+            output.write_char('~')?;
+        }
+        if eqn.is_equ_lit(bank) {
+            write!(output, "{EQUAL_PREDICATE}(")?;
+            bank.write_term(output, eqn.left(), full_terms)?;
+            output.write_str(", ")?;
+            bank.write_term(output, eqn.right(), full_terms)?;
+            output.write_char(')')
+        } else {
+            bank.write_term(output, eqn.left(), full_terms)
+        }
+    }
+}
+
 /// Writes the C `EqnTSTPPrint` shape.
 ///
 /// # Panics
@@ -1857,6 +1965,19 @@ pub fn eqn_app_encode_string(
 }
 
 #[must_use]
+pub fn eqn_fof_string(
+    bank: &TermBank,
+    eqn: &Eqn,
+    negated: bool,
+    full_terms: bool,
+    fof_options: EqnFofPrintOptions,
+) -> String {
+    let mut output = String::new();
+    let _ = eqn_write_fof(&mut output, bank, eqn, negated, full_terms, fof_options);
+    output
+}
+
+#[must_use]
 pub fn eqn_tstp_string(
     bank: &TermBank,
     eqn: &Eqn,
@@ -1878,7 +1999,8 @@ fn write_ho_paren(output: &mut impl fmt::Write, ch: char, options: EqnPrintOptio
 #[cfg(test)]
 mod tests {
     use super::{
-        eqn_app_encode_string, eqn_deref_string, eqn_string, eqn_tstp_string, Eqn, EqnPrintOptions,
+        eqn_app_encode_string, eqn_deref_string, eqn_fof_string, eqn_string, eqn_tstp_string, Eqn,
+        EqnFofPrintOptions, EqnPrintOptions,
     };
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
@@ -2015,6 +2137,61 @@ mod tests {
         assert_eq!(
             eqn_string(&bank, &predicate, false, true, EqnPrintOptions::tptp()),
             "++print_p"
+        );
+    }
+
+    #[test]
+    fn eqn_fof_print_string_matches_c_format_switches() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "fof_a");
+        let b = typed_const(&mut bank, "fof_b");
+        let equality = Eqn::alloc(a.clone(), b.clone(), &mut bank, true).unwrap();
+
+        assert_eq!(
+            eqn_fof_string(&bank, &equality, false, true, EqnFofPrintOptions::lop()),
+            "fof_a=fof_b"
+        );
+        assert_eq!(
+            eqn_fof_string(&bank, &equality, true, true, EqnFofPrintOptions::tstp()),
+            "fof_a!=fof_b"
+        );
+
+        let pcl_options = EqnFofPrintOptions {
+            pcl: true,
+            ..EqnFofPrintOptions::lop()
+        };
+        assert_eq!(
+            eqn_fof_string(&bank, &equality, false, true, pcl_options),
+            "equal(fof_a, fof_b)"
+        );
+        assert_eq!(
+            eqn_fof_string(&bank, &equality, true, true, EqnFofPrintOptions::tptp()),
+            "~equal(fof_a, fof_b)"
+        );
+
+        let ho_options = EqnFofPrintOptions {
+            higher_order_parentheses: true,
+            ..EqnFofPrintOptions::tstp()
+        };
+        assert_eq!(
+            eqn_fof_string(&bank, &equality, false, true, ho_options),
+            "((fof_a)=(fof_b))"
+        );
+
+        let atom = typed_pred_const(&mut bank, "fof_p");
+        let true_term = bank.true_term().clone();
+        let predicate = Eqn::alloc(atom, true_term, &mut bank, true).unwrap();
+        assert_eq!(
+            eqn_fof_string(&bank, &predicate, false, true, EqnFofPrintOptions::lop()),
+            "fof_p"
+        );
+        assert_eq!(
+            eqn_fof_string(&bank, &predicate, true, true, EqnFofPrintOptions::lop()),
+            "~fof_p"
+        );
+        assert_eq!(
+            eqn_fof_string(&bank, &predicate, true, true, ho_options),
+            "~(fof_p)"
         );
     }
 
