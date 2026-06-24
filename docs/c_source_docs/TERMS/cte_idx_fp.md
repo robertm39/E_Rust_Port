@@ -139,6 +139,9 @@ Source files reviewed: `TERMS/cte_idx_fp.h`, `TERMS/cte_idx_fp.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `TermFPSampleHO` strips lambda heads only while descending a non-empty position; the root sample of a lambda returns the lambda symbol itself. Preserve this for compatibility, but consider a normalized diagnostic wrapper once LFHO output behavior is covered.
+- The higher-order trailing-argument branch uses `term->arity + TypeGetMaxArity(term->type)`, not the remaining unapplied type arity. This can report a DB-lambda/trailing-argument sample even for positions beyond the apparent applied arguments; preserve the bound unless reference tests justify a compatibility switch.
+- `TermFPSampleHO` assumes typed terms when it checks trailing type arity. Rust should keep that precondition explicit instead of silently treating missing types as first-order absence.
 
 ### Porting Focus
 

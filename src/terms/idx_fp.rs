@@ -1,4 +1,7 @@
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::functypes::FunCode;
+use crate::terms::signature::SIG_DB_LAMBDA_CODE;
+use crate::terms::simpletypes::type_get_max_arity;
 use crate::terms::termtypes::{Term, TP_PRED_POS};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -72,6 +75,37 @@ pub fn term_fp_sample_fo(term: &Term, position: &[usize]) -> FunCode {
     }
 }
 
+#[must_use]
+pub fn term_fp_sample_ho(term: &Term, position: &[usize]) -> FunCode {
+    let mut current = term.clone();
+    for &pos in position {
+        while current.is_lambda() {
+            current = required_arg(&current, 1);
+        }
+
+        if current.is_top_level_free_var() {
+            return BELOW_VAR;
+        }
+
+        let arity = current.arity();
+        if pos < arity {
+            current = required_arg(&current, pos);
+        } else if pos < arity + term_type_max_arity(&current) {
+            return SIG_DB_LAMBDA_CODE;
+        } else {
+            return NOT_IN_TERM;
+        }
+    }
+
+    if current.is_top_level_free_var() {
+        ANY_VAR
+    } else if current.is_top_level_any_var() {
+        SIG_DB_LAMBDA_CODE
+    } else {
+        current.f_code()
+    }
+}
+
 /// Samples a term from a C-shaped integer sequence.
 ///
 /// The sequence encodes one position terminated by `-1`. `cursor` is advanced
@@ -123,18 +157,109 @@ pub fn term_fp_flex_sample_fo(term: &Term, sequence: &[i64], cursor: &mut usize)
 }
 
 #[must_use]
-pub fn term_fp_sample(term: &Term, position: &[usize]) -> FunCode {
-    term_fp_sample_fo(term, position)
+pub fn term_fp_sample_for_problem(
+    term: &Term,
+    position: &[usize],
+    problem_type: ProblemType,
+) -> FunCode {
+    if problem_type == ProblemType::HigherOrder {
+        term_fp_sample_ho(term, position)
+    } else {
+        term_fp_sample_fo(term, position)
+    }
 }
 
-/// C-compatible dispatch wrapper for first-order flexible sampling.
+/// Samples a term using higher-order fingerprinting.
 ///
 /// # Panics
 ///
-/// Panics under the same malformed sequence or uninitialized-argument
-/// conditions as [`term_fp_flex_sample_fo`].
+/// Panics if the sequence is missing its `-1` terminator, contains a negative
+/// non-terminator position, if a traversed term argument is uninitialized, or
+/// if higher-order trailing-argument sampling reaches an untyped term.
+pub fn term_fp_flex_sample_ho(term: &Term, sequence: &[i64], cursor: &mut usize) -> FunCode {
+    let mut current = term.clone();
+    let mut failed = false;
+    let mut result = NOT_IN_TERM;
+
+    loop {
+        let pos = *sequence
+            .get(*cursor)
+            .expect("fingerprint position sequence must be terminated by -1");
+        if pos == -1 {
+            break;
+        }
+        if !failed {
+            while current.is_lambda() {
+                current = required_arg(&current, 1);
+            }
+
+            if current.is_top_level_free_var() {
+                result = BELOW_VAR;
+                failed = true;
+            } else {
+                let pos = usize::try_from(pos)
+                    .expect("fingerprint position must be non-negative before terminator");
+                let arity = current.arity();
+                if pos < arity {
+                    current = required_arg(&current, pos);
+                } else if pos < arity + term_type_max_arity(&current) {
+                    result = SIG_DB_LAMBDA_CODE;
+                    failed = true;
+                } else {
+                    result = NOT_IN_TERM;
+                    failed = true;
+                }
+            }
+        }
+        *cursor += 1;
+    }
+
+    if !failed {
+        result = if current.is_top_level_free_var() {
+            ANY_VAR
+        } else if current.is_top_level_any_var() {
+            SIG_DB_LAMBDA_CODE
+        } else {
+            current.f_code()
+        };
+    }
+    *cursor += 1;
+    result
+}
+
+#[must_use]
+pub fn term_fp_sample(term: &Term, position: &[usize]) -> FunCode {
+    term_fp_sample_for_problem(term, position, problem_type())
+}
+
+/// Samples a term with the first-order or higher-order flexible sampler.
+///
+/// # Panics
+///
+/// Panics under the same malformed sequence, uninitialized-argument, or
+/// higher-order typing conditions as the selected sampler.
+pub fn term_fp_flex_sample_for_problem(
+    term: &Term,
+    sequence: &[i64],
+    cursor: &mut usize,
+    problem_type: ProblemType,
+) -> FunCode {
+    if problem_type == ProblemType::HigherOrder {
+        term_fp_flex_sample_ho(term, sequence, cursor)
+    } else {
+        term_fp_flex_sample_fo(term, sequence, cursor)
+    }
+}
+
+/// C-compatible dispatch wrapper for flexible sampling.
+///
+/// # Panics
+///
+/// Panics under the same malformed sequence, uninitialized-argument, or
+/// higher-order typing conditions as the selected first-order or higher-order
+/// sampler.
 pub fn term_fp_flex_sample(term: &Term, sequence: &[i64], cursor: &mut usize) -> FunCode {
-    term_fp_flex_sample_fo(term, sequence, cursor)
+    term_fp_flex_sample_for_problem(term, sequence, cursor, problem_type())
 }
 
 #[must_use]
@@ -389,6 +514,13 @@ fn required_arg(term: &Term, index: usize) -> Term {
         .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
 }
 
+fn term_type_max_arity(term: &Term) -> usize {
+    term.type_()
+        .as_ref()
+        .map(type_get_max_arity)
+        .expect("higher-order fingerprint sample requires typed term")
+}
+
 #[derive(Debug, Default)]
 struct FpFpRepresentatives {
     function: Option<FunCode>,
@@ -421,11 +553,15 @@ mod tests {
         index_fp4d_create, index_fp4m_create, index_fp4w_create, index_fp4x2_2_create,
         index_fp5m_create, index_fp6m_create, index_fp7_create, index_fp7m_create,
         index_fp_flex_create, index_fp_fp_create, reset_fp_fp_representatives_for_tests,
-        term_fp_flex_sample_fo, term_fp_sample_fo, ANY_VAR, BELOW_VAR, FP_INDEX_NAMES,
-        MAX_PM_INDEX_NAME_LEN, NOT_IN_TERM,
+        term_fp_flex_sample_fo, term_fp_flex_sample_for_problem, term_fp_sample_fo,
+        term_fp_sample_for_problem, ANY_VAR, BELOW_VAR, FP_INDEX_NAMES, MAX_PM_INDEX_NAME_LEN,
+        NOT_IN_TERM,
     };
-    use crate::terms::signature::SIG_PHONY_APP_CODE;
-    use crate::terms::termtypes::{Term, TP_PRED_POS};
+    use crate::basics::simple_stuff::ProblemType;
+    use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
+    use crate::terms::termtypes::{Term, TP_IS_DB_VAR, TP_PRED_POS};
+    use crate::terms::typebanks::TypeBank;
 
     fn leaf(code: i64) -> Term {
         Term::const_cell_alloc(code)
@@ -440,6 +576,24 @@ mod tests {
         for (index, arg) in args.iter().enumerate() {
             term.set_argument(index, arg.clone());
         }
+        term
+    }
+
+    fn typed_leaf(code: i64, type_: &Type) -> Term {
+        let term = leaf(code);
+        term.set_type(Some(type_.clone()));
+        term
+    }
+
+    fn typed_var(code: i64, type_: &Type) -> Term {
+        let term = var(code);
+        term.set_type(Some(type_.clone()));
+        term
+    }
+
+    fn typed_term(code: i64, args: &[Term], type_: &Type) -> Term {
+        let term = term(code, args);
+        term.set_type(Some(type_.clone()));
         term
     }
 
@@ -495,6 +649,95 @@ mod tests {
             BELOW_VAR
         );
         assert_eq!(cursor, 9);
+    }
+
+    #[test]
+    fn higher_order_sampling_skips_lambdas_and_uses_trailing_type_arity() {
+        let type_bank = TypeBank::new();
+        let individual = type_bank.i_type();
+        let predicate_type = alloc_arrow_type(vec![individual.clone(), type_bank.bool_type()]);
+        let a = typed_leaf(10, &individual);
+        let body = typed_term(20, std::slice::from_ref(&a), &predicate_type);
+        let binder = typed_var(-2, &individual);
+        let lambda = typed_term(SIG_DB_LAMBDA_CODE, &[binder, body.clone()], &predicate_type);
+
+        assert_eq!(
+            term_fp_sample_for_problem(&lambda, &[], ProblemType::HigherOrder),
+            SIG_DB_LAMBDA_CODE
+        );
+        assert_eq!(
+            term_fp_sample_for_problem(&lambda, &[0], ProblemType::HigherOrder),
+            10
+        );
+        assert_eq!(
+            term_fp_sample_for_problem(&body, &[1], ProblemType::HigherOrder),
+            SIG_DB_LAMBDA_CODE
+        );
+        assert_eq!(
+            term_fp_sample_for_problem(&body, &[2], ProblemType::HigherOrder),
+            NOT_IN_TERM
+        );
+        assert_eq!(
+            term_fp_sample_for_problem(&body, &[1], ProblemType::FirstOrder),
+            NOT_IN_TERM
+        );
+    }
+
+    #[test]
+    fn higher_order_sampling_classifies_applied_variables_like_c_macros() {
+        let type_bank = TypeBank::new();
+        let individual = type_bank.i_type();
+        let free_head = typed_var(-2, &individual);
+        let db_head = typed_leaf(99, &individual);
+        db_head.set_prop(TP_IS_DB_VAR);
+        let arg = typed_leaf(10, &individual);
+        let free_app = typed_term(SIG_PHONY_APP_CODE, &[free_head, arg.clone()], &individual);
+        let db_app = typed_term(SIG_PHONY_APP_CODE, &[db_head, arg], &individual);
+
+        assert_eq!(
+            term_fp_sample_for_problem(&free_app, &[], ProblemType::HigherOrder),
+            ANY_VAR
+        );
+        assert_eq!(
+            term_fp_sample_for_problem(&free_app, &[0], ProblemType::HigherOrder),
+            BELOW_VAR
+        );
+        assert_eq!(
+            term_fp_sample_for_problem(&db_app, &[], ProblemType::HigherOrder),
+            SIG_DB_LAMBDA_CODE
+        );
+    }
+
+    #[test]
+    fn higher_order_flexible_sampling_advances_past_each_position() {
+        let type_bank = TypeBank::new();
+        let individual = type_bank.i_type();
+        let predicate_type = alloc_arrow_type(vec![individual.clone(), type_bank.bool_type()]);
+        let a = typed_leaf(10, &individual);
+        let body = typed_term(20, &[a], &predicate_type);
+        let sequence = [1, -1, 2, -1, -2];
+        let mut cursor = 0;
+
+        assert_eq!(
+            term_fp_flex_sample_for_problem(
+                &body,
+                &sequence,
+                &mut cursor,
+                ProblemType::HigherOrder
+            ),
+            SIG_DB_LAMBDA_CODE
+        );
+        assert_eq!(cursor, 2);
+        assert_eq!(
+            term_fp_flex_sample_for_problem(
+                &body,
+                &sequence,
+                &mut cursor,
+                ProblemType::HigherOrder
+            ),
+            NOT_IN_TERM
+        );
+        assert_eq!(cursor, 4);
     }
 
     #[test]
