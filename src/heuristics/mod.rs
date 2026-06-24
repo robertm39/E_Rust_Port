@@ -2,6 +2,7 @@ pub mod clausefeatures;
 pub mod clauseweight;
 pub mod dagweight;
 pub mod diversityweight;
+pub mod fcode_featurearrays;
 pub mod fifo;
 pub mod gdweight;
 pub mod lifo;
