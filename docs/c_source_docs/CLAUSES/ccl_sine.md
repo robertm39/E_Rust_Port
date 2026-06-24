@@ -152,6 +152,7 @@ Source files reviewed: `CLAUSES/ccl_sine.h`, `CLAUSES/ccl_sine.c`.
 - `PStackClauseDelProp` mutates every clause referenced by the stack without consuming or reordering the stack. Rust models this as a stack of mutable clause references; formula property deletion remains deferred until `WFormula` ownership exists.
 - `PQueueStoreClause` writes two adjacent queue entries, the raw `ATClause` integer tag followed by the borrowed clause pointer. `ClauseSetFindAxSelectionSeeds` scans clauses in set order and stores conjectures plus hypotheses only when requested. Rust preserves the clause-only queue layout with `IntOrP<&Clause>`; mixed formula queues remain deferred until formulas have stable Rust handles.
 - `DRelPrintDebug` writes the relation summary and `formulas:` label to its `out` stream, but sends the terminating newline to `stderr`. Rust preserves that split-stream behavior for compatibility by requiring a separate stderr writer; future cleaned diagnostics should avoid this stream mismatch. Formula names/counts remain effectively zero in the current Rust clause-side D-relation until `WFormula` ownership is ported.
+- `SelectThreshold` gates selection on combined clause/formula cardinality, pushes all clauses and formulas only when the total is within the threshold, and returns the final size of the result stacks rather than the number newly added. Rust currently preserves the clause-side threshold behavior with caller-provided formula cardinality; pushing formula results remains deferred until `WFormula` sets exist.
 
 ### Porting Focus
 

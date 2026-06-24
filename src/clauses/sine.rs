@@ -5,7 +5,7 @@ use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::FormulaProperties;
-use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
 use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -262,6 +262,23 @@ pub fn clause_set_find_ax_selection_seeds<'a>(
     found
 }
 
+pub fn select_threshold_clause_sets<'a>(
+    clause_sets: &PStack<&'a ClauseSet>,
+    formula_cardinality: i64,
+    threshold: i64,
+    res_clauses: &mut PStack<&'a Clause>,
+) -> i64 {
+    let ax_cardinality = clause_set_ref_stack_cardinality(clause_sets) + formula_cardinality;
+
+    if ax_cardinality <= threshold {
+        for set in clause_sets.as_slice() {
+            set.push_clause_refs(res_clauses);
+        }
+    }
+
+    usize_to_i64(res_clauses.len())
+}
+
 /// Writes the C `PStackClausePrintTSTP` shape.
 ///
 /// # Errors
@@ -323,7 +340,7 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
-        pstack_clause_print_tstp_string, AxiomType, DRel, DRelation,
+        pstack_clause_print_tstp_string, select_threshold_clause_sets, AxiomType, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -642,5 +659,52 @@ mod tests {
             Some(4)
         );
         assert!(with_hypotheses.is_empty());
+    }
+
+    #[test]
+    fn select_threshold_clause_sets_pushes_all_clause_refs_under_combined_limit() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "threshold_a");
+        let b = typed_const(&mut bank, "threshold_b");
+        let c = typed_const(&mut bank, "threshold_c");
+        let mut first_clause = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let mut second_clause = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        let mut third_clause = clause_from(vec![literal(&mut bank, &c, &c, true)]);
+        first_clause.set_ident(10);
+        second_clause.set_ident(20);
+        third_clause.set_ident(30);
+        let first = ClauseSet::from_clauses([first_clause, second_clause]);
+        let second = ClauseSet::from_clauses([third_clause]);
+        let mut sets = PStack::new();
+        sets.push(&first);
+        sets.push(&second);
+        let mut result = PStack::new();
+
+        assert_eq!(select_threshold_clause_sets(&sets, 0, 3, &mut result), 3);
+        assert_eq!(
+            result
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
+    }
+
+    #[test]
+    fn select_threshold_clause_sets_returns_existing_result_len_when_over_limit() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "threshold_kept");
+        let b = typed_const(&mut bank, "threshold_blocked");
+        let existing = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let candidate = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        let set = ClauseSet::from_clauses([candidate]);
+        let mut sets = PStack::new();
+        sets.push(&set);
+        let mut result = PStack::new();
+        result.push(&existing);
+
+        assert_eq!(select_threshold_clause_sets(&sets, 1, 1, &mut result), 1);
+        assert_eq!(result.as_slice()[0].ident(), existing.ident());
     }
 }
