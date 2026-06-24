@@ -164,6 +164,25 @@ pub fn clause_tptp_depth_info_add(
     *depthmax
 }
 
+#[must_use]
+pub fn clause_info_string(bank: &TermBank, clause: &Clause) -> String {
+    let symbol_count =
+        c_long_from_clause_weight(clause.literal_weight(bank, 1.0, 1.0, 1.0, 1, 1, 1.0, false));
+    let variable_occurrences =
+        c_long_from_clause_weight(clause.literal_weight(bank, 0.0, 1.0, 1.0, 1, 1, 1.0, false));
+    format!(
+        "info({}, {}, {}, {}, {}, {}, {}, {})",
+        clause.ident(),
+        clause.proof_depth(),
+        clause.proof_size(),
+        symbol_count,
+        clause.depth(),
+        clause.literal_number(),
+        variable_occurrences,
+        clause_count_variable_set(clause)
+    )
+}
+
 fn eqn_tptp_depth_info_add(
     bank: &TermBank,
     eqn: &Eqn,
@@ -223,13 +242,21 @@ fn pd_index_from_positive(value: FunCode) -> PDArrayIndex {
         .unwrap_or_else(|_| panic!("positive variable code must fit the dynamic-array index type"))
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "C ClauseInfoPrint casts ClauseWeight's double result to long"
+)]
+fn c_long_from_clause_weight(weight: f64) -> i64 {
+    weight as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         clause_add_var_distribution, clause_count_ext_symbols, clause_count_maximal_literals,
         clause_count_maximal_terms, clause_count_singleton_set, clause_count_unorientable_literals,
-        clause_count_variable_set, clause_tptp_depth_info_add, eqn_add_var_distribution,
-        eqn_list_add_var_distribution, term_add_var_distribution,
+        clause_count_variable_set, clause_info_string, clause_tptp_depth_info_add,
+        eqn_add_var_distribution, eqn_list_add_var_distribution, term_add_var_distribution,
     };
     use crate::basics::pdarrays::PDIntArray;
     use crate::clauses::clause::Clause;
@@ -423,6 +450,37 @@ mod tests {
         assert_eq!(depthmax, 3);
         assert_eq!(depthsum, 3 + 2 + 3 + 1);
         assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn clause_info_string_matches_c_field_order() {
+        let mut bank = term_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "a");
+        let fx = typed_unary(&mut bank, "f", &x);
+        let mut clause = clause_from(vec![equation(&mut bank, &fx, &a, true)]);
+        clause.set_ident(42);
+        clause.set_proof_depth(3);
+        clause.set_proof_size(5);
+
+        assert_eq!(
+            clause_info_string(&bank, &clause),
+            "info(42, 3, 5, 4, 2, 1, 1, 1)"
+        );
+    }
+
+    #[test]
+    fn clause_info_string_preserves_c_d6_weight_semantics() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "d6_a");
+        let b = typed_const(&mut bank, "d6_b");
+        let mut clause = clause_from(vec![equation(&mut bank, &a, &b, true)]);
+        clause.set_ident(7);
+
+        assert_eq!(
+            clause_info_string(&bank, &clause),
+            "info(7, 0, 0, 3, 1, 1, 1, 0)"
+        );
     }
 
     #[test]

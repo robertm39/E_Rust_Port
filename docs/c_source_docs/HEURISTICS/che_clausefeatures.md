@@ -116,4 +116,8 @@ Source files reviewed: `HEURISTICS/che_clausefeatures.h`, `HEURISTICS/che_clause
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### C Behaviors To Revisit After Compatibility
+
+- `ClauseInfoPrint` labels field `d6` as variable occurrences, but computes it through `ClauseWeight(..., max_term_multiplier=0, vweight=1, fweight=1, ...)`, so the value includes the corrected equality-predicate contribution and follows orientation/maximality weight semantics rather than a direct variable-occurrence count.
 <!-- END MANUAL REVIEW: c_source_docs -->
