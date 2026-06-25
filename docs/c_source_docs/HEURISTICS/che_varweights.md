@@ -143,6 +143,8 @@ Source files reviewed: `HEURISTICS/che_varweights.h`, `HEURISTICS/che_varweights
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `TPTPTypeWeightCompute`, `SigWeightCompute`, `ProofWeightCompute`, `DepthWeightCompute`, `WeightLessDepthCompute`, `NLWeightCompute`, `PNRefinedWeightCompute`, and `SymTypeWeightCompute` all call `ClauseCondMarkMaximalTerms(data->ocb, clause)` before applying their specific scoring formulas.
+- Change-later candidate: once the Rust WFCB/proof-state path can own an `OCB` and mutable candidate clauses directly, collapse the explicit OCB-backed varweight helpers into the ordinary callback shape while preserving the C mark-before-score order.
 
 ### Porting Focus
 

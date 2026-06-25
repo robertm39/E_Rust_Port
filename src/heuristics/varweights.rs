@@ -8,6 +8,7 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -217,6 +218,22 @@ pub fn tptp_type_weight_compute(param: &VarWeightParam, bank: &TermBank, clause:
     result
 }
 
+/// Computes C `TPTPTypeWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn tptp_type_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    tptp_type_weight_compute(param, bank, clause)
+}
+
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -308,6 +325,22 @@ pub fn sig_weight_compute(
     result
 }
 
+/// Computes C `SigWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn sig_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    sig_weight_compute(param, bank, bank.signature(), clause)
+}
+
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -393,6 +426,22 @@ pub fn proof_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Cl
     result *= 1.0
         + param.proof_size_multiplier * (1.0 / i64_to_f64(clause.proof_size().saturating_add(1)));
     result
+}
+
+/// Computes C `ProofWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn proof_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    proof_weight_compute(param, bank, clause)
 }
 
 #[must_use]
@@ -512,6 +561,22 @@ pub fn depth_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
         .sum()
 }
 
+/// Computes C `DepthWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn depth_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    depth_weight_compute(param, clause)
+}
+
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -621,6 +686,22 @@ pub fn weight_less_depth_compute(param: &VarWeightParam, clause: &Clause) -> f64
         .sum()
 }
 
+/// Computes C `WeightLessDepthCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn weight_less_depth_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    weight_less_depth_compute(param, clause)
+}
+
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -705,6 +786,22 @@ pub fn nl_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Claus
         param.app_var_mult,
         false,
     )
+}
+
+/// Computes C `NLWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn nl_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    nl_weight_compute(param, bank, clause)
 }
 
 #[must_use]
@@ -903,6 +1000,22 @@ pub fn pn_refined_weight_compute(param: &VarWeightParam, bank: &TermBank, clause
         .sum()
 }
 
+/// Computes C `PNRefinedWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn pn_refined_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    pn_refined_weight_compute(param, bank, clause)
+}
+
 fn pn_refined_weight_wfcb_compute(
     data: Option<&mut VarWeightParam>,
     bank: &TermBank,
@@ -1026,6 +1139,22 @@ pub fn sym_type_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
         param.pweight,
         param.app_var_mult,
     )
+}
+
+/// Computes C `SymTypeWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn sym_type_weight_compute_with_ocb(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    sym_type_weight_compute(param, clause)
 }
 
 #[must_use]
@@ -1344,24 +1473,31 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_count_ext_symbols, clause_weight_age_compute, clause_weight_age_init,
-        clause_weight_age_parse, depth_weight_compute, depth_weight_init, depth_weight_parse,
-        nl_weight_compute, nl_weight_init, nl_weight_parse, pn_refined_weight_compute,
-        pn_refined_weight_init, pn_refined_weight_parse, proof_weight_compute, proof_weight_init,
-        proof_weight_parse, sig_weight_compute, sig_weight_init, sig_weight_parse,
+        clause_weight_age_parse, depth_weight_compute, depth_weight_compute_with_ocb,
+        depth_weight_init, depth_weight_parse, nl_weight_compute, nl_weight_compute_with_ocb,
+        nl_weight_init, nl_weight_parse, pn_refined_weight_compute,
+        pn_refined_weight_compute_with_ocb, pn_refined_weight_init, pn_refined_weight_parse,
+        proof_weight_compute, proof_weight_compute_with_ocb, proof_weight_init, proof_weight_parse,
+        sig_weight_compute, sig_weight_compute_with_ocb, sig_weight_init, sig_weight_parse,
         staggered_weight_compute, staggered_weight_init, staggered_weight_parse,
-        sym_type_weight_compute, sym_type_weight_init, sym_type_weight_parse,
-        tptp_type_weight_compute, tptp_type_weight_init, tptp_type_weight_parse,
-        weight_less_depth_compute, weight_less_depth_init, weight_less_depth_parse, VarWeightParam,
+        sym_type_weight_compute, sym_type_weight_compute_with_ocb, sym_type_weight_init,
+        sym_type_weight_parse, tptp_type_weight_compute, tptp_type_weight_compute_with_ocb,
+        tptp_type_weight_init, tptp_type_weight_parse, weight_less_depth_compute,
+        weight_less_depth_compute_with_ocb, weight_less_depth_init, weight_less_depth_parse,
+        VarWeightParam,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
+        CP_IS_ORIENTED, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1425,6 +1561,42 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![literal(
             bank, left, right, positive,
         )]))
+    }
+
+    fn ordering_clause(bank: &mut TermBank, suffix: &str) -> Clause {
+        let a_name = format!("a_{suffix}");
+        let f_name = format!("f_{suffix}");
+        let a = typed_const(bank, &a_name);
+        let f_of_a = typed_unary(bank, &f_name, &a);
+        unit_clause(bank, &a, &f_of_a, true)
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn assert_ocb_helper_matches_manual(
+        bank: &TermBank,
+        mut target: Clause,
+        expected_compute: impl FnOnce(&Clause) -> f64,
+        actual_compute: impl FnOnce(&mut OrderControlBlock, &mut Clause) -> f64,
+    ) {
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, bank));
+        let expected = expected_compute(&manually_marked);
+        let mut ocb = kbo_ocb(bank);
+
+        let actual = actual_compute(&mut ocb, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]
@@ -1521,6 +1693,41 @@ mod tests {
     }
 
     #[test]
+    fn type_signature_and_proof_weight_compute_with_ocb_mark_like_c() {
+        let mut bank = test_bank();
+
+        let type_param = tptp_type_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 1.0);
+        let mut type_clause = ordering_clause(&mut bank, "type");
+        type_clause.set_tptp_type(CP_TYPE_CONJECTURE);
+        assert_ocb_helper_matches_manual(
+            &bank,
+            type_clause,
+            |clause| tptp_type_weight_compute(&type_param, &bank, clause),
+            |ocb, clause| tptp_type_weight_compute_with_ocb(&type_param, ocb, &bank, clause),
+        );
+
+        let sig_param = sig_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 1.0);
+        let sig_clause = ordering_clause(&mut bank, "sig");
+        assert_ocb_helper_matches_manual(
+            &bank,
+            sig_clause,
+            |clause| sig_weight_compute(&sig_param, &bank, bank.signature(), clause),
+            |ocb, clause| sig_weight_compute_with_ocb(&sig_param, ocb, &bank, clause),
+        );
+
+        let proof_param = proof_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 1.0);
+        let mut proof_clause = ordering_clause(&mut bank, "proof");
+        proof_clause.set_proof_depth(2);
+        proof_clause.set_proof_size(3);
+        assert_ocb_helper_matches_manual(
+            &bank,
+            proof_clause,
+            |clause| proof_weight_compute(&proof_param, &bank, clause),
+            |ocb, clause| proof_weight_compute_with_ocb(&proof_param, ocb, &bank, clause),
+        );
+    }
+
+    #[test]
     fn depth_and_weight_less_depth_follow_c_literal_formulas() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a");
@@ -1549,6 +1756,47 @@ mod tests {
         assert_close(depth_weight_compute(&depth_param, &clause), 570.0);
         assert_close(weight_less_depth_compute(&less_depth_param, &clause), 34.5);
         assert_close(depth_param.app_var_mult(), 5.0);
+    }
+
+    #[test]
+    fn structural_varweight_compute_with_ocb_mark_like_c() {
+        let mut bank = test_bank();
+
+        let depth_param = depth_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 1.0);
+        let depth_clause = ordering_clause(&mut bank, "depth");
+        assert_ocb_helper_matches_manual(
+            &bank,
+            depth_clause,
+            |clause| depth_weight_compute(&depth_param, clause),
+            |ocb, clause| depth_weight_compute_with_ocb(&depth_param, ocb, &bank, clause),
+        );
+
+        let less_depth_param = weight_less_depth_init(2, 1, 3.0, 5.0, 7.0, 0.5, 1.0);
+        let less_depth_clause = ordering_clause(&mut bank, "less_depth");
+        assert_ocb_helper_matches_manual(
+            &bank,
+            less_depth_clause,
+            |clause| weight_less_depth_compute(&less_depth_param, clause),
+            |ocb, clause| weight_less_depth_compute_with_ocb(&less_depth_param, ocb, &bank, clause),
+        );
+
+        let nl_param = nl_weight_init(2, 7, 1, 3.0, 5.0, 7.0, 1.0);
+        let nl_clause = ordering_clause(&mut bank, "nl");
+        assert_ocb_helper_matches_manual(
+            &bank,
+            nl_clause,
+            |clause| nl_weight_compute(&nl_param, &bank, clause),
+            |ocb, clause| nl_weight_compute_with_ocb(&nl_param, ocb, &bank, clause),
+        );
+
+        let sym_param = sym_type_weight_init(2, 1, 3, 11, 3.0, 5.0, 7.0, 1.0);
+        let sym_clause = ordering_clause(&mut bank, "sym");
+        assert_ocb_helper_matches_manual(
+            &bank,
+            sym_clause,
+            |clause| sym_type_weight_compute(&sym_param, clause),
+            |ocb, clause| sym_type_weight_compute_with_ocb(&sym_param, ocb, &bank, clause),
+        );
     }
 
     #[test]
@@ -1640,6 +1888,20 @@ mod tests {
         assert_close(wfcb.compute_eval(&bank, &clause), 45.0);
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
         assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn pn_refined_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = test_bank();
+        let positive_param = pn_refined_weight_init(2, 1, 13, 17, 3.0, 5.0, 7.0, 1.0);
+        let positive_clause = ordering_clause(&mut bank, "pn");
+
+        assert_ocb_helper_matches_manual(
+            &bank,
+            positive_clause,
+            |clause| pn_refined_weight_compute(&positive_param, &bank, clause),
+            |ocb, clause| pn_refined_weight_compute_with_ocb(&positive_param, ocb, &bank, clause),
+        );
     }
 
     #[test]
