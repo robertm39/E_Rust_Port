@@ -3,7 +3,8 @@ use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
-    CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
+    CP_INITIAL, CP_IS_DEAD, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_LIMITED_RW,
+    CP_NO_GENERATION, CP_SUBSUMES_WATCH,
 };
 use crate::clauses::clausefunc::{clause_remove_ac_resolved, clause_remove_superfluous_literals};
 use crate::clauses::clausesets::ClauseSet;
@@ -1348,6 +1349,109 @@ pub fn proof_state_queue_generated_clause_for_eval(
     Ok(())
 }
 
+/// Drains `tmp_store` through the currently ported local body of C
+/// `insert_new_clauses`.
+///
+/// This covers generated counters, modifying forward contraction, watchlist
+/// checks, empty-clause return, aggressive forward subsumption, eval-store
+/// admission, HCB evaluation, and the final move to `unprocessed`. Destructive
+/// equality resolution and controlled clause splitting are still separate
+/// C-owned gates; when those options are enabled for pending generated clauses,
+/// this helper reports an explicit diagnostic instead of silently skipping them.
+///
+/// # Errors
+///
+/// Returns a diagnostic from forward contraction, literal selection, HCB
+/// evaluation, or from an enabled but not-yet-ported generated-clause gate.
+pub fn proof_state_insert_new_clauses(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<Clause>, Diagnostic> {
+    if !state.tmp_store().is_empty() {
+        ensure_insert_new_clauses_supported(control)?;
+    }
+
+    let generated_count = i64_to_u64_saturating(state.tmp_store().members());
+    let generated_lit_count = i64_to_u64_saturating(state.tmp_store().literals());
+    {
+        let statistics = state.statistics_mut();
+        statistics.generated_count += generated_count;
+        statistics.generated_lit_count += generated_lit_count;
+    }
+
+    while let Some(mut clause) = state.tmp_store_mut().extract_first() {
+        let context_sr = control.heuristic_parms().forward_context_sr_aggressive
+            || (control.heuristic_parms().backward_context_sr
+                && clause.query_prop(CP_IS_PROCESSED));
+        let condense = control.heuristic_parms().condensing_aggressive;
+
+        if clause.query_prop(CP_IS_IR_VICTIM) {
+            debug_assert!(clause.query_prop(CP_LIMITED_RW));
+            let _ = proof_state_forward_modify_clause(
+                state,
+                control,
+                &mut clause,
+                context_sr,
+                condense,
+                RewriteLevel::FullRewrite,
+            )?;
+            clause.del_prop(CP_IS_IR_VICTIM);
+        }
+
+        let level = control.heuristic_parms().forward_demod;
+        let trivial = proof_state_forward_modify_clause(
+            state,
+            control,
+            &mut clause,
+            context_sr,
+            condense,
+            level,
+        )?;
+        if trivial || clause.is_trivial(state.terms()) {
+            continue;
+        }
+
+        let static_watchlist = control.heuristic_parms().watchlist_is_static;
+        let lambda_demod = control.heuristic_parms().lambda_demod;
+        let _ = proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod);
+        if clause.is_empty() {
+            return Ok(Some(clause));
+        }
+
+        if control.heuristic_parms().forward_subsumption_aggressive {
+            let mut counts = ForwardContractCounts::default();
+            if proof_state_forward_subsumption(state, &mut clause, &mut counts, true).is_none() {
+                state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
+                continue;
+            }
+            state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
+        }
+
+        proof_state_queue_generated_clause_for_eval(state, control, clause)?;
+    }
+
+    proof_state_eval_clause_set(state, control)?;
+    let _ = proof_state_move_eval_store_to_unprocessed(state);
+    Ok(None)
+}
+
+fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
+    let params = control.heuristic_parms();
+    if params.er_aggressive && params.er_varlit_destructive {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "insert_new_clauses destructive equality-resolution gate is not ported yet",
+        ));
+    }
+    if params.split_aggressive {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "insert_new_clauses aggressive controlled splitting gate is not ported yet",
+        ));
+    }
+    Ok(())
+}
+
 /// Evaluates all clauses currently waiting in `eval_store`, matching C
 /// `eval_clause_set`.
 ///
@@ -1657,11 +1761,11 @@ mod tests {
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
         proof_state_forward_modify_clause, proof_state_forward_subsumption, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_global_indices, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
-        proof_state_reset_processed, select_inherited_literal, ForwardContractCounts,
-        ForwardContractOptions, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
+        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
+        proof_state_queue_generated_clause_for_eval, proof_state_reset_processed,
+        select_inherited_literal, ForwardContractCounts, ForwardContractOptions,
+        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2810,6 +2914,179 @@ mod tests {
         assert_eq!(queued.create_date(), 88);
         assert!(!queued.query_prop(CP_IS_ORIENTED));
         assert_eq!(queued.prop_lit_number(EP_IS_SELECTED), 0);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_routes_tmp_store_to_unprocessed() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.statistics_mut().proc_non_trivial_count = 91;
+        let (first, second) = {
+            let terms = state.terms_mut();
+            let mut first = negative_clause(terms);
+            first.set_ident(4_072);
+            first.set_prop(CP_IS_ORIENTED);
+            let second = unit_clause_with_id(terms, "pc_insert_new_second", 4_073);
+            (first, second)
+        };
+        state.tmp_store_mut().insert(first);
+        state.tmp_store_mut().insert(second);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewRouteTest");
+        control.heuristic_parms_mut().selection_strategy = SELECT_NEGATIVE_LITERALS.to_owned();
+
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 2);
+        assert_eq!(state.statistics().generated_count, 2);
+        assert_eq!(state.statistics().generated_lit_count, 2);
+        assert_eq!(state.statistics().non_trivial_generated_count, 2);
+        for ident in [4_072, 4_073] {
+            let clause = state.unprocessed().find_by_id(ident).unwrap();
+            assert_eq!(clause.create_date(), 91);
+            assert!(!clause.query_prop(CP_IS_ORIENTED));
+            assert!(clause.evaluations().is_some());
+        }
+        assert_eq!(
+            state
+                .unprocessed()
+                .find_by_id(4_072)
+                .unwrap()
+                .prop_lit_number(EP_IS_SELECTED),
+            1
+        );
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_drops_trivial_generated_clauses() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (trivial, survivor) = {
+            let terms = state.terms_mut();
+            let same = typed_const(terms, "pc_insert_new_trivial_same");
+            let mut trivial =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &same, &same, true)]));
+            trivial.set_ident(4_074);
+            let survivor = unit_clause_with_id(terms, "pc_insert_new_trivial_survivor", 4_075);
+            (trivial, survivor)
+        };
+        state.tmp_store_mut().insert(trivial);
+        state.tmp_store_mut().insert(survivor);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewTrivialTest");
+
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 1);
+        assert!(state.unprocessed().find_by_id(4_074).is_none());
+        assert!(state.unprocessed().find_by_id(4_075).is_some());
+        assert_eq!(state.statistics().generated_count, 2);
+        assert_eq!(state.statistics().generated_lit_count, 2);
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
+        assert_eq!(state.statistics().proc_trivial_count, 0);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_returns_empty_before_eval_drain() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (survivor, empty, tail) = {
+            let terms = state.terms_mut();
+            let survivor = unit_clause_with_id(terms, "pc_insert_new_before_empty", 4_076);
+            let mut empty = Clause::empty();
+            empty.set_ident(4_077);
+            let tail = unit_clause_with_id(terms, "pc_insert_new_after_empty", 4_078);
+            (survivor, empty, tail)
+        };
+        state.tmp_store_mut().insert(survivor);
+        state.tmp_store_mut().insert(empty);
+        state.tmp_store_mut().insert(tail);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewEmptyTest");
+
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .expect("empty generated clause should be returned");
+
+        assert_eq!(empty.ident(), 4_077);
+        assert_eq!(state.tmp_store().members(), 1);
+        assert!(state.tmp_store().find_by_id(4_078).is_some());
+        assert_eq!(state.eval_store().members(), 1);
+        assert!(state.eval_store().find_by_id(4_076).is_some());
+        assert!(state.unprocessed().is_empty());
+        assert_eq!(state.statistics().generated_count, 3);
+        assert_eq!(state.statistics().generated_lit_count, 2);
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_counts_aggressive_forward_subsumption() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (subsumer, candidate) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let replacement = typed_const(terms, "pc_insert_new_subsumes_a");
+            let instance = typed_const(terms, "pc_insert_new_subsumes_b");
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &replacement,
+                false,
+            )]));
+            subsumer.set_ident(4_079);
+            let mut candidate = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &instance,
+                &replacement,
+                false,
+            )]));
+            candidate.set_ident(4_080);
+            (subsumer, candidate)
+        };
+        state.processed_neg_units_mut().insert(subsumer);
+        state.tmp_store_mut().insert(candidate);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewSubsumedTest");
+        control.heuristic_parms_mut().forward_subsumption_aggressive = true;
+
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert!(state.unprocessed().is_empty());
+        assert_eq!(state.statistics().generated_count, 1);
+        assert_eq!(state.statistics().generated_lit_count, 1);
+        assert_eq!(state.statistics().non_trivial_generated_count, 0);
+        assert_eq!(state.statistics().aggressive_forward_subsumed_count, 1);
+        assert_eq!(state.statistics().proc_forward_subsumed_count, 0);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_rejects_unported_generated_clause_gates() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_unsupported", 4_081);
+        state.tmp_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().er_aggressive = true;
+        control.heuristic_parms_mut().er_varlit_destructive = true;
+
+        let error = proof_state_insert_new_clauses(&mut state, &mut control).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(state.tmp_store().members(), 1);
+        assert_eq!(state.statistics().generated_count, 0);
+        assert_eq!(state.statistics().generated_lit_count, 0);
     }
 
     #[test]
