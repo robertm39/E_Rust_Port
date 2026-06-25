@@ -1,6 +1,10 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::clauses::clausesets::ClauseSet;
+use crate::heuristics::clausesetfeatures::{
+    clause_set_count_maximal_literals, clause_set_count_maximal_terms,
+    clause_set_count_unorientable_literals,
+};
 use crate::heuristics::hcb::HeuristicParmsCell;
 use crate::heuristics::to_params::{
     ho_order_kind_name, LiteralCmp, OrderParmsCell, TOPrecGenMethod, TOWeightGenMethod,
@@ -11,6 +15,7 @@ use crate::heuristics::to_precgen::generate_precedence_into_ocb_with_order;
 use crate::heuristics::to_weightgen::{generate_weights_into_ocb, WeightGenerationContext};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 
 pub const KBO_BONUS: i64 = 1;
 pub const MAX_TERM_PENALTY: i64 = 2;
@@ -221,6 +226,24 @@ pub fn auto_ordering_analysis_string(label: &str) -> String {
     format!("\n{DEFAULT_COMCHAR_RAW} {label}-Ordering is analysing problem.\n")
 }
 
+/// Evaluates an ordering on the current axiom clause set.
+///
+/// This is C `OrderEvaluate` without the surrounding `ProofState` wrapper. It
+/// deliberately marks maximal terms on `axioms` as a side effect before reading
+/// the clause-set feature counters.
+#[allow(clippy::cast_precision_loss)]
+pub fn order_evaluate(ocb: &mut OrderControlBlock, bank: &TermBank, axioms: &mut ClauseSet) -> f64 {
+    axioms.mark_maximal_terms(ocb, bank);
+    let mut result = 0;
+    result += clause_set_count_maximal_terms(axioms) * MAX_TERM_PENALTY;
+    result += clause_set_count_maximal_literals(axioms) * MAX_LITERAL_PENALTY;
+    result += clause_set_count_unorientable_literals(axioms) * UNORIENT_LITERAL_PENALTY;
+    if ocb.ordering_type == TermOrdering::Kbo {
+        result *= KBO_BONUS;
+    }
+    result as f64
+}
+
 #[must_use]
 pub fn describe_auto_ordering(oparms: &OrderParmsCell) -> String {
     format!(
@@ -423,23 +446,33 @@ fn literal_cmp_from_raw(value: i64) -> Result<LiteralCmp, Diagnostic> {
 mod tests {
     use super::{
         auto_ordering_analysis_string, auto_ordering_params, describe_auto_ordering,
-        generate_auto_ordering, init_oparms, order_next_const_weight, order_next_ordering,
-        order_next_prec_gen, order_next_type, order_next_weight_gen, print_oparms_string,
-        to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS, MAX_CONST_WEIGHT,
-        MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
+        generate_auto_ordering, init_oparms, order_evaluate, order_next_const_weight,
+        order_next_ordering, order_next_prec_gen, order_next_type, order_next_weight_gen,
+        print_oparms_string, to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS,
+        MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::CompareResult;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
+    use crate::heuristics::clausesetfeatures::{
+        clause_set_count_maximal_literals, clause_set_count_maximal_terms,
+        clause_set_count_unorientable_literals,
+    };
     use crate::heuristics::hcb::HeuristicParmsCell;
     use crate::heuristics::to_params::{
         LiteralCmp, OrderParmsCell, TOPrecGenMethod, TOWeightGenMethod, TermOrdering,
         DEFAULT_DB_WEIGHT, DEFAULT_LAMBDA_WEIGHT, W_CONST_NO_SPECIAL_WEIGHT, W_CONST_NO_WEIGHT,
     };
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn signature() -> Signature {
@@ -448,6 +481,14 @@ mod tests {
             .insert_internal_codes()
             .unwrap_or_else(|err| panic!("{err}"));
         signature
+    }
+
+    fn term_bank() -> TermBank {
+        TermBank::new(signature()).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn individual(bank: &TermBank) -> Type {
+        bank.signature().type_bank().i_type()
     }
 
     fn typed_symbol(signature: &mut Signature, name: &str, arity: i32) -> FunCode {
@@ -469,6 +510,39 @@ mod tests {
         code
     }
 
+    fn typed_const(bank: &mut TermBank, name: &str, type_: &Type) -> Term {
+        let code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(code, type_.clone())
+            .unwrap_or_else(|err| panic!("{err}"));
+        bank.create_const_term(code)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let individual = individual(bank);
+        let code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(
+                code,
+                alloc_arrow_type(vec![individual.clone(), individual.clone()]),
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+        let term = Term::top_alloc(code, 1);
+        term.set_type(Some(individual));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn literal(bank: &mut TermBank, left: &Term, right: &Term) -> Eqn {
+        Eqn::alloc(left.clone(), right.clone(), bank, true).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn clause(literals: Vec<Eqn>) -> Clause {
+        Clause::alloc(EqnList::from_vec(literals))
+    }
+
     #[test]
     fn evaluation_constants_match_c_defines() {
         assert_eq!(KBO_BONUS, 1);
@@ -476,6 +550,37 @@ mod tests {
         assert_eq!(MAX_LITERAL_PENALTY, 1);
         assert_eq!(UNORIENT_LITERAL_PENALTY, 1);
         assert_eq!(MAX_CONST_WEIGHT, 2);
+    }
+
+    #[test]
+    fn order_evaluate_marks_axioms_and_scores_c_penalty_sum() {
+        let mut bank = term_bank();
+        let individual = individual(&bank);
+        let a = typed_const(&mut bank, "order_eval_a", &individual);
+        let b = typed_const(&mut bank, "order_eval_b", &individual);
+        let fa = typed_unary(&mut bank, "order_eval_f", &a);
+        let mut axioms = ClauseSet::from_clauses([clause(vec![
+            literal(&mut bank, &fa, &a),
+            literal(&mut bank, &b, &a),
+        ])]);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        );
+
+        assert_eq!(clause_set_count_maximal_terms(&axioms), 0);
+        assert_eq!(clause_set_count_maximal_literals(&axioms), 0);
+
+        let score = order_evaluate(&mut ocb, &bank, &mut axioms);
+        let expected = (clause_set_count_maximal_terms(&axioms) * MAX_TERM_PENALTY
+            + clause_set_count_maximal_literals(&axioms) * MAX_LITERAL_PENALTY
+            + clause_set_count_unorientable_literals(&axioms) * UNORIENT_LITERAL_PENALTY)
+            * KBO_BONUS;
+
+        assert!(expected > 0);
+        assert_eq!(score, expected as f64);
     }
 
     #[test]
