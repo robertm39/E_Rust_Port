@@ -7,7 +7,7 @@ use crate::clauses::eqn_props::{
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 pub const NO_SELECTION: &str = "NoSelection";
@@ -115,10 +115,40 @@ pub const SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN: &str =
 pub const P_SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN: &str =
     "PSelectNewComplexAHPExceptUniqMaxHorn";
 pub const SELECT_NEW_COMPLEX_AHP_NS: &str = "SelectNewComplexAHPNS";
+pub const SELECT_VG_NON_CR: &str = "SelectVGNonCR";
+pub const SELECT_CQ_AR_EQ_LAST: &str = "SelectCQArEqLast";
+pub const SELECT_CQ_AR_EQ_FIRST: &str = "SelectCQArEqFirst";
+pub const SELECT_CQI_AR_EQ_LAST: &str = "SelectCQIArEqLast";
+pub const SELECT_CQI_AR_EQ_FIRST: &str = "SelectCQIArEqFirst";
+pub const SELECT_CQ_AR: &str = "SelectCQAr";
+pub const SELECT_CQI_AR: &str = "SelectCQIAr";
+pub const SELECT_CQ_AR_NP_EQ_FIRST: &str = "SelectCQArNpEqFirst";
+pub const SELECT_CQI_AR_NP_EQ_FIRST: &str = "SelectCQIArNpEqFirst";
+pub const SELECT_CQ_GR_AR_EQ_FIRST: &str = "SelectCQGrArEqFirst";
+pub const SELECT_CQ_AR_NT_EQ_FIRST: &str = "SelectCQArNTEqFirst";
+pub const SELECT_CQI_AR_NT_EQ_FIRST: &str = "SelectCQIArNTEqFirst";
+pub const SELECT_CQ_AR_NT_NP_EQ_FIRST: &str = "SelectCQArNTNpEqFirst";
+pub const SELECT_CQI_AR_NT_NP_EQ_FIRST: &str = "SelectCQIArNTNpEqFirst";
+pub const SELECT_CQ_AR_NXT_EQ_FIRST: &str = "SelectCQArNXTEqFirst";
+pub const SELECT_CQI_AR_NXT_EQ_FIRST: &str = "SelectCQIArNXTEqFirst";
+pub const SELECT_CQ_AR_NT_NP: &str = "SelectCQArNTNp";
+pub const SELECT_CQI_AR_NT_NP: &str = "SelectCQIArNTNp";
+pub const SELECT_CQ_AR_NT: &str = "SelectCQArNT";
+pub const SELECT_CQI_AR_NT: &str = "SelectCQIArNT";
+pub const SELECT_CQ_AR_NP: &str = "SelectCQArNp";
+pub const SELECT_CQI_AR_NP: &str = "SelectCQIArNp";
+pub const SELECT_CQ_AR_NP_EQ_FIRST_UNLESS_PDOM: &str = "SelectCQArNpEqFirstUnlessPDom";
+pub const SELECT_CQ_AR_NT_EQ_FIRST_UNLESS_PDOM: &str = "SelectCQArNTEqFirstUnlessPDom";
+pub const SELECT_CQ_PREC_W: &str = "SelectCQPrecW";
+pub const SELECT_CQI_PREC_W: &str = "SelectCQIPrecW";
+pub const SELECT_CQ_PREC_W_NT_NP: &str = "SelectCQPrecWNTNp";
+pub const SELECT_CQI_PREC_W_NT_NP: &str = "SelectCQIPrecWNTNp";
 pub const SELECT_DIV_LITS: &str = "SelectDivLits";
 pub const SELECT_DIV_PREFER_INTO_LITS: &str = "SelectDivPreferIntoLits";
 
 const VAR_FACTOR: i64 = 3;
+const CQ_FORBIDDEN_WEIGHT: i64 = 100_000;
+const CQ_GROUND_BIAS: i64 = 2_000_000;
 static LITERAL_WEIGHT_COUNTER: AtomicI64 = AtomicI64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -623,6 +653,111 @@ impl AhpLiteralSelector {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CqLiteralSelector {
+    VgNonCr,
+    ArEqLast,
+    ArEqFirst,
+    IArEqLast,
+    IArEqFirst,
+    Ar,
+    IAr,
+    ArNpEqFirst,
+    IArNpEqFirst,
+    GrArEqFirst,
+    ArNtEqFirst,
+    IArNtEqFirst,
+    ArNtNpEqFirst,
+    IArNtNpEqFirst,
+    ArNxtEqFirst,
+    IArNxtEqFirst,
+    ArNtNp,
+    IArNtNp,
+    ArNt,
+    IArNt,
+    ArNp,
+    IArNp,
+    ArNpEqFirstUnlessPDom,
+    ArNtEqFirstUnlessPDom,
+    PrecW,
+    IPrecW,
+    PrecWNtNp,
+    IPrecWNtNp,
+}
+
+impl CqLiteralSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_VG_NON_CR => Some(Self::VgNonCr),
+            SELECT_CQ_AR_EQ_LAST => Some(Self::ArEqLast),
+            SELECT_CQ_AR_EQ_FIRST => Some(Self::ArEqFirst),
+            SELECT_CQI_AR_EQ_LAST => Some(Self::IArEqLast),
+            SELECT_CQI_AR_EQ_FIRST => Some(Self::IArEqFirst),
+            SELECT_CQ_AR => Some(Self::Ar),
+            SELECT_CQI_AR => Some(Self::IAr),
+            SELECT_CQ_AR_NP_EQ_FIRST => Some(Self::ArNpEqFirst),
+            SELECT_CQI_AR_NP_EQ_FIRST => Some(Self::IArNpEqFirst),
+            SELECT_CQ_GR_AR_EQ_FIRST => Some(Self::GrArEqFirst),
+            SELECT_CQ_AR_NT_EQ_FIRST => Some(Self::ArNtEqFirst),
+            SELECT_CQI_AR_NT_EQ_FIRST => Some(Self::IArNtEqFirst),
+            SELECT_CQ_AR_NT_NP_EQ_FIRST => Some(Self::ArNtNpEqFirst),
+            SELECT_CQI_AR_NT_NP_EQ_FIRST => Some(Self::IArNtNpEqFirst),
+            SELECT_CQ_AR_NXT_EQ_FIRST => Some(Self::ArNxtEqFirst),
+            SELECT_CQI_AR_NXT_EQ_FIRST => Some(Self::IArNxtEqFirst),
+            SELECT_CQ_AR_NT_NP => Some(Self::ArNtNp),
+            SELECT_CQI_AR_NT_NP => Some(Self::IArNtNp),
+            SELECT_CQ_AR_NT => Some(Self::ArNt),
+            SELECT_CQI_AR_NT => Some(Self::IArNt),
+            SELECT_CQ_AR_NP => Some(Self::ArNp),
+            SELECT_CQI_AR_NP => Some(Self::IArNp),
+            SELECT_CQ_AR_NP_EQ_FIRST_UNLESS_PDOM => Some(Self::ArNpEqFirstUnlessPDom),
+            SELECT_CQ_AR_NT_EQ_FIRST_UNLESS_PDOM => Some(Self::ArNtEqFirstUnlessPDom),
+            SELECT_CQ_PREC_W => Some(Self::PrecW),
+            SELECT_CQI_PREC_W => Some(Self::IPrecW),
+            SELECT_CQ_PREC_W_NT_NP => Some(Self::PrecWNtNp),
+            SELECT_CQI_PREC_W_NT_NP => Some(Self::IPrecWNtNp),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::VgNonCr => select_vg_non_cr(ocb, bank, clause),
+            Self::ArEqLast => select_cq_ar_eq_last(ocb, bank, clause),
+            Self::ArEqFirst => select_cq_ar_eq_first(ocb, bank, clause),
+            Self::IArEqLast => select_cqi_ar_eq_last(ocb, bank, clause),
+            Self::IArEqFirst => select_cqi_ar_eq_first(ocb, bank, clause),
+            Self::Ar => select_cq_ar(ocb, bank, clause),
+            Self::IAr => select_cqi_ar(ocb, bank, clause),
+            Self::ArNpEqFirst => select_cq_ar_np_eq_first(ocb, bank, clause),
+            Self::IArNpEqFirst => select_cqi_ar_np_eq_first(ocb, bank, clause),
+            Self::GrArEqFirst => select_cq_gr_ar_eq_first(ocb, bank, clause),
+            Self::ArNtEqFirst => select_cq_ar_nt_eq_first(ocb, bank, clause),
+            Self::IArNtEqFirst => select_cqi_ar_nt_eq_first(ocb, bank, clause),
+            Self::ArNtNpEqFirst => select_cq_ar_nt_np_eq_first(ocb, bank, clause),
+            Self::IArNtNpEqFirst => select_cqi_ar_nt_np_eq_first(ocb, bank, clause),
+            Self::ArNxtEqFirst => select_cq_ar_nxt_eq_first(ocb, bank, clause),
+            Self::IArNxtEqFirst => select_cqi_ar_nxt_eq_first(ocb, bank, clause),
+            Self::ArNtNp => select_cq_ar_nt_np(ocb, bank, clause),
+            Self::IArNtNp => select_cqi_ar_nt_np(ocb, bank, clause),
+            Self::ArNt => select_cq_ar_nt(ocb, bank, clause),
+            Self::IArNt => select_cqi_ar_nt(ocb, bank, clause),
+            Self::ArNp => select_cq_ar_np(ocb, bank, clause),
+            Self::IArNp => select_cqi_ar_np(ocb, bank, clause),
+            Self::ArNpEqFirstUnlessPDom => {
+                select_cq_ar_np_eq_first_unless_pdom(ocb, bank, clause);
+            }
+            Self::ArNtEqFirstUnlessPDom => {
+                select_cq_ar_nt_eq_first_unless_pdom(ocb, bank, clause);
+            }
+            Self::PrecW => select_cq_prec_w(ocb, bank, clause),
+            Self::IPrecW => select_cqi_prec_w(ocb, bank, clause),
+            Self::PrecWNtNp => select_cq_prec_w_nt_np(ocb, bank, clause),
+            Self::IPrecWNtNp => select_cqi_prec_w_nt_np(ocb, bank, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OrientableWeightChoice {
     Largest,
     Smallest,
@@ -664,6 +799,42 @@ enum MinInfposPositivePolicy {
 enum NewComplexAhpMode {
     Standard,
     NoSplit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CqArityPreference {
+    High,
+    Low,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CqFilter {
+    None,
+    NoPropositional,
+    NoType,
+    NoTypeOrPropositional,
+    NoXType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CqGroundBias {
+    None,
+    PreferGroundWithinSymbol,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CqWeightSpec {
+    arity: CqArityPreference,
+    eq_w1: Option<i64>,
+    filter: CqFilter,
+    ground_bias: CqGroundBias,
+    forbidden_w1: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CqPrecedenceWeightSpec {
+    inverted: bool,
+    filter: CqFilter,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1619,6 +1790,319 @@ pub fn select_new_complex_ahp_ns(
     select_new_complex_ahp_impl(ocb, bank, clause, false, NewComplexAhpMode::NoSplit);
 }
 
+pub fn select_vg_non_cr(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_vg_non_cr_impl(ocb, bank, clause);
+}
+
+pub fn select_cq_ar_eq_last(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, Some(1_000_000), CqFilter::None),
+    );
+}
+
+pub fn select_cq_ar_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, Some(-100_000), CqFilter::None),
+    );
+}
+
+pub fn select_cqi_ar_eq_last(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, Some(100_000), CqFilter::None),
+    );
+}
+
+pub fn select_cqi_ar_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, Some(-100_000), CqFilter::None),
+    );
+}
+
+pub fn select_cq_ar(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, None, CqFilter::None),
+    );
+}
+
+pub fn select_cqi_ar(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, None, CqFilter::None),
+    );
+}
+
+pub fn select_cq_ar_np_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(
+            CqArityPreference::High,
+            Some(-100_000),
+            CqFilter::NoPropositional,
+        ),
+    );
+}
+
+pub fn select_cqi_ar_np_eq_first(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqWeightSpec {
+            arity: CqArityPreference::Low,
+            eq_w1: Some(-1_000_000),
+            filter: CqFilter::NoPropositional,
+            ground_bias: CqGroundBias::None,
+            forbidden_w1: 1_000_000,
+        },
+    );
+}
+
+pub fn select_cq_gr_ar_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqWeightSpec {
+            arity: CqArityPreference::High,
+            eq_w1: Some(-1_000_000),
+            filter: CqFilter::None,
+            ground_bias: CqGroundBias::PreferGroundWithinSymbol,
+            forbidden_w1: CQ_FORBIDDEN_WEIGHT,
+        },
+    );
+}
+
+pub fn select_cq_ar_nt_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, Some(-100_000), CqFilter::NoType),
+    );
+}
+
+pub fn select_cqi_ar_nt_eq_first(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, Some(-100_000), CqFilter::NoType),
+    );
+}
+
+pub fn select_cq_ar_nt_np_eq_first(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(
+            CqArityPreference::High,
+            Some(-100_000),
+            CqFilter::NoTypeOrPropositional,
+        ),
+    );
+}
+
+pub fn select_cqi_ar_nt_np_eq_first(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(
+            CqArityPreference::Low,
+            Some(-100_000),
+            CqFilter::NoTypeOrPropositional,
+        ),
+    );
+}
+
+pub fn select_cq_ar_nxt_eq_first(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, Some(-100_000), CqFilter::NoXType),
+    );
+}
+
+pub fn select_cqi_ar_nxt_eq_first(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, Some(-100_000), CqFilter::NoXType),
+    );
+}
+
+pub fn select_cq_ar_nt_np(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(
+            CqArityPreference::High,
+            None,
+            CqFilter::NoTypeOrPropositional,
+        ),
+    );
+}
+
+pub fn select_cqi_ar_nt_np(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(
+            CqArityPreference::Low,
+            None,
+            CqFilter::NoTypeOrPropositional,
+        ),
+    );
+}
+
+pub fn select_cq_ar_nt(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, None, CqFilter::NoType),
+    );
+}
+
+pub fn select_cqi_ar_nt(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, None, CqFilter::NoType),
+    );
+}
+
+pub fn select_cq_ar_np(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::High, None, CqFilter::NoPropositional),
+    );
+}
+
+pub fn select_cqi_ar_np(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        cq_spec(CqArityPreference::Low, None, CqFilter::NoPropositional),
+    );
+}
+
+pub fn select_cq_ar_np_eq_first_unless_pdom(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_pdom(ocb, bank, clause, select_cq_ar_np_eq_first);
+}
+
+pub fn select_cq_ar_nt_eq_first_unless_pdom(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_pdom(ocb, bank, clause, select_cq_ar_nt_eq_first);
+}
+
+pub fn select_cq_prec_w(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_precedence_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqPrecedenceWeightSpec {
+            inverted: false,
+            filter: CqFilter::None,
+        },
+    );
+}
+
+pub fn select_cqi_prec_w(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_precedence_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqPrecedenceWeightSpec {
+            inverted: true,
+            filter: CqFilter::None,
+        },
+    );
+}
+
+pub fn select_cq_prec_w_nt_np(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_precedence_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqPrecedenceWeightSpec {
+            inverted: false,
+            filter: CqFilter::NoTypeOrPropositional,
+        },
+    );
+}
+
+pub fn select_cqi_prec_w_nt_np(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_precedence_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqPrecedenceWeightSpec {
+            inverted: true,
+            filter: CqFilter::NoTypeOrPropositional,
+        },
+    );
+}
+
 pub fn select_min_infpos(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
     select_min_infpos_impl(ocb, bank, clause, MinInfposPositivePolicy::Never, false);
 }
@@ -1805,6 +2289,15 @@ pub fn apply_ported_literal_selector_with_bank(
         selector.apply(ocb, bank, clause);
         Ok(())
     } else if let Some(selector) = AhpLiteralSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
+        Ok(())
+    } else if let Some(selector) = CqLiteralSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(UnsupportedLiteralSelection::new(name));
         };
@@ -2719,6 +3212,201 @@ fn select_new_complex_ahp_except_uniq_max_horn_impl(
     );
 }
 
+const fn cq_spec(arity: CqArityPreference, eq_w1: Option<i64>, filter: CqFilter) -> CqWeightSpec {
+    CqWeightSpec {
+        arity,
+        eq_w1,
+        filter,
+        ground_bias: CqGroundBias::None,
+        forbidden_w1: CQ_FORBIDDEN_WEIGHT,
+    }
+}
+
+fn select_vg_non_cr_impl(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    debug_assert_ne!(clause.negative_literal_count(), 0);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    if let Some(index) = clause.literals().find_neg_pure_var_lit_index() {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        return;
+    }
+
+    clause.cond_mark_maximal_terms(ocb, bank);
+    if let Some(index) = find_min_weight_negative_literal(clause, true) {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        return;
+    }
+
+    if clause.literals().query_prop_number(EP_IS_MAXIMAL) == 1
+        && clause
+            .literals()
+            .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+            == 1
+    {
+        return;
+    }
+
+    select_new_complex_ahp_impl(ocb, bank, clause, false, NewComplexAhpMode::NoSplit);
+}
+
+fn select_cq_with_spec(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    spec: CqWeightSpec,
+) {
+    generic_uniq_selection_with_ordering(ocb, bank, clause, false, |eval, literal, _| {
+        cq_weight(eval, literal, bank, spec);
+    });
+}
+
+fn select_cq_precedence_with_spec(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    spec: CqPrecedenceWeightSpec,
+) {
+    let sig_size = ocb.sig_size;
+    let prec_weights = ocb.prec_weights.clone();
+    generic_uniq_selection_with_ordering(ocb, bank, clause, false, |eval, literal, _| {
+        cq_precedence_weight(eval, literal, sig_size, prec_weights.as_deref(), bank, spec);
+    });
+}
+
+fn cq_weight(eval: &mut LitEval, literal: &Eqn, bank: &TermBank, spec: CqWeightSpec) {
+    if !literal.is_negative() {
+        return;
+    }
+
+    if literal.is_equ_lit(bank) || literal.left().is_free_var() {
+        if let Some(eq_w1) = spec.eq_w1 {
+            eval.w1 = eq_w1;
+            eval.w2 = 0;
+        } else {
+            eval.w1 = match spec.arity {
+                CqArityPreference::High => -2,
+                CqArityPreference::Low => 2,
+            };
+            eval.w2 = cq_alpha_rank_for_left(bank, literal);
+        }
+    } else {
+        let f_code = literal.left().f_code();
+        eval.w1 = match spec.arity {
+            CqArityPreference::High => -cq_symbol_arity(bank, f_code),
+            CqArityPreference::Low => cq_symbol_arity(bank, f_code),
+        };
+        eval.w2 = cq_alpha_rank(bank, f_code);
+        if cq_filter_rejects(literal, bank, spec.filter) {
+            eval.w1 = spec.forbidden_w1;
+            eval.forbidden = true;
+        }
+    }
+
+    eval.w3 = literal_selection_diff_weight(literal);
+    if spec.ground_bias == CqGroundBias::PreferGroundWithinSymbol && literal.is_ground() {
+        eval.w2 -= CQ_GROUND_BIAS;
+    }
+}
+
+fn cq_precedence_weight(
+    eval: &mut LitEval,
+    literal: &Eqn,
+    sig_size: i64,
+    prec_weights: Option<&[i64]>,
+    bank: &TermBank,
+    spec: CqPrecedenceWeightSpec,
+) {
+    if !literal.is_negative() {
+        return;
+    }
+
+    if literal.left().is_free_var() {
+        eval.w1 = 0;
+        eval.w2 = 0;
+    } else if cq_filter_rejects(literal, bank, spec.filter) {
+        eval.w1 = CQ_FORBIDDEN_WEIGHT;
+        eval.forbidden = true;
+    } else {
+        let f_code = literal.left().f_code();
+        eval.w1 = cq_fun_prec_weight(sig_size, prec_weights, f_code);
+        if spec.inverted {
+            eval.w1 = -eval.w1;
+        }
+        eval.w2 = cq_alpha_rank(bank, f_code);
+    }
+    eval.w3 = literal_selection_diff_weight(literal);
+}
+
+fn cq_fun_prec_weight(sig_size: i64, prec_weights: Option<&[i64]>, symbol: i64) -> i64 {
+    if symbol <= sig_size {
+        if let Some(weight) = prec_weights.and_then(|weights| {
+            usize::try_from(symbol)
+                .ok()
+                .and_then(|index| weights.get(index))
+        }) {
+            return *weight;
+        }
+    }
+    -symbol
+}
+
+fn cq_symbol_arity(bank: &TermBank, f_code: i64) -> i64 {
+    i64::from(bank.signature().find_arity(f_code).unwrap_or(0))
+}
+
+fn cq_alpha_rank(bank: &TermBank, f_code: i64) -> i64 {
+    i64::from(bank.signature().alpha_rank(f_code))
+}
+
+fn cq_alpha_rank_for_left(bank: &TermBank, literal: &Eqn) -> i64 {
+    let f_code = literal.left().f_code();
+    if f_code > 0 {
+        cq_alpha_rank(bank, f_code)
+    } else {
+        0
+    }
+}
+
+fn cq_filter_rejects(literal: &Eqn, bank: &TermBank, filter: CqFilter) -> bool {
+    match filter {
+        CqFilter::None => false,
+        CqFilter::NoPropositional => literal.is_propositional(bank),
+        CqFilter::NoType => literal.is_type_pred(bank),
+        CqFilter::NoTypeOrPropositional => {
+            literal.is_type_pred(bank) || literal.is_propositional(bank)
+        }
+        CqFilter::NoXType => literal.is_x_type_pred(bank),
+    }
+}
+
+fn select_unless_pdom(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    selector: fn(&mut OrderControlBlock, &TermBank, &mut Clause),
+) {
+    debug_assert_ne!(clause.negative_literal_count(), 0);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    clause.cond_mark_maximal_terms(ocb, bank);
+
+    let pos_max_predicates = clause
+        .literals()
+        .as_slice()
+        .iter()
+        .filter(|literal| literal.is_positive() && literal.is_maximal())
+        .map(|literal| literal.pred_code_fo(bank))
+        .collect::<BTreeSet<_>>();
+
+    if clause.literals().as_slice().iter().any(|literal| {
+        literal.is_negative() && pos_max_predicates.contains(&literal.pred_code_fo(bank))
+    }) {
+        return;
+    }
+
+    selector(ocb, bank, clause);
+}
+
 fn positive_predicate_distribution(clause: &Clause, bank: &TermBank) -> BTreeMap<i64, i64> {
     let mut pred_dist = BTreeMap::new();
     for literal in clause
@@ -3606,6 +4294,103 @@ mod tests {
         ]))
     }
 
+    fn cq_arity_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "cq_arity_pos");
+        let a = shared_const(bank, "cq_arity_a");
+        let b = shared_const(bank, "cq_arity_b");
+        let unary_atom = weighted_predicate_unary_atom(bank, "cq_arity_unary", &a, 4);
+        let binary_atom = weighted_predicate_binary_atom(bank, "cq_arity_binary", &a, &b, 5);
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &unary_atom, false),
+            predicate_literal(bank, &binary_atom, false),
+            literal(bank, &a, &b, false),
+        ]))
+    }
+
+    fn cq_ground_bias_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "cq_ground_pos");
+        let a = shared_const(bank, "cq_ground_a");
+        let x = typed_var(bank, -390);
+        let nonground_atom = weighted_predicate_unary_atom(bank, "cq_ground_p", &x, 4);
+        let nonground_atom = bank.insert(&nonground_atom, DerefType::Never).unwrap();
+        let ground_atom = weighted_predicate_unary_atom(bank, "cq_ground_p", &a, 4);
+        let ground_atom = bank.insert(&ground_atom, DerefType::Never).unwrap();
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &nonground_atom, false),
+            predicate_literal(bank, &ground_atom, false),
+        ]))
+    }
+
+    fn cq_filter_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "cq_filter_pos");
+        let prop = predicate_const_atom(bank, "cq_filter_prop");
+        let type_pred = weighted_predicate_const_atom(bank, "cq_filter_type", 3);
+        let x = typed_var(bank, -400);
+        let y = typed_var(bank, -402);
+        let x_type = weighted_predicate_binary_atom(bank, "cq_filter_xtype", &x, &y, 4);
+        let a = shared_const(bank, "cq_filter_a");
+        let ordinary = weighted_predicate_unary_atom(bank, "cq_filter_ordinary", &a, 4);
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &prop, false),
+            predicate_literal(bank, &type_pred, false),
+            predicate_literal(bank, &x_type, false),
+            predicate_literal(bank, &ordinary, false),
+        ]))
+    }
+
+    fn cq_precedence_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "cq_prec_pos");
+        let a = shared_const(bank, "cq_prec_a");
+        let high_atom = weighted_predicate_unary_atom(bank, "cq_prec_high", &a, 4);
+        let low_atom = weighted_predicate_unary_atom(bank, "cq_prec_low", &a, 4);
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &high_atom, false),
+            predicate_literal(bank, &low_atom, false),
+        ]))
+    }
+
+    fn cq_unless_pdom_clause(bank: &mut TermBank, shared_predicate: bool) -> Clause {
+        let pos = predicate_const_atom(bank, "cq_pdom_shared");
+        let blocked = if shared_predicate {
+            predicate_const_atom(bank, "cq_pdom_shared")
+        } else {
+            predicate_const_atom(bank, "cq_pdom_other")
+        };
+        let fallback = predicate_const_atom(bank, "cq_pdom_fallback");
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &blocked, false),
+            predicate_literal(bank, &fallback, false),
+        ]));
+        mark_maximal_literals(&mut clause, &[0]);
+        clause
+    }
+
+    fn vg_non_cr_nonground_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "vg_non_cr_pos");
+        let x = typed_var(bank, -410);
+        let y = typed_var(bank, -412);
+        let p_x = weighted_predicate_unary_atom(bank, "vg_non_cr_p", &x, 4);
+        let q_y = weighted_predicate_unary_atom(bank, "vg_non_cr_q", &y, 4);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &p_x, false),
+            predicate_literal(bank, &q_y, false),
+        ]));
+        mark_maximal_literals(&mut clause, &[0]);
+        clause
+    }
+
     fn maximal_gate_clause(bank: &mut TermBank) -> Clause {
         let pos = predicate_const_atom(bank, "max_gate_pos");
         let a = shared_const(bank, "max_gate_a");
@@ -4311,6 +5096,140 @@ mod tests {
     }
 
     #[test]
+    fn cq_arity_variants_preserve_equality_ordering_constants() {
+        let mut bank = test_bank();
+        let mut eq_last = cq_arity_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_cq_ar_eq_last(&mut ocb, &bank, &mut eq_last);
+        assert_eq!(selected_indices(&eq_last), vec![2]);
+        assert!(!eq_last.query_prop(CP_IS_ORIENTED));
+
+        let mut eq_first_bank = test_bank();
+        let mut eq_first = cq_arity_clause(&mut eq_first_bank);
+        let mut eq_first_ocb = kbo_ocb(&eq_first_bank);
+        super::select_cq_ar_eq_first(&mut eq_first_ocb, &eq_first_bank, &mut eq_first);
+        assert_eq!(selected_indices(&eq_first), vec![3]);
+
+        let mut inverse_eq_last_bank = test_bank();
+        let mut inverse_eq_last = cq_arity_clause(&mut inverse_eq_last_bank);
+        let mut inverse_eq_last_ocb = kbo_ocb(&inverse_eq_last_bank);
+        super::select_cqi_ar_eq_last(
+            &mut inverse_eq_last_ocb,
+            &inverse_eq_last_bank,
+            &mut inverse_eq_last,
+        );
+        assert_eq!(selected_indices(&inverse_eq_last), vec![1]);
+
+        let mut inverse_eq_first_bank = test_bank();
+        let mut inverse_eq_first = cq_arity_clause(&mut inverse_eq_first_bank);
+        let mut inverse_eq_first_ocb = kbo_ocb(&inverse_eq_first_bank);
+        super::select_cqi_ar_eq_first(
+            &mut inverse_eq_first_ocb,
+            &inverse_eq_first_bank,
+            &mut inverse_eq_first,
+        );
+        assert_eq!(selected_indices(&inverse_eq_first), vec![3]);
+    }
+
+    #[test]
+    fn cq_ground_bias_prefers_ground_only_within_the_same_symbol() {
+        let mut bank = test_bank();
+        let mut clause = cq_ground_bias_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_cq_gr_ar_eq_first(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+    }
+
+    #[test]
+    fn cq_filters_mark_rejected_best_candidate_as_forbidden() {
+        let mut bank = test_bank();
+        let mut no_prop = cq_filter_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_cq_ar_np(&mut ocb, &bank, &mut no_prop);
+        assert_eq!(selected_indices(&no_prop), vec![3]);
+
+        let mut no_x_type_bank = test_bank();
+        let mut no_x_type = cq_filter_clause(&mut no_x_type_bank);
+        let mut no_x_type_ocb = kbo_ocb(&no_x_type_bank);
+        super::select_cq_ar_nxt_eq_first(&mut no_x_type_ocb, &no_x_type_bank, &mut no_x_type);
+        assert_eq!(selected_indices(&no_x_type), vec![4]);
+    }
+
+    #[test]
+    fn cq_precedence_variants_use_ocb_precedence_weights() {
+        let mut bank = test_bank();
+        let mut direct = cq_precedence_clause(&mut bank);
+        let high = bank.signature().find_f_code("cq_prec_high");
+        let low = bank.signature().find_f_code("cq_prec_low");
+        let mut ocb = kbo_ocb(&bank);
+        ocb.set_fun_prec_weight(high, 30);
+        ocb.set_fun_prec_weight(low, 10);
+
+        super::select_cq_prec_w(&mut ocb, &bank, &mut direct);
+        assert_eq!(selected_indices(&direct), vec![2]);
+
+        let mut inverted_bank = test_bank();
+        let mut inverted = cq_precedence_clause(&mut inverted_bank);
+        let high = inverted_bank.signature().find_f_code("cq_prec_high");
+        let low = inverted_bank.signature().find_f_code("cq_prec_low");
+        let mut inverted_ocb = kbo_ocb(&inverted_bank);
+        inverted_ocb.set_fun_prec_weight(high, 30);
+        inverted_ocb.set_fun_prec_weight(low, 10);
+
+        super::select_cqi_prec_w(&mut inverted_ocb, &inverted_bank, &mut inverted);
+        assert_eq!(selected_indices(&inverted), vec![1]);
+    }
+
+    #[test]
+    fn cq_unless_pdom_gates_on_maximal_positive_predicate_domination() {
+        let mut bank = test_bank();
+        let mut blocked = cq_unless_pdom_clause(&mut bank, true);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_cq_ar_np_eq_first_unless_pdom(&mut ocb, &bank, &mut blocked);
+
+        assert_eq!(selected_indices(&blocked), Vec::<usize>::new());
+        assert!(blocked.query_prop(CP_IS_ORIENTED));
+
+        let mut allowed_bank = test_bank();
+        let mut allowed = cq_unless_pdom_clause(&mut allowed_bank, false);
+        let mut allowed_ocb = kbo_ocb(&allowed_bank);
+        super::select_cq_ar_nt_eq_first_unless_pdom(&mut allowed_ocb, &allowed_bank, &mut allowed);
+        assert_eq!(selected_indices(&allowed), vec![2]);
+        assert!(!allowed.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn vg_non_cr_preserves_c_branch_order_and_side_effects() {
+        let mut bank = test_bank();
+        let mut pure_var = max_lcomplex_priority_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_vg_non_cr(&mut ocb, &bank, &mut pure_var);
+        assert_eq!(selected_indices(&pure_var), vec![2]);
+
+        let mut ground_bank = test_bank();
+        let mut ground = new_complex_ground_clause(&mut ground_bank);
+        let ground_index = first_smallest_ground_negative_index(&ground);
+        let mut ground_ocb = kbo_ocb(&ground_bank);
+
+        super::select_vg_non_cr(&mut ground_ocb, &ground_bank, &mut ground);
+        assert_eq!(selected_indices(&ground), vec![ground_index]);
+        assert!(ground.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_max_bank = test_bank();
+        let mut positive_max = vg_non_cr_nonground_clause(&mut positive_max_bank);
+        let mut positive_max_ocb = kbo_ocb(&positive_max_bank);
+        super::select_vg_non_cr(&mut positive_max_ocb, &positive_max_bank, &mut positive_max);
+        assert_eq!(selected_indices(&positive_max), Vec::<usize>::new());
+        assert!(positive_max.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
     fn new_complex_selects_ground_literal_with_smallest_max_side() {
         let mut bank = test_bank();
         let mut clause = new_complex_ground_clause(&mut bank);
@@ -4664,6 +5583,50 @@ mod tests {
     }
 
     #[test]
+    fn bank_aware_cq_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_VG_NON_CR,
+            super::SELECT_CQ_AR_EQ_LAST,
+            super::SELECT_CQ_AR_EQ_FIRST,
+            super::SELECT_CQI_AR_EQ_LAST,
+            super::SELECT_CQI_AR_EQ_FIRST,
+            super::SELECT_CQ_AR,
+            super::SELECT_CQI_AR,
+            super::SELECT_CQ_AR_NP_EQ_FIRST,
+            super::SELECT_CQI_AR_NP_EQ_FIRST,
+            super::SELECT_CQ_GR_AR_EQ_FIRST,
+            super::SELECT_CQ_AR_NT_EQ_FIRST,
+            super::SELECT_CQI_AR_NT_EQ_FIRST,
+            super::SELECT_CQ_AR_NT_NP_EQ_FIRST,
+            super::SELECT_CQI_AR_NT_NP_EQ_FIRST,
+            super::SELECT_CQ_AR_NXT_EQ_FIRST,
+            super::SELECT_CQI_AR_NXT_EQ_FIRST,
+            super::SELECT_CQ_AR_NT_NP,
+            super::SELECT_CQI_AR_NT_NP,
+            super::SELECT_CQ_AR_NT,
+            super::SELECT_CQI_AR_NT,
+            super::SELECT_CQ_AR_NP,
+            super::SELECT_CQI_AR_NP,
+            super::SELECT_CQ_AR_NP_EQ_FIRST_UNLESS_PDOM,
+            super::SELECT_CQ_AR_NT_EQ_FIRST_UNLESS_PDOM,
+            super::SELECT_CQ_PREC_W,
+            super::SELECT_CQI_PREC_W,
+            super::SELECT_CQ_PREC_W_NT_NP,
+            super::SELECT_CQI_PREC_W_NT_NP,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = cq_arity_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
     fn bank_aware_orientable_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_LARGEST_ORIENTABLE,
@@ -4765,12 +5728,12 @@ mod tests {
     }
 
     #[test]
-    fn unported_selector_reports_name() {
+    fn unsupported_selector_reports_name() {
         let mut clause = Clause::empty();
         let error =
-            apply_ported_literal_selector("SelectCQArEqLast", None, &mut clause).unwrap_err();
+            apply_ported_literal_selector("UnknownLiteralSelector", None, &mut clause).unwrap_err();
 
-        assert_eq!(error.strategy(), "SelectCQArEqLast");
+        assert_eq!(error.strategy(), "UnknownLiteralSelector");
         assert!(error.to_string().contains("not ported yet"));
     }
 }

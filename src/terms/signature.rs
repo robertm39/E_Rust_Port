@@ -718,6 +718,19 @@ impl Signature {
         self.func(f_code).alpha_rank
     }
 
+    #[must_use]
+    pub fn alpha_rank(&self, f_code: FunCode) -> i32 {
+        if self.alpha_ranks_valid {
+            return self.func(f_code).alpha_rank;
+        }
+        self.f_index
+            .values()
+            .copied()
+            .position(|ranked| ranked == f_code)
+            .and_then(|rank| i32::try_from(rank).ok())
+            .unwrap_or_else(|| self.func(f_code).alpha_rank)
+    }
+
     pub fn insert_id(&mut self, name: &str, arity: i32, special_id: bool) -> FunCode {
         self.insert_id_for_problem(name, arity, special_id, problem_type())
     }
