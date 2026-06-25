@@ -6,6 +6,7 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
@@ -251,6 +252,22 @@ pub fn diversity_weight_compute(
     result
 }
 
+/// Computes C `DiversityWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn diversity_weight_compute_with_ocb(
+    param: &DiversityWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    diversity_weight_compute(param, bank, clause)
+}
+
 fn diversity_weight_wfcb_compute(
     data: Option<&mut DiversityWeightParam>,
     bank: &TermBank,
@@ -272,14 +289,19 @@ fn i64_to_f64(value: i64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diversity_weight_compute, diversity_weight_init, diversity_weight_parse, DEFAULT_MAX_MULT,
+        diversity_weight_compute, diversity_weight_compute_with_ocb, diversity_weight_init,
+        diversity_weight_parse, DEFAULT_MAX_MULT,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -319,6 +341,26 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![literal]))
     }
 
+    fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        bank.parse_term_simple(&mut scanner).unwrap()
+    }
+
+    fn parsed_unit_clause(bank: &mut TermBank, left: &str, right: &str, positive: bool) -> Clause {
+        let left = parse_in_bank(bank, left);
+        let right = parse_in_bank(bank, right);
+        unit_clause(bank, &left, &right, positive)
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     #[test]
     fn diversity_weight_adds_function_and_variable_diversity_penalties() {
         let mut bank = test_bank();
@@ -352,6 +394,24 @@ mod tests {
         let param = diversity_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0, 1.0);
 
         assert_close(diversity_weight_compute(&param, &bank, &clause), 564.0);
+    }
+
+    #[test]
+    fn diversity_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut target = parsed_unit_clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let param = diversity_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0, 1.0);
+        let expected = diversity_weight_compute(&param, &bank, &manually_marked);
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = diversity_weight_compute_with_ocb(&param, &mut ocb, &bank, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]
