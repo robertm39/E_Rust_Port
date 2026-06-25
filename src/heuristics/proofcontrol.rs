@@ -1,9 +1,11 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::axiomscan::clause_set_scan_ac;
@@ -396,9 +398,9 @@ pub fn proof_state_init_indexing(
 ///
 /// This covers the processed-set precondition, FV-index/watchlist prefix,
 /// `Uniq` ordering of axioms, copying axioms into `unprocessed`, active-HCB
-/// evaluation, `prefer_initial_clauses` priority adjustment, and SOS marking.
-/// Watchlist hit checks, proof-documentation/derivation pushes, and
-/// global-index reset/initialization remain pending.
+/// evaluation, `prefer_initial_clauses` priority adjustment, SOS marking, and
+/// AC scanning. Watchlist hit checks, proof-documentation/derivation pushes,
+/// and state-owned global-index storage remain pending.
 ///
 /// # Errors
 ///
@@ -423,6 +425,27 @@ pub fn proof_state_init(
         sos_marked: axiom_outcome.sos_marked,
         ac_handling_active,
     })
+}
+
+/// Runs C `ProofStateInit`, then initializes caller-owned global indices.
+///
+/// C stores these indices in `state->gindices`. The current Rust `ProofState`
+/// owns its `TermBank` directly, while `GlobalIndices` borrows the signature, so
+/// callers provide the index owner explicitly until proof-session ownership can
+/// hold both without a self-reference.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`proof_state_init`].
+pub fn proof_state_init_with_global_indices<'sig>(
+    state: &'sig mut ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices<'sig>,
+    problem_type: ProblemType,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
+    let outcome = proof_state_init(state, control)?;
+    proof_state_init_global_indices(state, control, indices, problem_type);
+    Ok(outcome)
 }
 
 /// Runs the axiom-queue portion of C `ProofStateInit` after indexing setup.
@@ -505,6 +528,28 @@ pub fn proof_state_init_ac_handling(state: &mut ProofState, control: &mut ProofC
     let active = clause_set_scan_ac(terms.signature_mut(), unprocessed);
     control.ac_handling_active = active;
     active
+}
+
+/// Runs the global-index free/init tail of C `ProofStateInit`.
+///
+/// This mirrors `GlobalIndicesFreeIndices(&state->gindices)` followed by
+/// `GlobalIndicesInit(...)`. The problem type is explicit instead of reading
+/// C's process-global `problemType`.
+pub fn proof_state_init_global_indices<'sig>(
+    state: &'sig ProofState,
+    control: &ProofControl,
+    indices: &mut GlobalIndices<'sig>,
+    problem_type: ProblemType,
+) {
+    let params = control.heuristic_parms();
+    indices.init_for_problem(
+        state.terms().signature(),
+        params.rw_bw_index_type.as_str(),
+        params.pm_from_index_type.as_str(),
+        params.pm_into_index_type.as_str(),
+        params.ext_rules_max_depth,
+        problem_type,
+    );
 }
 
 fn unknown_heuristic_handle(name: &str) -> Diagnostic {
@@ -710,11 +755,13 @@ mod tests {
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_init, proof_state_init_ac_handling,
-        proof_state_init_indexing, select_inherited_literal, LiteralSelectionOutcome,
+        proof_state_init_global_indices, proof_state_init_indexing,
+        proof_state_init_with_global_indices, select_inherited_literal, LiteralSelectionOutcome,
         DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
@@ -723,6 +770,7 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
+    use crate::clauses::global_indices::global_indices_null;
     use crate::clauses::neweval::{PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::hcb::{
@@ -1106,6 +1154,71 @@ mod tests {
         assert!(outcome.ac_handling_active);
         assert!(control.ac_handling_active());
         assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+    }
+
+    #[test]
+    fn proof_state_init_global_indices_uses_control_index_parameters() {
+        let state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().rw_bw_index_type = "FP1".to_owned();
+        control.heuristic_parms_mut().pm_from_index_type = "NoIndex".to_owned();
+        control.heuristic_parms_mut().pm_into_index_type = "FP7".to_owned();
+        control.heuristic_parms_mut().ext_rules_max_depth = 3;
+        let mut indices = global_indices_null();
+
+        proof_state_init_global_indices(&state, &control, &mut indices, ProblemType::HigherOrder);
+
+        assert!(indices.has_bw_rw_index());
+        assert!(!indices.has_pm_from_index());
+        assert!(indices.has_pm_into_index());
+        assert!(indices.has_pm_negp_index());
+        assert!(indices.has_ext_into_index());
+        assert!(indices.has_ext_from_index());
+        assert_eq!(indices.rw_bw_index_type(), "FP1");
+        assert_eq!(indices.pm_from_index_type(), "NoIndex");
+        assert_eq!(indices.pm_into_index_type(), "FP7");
+        assert_eq!(indices.ext_rules_max_depth(), 3);
+        assert_eq!(indices.problem_type(), ProblemType::HigherOrder);
+    }
+
+    #[test]
+    fn proof_state_init_with_global_indices_runs_tail_after_state_init() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, _) = commutativity_axiom(state.terms_mut(), "pc_init_global_idx_f", 4_014);
+        state.axioms_mut().insert(axiom);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            rw_bw_index_type: "FP1".to_owned(),
+            pm_from_index_type: "NoIndex".to_owned(),
+            pm_into_index_type: "NoIndex".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["InitGlobalIdxTest=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let mut indices = global_indices_null();
+        let outcome = proof_state_init_with_global_indices(
+            &mut state,
+            &mut control,
+            &mut indices,
+            ProblemType::FirstOrder,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.initial_clauses, 1);
+        assert!(indices.has_bw_rw_index());
+        assert_eq!(indices.rw_bw_index_type(), "FP1");
+        assert_eq!(indices.problem_type(), ProblemType::FirstOrder);
     }
 
     #[test]
