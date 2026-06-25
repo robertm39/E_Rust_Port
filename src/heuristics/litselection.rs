@@ -7,6 +7,7 @@ use crate::clauses::eqn_props::{
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 pub const NO_SELECTION: &str = "NoSelection";
@@ -65,6 +66,10 @@ pub const SELECT_COMPLEX: &str = "SelectComplex";
 pub const P_SELECT_COMPLEX: &str = "PSelectComplex";
 pub const SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "SelectComplexExceptRRHorn";
 pub const P_SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "PSelectComplexExceptRRHorn";
+pub const SELECT_COMPLEX_AHP: &str = "SelectComplexAHP";
+pub const P_SELECT_COMPLEX_AHP: &str = "PSelectComplexAHP";
+pub const SELECT_COMPLEX_AHP_EXCEPT_RR_HORN: &str = "SelectComplexAHPExceptRRHorn";
+pub const P_SELECT_COMPLEX_AHP_EXCEPT_RR_HORN: &str = "PSelectComplexAHPExceptRRHorn";
 pub const SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "SelectComplexExceptUniqMaxHorn";
 pub const P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "PSelectComplexExceptUniqMaxHorn";
 pub const M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "MSelectComplexExceptUniqMaxHorn";
@@ -92,6 +97,15 @@ pub const H_SELECT_MIN_INFPOS: &str = "HSelectMinInfpos";
 pub const G_SELECT_MIN_INFPOS: &str = "GSelectMinInfpos";
 pub const SELECT_MIN_INFPOS_NO_TYPE_PRED: &str = "SelectMinInfposNoTypePred";
 pub const P_SELECT_MIN_INFPOS_NO_TYPE_PRED: &str = "PSelectMinInfposNoTypePred";
+pub const SELECT_NEW_COMPLEX_AHP: &str = "SelectNewComplexAHP";
+pub const P_SELECT_NEW_COMPLEX_AHP: &str = "PSelectNewComplexAHP";
+pub const SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN: &str = "SelectNewComplexAHPExceptRRHorn";
+pub const P_SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN: &str = "PSelectNewComplexAHPExceptRRHorn";
+pub const SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN: &str =
+    "SelectNewComplexAHPExceptUniqMaxHorn";
+pub const P_SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN: &str =
+    "PSelectNewComplexAHPExceptUniqMaxHorn";
+pub const SELECT_NEW_COMPLEX_AHP_NS: &str = "SelectNewComplexAHPNS";
 pub const SELECT_DIV_LITS: &str = "SelectDivLits";
 pub const SELECT_DIV_PREFER_INTO_LITS: &str = "SelectDivPreferIntoLits";
 
@@ -485,6 +499,70 @@ impl MinInfposSelector {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AhpLiteralSelector {
+    Complex,
+    PositiveComplex,
+    ComplexExceptRRHorn,
+    PositiveComplexExceptRRHorn,
+    NewComplex,
+    PositiveNewComplex,
+    NewComplexExceptRRHorn,
+    PositiveNewComplexExceptRRHorn,
+    NewComplexExceptUniqueMaxHorn,
+    PositiveNewComplexExceptUniqueMaxHorn,
+    NewComplexNoSplit,
+}
+
+impl AhpLiteralSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_COMPLEX_AHP => Some(Self::Complex),
+            P_SELECT_COMPLEX_AHP => Some(Self::PositiveComplex),
+            SELECT_COMPLEX_AHP_EXCEPT_RR_HORN => Some(Self::ComplexExceptRRHorn),
+            P_SELECT_COMPLEX_AHP_EXCEPT_RR_HORN => Some(Self::PositiveComplexExceptRRHorn),
+            SELECT_NEW_COMPLEX_AHP => Some(Self::NewComplex),
+            P_SELECT_NEW_COMPLEX_AHP => Some(Self::PositiveNewComplex),
+            SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN => Some(Self::NewComplexExceptRRHorn),
+            P_SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN => Some(Self::PositiveNewComplexExceptRRHorn),
+            SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN => {
+                Some(Self::NewComplexExceptUniqueMaxHorn)
+            }
+            P_SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN => {
+                Some(Self::PositiveNewComplexExceptUniqueMaxHorn)
+            }
+            SELECT_NEW_COMPLEX_AHP_NS => Some(Self::NewComplexNoSplit),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::Complex => select_complex_ahp(ocb, bank, clause),
+            Self::PositiveComplex => p_select_complex_ahp(ocb, bank, clause),
+            Self::ComplexExceptRRHorn => select_complex_ahp_except_rr_horn(ocb, bank, clause),
+            Self::PositiveComplexExceptRRHorn => {
+                p_select_complex_ahp_except_rr_horn(ocb, bank, clause);
+            }
+            Self::NewComplex => select_new_complex_ahp(ocb, bank, clause),
+            Self::PositiveNewComplex => p_select_new_complex_ahp(ocb, bank, clause),
+            Self::NewComplexExceptRRHorn => {
+                select_new_complex_ahp_except_rr_horn(ocb, bank, clause);
+            }
+            Self::PositiveNewComplexExceptRRHorn => {
+                p_select_new_complex_ahp_except_rr_horn(ocb, bank, clause);
+            }
+            Self::NewComplexExceptUniqueMaxHorn => {
+                select_new_complex_ahp_except_uniq_max_horn(ocb, bank, clause);
+            }
+            Self::PositiveNewComplexExceptUniqueMaxHorn => {
+                p_select_new_complex_ahp_except_uniq_max_horn(ocb, bank, clause);
+            }
+            Self::NewComplexNoSplit => select_new_complex_ahp_ns(ocb, bank, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OrientableWeightChoice {
     Largest,
     Smallest,
@@ -509,6 +587,12 @@ enum MinInfposPositivePolicy {
     IfSelectedNonGround,
     IfSelectedGround,
     AfterSelection,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NewComplexAhpMode {
+    Standard,
+    NoSplit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1282,6 +1366,86 @@ pub fn p_select_new_complex_except_uniq_max_horn(
     select_new_complex_except_uniq_max_horn_impl(ocb, bank, clause, true);
 }
 
+pub fn select_complex_ahp(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_complex_ahp_impl(ocb, bank, clause, false);
+}
+
+pub fn p_select_complex_ahp(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_complex_ahp_impl(ocb, bank, clause, true);
+}
+
+pub fn select_complex_ahp_except_rr_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if !(clause.is_horn() && clause.is_range_restricted()) {
+        select_complex_ahp(ocb, bank, clause);
+    }
+}
+
+pub fn p_select_complex_ahp_except_rr_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if !(clause.is_horn() && clause.is_range_restricted()) {
+        p_select_complex_ahp(ocb, bank, clause);
+    }
+}
+
+pub fn select_new_complex_ahp(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_new_complex_ahp_impl(ocb, bank, clause, false, NewComplexAhpMode::Standard);
+}
+
+pub fn p_select_new_complex_ahp(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_new_complex_ahp_impl(ocb, bank, clause, true, NewComplexAhpMode::Standard);
+}
+
+pub fn select_new_complex_ahp_except_rr_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if !(clause.is_horn() && clause.is_range_restricted()) {
+        select_new_complex_ahp(ocb, bank, clause);
+    }
+}
+
+pub fn p_select_new_complex_ahp_except_rr_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if !(clause.is_horn() && clause.is_range_restricted()) {
+        p_select_new_complex_ahp(ocb, bank, clause);
+    }
+}
+
+pub fn select_new_complex_ahp_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_new_complex_ahp_except_uniq_max_horn_impl(ocb, bank, clause, false);
+}
+
+pub fn p_select_new_complex_ahp_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_new_complex_ahp_except_uniq_max_horn_impl(ocb, bank, clause, true);
+}
+
+pub fn select_new_complex_ahp_ns(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_new_complex_ahp_impl(ocb, bank, clause, false, NewComplexAhpMode::NoSplit);
+}
+
 pub fn select_min_infpos(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
     select_min_infpos_impl(ocb, bank, clause, MinInfposPositivePolicy::Never, false);
 }
@@ -1450,6 +1614,15 @@ pub fn apply_ported_literal_selector_with_bank(
         selector.apply(ocb, bank, clause);
         Ok(())
     } else if let Some(selector) = MinInfposSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
+        Ok(())
+    } else if let Some(selector) = AhpLiteralSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(UnsupportedLiteralSelection::new(name));
         };
@@ -1744,6 +1917,50 @@ fn generic_uniq_selection_no_ordering(
 ) {
     debug_assert_ne!(clause.negative_literal_count(), 0);
     debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    let mut evals = clause
+        .literals()
+        .as_slice()
+        .iter()
+        .map(LitEval::new)
+        .collect::<Vec<_>>();
+
+    for (eval, literal) in evals.iter_mut().zip(clause.literals().as_slice()) {
+        weight_fun(eval, literal, clause);
+    }
+
+    let mut selected_index = 0;
+    for (index, eval) in evals.iter().enumerate().skip(1) {
+        if lit_eval_compare(eval, &evals[selected_index]).is_lt() {
+            selected_index = index;
+        }
+    }
+
+    debug_assert!(
+        !evals[selected_index].is_positive,
+        "generic literal selection candidate must be negative"
+    );
+
+    if !evals[selected_index].forbidden {
+        clause.literals_mut().as_mut_slice()[selected_index].set_prop(EP_IS_SELECTED);
+        clause.del_prop(CP_IS_ORIENTED);
+        if positive {
+            select_positive_literals(clause);
+        }
+    }
+}
+
+fn generic_uniq_selection_with_ordering(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive: bool,
+    mut weight_fun: impl FnMut(&mut LitEval, &Eqn, &Clause),
+) {
+    debug_assert_ne!(clause.negative_literal_count(), 0);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    clause.cond_mark_maximal_terms(ocb, bank);
 
     let mut evals = clause
         .literals()
@@ -2103,6 +2320,129 @@ fn find_max_x_type_no_type_literal(clause: &Clause, bank: &TermBank) -> Option<u
     selected
 }
 
+fn select_complex_ahp_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) {
+    let pred_dist = positive_predicate_distribution(clause, bank);
+    generic_uniq_selection_with_ordering(
+        ocb,
+        bank,
+        clause,
+        positive_variant,
+        |eval, literal, _| {
+            complex_ahp_weight(eval, literal, &pred_dist);
+        },
+    );
+}
+
+fn select_new_complex_ahp_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    mode: NewComplexAhpMode,
+) {
+    let pred_dist = positive_predicate_distribution(clause, bank);
+    generic_uniq_selection_with_ordering(
+        ocb,
+        bank,
+        clause,
+        positive_variant,
+        |eval, literal, _| {
+            new_complex_ahp_weight(eval, literal, bank, &pred_dist, mode);
+        },
+    );
+}
+
+fn select_new_complex_ahp_except_uniq_max_horn_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) {
+    if clause.is_horn() {
+        clause.cond_mark_maximal_terms(ocb, bank);
+        if clause.literals().query_prop_number(EP_IS_MAXIMAL) == 1 {
+            return;
+        }
+    }
+
+    select_new_complex_ahp_impl(
+        ocb,
+        bank,
+        clause,
+        positive_variant,
+        NewComplexAhpMode::Standard,
+    );
+}
+
+fn positive_predicate_distribution(clause: &Clause, bank: &TermBank) -> BTreeMap<i64, i64> {
+    let mut pred_dist = BTreeMap::new();
+    for literal in clause
+        .literals()
+        .as_slice()
+        .iter()
+        .take_while(|literal| literal.is_positive())
+    {
+        *pred_dist.entry(literal.pred_code_fo(bank)).or_insert(0) += 1;
+    }
+    pred_dist
+}
+
+fn pred_dist_value(pred_dist: &BTreeMap<i64, i64>, f_code: i64) -> i64 {
+    pred_dist.get(&f_code).copied().unwrap_or(0)
+}
+
+fn complex_ahp_weight(eval: &mut LitEval, literal: &Eqn, pred_dist: &BTreeMap<i64, i64>) {
+    if literal.is_negative() {
+        if literal.is_pure_var() {
+            eval.w1 = 0;
+        } else if literal.is_ground() {
+            eval.w1 = 10;
+            eval.w2 = literal.standard_weight();
+        } else {
+            eval.w1 = 20;
+            eval.w2 = -literal_selection_diff_weight(literal);
+        }
+    }
+    if literal.left().f_code() > 0 {
+        eval.w3 = pred_dist_value(pred_dist, literal.left().f_code());
+    }
+}
+
+fn new_complex_ahp_weight(
+    eval: &mut LitEval,
+    literal: &Eqn,
+    bank: &TermBank,
+    pred_dist: &BTreeMap<i64, i64>,
+    mode: NewComplexAhpMode,
+) {
+    if literal.is_negative() {
+        if mode == NewComplexAhpMode::NoSplit && literal.is_split_lit(bank) {
+            eval.w1 = 100_000;
+            eval.forbidden = true;
+        } else if literal.is_ground() {
+            eval.w1 = 0;
+            eval.w2 = term_standard_weight(literal.left());
+        } else if !literal.is_x_type_pred(bank) {
+            eval.w1 = 10;
+            eval.w2 = literal.max_term_positions();
+        } else if !literal.is_type_pred(bank) {
+            eval.w1 = 20;
+            eval.w2 = -term_standard_weight(literal.left());
+        } else {
+            eval.w1 = 100_000;
+            eval.forbidden = true;
+        }
+    }
+    if !literal.left().is_free_var() {
+        eval.w3 = pred_dist_value(pred_dist, literal.left().f_code());
+    }
+}
+
 fn select_min_infpos_impl(
     ocb: &mut OrderControlBlock,
     bank: &TermBank,
@@ -2264,7 +2604,7 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -2831,6 +3171,50 @@ mod tests {
             predicate_literal(bank, &pos, true),
             predicate_literal(bank, &first, false),
             predicate_literal(bank, &second, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn ahp_head_sharing_clause(bank: &mut TermBank) -> Clause {
+        let shared = predicate_const_atom(bank, "ahp_shared");
+        let other = predicate_const_atom(bank, "ahp_other");
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &shared, true),
+            predicate_literal(bank, &shared, false),
+            predicate_literal(bank, &other, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn ahp_non_horn_head_sharing_clause(bank: &mut TermBank) -> Clause {
+        let shared = predicate_const_atom(bank, "ahp_non_horn_shared");
+        let extra = predicate_const_atom(bank, "ahp_non_horn_extra");
+        let other = predicate_const_atom(bank, "ahp_non_horn_other");
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &shared, true),
+            predicate_literal(bank, &extra, true),
+            predicate_literal(bank, &shared, false),
+            predicate_literal(bank, &other, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn ahp_split_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "ahp_split_pos");
+        let split = predicate_const_atom(bank, "ahp_split_bad");
+        let ordinary = predicate_const_atom(bank, "ahp_split_ok");
+        bank.signature_mut()
+            .set_func_prop(split.f_code(), FP_CL_SPLIT_DEF);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &split, false),
+            predicate_literal(bank, &ordinary, false),
         ]));
         clause.set_prop(CP_IS_ORIENTED);
         clause
@@ -3582,6 +3966,110 @@ mod tests {
     }
 
     #[test]
+    fn complex_ahp_uses_positive_head_distribution_as_tiebreaker() {
+        let mut bank = test_bank();
+        let mut clause = ahp_head_sharing_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_complex_ahp(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = ahp_head_sharing_clause(&mut bank);
+
+        super::p_select_complex_ahp(&mut ocb, &bank, &mut positive_variant);
+        assert_eq!(selected_indices(&positive_variant), vec![0, 2]);
+    }
+
+    #[test]
+    fn complex_ahp_rr_horn_wrapper_preserves_c_noop_gate() {
+        let bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut blocked = range_restricted_clause();
+        blocked.literals_mut().set_prop(EP_IS_SELECTED);
+
+        super::select_complex_ahp_except_rr_horn(&mut ocb, &bank, &mut blocked);
+
+        assert_eq!(selected_indices(&blocked), vec![0, 1]);
+
+        let mut allowed_bank = test_bank();
+        let mut allowed = ahp_non_horn_head_sharing_clause(&mut allowed_bank);
+        let mut allowed_ocb = kbo_ocb(&allowed_bank);
+
+        super::p_select_complex_ahp_except_rr_horn(&mut allowed_ocb, &allowed_bank, &mut allowed);
+        assert_eq!(selected_indices(&allowed), vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn new_complex_ahp_uses_positive_head_distribution_and_filters_split() {
+        let mut bank = test_bank();
+        let mut clause = ahp_head_sharing_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_new_complex_ahp(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = ahp_head_sharing_clause(&mut bank);
+
+        super::p_select_new_complex_ahp(&mut ocb, &bank, &mut positive_variant);
+        assert_eq!(selected_indices(&positive_variant), vec![0, 2]);
+
+        let mut split_filtered = ahp_split_clause(&mut bank);
+
+        super::select_new_complex_ahp_ns(&mut ocb, &bank, &mut split_filtered);
+        assert_eq!(selected_indices(&split_filtered), vec![2]);
+        assert!(!split_filtered.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn new_complex_ahp_wrappers_preserve_rr_and_unique_max_gates() {
+        let bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut rr_blocked = range_restricted_clause();
+
+        super::select_new_complex_ahp_except_rr_horn(&mut ocb, &bank, &mut rr_blocked);
+        assert_eq!(selected_indices(&rr_blocked), Vec::<usize>::new());
+
+        let mut allowed_bank = test_bank();
+        let mut allowed = ahp_non_horn_head_sharing_clause(&mut allowed_bank);
+        let mut allowed_ocb = kbo_ocb(&allowed_bank);
+
+        super::p_select_new_complex_ahp_except_rr_horn(
+            &mut allowed_ocb,
+            &allowed_bank,
+            &mut allowed,
+        );
+        assert_eq!(selected_indices(&allowed), vec![0, 1, 3]);
+
+        let mut unique_bank = test_bank();
+        let mut unique_blocked = ahp_head_sharing_clause(&mut unique_bank);
+        mark_maximal_literals(&mut unique_blocked, &[1]);
+        let mut unique_ocb = kbo_ocb(&unique_bank);
+
+        super::select_new_complex_ahp_except_uniq_max_horn(
+            &mut unique_ocb,
+            &unique_bank,
+            &mut unique_blocked,
+        );
+        assert_eq!(selected_indices(&unique_blocked), Vec::<usize>::new());
+        assert!(unique_blocked.query_prop(CP_IS_ORIENTED));
+
+        let mut unique_allowed = ahp_head_sharing_clause(&mut unique_bank);
+        mark_maximal_literals(&mut unique_allowed, &[1, 2]);
+
+        super::p_select_new_complex_ahp_except_uniq_max_horn(
+            &mut unique_ocb,
+            &unique_bank,
+            &mut unique_allowed,
+        );
+        assert_eq!(selected_indices(&unique_allowed), vec![0, 2]);
+        assert!(!unique_allowed.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
     fn bank_aware_unless_max_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_UNLESS_UNIQ_MAX,
@@ -3661,6 +4149,33 @@ mod tests {
         ] {
             let mut bank = test_bank();
             let mut clause = min_infpos_ground_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
+    fn bank_aware_ahp_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_COMPLEX_AHP,
+            super::P_SELECT_COMPLEX_AHP,
+            super::SELECT_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::P_SELECT_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::SELECT_NEW_COMPLEX_AHP,
+            super::P_SELECT_NEW_COMPLEX_AHP,
+            super::SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::P_SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN,
+            super::SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN,
+            super::P_SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN,
+            super::SELECT_NEW_COMPLEX_AHP_NS,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = ahp_non_horn_head_sharing_clause(&mut bank);
             let mut ocb = kbo_ocb(&bank);
 
             apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
@@ -3776,9 +4291,9 @@ mod tests {
     fn unported_selector_reports_name() {
         let mut clause = Clause::empty();
         let error =
-            apply_ported_literal_selector("SelectNewComplexAHP", None, &mut clause).unwrap_err();
+            apply_ported_literal_selector("SelectCQArEqLast", None, &mut clause).unwrap_err();
 
-        assert_eq!(error.strategy(), "SelectNewComplexAHP");
+        assert_eq!(error.strategy(), "SelectCQArEqLast");
         assert!(error.to_string().contains("not ported yet"));
     }
 }
