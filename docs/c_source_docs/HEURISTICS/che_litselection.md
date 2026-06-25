@@ -380,12 +380,17 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 
 - `SelectNoLiterals` and `SelectNoGeneration` assert that no literals are selected and otherwise do nothing. Their bodies rely on `DoLiteralSelection` in `che_proofcontrol.c` to clear `EPIsSelected` before any selector function is called.
 - `NoSelection` and `NoGeneration` are distinct selector names and distinct function pointers in C, even though both selector bodies are no-ops. `NoGeneration` is also checked elsewhere in the proof process to suppress generating inferences, so Rust should not collapse the two strategy names.
+- The simple non-orienting selectors do not require `OCB` state. `SelectNegativeLiterals`, `PSelectNegativeLiterals`, pure-variable, largest/smallest negative, diff-weight, and ground-negative selectors mutate only literal `EPIsSelected` bits. Largest/smallest/diff variants use strict `>` or `<`, so the first literal with the best score wins ties.
+- `PSelectFirstVariableLiteral` does not select the pure-variable literal itself despite its comment saying it does; it only calls `clause_select_pos()` after finding a negative `X!=Y`, so only positive literals are selected.
+- `PSelectGroundNegativeLiteral` first selects positive literals while scanning, but if no negative ground literal is found it clears `EPIsSelected` from the whole literal list. That makes the positive selections transient in the no-ground case.
+- `lit_sel_diff_weight(handle)` is a macro equal to `100*EqnStandardDiff(handle)+EqnStandardWeight(handle)`. Several selectors recompute it when comparing and then storing the current best value rather than caching side weights separately.
 - `GetLitSelFun` and `GetLitSelName` are table-driven. Reverse lookup scans function pointers and returns the first matching name, so table order is part of the printable strategy surface.
 
 ### Change-Later Observations
 
 - The literal-selection unit mixes several families of selectors with repeated "P" positive-literal variants and many near-duplicate weight helpers. Keep the initial Rust port close to the table and wrappers, but consider factoring shared scoring code only after reference tests cover representative selectors from each family.
 - Many selector functions call `ClauseDelProp(clause, CPIsOriented)` after selecting a literal even though `DoLiteralSelection` already cleared the clause-oriented property before dispatch. Preserve the redundant invalidation while porting selector bodies; it may still document orientation-cache assumptions for selectors that orient or inspect maximality internally.
+- Several comments describe older behavior that no longer matches the code, notably `PSelectFirstVariableLiteral` and `PSelectGroundNegativeLiteral`. Prefer source-code behavior over comments for compatibility, and revisit the comments only after reference strategy tests prove the difference is unobservable.
 
 ### Porting Focus
 
