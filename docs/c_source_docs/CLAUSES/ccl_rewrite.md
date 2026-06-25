@@ -148,7 +148,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 
 ### Rust Port Notes
 
-- `ClauseLocalRW` is ported in `src/clauses/rewrite.rs` as a clause-local mutation helper. It preserves the C order: orient literals, collect local rules, skip rule-source literals while rewriting, then recompute literal counts, remove superfluous literals, and clear the clause orientation cache on modification.
+- `ClauseLocalRW` is ported in `src/clauses/rewrite.rs` as a clause-local mutation helper. It preserves the C order: orient literals, collect local rules, skip rule-source literals while rewriting, then recompute literal counts, remove superfluous literals, clear the clause orientation cache, and record `DCLocalRewrite` on modification.
 - The temporary local rewrite system is keyed by shared-term identity, matching C's pointer-keyed `PObjMap`; duplicate rule keys overwrite earlier values like `PObjMapStore`.
 - C treats any negative oriented literal as a local rule source, not just equational literals. This means an oriented negative predicate literal can be skipped as a source instead of rewritten by a positive-atom rule. Rust preserves that classification.
 - `replace_term` recursively follows rule replacements and rebuilds changed top cells through the term bank. This matches `TermMap` restart behavior when the mapper returns a different shared term.
@@ -158,7 +158,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 
 ### Change Later Candidates
 
-- C records `DCLocalRewrite` with `ClausePushDerivation` after a successful local rewrite. Rust currently omits that side effect until clause derivation ownership is ported.
+- `ClauseLocalRW` and clause normal-form rewriting now preserve C's compact derivation stack shape with numeric operation codes. Replace those raw constants with a typed derivation-code module when the broader proof-object and proof-output port lands.
 - C does not directly refresh the cached clause weight after `ClauseLocalRW` unless `ClauseRemoveSuperfluousLiterals` removes something. Rust refreshes after any local rewrite to preserve the current Rust cached-weight invariant; revisit this when forward-contraction reference tests cover stale-weight observability.
 - Positive-atom local rewriting uses `$false` as an intermediate replacement and relies on `EqnMap` to normalize `$false`/`$true` and flip polarity. A later typed API could expose this as a Boolean-literal transformation, but compatibility code should keep the C normalization path visible.
 - The top-chain helper checks whether a link is followable before reading its SoS flag, so a skipped limited link under restricted rewriting does not contribute to SoS status. Preserve this for compatibility unless proof accounting tests show the C order is accidental.
@@ -171,6 +171,6 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - The C right-side branch for unoriented demodulators intentionally omits the restricted-renaming rejection used on the left-side branch, with an inline note that the older condition looked wrong. Rust preserves that asymmetry for compatibility until C/Rust comparison tests prove a different rule is observable.
 - `term_li_normalform` is driven by `RWDesc`, which packages the OCB, bank, demodulator list, level, age cutoff, `prefer_general`, and `sos_rewritten` flag. Rust currently passes those pieces explicitly plus a private trace object; this should be collapsed into a Rust descriptor once indexed demodulator selection and clause-set normalization share the path.
 - `eqn_li_normalform` also performs verbose proof documentation through `DocClauseRewriteDefault`. Rust now records compact derivation entries for clause-level normalization, but proof-output documentation and a typed derivation-code enum remain later work.
-- `ClauseComputeLINormalform` counts rewrite steps as `(new_deriv_sp - old_deriv_sp) / 2`, relying on each demodulation entry being stored as a `DCRewrite` operation plus one clause argument. Rust preserves that compact stack shape with a numeric `DC_REWRITE` constant; replace it with a typed derivation-code module when the broader proof-object port lands.
+- `ClauseComputeLINormalform` counts rewrite steps as `(new_deriv_sp - old_deriv_sp) / 2`, relying on each demodulation entry being stored as a `DCRewrite` operation plus one clause argument. Rust preserves that compact stack shape; keep this arithmetic covered by tests when replacing raw derivation constants.
 - The C set-level normal-form wrapper updates clause weights in place without refreshing evaluation indexes. Rust preserves the direct weight update; revisit this if weighted evaluation indexes become live during simplification.
 <!-- END MANUAL REVIEW: c_source_docs -->

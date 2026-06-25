@@ -8,7 +8,7 @@ use std::fmt::{self, Write};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RewriteSequenceEntry {
-    InjectionOp(i64),
+    Operation(i64),
     Demodulator(RewriteDemodulator),
 }
 
@@ -339,7 +339,7 @@ pub fn term_compute_rw_sequence(
             .expect("rewritten term must have a replacement");
         if let Some(demodulator) = current.rw_demod_field() {
             if inject_op != 0 {
-                stack.push(RewriteSequenceEntry::InjectionOp(i64::from(inject_op)));
+                stack.push(RewriteSequenceEntry::Operation(i64::from(inject_op)));
             }
             stack.push(RewriteSequenceEntry::Demodulator(demodulator));
         } else {
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(
             stack.as_slice(),
             &[
-                RewriteSequenceEntry::InjectionOp(99),
+                RewriteSequenceEntry::Operation(99),
                 RewriteSequenceEntry::Demodulator(demod)
             ]
         );

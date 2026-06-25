@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
 
+const DC_LOCAL_REWRITE: i32 = 5;
 const DC_REWRITE: i32 = 516;
 
 pub static REWRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -123,6 +124,9 @@ pub fn clause_local_rw(
         clause.recompute_lit_counts();
         let _ = clause_remove_superfluous_literals(clause, bank);
         clause.del_prop(CP_IS_ORIENTED);
+        clause
+            .ensure_derivation()
+            .push(RewriteSequenceEntry::Operation(i64::from(DC_LOCAL_REWRITE)));
         clause.set_weight(clause.standard_weight());
     }
 
@@ -1522,6 +1526,10 @@ mod tests {
         assert!(!rewritten.query_prop(EP_IS_ORIENTED));
         assert!(!clause.query_prop(CP_IS_ORIENTED));
         assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[RewriteSequenceEntry::Operation(5)]
+        );
         let source = &clause.literals().as_slice()[1];
         assert_eq!(source.left(), &f_a);
         assert_eq!(source.right(), &a);
@@ -1569,6 +1577,7 @@ mod tests {
         assert!(!modified);
         assert_eq!(clause.literals().as_slice()[0].left(), &f_a);
         assert_eq!(clause.literals().as_slice()[0].right(), &a);
+        assert!(clause.derivation().is_none());
     }
 
     #[test]
@@ -2157,9 +2166,9 @@ mod tests {
         assert_eq!(
             clause.derivation().unwrap().as_slice(),
             &[
-                RewriteSequenceEntry::InjectionOp(516),
+                RewriteSequenceEntry::Operation(516),
                 RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(101)),
-                RewriteSequenceEntry::InjectionOp(516),
+                RewriteSequenceEntry::Operation(516),
                 RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(102)),
             ]
         );
