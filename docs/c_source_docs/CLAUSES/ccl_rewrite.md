@@ -154,6 +154,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - `replace_term` recursively follows rule replacements and rebuilds changed top cells through the term bank. This matches `TermMap` restart behavior when the mapper returns a different shared term.
 - `term_follow_top_RW_chain` is represented by `term_follow_top_rw_chain` in `src/terms/replace.rs`. It follows only rewrite links carrying a demodulator handle, honors the restricted-rewrite bit before stepping, and reports whether any traversed link was SoS-derived.
 - Plain `ClauseComputeLINormalform` behavior is ported in `src/clauses/rewrite.rs` as `clause_compute_li_normalform_plain`. It normalizes literal sides with the same limited-rewrite retry condition, recovers compact rewrite derivation entries with `term_compute_rw_sequence`, clears `CP_INITIAL` only when the derivation delta records rewrite steps, and propagates `CP_IS_SOS` from followed rewrite links.
+- Plain `ClauseSetComputeLINormalform` behavior is ported as `clause_set_compute_li_normalform_plain`. It preserves set iteration order, sums per-clause rewrite counts, and refreshes cached standard weight only on clauses with nonzero rewrite steps.
 
 ### Change Later Candidates
 
@@ -171,5 +172,5 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - `term_li_normalform` is driven by `RWDesc`, which packages the OCB, bank, demodulator list, level, age cutoff, `prefer_general`, and `sos_rewritten` flag. Rust currently passes those pieces explicitly plus a private trace object; this should be collapsed into a Rust descriptor once indexed demodulator selection and clause-set normalization share the path.
 - `eqn_li_normalform` also performs verbose proof documentation through `DocClauseRewriteDefault`. Rust now records compact derivation entries for clause-level normalization, but proof-output documentation and a typed derivation-code enum remain later work.
 - `ClauseComputeLINormalform` counts rewrite steps as `(new_deriv_sp - old_deriv_sp) / 2`, relying on each demodulation entry being stored as a `DCRewrite` operation plus one clause argument. Rust preserves that compact stack shape with a numeric `DC_REWRITE` constant; replace it with a typed derivation-code module when the broader proof-object port lands.
-- `ClauseSetComputeLINormalform` updates rewritten clause weights after calling `ClauseComputeLINormalform`. Rust currently ports the per-clause wrapper only; keep the set-level weight refresh and iteration semantics visible when clause-set simplification is wired.
+- The C set-level normal-form wrapper updates clause weights in place without refreshing evaluation indexes. Rust preserves the direct weight update; revisit this if weighted evaluation indexes become live during simplification.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -788,6 +788,47 @@ pub fn clause_compute_li_normalform_plain(
     Ok(rewrite_steps)
 }
 
+/// Compute plain leftmost-innermost normal forms for every clause in a set.
+///
+/// This ports C `ClauseSetComputeLINormalform`: each clause is normalized in
+/// set iteration order, the returned rewrite-step counts are summed, and a
+/// rewritten clause's cached standard weight is refreshed.
+///
+/// # Errors
+///
+/// Returns a diagnostic if any clause normalization fails.
+///
+/// # Panics
+///
+/// Panics under the same preconditions as [`clause_compute_li_normalform_plain`].
+pub fn clause_set_compute_li_normalform_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    set: &mut ClauseSet,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    lambda_demod: bool,
+) -> Result<i64, Diagnostic> {
+    let mut result = 0;
+    for clause in set.iter_mut() {
+        let steps = clause_compute_li_normalform_plain(
+            bank,
+            ocb,
+            clause,
+            demodulators,
+            level,
+            prefer_general,
+            lambda_demod,
+        )?;
+        if steps != 0 {
+            clause.set_weight(clause.standard_weight());
+        }
+        result += steps;
+    }
+    Ok(result)
+}
+
 fn record_eqn_normalform_trace(
     stack: &mut PStack<RewriteSequenceEntry>,
     trace: EqnNormalformTrace,
@@ -1331,8 +1372,9 @@ fn map_literal_terms(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_compute_li_normalform_plain, clause_local_rw, eqn_has_rw_side,
-        eqn_li_normalform_plain, find_rewritable_clauses, find_rewritable_clauses_indexed,
+        clause_compute_li_normalform_plain, clause_local_rw,
+        clause_set_compute_li_normalform_plain, eqn_has_rw_side, eqn_li_normalform_plain,
+        find_rewritable_clauses, find_rewritable_clauses_indexed,
         rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain,
         term_li_normalform_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
         REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
@@ -2200,6 +2242,89 @@ mod tests {
         assert_eq!(steps, 1);
         assert!(clause.query_prop(CP_IS_SOS));
         assert_eq!(clause.literals().as_slice()[0].left(), &replacement);
+    }
+
+    #[test]
+    fn clause_set_li_normalform_sums_steps_and_refreshes_rewritten_weights() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let first_replacement = typed_const(&mut bank, "clause_set_nf_a");
+        let second_replacement = typed_const(&mut bank, "clause_set_nf_b");
+        let first_arg = typed_const(&mut bank, "clause_set_nf_c");
+        let second_arg = typed_const(&mut bank, "clause_set_nf_d");
+        let untouched = typed_const(&mut bank, "clause_set_nf_e");
+        let f_x = typed_unary(&mut bank, "clause_set_nf_f", &x);
+        let f_first_arg = typed_unary(&mut bank, "clause_set_nf_f", &first_arg);
+        let g_x = typed_unary(&mut bank, "clause_set_nf_g", &x);
+        let g_second_arg = typed_unary(&mut bank, "clause_set_nf_g", &second_arg);
+
+        let mut first_demod_lit = eqn(&mut bank, &f_x, &first_replacement, true);
+        oriented_demod(&mut first_demod_lit);
+        let mut second_demod_lit = eqn(&mut bank, &g_x, &second_replacement, true);
+        oriented_demod(&mut second_demod_lit);
+        let mut first_demod = Clause::alloc(EqnList::from_vec(vec![first_demod_lit]));
+        first_demod.set_ident(201);
+        first_demod.set_date(SysDate::from_raw(5));
+        let mut second_demod = Clause::alloc(EqnList::from_vec(vec![second_demod_lit]));
+        second_demod.set_ident(202);
+        second_demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([first_demod, second_demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+
+        let mut first_clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &f_first_arg,
+            &untouched,
+            true,
+        )]));
+        first_clause.set_prop(CP_INITIAL);
+        first_clause.set_weight(-10);
+        let first_id = first_clause.ident();
+        let mut second_clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &untouched,
+            &g_second_arg,
+            true,
+        )]));
+        second_clause.set_prop(CP_INITIAL);
+        second_clause.set_weight(-20);
+        let second_id = second_clause.ident();
+        let mut unchanged_clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank, &untouched, &untouched, true,
+        )]));
+        unchanged_clause.set_weight(-30);
+        let unchanged_id = unchanged_clause.ident();
+        let mut set = ClauseSet::from_clauses([first_clause, second_clause, unchanged_clause]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let steps = clause_set_compute_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut set,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 2);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![first_id, second_id, unchanged_id]
+        );
+        let first = set.find_by_id(first_id).unwrap();
+        assert_eq!(first.literals().as_slice()[0].left(), &first_replacement);
+        assert_eq!(first.weight(), first.standard_weight());
+        assert!(!first.query_prop(CP_INITIAL));
+        let second = set.find_by_id(second_id).unwrap();
+        assert_eq!(second.literals().as_slice()[0].right(), &second_replacement);
+        assert_eq!(second.weight(), second.standard_weight());
+        assert!(!second.query_prop(CP_INITIAL));
+        let unchanged = set.find_by_id(unchanged_id).unwrap();
+        assert_eq!(unchanged.weight(), -30);
+        assert_eq!(unchanged.literals().as_slice()[0].left(), &untouched);
     }
 
     #[test]
