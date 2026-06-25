@@ -1,15 +1,26 @@
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause_props::{CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
 use crate::clauses::freqvectors::FvCollect;
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::signature::{FunctionProperties, Signature};
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
+use std::path::Path;
 
 pub const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 pub const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WatchlistSource<'a> {
+    Disabled,
+    Inline,
+    File(&'a Path),
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProofStateStatistics {
@@ -334,6 +345,53 @@ impl ProofState {
         }
     }
 
+    /// Loads or disables the proof-state watchlist like C
+    /// `ProofStateLoadWatchlist`.
+    ///
+    /// File sources are parsed into the existing watchlist set and then require
+    /// end-of-file. Inline sources skip parsing but still activate the current
+    /// watchlist. Disabled sources drop the optional watchlist.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from file opening, parsing, trailing-token checks, or
+    /// attempting to activate a watchlist that was already disabled.
+    pub fn load_watchlist(
+        &mut self,
+        source: WatchlistSource<'_>,
+        parse_format: IoFormat,
+    ) -> Result<i64, Diagnostic> {
+        if source == WatchlistSource::Disabled {
+            self.watchlist = None;
+            return Ok(0);
+        }
+
+        let Self {
+            terms, watchlist, ..
+        } = self;
+        let watchlist = watchlist.as_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "Cannot activate a proof-state watchlist after it has been disabled",
+            )
+        })?;
+
+        let parsed = match source {
+            WatchlistSource::Disabled => unreachable!("disabled watchlist handled above"),
+            WatchlistSource::Inline => 0,
+            WatchlistSource::File(path) => {
+                let mut scanner = Scanner::from_file(path, true)?;
+                scanner.set_format(parse_format);
+                let parsed = watchlist.parse_list(&mut scanner, terms, ProblemType::FirstOrder)?;
+                scanner.check_tok(TokenType::NO_TOKEN)?;
+                parsed
+            }
+        };
+
+        activate_watchlist(watchlist, terms);
+        Ok(parsed)
+    }
+
     /// Initializes and installs the FV-index anchors attached by C
     /// `fvi_param_init`.
     ///
@@ -374,18 +432,29 @@ pub fn proof_state_alloc(free_symbol_props: FunctionProperties) -> Result<ProofS
     ProofState::new(free_symbol_props)
 }
 
+fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
+    watchlist.set_tptp_type(CP_TYPE_WATCH_CLAUSE);
+    watchlist.set_prop(CP_WATCH_ONLY);
+    watchlist.default_weigh_clauses();
+    watchlist.sort_literals_by(|left, right| i64::from(left.subsume_inverse_compare(right, terms)));
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{proof_state_alloc, ProofState, ProofStateStatistics};
+    use super::{proof_state_alloc, ProofState, ProofStateStatistics, WatchlistSource};
+    use crate::basics::error::ErrorCode;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{WATCHLIST_INLINE_QSTRING, WATCHLIST_INLINE_STRING};
+    use crate::inout::scanner::IoFormat;
     use crate::terms::signature::{FP_DISTINCT_PROP, FP_IGNORE_PROPS};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
+    use std::path::PathBuf;
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
@@ -439,6 +508,24 @@ mod tests {
         let right_const = typed_const(bank, &format!("{stem}_right"));
         let right = typed_unary(bank, &format!("{stem}_f"), &right_const);
         clause_from(vec![literal(bank, &left, &right, true)], ident)
+    }
+
+    fn temp_path(stem: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "e_rust_port_proofstate_{stem}_{}.p",
+            std::process::id()
+        ));
+        path
+    }
+
+    fn assert_watchlist_clause_shape(state: &ProofState) {
+        for clause in state.watchlist().unwrap().iter() {
+            assert_eq!(clause.query_tptp_type(), CP_TYPE_WATCH_CLAUSE);
+            assert!(clause.query_prop(CP_WATCH_ONLY));
+            assert_eq!(clause.weight(), clause.standard_weight());
+            assert!(clause.is_subsume_ordered(state.terms()));
+        }
     }
 
     #[test]
@@ -586,5 +673,69 @@ mod tests {
         assert!(state.watchlist().is_none());
         assert!(state.processed_non_units().fv_anchor().is_some());
         assert!(state.definition_store().fv_anchor().is_some());
+    }
+
+    #[test]
+    fn proof_state_load_watchlist_inline_marks_existing_watchlist() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let watch = nontrivial_clause(&mut state, "inline_watch", 50);
+
+        state.watchlist_mut().unwrap().insert(watch);
+
+        assert_eq!(
+            state
+                .load_watchlist(WatchlistSource::Inline, IoFormat::Lop)
+                .unwrap(),
+            0
+        );
+        assert_eq!(state.watchlist().unwrap().members(), 1);
+        assert_watchlist_clause_shape(&state);
+    }
+
+    #[test]
+    fn proof_state_load_watchlist_file_parses_marks_and_requires_eof() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let path = temp_path("file");
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, b"p(a).\nq(a) <- r(a).\n").unwrap();
+
+        assert_eq!(
+            state
+                .load_watchlist(WatchlistSource::File(&path), IoFormat::Lop)
+                .unwrap(),
+            2
+        );
+
+        assert_eq!(state.watchlist().unwrap().members(), 2);
+        assert_watchlist_clause_shape(&state);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn proof_state_load_watchlist_disabled_discards_watchlist() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        assert_eq!(
+            state
+                .load_watchlist(WatchlistSource::Disabled, IoFormat::Lop)
+                .unwrap(),
+            0
+        );
+
+        assert!(state.watchlist().is_none());
+    }
+
+    #[test]
+    fn proof_state_load_watchlist_active_after_disable_reports_error() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        state
+            .load_watchlist(WatchlistSource::Disabled, IoFormat::Lop)
+            .unwrap();
+        let error = state
+            .load_watchlist(WatchlistSource::Inline, IoFormat::Lop)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
     }
 }
