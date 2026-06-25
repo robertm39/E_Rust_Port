@@ -19,6 +19,9 @@ use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
+use crate::clauses::splitting::{
+    clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
+};
 use crate::clauses::subsumption::{
     clause_negative_simplify_reflect, clause_positive_simplify_reflect,
     clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
@@ -30,6 +33,7 @@ use crate::heuristics::axiomscan::clause_set_scan_ac;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_reweight, AcHandling, HeuristicParmsCell, SplitClassType,
+    SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -1317,6 +1321,10 @@ fn i64_to_u64_saturating(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 /// Queues one generated non-trivial clause into `eval_store`, matching the
 /// admission tail of C `insert_new_clauses`.
 ///
@@ -1357,9 +1365,11 @@ pub fn proof_state_queue_generated_clause_for_eval(
 /// checks, empty-clause return, aggressive forward subsumption, eval-store
 /// admission, HCB evaluation, and the final move to `unprocessed`. Destructive
 /// equality resolution is available for the first-order destructive
-/// variable-literal path. Controlled clause splitting is still a separate
-/// C-owned gate; when that option is enabled for pending generated clauses, this
-/// helper reports an explicit diagnostic instead of silently skipping it.
+/// variable-literal path, and controlled clause splitting is available for the
+/// fresh-definition path. Definition reuse remains a separate C-owned
+/// formula-store behavior; when that option is enabled for pending generated
+/// clauses, this helper reports an explicit diagnostic instead of silently
+/// skipping it.
 ///
 /// # Errors
 ///
@@ -1447,6 +1457,25 @@ pub fn proof_state_insert_new_clauses(
             }
         }
 
+        if control.heuristic_parms().split_aggressive
+            && controlled_split_class_matches(&clause, control.heuristic_parms().split_clauses)
+        {
+            let split_method = clause_split_method(control.heuristic_parms().split_method);
+            match clause_split_fresh(state.terms_mut(), clause, split_method)? {
+                ClauseSplitOutcome::Unsplit(unsplit) => {
+                    clause = *unsplit;
+                }
+                ClauseSplitOutcome::Split(clauses) => {
+                    let count = usize_to_u64_saturating(clauses.len());
+                    for split_clause in clauses {
+                        state.tmp_store_mut().insert(split_clause);
+                    }
+                    state.statistics_mut().generated_count += count;
+                    continue;
+                }
+            }
+        }
+
         proof_state_queue_generated_clause_for_eval(state, control, clause)?;
     }
 
@@ -1457,13 +1486,33 @@ pub fn proof_state_insert_new_clauses(
 
 fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
     let params = control.heuristic_parms();
-    if params.split_aggressive {
+    if params.split_aggressive
+        && params.split_clauses != SplitClassType::NONE
+        && !params.split_fresh_defs
+    {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
-            "insert_new_clauses aggressive controlled splitting gate is not ported yet",
+            "insert_new_clauses controlled splitting definition reuse is not ported yet",
         ));
     }
     Ok(())
+}
+
+fn clause_split_method(method: SplitType) -> ClauseSplitMethod {
+    match method {
+        SplitType::GroundNone => ClauseSplitMethod::GroundNone,
+        SplitType::GroundOne => ClauseSplitMethod::GroundOne,
+        SplitType::GroundFull => ClauseSplitMethod::GroundFull,
+    }
+}
+
+fn controlled_split_class_matches(clause: &Clause, which: SplitClassType) -> bool {
+    which != SplitClassType::NONE
+        && ((clause.is_horn() && which.contains(SplitClassType::HORN))
+            || (!clause.is_horn() && which.contains(SplitClassType::NON_HORN))
+            || (clause.is_negative() && which.contains(SplitClassType::NEGATIVE))
+            || (clause.is_positive() && which.contains(SplitClassType::POSITIVE))
+            || (clause.is_mixed() && which.contains(SplitClassType::MIXED)))
 }
 
 /// Evaluates all clauses currently waiting in `eval_store`, matching C
@@ -1793,7 +1842,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
-        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
+        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_SELECTED, EP_IS_SPLIT_LIT,
+        EP_MAX_IS_UP_TO_DATE,
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
@@ -1802,7 +1852,7 @@ mod tests {
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::{proof_state_alloc, ProofState};
     use crate::heuristics::hcb::{
-        AcHandling, HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC,
+        AcHandling, HeuristicParmsCell, SplitClassType, SplitType, HCB_DEFAULT_HEURISTIC,
     };
     use crate::heuristics::litselection::{SELECT_NEGATIVE_LITERALS, SELECT_UNLESS_POS_MAX};
     use crate::heuristics::to_params::TermOrdering;
@@ -3131,12 +3181,66 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_insert_new_clauses_rejects_unported_splitting_gate() {
+    fn proof_state_insert_new_clauses_requeues_fresh_split_result() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_unsupported", 4_082);
+        let clause = {
+            let terms = state.terms_mut();
+            let left_var = typed_var(terms, -40);
+            let right_var = typed_var(terms, -42);
+            let left_const = typed_const(terms, "pc_insert_new_split_left");
+            let right_const = typed_const(terms, "pc_insert_new_split_right");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left_var, &left_const, true),
+                literal(terms, &right_var, &right_const, true),
+            ]));
+            clause.set_ident(4_082);
+            clause
+        };
+        state.tmp_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewFreshSplitTest");
+        control.heuristic_parms_mut().split_aggressive = true;
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
+
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 3);
+        assert_eq!(state.statistics().generated_count, 4);
+        assert_eq!(state.statistics().generated_lit_count, 2);
+        assert_eq!(state.statistics().non_trivial_generated_count, 3);
+
+        let residual = state.unprocessed().find_by_id(4_082).unwrap();
+        assert_eq!(residual.literal_number(), 2);
+        assert!(residual.literals().as_slice().iter().all(Eqn::is_negative));
+        assert!(residual
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| literal.query_prop(EP_IS_SPLIT_LIT)));
+        let split_literal_count = state
+            .unprocessed()
+            .iter()
+            .flat_map(|clause| clause.literals().as_slice())
+            .filter(|literal| literal.query_prop(EP_IS_SPLIT_LIT))
+            .count();
+        assert_eq!(split_literal_count, 4);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_rejects_unported_split_definition_reuse() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_unsupported", 4_083);
         state.tmp_store_mut().insert(clause);
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().split_aggressive = true;
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_fresh_defs = false;
 
         let error = proof_state_insert_new_clauses(&mut state, &mut control).unwrap_err();
 

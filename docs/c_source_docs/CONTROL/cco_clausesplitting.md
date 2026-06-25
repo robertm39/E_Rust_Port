@@ -74,6 +74,16 @@ Source files reviewed: `CONTROL/cco_clausesplitting.h`, `CONTROL/cco_clausesplit
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- Rust now ports `ControlledClauseSplit` for the generated-clause fresh-definition path: the split-class mask checks for Horn, non-Horn, negative, positive, and mixed clauses are preserved, and matching clauses call the fresh `ClauseSplit` port before requeueing results through `tmp_store`.
+- The same control gate still reports an explicit diagnostic when definition reuse is requested, because C `DefStore` variant lookup and formula archives are not yet ported.
+
+### Change-Later Observations
+
+- `SplitAll` is still the C value `7`, so the wrapper's Horn/non-Horn checks make it effectively broad even though the mask does not include the later positive/mixed bits. Rust preserves this rather than normalizing the mask.
+- The C wrapper receives a full `DefStore_p`; Rust currently needs only the term bank for fresh splitting. Reintroduce the full owner at this boundary when definition reuse is ported.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -97,6 +97,16 @@ Source files reviewed: `CLAUSES/ccl_def_handling.h`, `CLAUSES/ccl_def_handling.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- Rust now ports the generated split-literal subset of `GenDefLit` for arity-zero fresh split definitions, including generated predicate typing, `FPClSplitDef`, `EPIsSplitLit`, and term-bank sharing.
+- `DefStore`, `GetFormulaDefinition`, `GetClauseDefinition`, `GetDefinitions` variant lookup/reuse, `def_archive`, and the formula/derivation output side effects remain pending.
+
+### Change-Later Observations
+
+- The current Rust proof state represents `definition_store` as a `ClauseSet`, not the full C `DefStoreCell` with term-bank pointer, definition clause variants, numeric associations, and formula archive. Keep definition reuse disabled until that owner is represented.
+- C `GetDefinitions(fresh=true)` deliberately does not insert reusable variant associations, but it still archives the introduced formula definition. Rust fresh splitting skips the formula archive for now; add it when formula sets and split-definition proof output are ported.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
