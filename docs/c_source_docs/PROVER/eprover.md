@@ -125,7 +125,7 @@ Source files reviewed: `PROVER/eprover.c`.
 
 - `eprover.c` handles syntax-only parsing through the same proof-state scanner/parser setup used by ordinary input processing. The Rust executable now has a parse-only path for the currently supported clause syntax, but it should be rejoined with the full proof-state/formula parser once `WFormula`/formula-list parsing and the remaining scanner owners are ported.
 - `CreateScanner(StreamTypeFile, "-", ...)` keeps stdin as a real scanner stream with stdin source identity. The current Rust syntax-only implementation reads stdin into an in-memory scanner first; revisit that once exact stdin diagnostics and streaming include behavior are compatibility-tested.
-- `--lpo-recursion-limit` emits its large-value warning immediately during option parsing, before the missing `break` falls through into `--restrict-literal-comparisons`. Rust now emits the warning for valid runs, but exact warning/error ordering for later invalid options should be handled with the final executable diagnostic layer.
+- `--lpo-recursion-limit` updates the process-wide LPO recursion limit and emits its large-value warning immediately during option parsing, before the missing `break` falls through into `--restrict-literal-comparisons`. Rust now applies the global limit and emits the warning for valid runs, but exact warning/error ordering for later invalid options should be handled with the final executable diagnostic layer.
 
 ### Porting Focus
 

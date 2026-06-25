@@ -14,6 +14,7 @@ use crate::inout::commandline::{
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
+use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 use crate::terms::signature::{
@@ -557,6 +558,7 @@ pub struct TermOrderingConfig {
     pub constant_weight: i64,
     pub precedence: Option<String>,
     pub lpo_recursion_limit: i64,
+    pub lpo_recursion_limit_changed: bool,
     pub literal_comparison: LiteralComparison,
     pub lambda_weight: i64,
     pub db_weight: i64,
@@ -575,6 +577,7 @@ impl Default for TermOrderingConfig {
             constant_weight: 0,
             precedence: None,
             lpo_recursion_limit: DEFAULT_LPO_RECURSION_LIMIT,
+            lpo_recursion_limit_changed: false,
             literal_comparison: LiteralComparison::Normal,
             lambda_weight: DEFAULT_LAMBDA_WEIGHT,
             db_weight: DEFAULT_DB_WEIGHT,
@@ -1281,6 +1284,12 @@ fn apply_time_limit_state(config: &EProverConfig) {
     }
     if let Some(limit) = config.schedule_time_limit {
         let _ = set_schedule_time_limit(c_rlimit_from_arg(limit));
+    }
+}
+
+fn apply_ordering_state(config: &EProverConfig) {
+    if config.search.ordering.lpo_recursion_limit_changed {
+        set_lpo_recursion_depth_limit(config.search.ordering.lpo_recursion_limit);
     }
 }
 
@@ -2083,6 +2092,7 @@ fn apply_term_ordering_option(
                 ));
             }
             config.search.ordering.lpo_recursion_limit = recursion_limit;
+            config.search.ordering.lpo_recursion_limit_changed = true;
             if recursion_limit > LPO_RECURSION_WARNING_LIMIT {
                 config.warnings.push(Diagnostic::new(
                     ErrorCode::NO_ERROR,
@@ -3119,6 +3129,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     set_verbose_level(verbose);
     let _ = set_output_level(config.output_level);
     apply_time_limit_state(config);
+    apply_ordering_state(config);
     let _ = set_memory_limit(config.memory_limit);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
@@ -3240,6 +3251,7 @@ mod tests {
         hard_time_limit, schedule_time_limit, set_hard_time_limit, set_schedule_time_limit,
         set_soft_time_limit, soft_time_limit, RLIM_INFINITY_COMPAT,
     };
+    use crate::orderings::cto_lpo::{lpo_recursion_depth_limit, set_lpo_recursion_depth_limit};
     use crate::prover::version::VERSION;
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
@@ -4589,6 +4601,7 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.search.ordering.lpo_recursion_limit, 100);
+        assert!(config.search.ordering.lpo_recursion_limit_changed);
         assert!(config.warnings.is_empty());
         assert_eq!(
             config.search.ordering.literal_comparison,
@@ -4605,6 +4618,7 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.search.ordering.lpo_recursion_limit, 25);
+        assert!(config.search.ordering.lpo_recursion_limit_changed);
         assert_eq!(
             config.search.ordering.literal_comparison,
             LiteralComparison::TfoEqMin
@@ -4615,6 +4629,7 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.search.ordering.lpo_recursion_limit, 20001);
+        assert!(config.search.ordering.lpo_recursion_limit_changed);
         assert_eq!(
             config.search.ordering.literal_comparison,
             LiteralComparison::None
@@ -4908,6 +4923,7 @@ mod tests {
 
     #[test]
     fn run_emits_lpo_recursion_limit_warning_like_c() {
+        let old_limit = lpo_recursion_depth_limit();
         let path = temp_path("syntax-lpo-warning");
         std::fs::write(&path, "p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -4933,6 +4949,8 @@ mod tests {
             String::from_utf8(stderr).unwrap(),
             "eprover: Warning: Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.\n"
         );
+
+        set_lpo_recursion_depth_limit(old_limit);
         std::fs::remove_file(&path).unwrap();
     }
 
