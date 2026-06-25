@@ -90,6 +90,7 @@ pub struct ClauseSet {
     literals: i64,
     date: SysDate,
     identifier: String,
+    fv_anchor: Option<FvIndexAnchor>,
     eval_indices: Vec<BTreeSet<EvalIndexEntry>>,
     eval_no: usize,
     next_eval_object: EvalObjectHandle,
@@ -111,6 +112,7 @@ impl ClauseSet {
             literals: 0,
             date,
             identifier: String::new(),
+            fv_anchor: None,
             eval_indices: Vec::new(),
             eval_no: 0,
             next_eval_object: 0,
@@ -147,6 +149,24 @@ impl ClauseSet {
 
     pub fn set_identifier(&mut self, identifier: impl Into<String>) {
         self.identifier = identifier.into();
+    }
+
+    #[must_use]
+    pub const fn fv_anchor(&self) -> Option<&FvIndexAnchor> {
+        self.fv_anchor.as_ref()
+    }
+
+    #[must_use]
+    pub const fn fv_anchor_mut(&mut self) -> Option<&mut FvIndexAnchor> {
+        self.fv_anchor.as_mut()
+    }
+
+    pub fn set_fv_anchor(&mut self, fv_anchor: Option<FvIndexAnchor>) -> Option<FvIndexAnchor> {
+        std::mem::replace(&mut self.fv_anchor, fv_anchor)
+    }
+
+    pub fn take_fv_anchor(&mut self) -> Option<FvIndexAnchor> {
+        self.fv_anchor.take()
     }
 
     #[must_use]
@@ -308,14 +328,12 @@ impl ClauseSet {
         fv_anchor: Option<&mut FvIndexAnchor>,
         bank: &TermBank,
     ) {
-        debug_assert_eq!(clause.weight(), clause.standard_weight());
-        let mut clause = clause;
-        if let Some(anchor) = fv_anchor {
-            let mut packed = fv_index_pack_clause(clause, Some(&*anchor));
-            anchor.insert(&mut packed, bank);
-            clause = packed.into_clause();
-            clause.set_prop(CP_IS_S_INDEXED);
-        }
+        let clause = indexed_clause_for_anchor(clause, fv_anchor, bank);
+        self.insert(clause);
+    }
+
+    pub fn indexed_insert_clause_owned(&mut self, clause: Clause, bank: &TermBank) {
+        let clause = indexed_clause_for_anchor(clause, self.fv_anchor.as_mut(), bank);
         self.insert(clause);
     }
 
@@ -329,6 +347,16 @@ impl ClauseSet {
         while let Some(mut clause) = source.extract_first() {
             clause.set_weight(clause.standard_weight());
             self.indexed_insert_clause(clause, fv_anchor.as_deref_mut(), bank);
+            moved += 1;
+        }
+        moved
+    }
+
+    pub fn indexed_insert_clause_set_owned(&mut self, source: &mut Self, bank: &TermBank) -> i64 {
+        let mut moved = 0;
+        while let Some(mut clause) = source.extract_first() {
+            clause.set_weight(clause.standard_weight());
+            self.indexed_insert_clause_owned(clause, bank);
             moved += 1;
         }
         moved
@@ -814,6 +842,27 @@ impl ClauseSet {
         self.members()
     }
 
+    /// Rebuilds this set through its owned feature-vector index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no feature-vector anchor is installed on the set.
+    pub fn fv_indexify_owned(&mut self, bank: &TermBank) -> i64 {
+        assert!(
+            self.fv_anchor.is_some(),
+            "FV indexify requires an installed FV anchor"
+        );
+        let mut stack = Vec::with_capacity(self.clauses.len());
+        while let Some(clause) = self.extract_first() {
+            stack.push(clause);
+        }
+
+        while let Some(clause) = stack.pop() {
+            self.indexed_insert_clause_owned(clause, bank);
+        }
+        self.members()
+    }
+
     pub fn push_clause_refs<'a>(&'a self, stack: &mut PStack<&'a Clause>) -> i64 {
         let mut pushed = 0;
         for clause in &self.clauses {
@@ -931,7 +980,13 @@ impl ClauseSet {
                 root.remove(&entry);
             }
         }
-        let clause = self.clauses.remove(position)?;
+        let mut clause = self.clauses.remove(position)?;
+        if clause.query_prop(CP_IS_S_INDEXED) {
+            if let Some(anchor) = self.fv_anchor.as_mut() {
+                anchor.delete(&clause);
+            }
+            clause.del_prop(CP_IS_S_INDEXED);
+        }
         self.literals -= usize_to_i64(clause.literal_number());
         Some(clause)
     }
@@ -943,6 +998,22 @@ impl ClauseSet {
             .map(|clause| usize_to_i64(clause.literal_number()))
             .sum();
     }
+}
+
+fn indexed_clause_for_anchor(
+    clause: Clause,
+    fv_anchor: Option<&mut FvIndexAnchor>,
+    bank: &TermBank,
+) -> Clause {
+    debug_assert_eq!(clause.weight(), clause.standard_weight());
+    let mut clause = clause;
+    if let Some(anchor) = fv_anchor {
+        let mut packed = fv_index_pack_clause(clause, Some(&*anchor));
+        anchor.insert(&mut packed, bank);
+        clause = packed.into_clause();
+        clause.set_prop(CP_IS_S_INDEXED);
+    }
+    clause
 }
 
 fn index_clause_evaluations(
@@ -1492,6 +1563,83 @@ mod tests {
     }
 
     #[test]
+    fn owned_indexed_insert_without_anchor_behaves_like_plain_insert() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "owned_plain_a");
+        let b = typed_const(&mut bank, "owned_plain_b");
+        let clause = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let ident = clause.ident();
+        let mut set = ClauseSet::new();
+
+        set.indexed_insert_clause_owned(clause, &bank);
+
+        assert_eq!(set.members(), 1);
+        let stored = set.find_by_id(ident).unwrap();
+        assert!(!stored.query_prop(CP_IS_S_INDEXED));
+        assert!(set.fv_anchor().is_none());
+    }
+
+    #[test]
+    fn owned_indexed_insert_marks_indexes_and_extracts_from_anchor() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "owned_idx_a");
+        let b = typed_const(&mut bank, "owned_idx_b");
+        let clause = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let ident = clause.ident();
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        let mut set = ClauseSet::new();
+        set.set_fv_anchor(Some(ac_anchor(max_symbols)));
+
+        set.indexed_insert_clause_owned(clause, &bank);
+
+        let stored = set.find_by_id(ident).unwrap();
+        assert!(stored.query_prop(CP_IS_S_INDEXED));
+        assert_eq!(set.fv_anchor().unwrap().index().clause_count(), 1);
+        assert_eq!(set.fv_anchor().unwrap().count_nodes(true, false), 1);
+
+        let extracted = set.extract_first().unwrap();
+        assert_eq!(extracted.ident(), ident);
+        assert!(!extracted.query_prop(CP_IS_S_INDEXED));
+        assert_eq!(set.fv_anchor().unwrap().index().clause_count(), 0);
+    }
+
+    #[test]
+    fn owned_indexed_insert_clause_set_reweighs_source_and_preserves_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "owned_set_a");
+        let b = typed_const(&mut bank, "owned_set_b");
+        let c = typed_const(&mut bank, "owned_set_c");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut second = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        first.set_weight(0);
+        second.set_weight(0);
+        let mut source = ClauseSet::from_clauses([first, second]);
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        let mut target = ClauseSet::new();
+        target.set_fv_anchor(Some(ac_anchor(max_symbols)));
+
+        assert_eq!(
+            target.indexed_insert_clause_set_owned(&mut source, &bank),
+            2
+        );
+
+        assert!(source.is_empty());
+        assert_eq!(
+            target.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![first_id, second_id]
+        );
+        assert!(target
+            .iter()
+            .all(|clause| clause.weight() == clause.standard_weight()));
+        assert!(target
+            .iter()
+            .all(|clause| clause.query_prop(CP_IS_S_INDEXED)));
+        assert_eq!(target.fv_anchor().unwrap().count_nodes(true, false), 2);
+    }
+
+    #[test]
     fn fv_indexify_reinserts_from_stack_and_marks_s_indexed_clauses() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "fv_a");
@@ -1513,6 +1661,31 @@ mod tests {
         assert!(set.iter().all(|clause| clause.query_prop(CP_IS_S_INDEXED)));
         assert!(anchor.count_nodes(false, false) > 0);
         assert_eq!(anchor.count_nodes(true, false), 2);
+    }
+
+    #[test]
+    fn fv_indexify_owned_reinserts_from_stack_and_marks_s_indexed_clauses() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "owned_fv_a");
+        let b = typed_const(&mut bank, "owned_fv_b");
+        let c = typed_const(&mut bank, "owned_fv_c");
+        let first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let second = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let mut set = ClauseSet::from_clauses([first, second]);
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        set.set_fv_anchor(Some(ac_anchor(max_symbols)));
+
+        assert_eq!(set.fv_indexify_owned(&bank), 2);
+
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![second_id, first_id]
+        );
+        assert!(set.iter().all(|clause| clause.query_prop(CP_IS_S_INDEXED)));
+        assert!(set.fv_anchor().unwrap().count_nodes(false, false) > 0);
+        assert_eq!(set.fv_anchor().unwrap().count_nodes(true, false), 2);
     }
 
     #[test]

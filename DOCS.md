@@ -56,7 +56,7 @@ Command roles:
 1. Run `git status --short` before changing documentation.
 2. Do not modify `eprover/`.
 3. Add new agent-facing documentation to `DOCS.md` or to a linked docs location.
-4. Document aspects of the C implementation that may make sense to change later, including accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, or performance tradeoffs that should be revisited after compatibility is secured.
+4. For new porting work and retroactive review of already-ported code, document aspects of the C implementation that may make sense to change later, including accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, or performance tradeoffs that should be revisited after compatibility is secured.
 5. For C-source pages, edit manual-review sections by hand when adding source-review knowledge.
 6. Use generation only for source inventory and other mechanical updates.
 7. Run the coverage, link, and regeneration-preservation checks.

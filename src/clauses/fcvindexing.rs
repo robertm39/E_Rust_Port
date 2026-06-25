@@ -127,6 +127,15 @@ pub struct FvIndexInitAnchors {
     def_store: FvIndexAnchor,
 }
 
+pub struct FvIndexInitTargetSets<'a> {
+    pub processed_non_units: &'a mut ClauseSet,
+    pub processed_pos_rules: &'a mut ClauseSet,
+    pub processed_pos_eqns: &'a mut ClauseSet,
+    pub processed_neg_units: &'a mut ClauseSet,
+    pub watchlist: Option<&'a mut ClauseSet>,
+    pub def_store: &'a mut ClauseSet,
+}
+
 impl FvIndexInitAnchors {
     #[must_use]
     pub fn processed_non_units(&self) -> Option<&FvIndexAnchor> {
@@ -156,6 +165,26 @@ impl FvIndexInitAnchors {
     #[must_use]
     pub const fn def_store(&self) -> &FvIndexAnchor {
         &self.def_store
+    }
+
+    pub fn install(self, targets: FvIndexInitTargetSets<'_>) {
+        let FvIndexInitTargetSets {
+            processed_non_units,
+            processed_pos_rules,
+            processed_pos_eqns,
+            processed_neg_units,
+            watchlist,
+            def_store,
+        } = targets;
+
+        processed_non_units.set_fv_anchor(self.processed_non_units);
+        processed_pos_rules.set_fv_anchor(self.processed_pos_rules);
+        processed_pos_eqns.set_fv_anchor(self.processed_pos_eqns);
+        processed_neg_units.set_fv_anchor(self.processed_neg_units);
+        if let Some(watchlist) = watchlist {
+            watchlist.set_fv_anchor(self.watchlist);
+        }
+        def_store.set_fv_anchor(Some(self.def_store));
     }
 }
 
@@ -608,7 +637,7 @@ pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> F
 mod tests {
     use super::{
         fv_index_pack_clause, fv_index_storage, fvi_param_init_anchors, fvi_param_init_specs,
-        FvIndex, FvIndexAnchor, FvIndexParams,
+        FvIndex, FvIndexAnchor, FvIndexInitTargetSets, FvIndexParams,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -822,6 +851,74 @@ mod tests {
         assert!(anchors.processed_pos_eqns().is_some());
         assert!(anchors.processed_neg_units().is_some());
         assert!(anchors.watchlist().is_none());
+    }
+
+    #[test]
+    fn fvi_param_init_anchors_install_into_clause_set_targets() {
+        let mut bank = test_bank();
+        let axioms = two_clause_axioms(&mut bank);
+        let params = FvIndexParams::new(FvIndexType::AcFold, false, true, 9, 1);
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+        let mut non_units = ClauseSet::new();
+        let mut rules = ClauseSet::new();
+        let mut equations = ClauseSet::new();
+        let mut negative_units = ClauseSet::new();
+        let mut watch = ClauseSet::new();
+        let mut defs = ClauseSet::new();
+
+        fvi_param_init_anchors(&axioms, &specs, &params, true).install(FvIndexInitTargetSets {
+            processed_non_units: &mut non_units,
+            processed_pos_rules: &mut rules,
+            processed_pos_eqns: &mut equations,
+            processed_neg_units: &mut negative_units,
+            watchlist: Some(&mut watch),
+            def_store: &mut defs,
+        });
+
+        for anchor in [
+            non_units.fv_anchor(),
+            rules.fv_anchor(),
+            equations.fv_anchor(),
+            negative_units.fv_anchor(),
+            watch.fv_anchor(),
+        ] {
+            let anchor = anchor.unwrap_or_else(|| panic!("active FV anchor should be installed"));
+            assert_eq!(anchor.cspec(), specs.cspec());
+            assert_eq!(anchor.index().clause_count(), 0);
+        }
+        assert_eq!(defs.fv_anchor().unwrap().cspec(), specs.def_store_cspec());
+    }
+
+    #[test]
+    fn fvi_param_init_anchors_install_skips_processed_targets_for_no_features() {
+        let mut bank = test_bank();
+        let axioms = two_clause_axioms(&mut bank);
+        let params = FvIndexParams::new(FvIndexType::NoFeatures, false, false, 9, 1);
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+        let mut non_units = ClauseSet::new();
+        let mut rules = ClauseSet::new();
+        let mut equations = ClauseSet::new();
+        let mut negative_units = ClauseSet::new();
+        let mut watch = ClauseSet::new();
+        let mut defs = ClauseSet::new();
+
+        fvi_param_init_anchors(&axioms, &specs, &params, true).install(FvIndexInitTargetSets {
+            processed_non_units: &mut non_units,
+            processed_pos_rules: &mut rules,
+            processed_pos_eqns: &mut equations,
+            processed_neg_units: &mut negative_units,
+            watchlist: Some(&mut watch),
+            def_store: &mut defs,
+        });
+
+        assert!(non_units.fv_anchor().is_none());
+        assert!(rules.fv_anchor().is_none());
+        assert!(equations.fv_anchor().is_none());
+        assert!(negative_units.fv_anchor().is_none());
+        assert!(watch.fv_anchor().is_none());
+        assert_eq!(defs.fv_anchor().unwrap().cspec(), specs.def_store_cspec());
     }
 
     #[test]
