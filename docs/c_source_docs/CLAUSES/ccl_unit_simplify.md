@@ -88,6 +88,11 @@ Source files reviewed: `CLAUSES/ccl_unit_simplify.h`, `CLAUSES/ccl_unit_simplify
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `ClauseSimplifyWithUnitSet` first tries top-level lookup for `TopLevelUnitSimplify`; `FullUnitSimplify` calls `FindSimplifyingUnit`, which tries top-level units of either sign, then descends through exactly one differing argument pair and only accepts positive units for deeper simplification.
+- Opposite-signed unit simplification removes the current literal, clears only `CPLimitedRW`, and keeps iterating at the same list handle. Same-signed simplification returns `false` immediately to signal subsumption, optionally marks the unit `CPIsProtected` for equal standard weight, and does not remove the target literal.
+- Change-later candidate: same-signed subsumption calls `ClauseSetProp(pos->clause, ClauseQueryProp(clause, CPIsSOS))`. Since `ClauseQueryProp` returns boolean `0` or `1`, an SOS target marks the unit `CPInitial` instead of `CPIsSOS`. Preserve this until proof-search reference tests can decide whether it is relied on.
+- `FindSimplifyingUnit` has a higher-order-specific early return after finding a descended positive unit, but the first-order path returns the same result immediately after the loop condition observes success. Treat that branch as redundant unless later higher-order indexed matching gives it a distinct effect.
+- Rust currently ports a plain-set lookup for this behavior. The C unit relies on `unit_set->demod_index`, `PDTreeSearchInit`, and live `ClausePos` results, so indexed demodulator integration remains a future ownership task.
 
 ### Porting Focus
 

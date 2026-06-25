@@ -29,3 +29,4 @@ pub mod subsumption;
 pub mod subterm_index;
 pub mod subterm_tree;
 pub mod tautologies;
+pub mod unit_simplify;
