@@ -384,13 +384,16 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 - `PSelectFirstVariableLiteral` does not select the pure-variable literal itself despite its comment saying it does; it only calls `clause_select_pos()` after finding a negative `X!=Y`, so only positive literals are selected.
 - `PSelectGroundNegativeLiteral` first selects positive literals while scanning, but if no negative ground literal is found it clears `EPIsSelected` from the whole literal list. That makes the positive selections transient in the no-ground case.
 - `lit_sel_diff_weight(handle)` is a macro equal to `100*EqnStandardDiff(handle)+EqnStandardWeight(handle)`. Several selectors recompute it when comparing and then storing the current best value rather than caching side weights separately.
+- `PSelectOptimalLiteral` and `PSelectMinOptimalLiteral` select positive literals only through their fallback calls (`PSelectDiffNegativeLiteral` and `PSelectSmallestNegativeLiteral`). When their own ground-negative branch succeeds, the C bodies select only the chosen negative literal despite comments saying that positives are selected too.
+- The range-restriction optimal wrappers are thin gates over `ClauseIsRangeRestricted`, `ClauseIsAntiRangeRestricted`, and `ClauseIsStronglyRangeRestricted`. `SelectAntiRROptimalLiteral` has an explicit zero-negative-literal return, while `PSelectAntiRROptimalLiteral` relies on the outer `DoLiteralSelection` negative-literal gate. `PSelectStrongRRNonRROptimalLiteral` actively clears selected bits in the range-restricted-but-not-strongly-range-restricted case.
 - `GetLitSelFun` and `GetLitSelName` are table-driven. Reverse lookup scans function pointers and returns the first matching name, so table order is part of the printable strategy surface.
 
 ### Change-Later Observations
 
 - The literal-selection unit mixes several families of selectors with repeated "P" positive-literal variants and many near-duplicate weight helpers. Keep the initial Rust port close to the table and wrappers, but consider factoring shared scoring code only after reference tests cover representative selectors from each family.
 - Many selector functions call `ClauseDelProp(clause, CPIsOriented)` after selecting a literal even though `DoLiteralSelection` already cleared the clause-oriented property before dispatch. Preserve the redundant invalidation while porting selector bodies; it may still document orientation-cache assumptions for selectors that orient or inspect maximality internally.
-- Several comments describe older behavior that no longer matches the code, notably `PSelectFirstVariableLiteral` and `PSelectGroundNegativeLiteral`. Prefer source-code behavior over comments for compatibility, and revisit the comments only after reference strategy tests prove the difference is unobservable.
+- Several comments describe older behavior that no longer matches the code, notably `PSelectFirstVariableLiteral`, `PSelectGroundNegativeLiteral`, `PSelectOptimalLiteral`, and `PSelectMinOptimalLiteral`. Prefer source-code behavior over comments for compatibility, and revisit the comments only after reference strategy tests prove the difference is unobservable.
+- The positive-variant optimal wrappers repeat mostly identical gate/fallback structure with small selected-bit differences. Keep them literal during the port, but after selector-level reference tests exist, consider consolidating the wrappers behind explicit gate and fallback helpers.
 
 ### Porting Focus
 
