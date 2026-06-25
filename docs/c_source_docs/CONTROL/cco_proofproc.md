@@ -153,6 +153,7 @@ Source files reviewed: `CONTROL/cco_proofproc.h`, `CONTROL/cco_proofproc.c`.
 - `ProofStateResetProcessedSet` drains a processed set, archives each original clause, flat-copies it back through the proof-state term bank, evaluates the copy with the active HCB, clears `CPIsOriented`, optionally applies the same `prefer_initial_clauses` priority offset as initialization, and inserts the copy into `unprocessed`. Rust now ports the local archive/copy/evaluate/requeue behavior for all four processed sets through `ProofStateResetProcessed`.
 - `ProofStateMoveSetToTmp` is intentionally lighter than reset: it drains a processed set into `tmp_store`, clears only `CPIsOriented`, and does not copy, archive, or reevaluate clauses. Rust now ports this behavior for all four processed sets through `ProofStateMoveToTmpStore`, including preservation of any existing evaluation cells on moved clauses.
 - `eval_clause_set` evaluates every clause currently held in `state->eval_store` with the active HCB but does not drain or otherwise route those clauses; `insert_new_clauses` performs the later extraction and insertion into `unprocessed`. Rust now exposes this eval-store evaluation step as a standalone helper and preserves eval-store membership/order.
+- The final `insert_new_clauses` tail drains evaluated clauses from `eval_store`, clears `CPIsOriented` again, emits the `"eval"` proof quote, and inserts the clauses into `unprocessed`. Rust now ports the local eval-store-to-unprocessed movement and reuses `ClauseSet` insertion to preserve evaluation indices.
 
 ### Change-Later Observations
 
@@ -175,6 +176,8 @@ Source files reviewed: `CONTROL/cco_proofproc.h`, `CONTROL/cco_proofproc.c`.
 - Both reset and move-to-tmp paths delete `CPIsGlobalIndexed` clauses from `state->gindices` before moving them. Rust's current wrappers do not own long-lived proof-state global indices, so this deletion remains part of the future proof-session/global-index ownership work.
 - The `eval_clause_set` comment claims no side effects even though the function adds evaluation cells to every clause in `eval_store`. Rust documents the mutation explicitly.
 - C evaluates clauses after inserting them into `eval_store`, which means the set's evaluation trees do not receive entries until the clauses are later extracted and inserted into another set. Rust extracts and reinserts each evaluated clause inside `eval_store` to keep `ClauseSet` evaluation indices synchronized while preserving the visible clause order.
+- `insert_new_clauses` clears `CPIsOriented` both before literal selection/eval-store insertion and again when draining `eval_store` into `unprocessed`. Rust preserves the tail clearing so the eventual full helper can remain C-shaped; a later cleanup could collapse duplicate clearing only after selection and proof-output tests prove it unobservable.
+- The `insert_new_clauses` eval-store drain emits `DocClauseQuoteDefault(..., "eval")` in C. Rust currently ports only the set movement and leaves the quote for proof-documentation/global-output integration.
 
 ### Porting Focus
 

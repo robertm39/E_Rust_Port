@@ -816,6 +816,21 @@ pub fn proof_state_eval_clause_set(
     Ok(pending)
 }
 
+/// Moves evaluated clauses from `eval_store` to `unprocessed`.
+///
+/// This is the final queueing tail of C `insert_new_clauses` after
+/// [`proof_state_eval_clause_set`] has attached evaluations. Proof-output
+/// quoting is left for the later proof-documentation integration.
+pub fn proof_state_move_eval_store_to_unprocessed(state: &mut ProofState) -> i64 {
+    let mut moved = 0;
+    while let Some(mut clause) = state.eval_store_mut().extract_first() {
+        clause.del_prop(CP_IS_ORIENTED);
+        state.unprocessed_mut().insert(clause);
+        moved += 1;
+    }
+    moved
+}
+
 /// Runs the AC-axiom scan portion of C `ProofStateInit`.
 ///
 /// The C code scans the initialized `unprocessed` set, not the source axiom
@@ -1058,9 +1073,9 @@ mod tests {
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_eval_clause_set, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_global_indices, proof_state_move_to_tmp_store,
-        proof_state_reset_processed, select_inherited_literal, LiteralSelectionOutcome,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_init_with_global_indices, proof_state_move_eval_store_to_unprocessed,
+        proof_state_move_to_tmp_store, proof_state_reset_processed, select_inherited_literal,
+        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1723,6 +1738,51 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         let clause = state.eval_store().find_by_id(4_062).unwrap();
         assert!(clause.evaluations().is_none());
+    }
+
+    #[test]
+    fn proof_state_move_eval_store_to_unprocessed_preserves_evaluations_and_indices() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut first, mut second) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_eval_move_first", 4_070),
+                unit_clause_with_id(terms, "pc_eval_move_second", 4_071),
+            )
+        };
+        first.set_prop(CP_IS_ORIENTED);
+        second.set_prop(CP_IS_ORIENTED);
+        let mut first_eval = evals_alloc(1);
+        first_eval.eval_mut(0).set_priority(50);
+        first.add_eval_cell(first_eval);
+        let mut second_eval = evals_alloc(1);
+        second_eval.eval_mut(0).set_priority(10);
+        second.add_eval_cell(second_eval);
+        state.eval_store_mut().insert(first);
+        state.eval_store_mut().insert(second);
+
+        let moved = proof_state_move_eval_store_to_unprocessed(&mut state);
+
+        assert_eq!(moved, 2);
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 2);
+        assert_eq!(
+            state
+                .unprocessed()
+                .iter()
+                .map(Clause::ident)
+                .collect::<Vec<_>>(),
+            vec![4_070, 4_071]
+        );
+        for ident in [4_070, 4_071] {
+            let clause = state.unprocessed().find_by_id(ident).unwrap();
+            assert!(!clause.query_prop(CP_IS_ORIENTED));
+            assert!(clause.evaluations().is_some());
+        }
+        assert_eq!(
+            state.unprocessed().find_best(0).map(Clause::ident),
+            Some(4_071)
+        );
     }
 
     #[test]
