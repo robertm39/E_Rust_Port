@@ -9,6 +9,7 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::simpletypes::Type;
@@ -1403,6 +1404,36 @@ pub fn generic_fun_weight_compute(
     )
 }
 
+/// Computes C `GenericFunWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn generic_fun_weight_compute_with_ocb(
+    param: &mut FunWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    param.ensure_fun_weights(bank);
+    clause.cond_mark_maximal_terms(ocb, bank);
+    clause.fun_weight(
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.vweight,
+        param.flimit,
+        param
+            .fweights
+            .as_deref()
+            .unwrap_or_else(|| panic!("FunWeight vector must be initialized")),
+        param.fweight,
+        param.app_var_mult,
+        param.type_freqs.as_ref(),
+    )
+}
+
 pub fn fun_weight_compute(param: &mut FunWeightParam, bank: &TermBank, clause: &Clause) -> f64 {
     generic_fun_weight_compute(param, bank, clause)
 }
@@ -1418,6 +1449,55 @@ pub fn sym_offset_weight_compute(
     clause: &Clause,
 ) -> f64 {
     param.ensure_fun_weights(bank);
+    let mut result = clause.literal_weight(
+        bank,
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.vweight,
+        param.fweight,
+        param.app_var_mult,
+        false,
+    );
+
+    let mut symbols = Vec::new();
+    {
+        let f_occur = param
+            .f_occur
+            .as_mut()
+            .unwrap_or_else(|| panic!("SymOffsetWeight requires an occurrence array"));
+        clause.add_fun_occs(f_occur, &mut symbols);
+    }
+
+    while let Some(f_code) = symbols.pop() {
+        result += i64_to_f64(param.weight_for_f_code(f_code));
+        let f_occur = param
+            .f_occur
+            .as_mut()
+            .unwrap_or_else(|| panic!("SymOffsetWeight requires an occurrence array"));
+        assert!(
+            f_occur.assign(f_code_to_pd_index(f_code), 0),
+            "function-occurrence array must cover positive f-codes"
+        );
+    }
+
+    result
+}
+
+/// Computes C `SymOffsetWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn sym_offset_weight_compute_with_ocb(
+    param: &mut FunWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    param.ensure_fun_weights(bank);
+    clause.cond_mark_maximal_terms(ocb, bank);
     let mut result = clause.literal_weight(
         bank,
         param.max_term_multiplier,
@@ -1639,16 +1719,20 @@ mod tests {
         conjecture_relative_symbol_type_weight_parse, conjecture_relative_symbol_weight_parse,
         conjecture_simplified_symbol_weight_parse, conjecture_symbol_weight_parse,
         conjecture_type_based_weight_parse, fun_weight_compute, fun_weight_init, fun_weight_parse,
-        relevance_level_weight2_parse, relevance_level_weight_parse, sym_offset_weight_compute,
-        sym_offset_weight_init, sym_offset_weight_parse,
+        generic_fun_weight_compute_with_ocb, relevance_level_weight2_parse,
+        relevance_level_weight_parse, sym_offset_weight_compute,
+        sym_offset_weight_compute_with_ocb, sym_offset_weight_init, sym_offset_weight_parse,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE};
+    use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1706,6 +1790,22 @@ mod tests {
         let g_of_b = typed_unary(bank, "g", &b);
         let literal = Eqn::alloc(f_of_a, g_of_b, bank, true).unwrap();
         Clause::alloc(EqnList::from_vec(vec![literal]))
+    }
+
+    fn ordering_clause(bank: &mut TermBank) -> Clause {
+        let a = typed_const(bank, "a");
+        let f_of_a = typed_unary(bank, "f", &a);
+        let literal = Eqn::alloc(a, f_of_a, bank, true).unwrap();
+        Clause::alloc(EqnList::from_vec(vec![literal]))
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     fn relevance_axioms(bank: &mut TermBank) -> ClauseSet {
@@ -1776,6 +1876,42 @@ mod tests {
         assert_close(wfcb.compute_eval(&bank, &clause), 34.0);
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
         assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn fun_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = test_bank();
+        let mut target = ordering_clause(&mut bank);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = fun_weight_init(
+            3.0,
+            5.0,
+            7.0,
+            1,
+            2,
+            vec![("f".to_owned(), 10), ("a".to_owned(), 20)],
+            1.0,
+        );
+        let expected = fun_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut actual_param = fun_weight_init(
+            3.0,
+            5.0,
+            7.0,
+            1,
+            2,
+            vec![("f".to_owned(), 10), ("a".to_owned(), 20)],
+            1.0,
+        );
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual =
+            generic_fun_weight_compute_with_ocb(&mut actual_param, &mut ocb, &bank, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]
@@ -1977,6 +2113,42 @@ mod tests {
 
         assert_close(sym_offset_weight_compute(&mut param, &bank, &clause), 18.0);
         assert_close(sym_offset_weight_compute(&mut param, &bank, &clause), 18.0);
+    }
+
+    #[test]
+    fn sym_offset_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = test_bank();
+        let mut target = ordering_clause(&mut bank);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = sym_offset_weight_init(
+            3.0,
+            5.0,
+            7.0,
+            1,
+            2,
+            vec![("f".to_owned(), 10), ("a".to_owned(), -3)],
+            1.0,
+        );
+        let expected = sym_offset_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut actual_param = sym_offset_weight_init(
+            3.0,
+            5.0,
+            7.0,
+            1,
+            2,
+            vec![("f".to_owned(), 10), ("a".to_owned(), -3)],
+            1.0,
+        );
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual =
+            sym_offset_weight_compute_with_ocb(&mut actual_param, &mut ocb, &bank, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]

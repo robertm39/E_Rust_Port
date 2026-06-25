@@ -133,6 +133,9 @@ Source files reviewed: `HEURISTICS/che_funweights.h`, `HEURISTICS/che_funweights
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `GenericFunWeightCompute` calls the configured `init_fun` lazily, then `ClauseCondMarkMaximalTerms(data->ocb, clause)`, then `ClauseFunWeight` with `data->fweights` and optional `type_freqs`; preserve that init/mark/score order.
+- `SymOffsetWeightCompute` follows the same lazy-init and `ClauseCondMarkMaximalTerms` order before ordinary clause weighting, then calls `ClauseAddFunOccs`, adds one configured offset per distinct symbol, and resets each touched occurrence-array slot to zero.
+- Change-later candidate: once the Rust WFCB/proof-state path can own an `OCB` and mutable candidate clauses directly, collapse the explicit OCB-backed funweight helpers into the ordinary callback shape while preserving the C lazy-init, mark, score, offset, and occurrence-reset ordering.
 
 ### Porting Focus
 
