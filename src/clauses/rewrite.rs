@@ -27,6 +27,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
 
+pub static REWRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+pub static REWRITE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_UNBOUND_VAR_FAILS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_UNCACHED: AtomicU64 = AtomicU64::new(0);
 pub static BWRW_MATCH_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -194,6 +196,144 @@ pub fn find_rewritable_clauses_indexed<'idx>(
     }
 
     Ok(count)
+}
+
+/// Rewrite a term at the top position with demodulators from a plain set scan.
+///
+/// This ports the decision rules of C `indexed_find_demodulator` and
+/// `rewrite_with_clause_set`, but uses set-order scanning until the perfect
+/// discrimination tree is ported.
+///
+/// # Errors
+///
+/// Returns a diagnostic if ordering-side checks or replacement insertion need
+/// to create terms and fail.
+///
+/// # Panics
+///
+/// Panics if `term` is a free variable or already has a top rewrite link,
+/// matching the C preconditions.
+pub fn rewrite_with_clause_set_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    date: SysDate,
+    demodulators: &ClauseSet,
+    _prefer_general: bool,
+    restricted_rw: bool,
+) -> Result<Term, Diagnostic> {
+    assert!(!term.is_free_var(), "free variables are not rewritten");
+    assert!(
+        !term.is_top_rewritten(),
+        "top-level rewrite expects no existing top rewrite link"
+    );
+
+    REWRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+
+    let mut subst = Substitution::new();
+    let Some(found) = find_plain_demodulator(
+        ocb,
+        bank,
+        term,
+        date,
+        demodulators,
+        &mut subst,
+        restricted_rw,
+    )?
+    else {
+        return Ok(term.clone());
+    };
+
+    REWRITE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+    let replacement = bank.insert_instantiated(found.replacement)?;
+    subst.backtrack();
+
+    if replacement == *term {
+        return Ok(term.clone());
+    }
+
+    let result_type = if restricted_rw {
+        RwResultType::AlwaysRewritable
+    } else {
+        RwResultType::LimitedRewritable
+    };
+    term_add_rw_link(
+        term,
+        &replacement,
+        Some(rewrite_demodulator_handle(found.clause)),
+        found.clause.is_sos(),
+        result_type,
+    );
+    REWRITE_UNCACHED.fetch_add(1, Ordering::Relaxed);
+    Ok(replacement)
+}
+
+struct PlainDemodulatorMatch<'a> {
+    clause: &'a Clause,
+    replacement: &'a Term,
+}
+
+fn find_plain_demodulator<'a>(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    term: &Term,
+    date: SysDate,
+    demodulators: &'a ClauseSet,
+    subst: &mut Substitution,
+    restricted_rw: bool,
+) -> Result<Option<PlainDemodulatorMatch<'a>>, Diagnostic> {
+    for clause in demodulators.iter() {
+        if !clause.is_demodulator() {
+            continue;
+        }
+        if !date.is_earlier_than(clause.date()) {
+            continue;
+        }
+
+        let eqn = clause
+            .literals()
+            .as_slice()
+            .first()
+            .expect("positive unit demodulator has one literal");
+        if demodulator_date_blocks_term(term, clause, eqn) {
+            continue;
+        }
+
+        let backtrack = subst.len();
+        if subst_match_complete(eqn.left(), term, subst)
+            && (eqn.is_oriented() || instance_is_rule(ocb, bank, eqn.left(), eqn.right(), subst)?)
+            && (!restricted_rw || !subst.is_renaming())
+        {
+            return Ok(Some(PlainDemodulatorMatch {
+                clause,
+                replacement: eqn.right(),
+            }));
+        }
+        subst.backtrack_to_pos(backtrack);
+
+        if !eqn.is_oriented() {
+            let backtrack = subst.len();
+            if subst_match_complete(eqn.right(), term, subst)
+                && instance_is_rule(ocb, bank, eqn.right(), eqn.left(), subst)?
+            {
+                return Ok(Some(PlainDemodulatorMatch {
+                    clause,
+                    replacement: eqn.left(),
+                }));
+            }
+            subst.backtrack_to_pos(backtrack);
+        }
+    }
+    Ok(None)
+}
+
+fn demodulator_date_blocks_term(term: &Term, clause: &Clause, eqn: &Eqn) -> bool {
+    let level = if eqn.is_oriented() {
+        RewriteLevel::RuleRewrite
+    } else {
+        RewriteLevel::FullRewrite
+    };
+    !term.nf_date(level).is_earlier_than(clause.date())
 }
 
 #[expect(
@@ -622,7 +762,8 @@ fn map_literal_terms(
 mod tests {
     use super::{
         clause_local_rw, eqn_has_rw_side, find_rewritable_clauses, find_rewritable_clauses_indexed,
-        BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
+        rewrite_with_clause_set_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
+        REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::sysdate::SysDate;
@@ -723,6 +864,9 @@ mod tests {
     }
 
     fn reset_backward_rewrite_counters() {
+        REWRITE_ATTEMPTS.store(0, Ordering::Relaxed);
+        REWRITE_SUCCESSES.store(0, Ordering::Relaxed);
+        REWRITE_UNCACHED.store(0, Ordering::Relaxed);
         BWRW_MATCH_ATTEMPTS.store(0, Ordering::Relaxed);
         BWRW_MATCH_SUCCESSES.store(0, Ordering::Relaxed);
         REWRITE_UNBOUND_VAR_FAILS.store(0, Ordering::Relaxed);
@@ -955,6 +1099,139 @@ mod tests {
         assert_eq!(results[0].ident(), 32);
         assert!(f_b.is_top_rewritten());
         assert_eq!(f_b.rw_replace_field(), Some(a));
+    }
+
+    #[test]
+    fn plain_clause_set_rewrite_links_first_matching_demodulator() {
+        reset_backward_rewrite_counters();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "rw_plain_a");
+        let b = typed_const(&mut bank, "rw_plain_b");
+        let f_x = typed_unary(&mut bank, "rw_plain_f", &x);
+        let f_b = typed_unary(&mut bank, "rw_plain_f", &b);
+        let mut demod_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_ident(41);
+        demod.set_date(SysDate::from_raw(5));
+        let demods = ClauseSet::from_clauses([demod]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            SysDate::from_raw(0),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, a);
+        assert_eq!(f_b.rw_replace_field(), Some(a));
+        assert!(f_b.is_top_rewritten());
+        assert!(!f_b.is_rrewritten());
+        assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
+        assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
+        assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn plain_clause_set_rewrite_respects_normal_form_dates() {
+        reset_backward_rewrite_counters();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "rw_plain_nf_a");
+        let b = typed_const(&mut bank, "rw_plain_nf_b");
+        let f_x = typed_unary(&mut bank, "rw_plain_nf_f", &x);
+        let f_b = typed_unary(&mut bank, "rw_plain_nf_f", &b);
+        f_b.set_nf_date(RewriteLevel::RuleRewrite, SysDate::from_raw(5));
+        let mut demod_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let demods = ClauseSet::from_clauses([demod]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            SysDate::from_raw(0),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, f_b);
+        assert!(!f_b.is_top_rewritten());
+        assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn plain_clause_set_rewrite_rejects_restricted_renaming_match() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let f_x = typed_unary(&mut bank, "rw_plain_rest_f", &x);
+        let g_x = typed_unary(&mut bank, "rw_plain_rest_g", &x);
+        let f_y = typed_unary(&mut bank, "rw_plain_rest_f", &y);
+        let mut demod_lit = eqn(&mut bank, &f_x, &g_x, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let demods = ClauseSet::from_clauses([demod]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &f_y,
+            SysDate::from_raw(0),
+            &demods,
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, f_y);
+        assert!(!f_y.is_top_rewritten());
+        assert!(y.binding().is_none());
+    }
+
+    #[test]
+    fn plain_clause_set_rewrite_counts_but_does_not_link_self_replacement() {
+        reset_backward_rewrite_counters();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "rw_plain_self_a");
+        let f_x = typed_unary(&mut bank, "rw_plain_self_f", &x);
+        let f_a = typed_unary(&mut bank, "rw_plain_self_f", &a);
+        let mut demod_lit = eqn(&mut bank, &f_x, &f_x, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let demods = ClauseSet::from_clauses([demod]);
+        let mut ocb = kbo_ocb(&bank);
+
+        let rewritten = rewrite_with_clause_set_plain(
+            &mut bank,
+            &mut ocb,
+            &f_a,
+            SysDate::from_raw(0),
+            &demods,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, f_a);
+        assert!(!f_a.is_top_rewritten());
+        assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
+        assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
     }
 
     #[test]
