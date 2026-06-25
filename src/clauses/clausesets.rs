@@ -18,6 +18,7 @@ use crate::clauses::freqvectors::{
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::scanner::Scanner;
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -485,6 +486,13 @@ impl ClauseSet {
         result
     }
 
+    /// Orient and mark maximal literals in every clause in set order.
+    pub fn mark_maximal_terms(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) {
+        for clause in &mut self.clauses {
+            clause.mark_maximal_terms(ocb, bank);
+        }
+    }
+
     pub fn term_set_prop(&self, prop: TermProperties) {
         for clause in &self.clauses {
             clause.term_set_prop(prop);
@@ -926,23 +934,26 @@ mod tests {
         clause_set_list_get_max_date, clause_set_ref_stack_cardinality,
         clause_set_stack_cardinality, ClauseSet,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
+        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::EqnSide;
+    use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::freqvectors::{
         fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
         FvCollectLayout, FvIndexType,
     };
     use crate::clauses::neweval::{evals_alloc, EvalCell};
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -993,6 +1004,15 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     fn clause_with_evaluations(mut clause: Clause, values: &[(i64, f32)]) -> Clause {
@@ -1331,6 +1351,28 @@ mod tests {
             rest.iter().map(|clause| clause.ident()).collect::<Vec<_>>(),
             vec![ids[0], ids[1]]
         );
+    }
+
+    #[test]
+    fn mark_maximal_terms_updates_each_clause_in_set_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let first = clause_from(vec![
+            literal(&mut bank, &a, &f_a, true),
+            literal(&mut bank, &a, &a, true),
+        ]);
+        let second = clause_from(vec![literal(&mut bank, &a, &f_a, true)]);
+        let mut set = ClauseSet::from_clauses([first, second]);
+        let mut ocb = kbo_ocb(&bank);
+
+        set.mark_maximal_terms(&mut ocb, &bank);
+
+        assert!(set.iter().all(|clause| clause.query_prop(CP_IS_ORIENTED)));
+        let clauses = set.iter().collect::<Vec<_>>();
+        assert_eq!(clauses[0].literals().query_prop_number(EP_IS_MAXIMAL), 1);
+        assert_eq!(clauses[1].literals().query_prop_number(EP_IS_MAXIMAL), 1);
+        assert_eq!(clauses[0].literals().as_slice()[0].left(), &f_a);
     }
 
     #[test]

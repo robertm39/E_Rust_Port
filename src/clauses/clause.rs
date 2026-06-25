@@ -5,8 +5,8 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
-    CP_IS_D_INDEXED, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
-    CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_WATCH_CLAUSE,
+    CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
+    CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::eqn::{eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
@@ -15,6 +15,7 @@ use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::inout::basicparser::parse_skip_parenthesized_expr;
 use crate::inout::scanner::{test_tok, IoFormat, Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::func_symb_start_token;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -136,6 +137,14 @@ impl Clause {
     pub fn replace_literals(&mut self, literals: EqnList) {
         self.literals = literals;
         self.recompute_lit_counts();
+    }
+
+    /// Orient literals and mark maximal literals, matching C
+    /// `ClauseMarkMaximalTerms`.
+    pub fn mark_maximal_terms(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) {
+        self.literals.orient(ocb, bank);
+        self.literals.mark_maximal_literals(ocb, bank);
+        self.set_prop(CP_IS_ORIENTED);
     }
 
     #[must_use]
@@ -1744,6 +1753,7 @@ mod tests {
         clause_print_tstp_core_string, clause_starts_maybe, clause_tstp_string, Clause,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -1757,7 +1767,9 @@ mod tests {
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_PSEUDO_LIT};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::evals_alloc;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -1833,6 +1845,15 @@ mod tests {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
 
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     #[test]
     fn allocation_sorts_positive_literals_before_negative_literals() {
         let mut bank = test_bank();
@@ -1852,6 +1873,26 @@ mod tests {
         assert!(clause.ident() > i64::MIN);
         assert_eq!(clause.date(), SysDate::creation_time());
         assert!(clause.evaluations().is_none());
+    }
+
+    #[test]
+    fn mark_maximal_terms_orients_literals_and_marks_clause() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &f_a, true),
+            eqn(&mut bank, &a, &a, true),
+        ]));
+        let mut ocb = kbo_ocb(&bank);
+
+        clause.mark_maximal_terms(&mut ocb, &bank);
+
+        assert!(clause.query_prop(CP_IS_ORIENTED));
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        assert_eq!(clause.literals().as_slice()[0].left(), &f_a);
+        assert!(clause.literals().as_slice()[0].is_maximal());
+        assert!(!clause.literals().as_slice()[1].is_maximal());
     }
 
     #[test]
