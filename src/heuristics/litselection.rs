@@ -58,6 +58,10 @@ pub const SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "SelectOptimalRestrNDepth2";
 pub const P_SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "PSelectOptimalRestrNDepth2";
 pub const SELECT_UNLESS_UNIQ_MAX: &str = "SelectUnlessUniqMax";
 pub const P_SELECT_UNLESS_UNIQ_MAX: &str = "PSelectUnlessUniqMax";
+pub const SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE: &str =
+    "SelectUnlessUniqMaxSmallestOrientable";
+pub const P_SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE: &str =
+    "PSelectUnlessUniqMaxSmallestOrientable";
 pub const SELECT_UNLESS_POS_MAX: &str = "SelectUnlessPosMax";
 pub const P_SELECT_UNLESS_POS_MAX: &str = "PSelectUnlessPosMax";
 pub const SELECT_UNLESS_UNIQ_POS_MAX: &str = "SelectUnlessUniqPosMax";
@@ -349,6 +353,8 @@ impl OrientableLiteralSelector {
 enum MaximalGateSelector {
     UnlessUniqMax,
     PUnlessUniqMax,
+    UnlessUniqMaxSmallestOrientable,
+    PUnlessUniqMaxSmallestOrientable,
     UnlessPosMax,
     PUnlessPosMax,
     UnlessUniqPosMax,
@@ -362,6 +368,12 @@ impl MaximalGateSelector {
         match name {
             SELECT_UNLESS_UNIQ_MAX => Some(Self::UnlessUniqMax),
             P_SELECT_UNLESS_UNIQ_MAX => Some(Self::PUnlessUniqMax),
+            SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE => {
+                Some(Self::UnlessUniqMaxSmallestOrientable)
+            }
+            P_SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE => {
+                Some(Self::PUnlessUniqMaxSmallestOrientable)
+            }
             SELECT_UNLESS_POS_MAX => Some(Self::UnlessPosMax),
             P_SELECT_UNLESS_POS_MAX => Some(Self::PUnlessPosMax),
             SELECT_UNLESS_UNIQ_POS_MAX => Some(Self::UnlessUniqPosMax),
@@ -376,6 +388,12 @@ impl MaximalGateSelector {
         match self {
             Self::UnlessUniqMax => select_unless_uniq_max_optimal_literal(ocb, bank, clause),
             Self::PUnlessUniqMax => p_select_unless_uniq_max_optimal_literal(ocb, bank, clause),
+            Self::UnlessUniqMaxSmallestOrientable => {
+                select_unless_uniq_max_smallest_orientable(ocb, bank, clause);
+            }
+            Self::PUnlessUniqMaxSmallestOrientable => {
+                p_select_unless_uniq_max_smallest_orientable(ocb, bank, clause);
+            }
             Self::UnlessPosMax => select_unless_pos_max_optimal_literal(ocb, bank, clause),
             Self::PUnlessPosMax => p_select_unless_pos_max_optimal_literal(ocb, bank, clause),
             Self::UnlessUniqPosMax => {
@@ -1374,6 +1392,22 @@ pub fn p_select_unless_uniq_max_optimal_literal(
     clause: &mut Clause,
 ) {
     select_unless_maximal_gate_optimal_literal(ocb, bank, clause, true, MaximalGate::MoreThanOne);
+}
+
+pub fn select_unless_uniq_max_smallest_orientable(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_smallest_orientable(ocb, bank, clause, false);
+}
+
+pub fn p_select_unless_uniq_max_smallest_orientable(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_smallest_orientable(ocb, bank, clause, true);
 }
 
 pub fn select_unless_pos_max_optimal_literal(
@@ -2557,6 +2591,24 @@ fn select_unless_maximal_gate_optimal_literal(
     }
 }
 
+fn select_unless_maximal_gate_smallest_orientable(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) {
+    clause.cond_mark_maximal_terms(ocb, bank);
+
+    if maximal_gate_allows_selection(clause, MaximalGate::MoreThanOne) {
+        if positive_variant {
+            p_select_smallest_orientable_literal(ocb, bank, clause);
+        } else {
+            select_smallest_orientable_literal(ocb, bank, clause);
+        }
+        clause.del_prop(CP_IS_ORIENTED);
+    }
+}
+
 fn maximal_gate_allows_selection(clause: &Clause, gate: MaximalGate) -> bool {
     match gate {
         MaximalGate::MoreThanOne => clause.literals().query_prop_number(EP_IS_MAXIMAL) > 1,
@@ -3598,10 +3650,11 @@ mod tests {
         p_select_largest_orientable_literal, p_select_min_optimal_literal,
         p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
         p_select_smallest_orientable_literal, p_select_strong_rr_non_rr_optimal_literal,
-        p_select_unless_uniq_max_optimal_literal, reset_literal_weight_counter_for_tests,
-        select_all_cond_optimal_literal, select_anti_rr_optimal_literal, select_complex,
-        select_complex_except_rr_horn, select_complex_prefer_eq, select_complex_prefer_neq,
-        select_cond_optimal_literal, select_depth2_optimal_literal, select_diff_negative_literal,
+        p_select_unless_uniq_max_optimal_literal, p_select_unless_uniq_max_smallest_orientable,
+        reset_literal_weight_counter_for_tests, select_all_cond_optimal_literal,
+        select_anti_rr_optimal_literal, select_complex, select_complex_except_rr_horn,
+        select_complex_prefer_eq, select_complex_prefer_neq, select_cond_optimal_literal,
+        select_depth2_optimal_literal, select_diff_negative_literal,
         select_diversification_literals, select_diversification_prefer_into_literals,
         select_first_variable_literal, select_ground_negative_literal, select_l_complex,
         select_largest_negative_literal, select_largest_orientable_literal,
@@ -3611,18 +3664,19 @@ mod tests {
         select_p_depth2_optimal_literal, select_smallest_negative_literal,
         select_smallest_orientable_literal, select_strong_rr_non_rr_optimal_literal,
         select_unless_pos_max_optimal_literal, select_unless_uniq_max_optimal_literal,
-        select_unless_uniq_max_pos_optimal_literal, select_unless_uniq_pos_max_optimal_literal,
-        M_SELECT_LARGEST_ORIENTABLE, M_SELECT_SMALLEST_ORIENTABLE, NO_GENERATION, NO_SELECTION,
-        P_SELECT_ALL_COND_OPTIMAL_LIT, P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COMPLEX,
-        P_SELECT_COMPLEX_EXCEPT_RR_HORN, P_SELECT_COMPLEX_PREFER_EQ, P_SELECT_COMPLEX_PREFER_NEQ,
-        P_SELECT_COND_OPTIMAL_LIT, P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT,
-        P_SELECT_LARGEST_NEG_LIT, P_SELECT_LARGEST_ORIENTABLE, P_SELECT_L_COMPLEX,
-        P_SELECT_MIN_OPTIMAL_LIT, P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT,
-        P_SELECT_NON_RR_OPTIMAL_LIT, P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT,
-        P_SELECT_OPTIMAL_RESTR_DEPTH2, P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
-        P_SELECT_OPTIMAL_RESTR_P_DEPTH2, P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
-        P_SELECT_SMALLEST_ORIENTABLE, P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
-        P_SELECT_UNLESS_POS_MAX, P_SELECT_UNLESS_UNIQ_MAX, P_SELECT_UNLESS_UNIQ_MAX_POS,
+        select_unless_uniq_max_pos_optimal_literal, select_unless_uniq_max_smallest_orientable,
+        select_unless_uniq_pos_max_optimal_literal, M_SELECT_LARGEST_ORIENTABLE,
+        M_SELECT_SMALLEST_ORIENTABLE, NO_GENERATION, NO_SELECTION, P_SELECT_ALL_COND_OPTIMAL_LIT,
+        P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COMPLEX, P_SELECT_COMPLEX_EXCEPT_RR_HORN,
+        P_SELECT_COMPLEX_PREFER_EQ, P_SELECT_COMPLEX_PREFER_NEQ, P_SELECT_COND_OPTIMAL_LIT,
+        P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT, P_SELECT_LARGEST_NEG_LIT,
+        P_SELECT_LARGEST_ORIENTABLE, P_SELECT_L_COMPLEX, P_SELECT_MIN_OPTIMAL_LIT,
+        P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT, P_SELECT_NON_RR_OPTIMAL_LIT,
+        P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT, P_SELECT_OPTIMAL_RESTR_DEPTH2,
+        P_SELECT_OPTIMAL_RESTR_N_DEPTH2, P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
+        P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT, P_SELECT_SMALLEST_ORIENTABLE,
+        P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, P_SELECT_UNLESS_POS_MAX, P_SELECT_UNLESS_UNIQ_MAX,
+        P_SELECT_UNLESS_UNIQ_MAX_POS, P_SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE,
         P_SELECT_UNLESS_UNIQ_POS_MAX, SELECT_ALL_COND_OPTIMAL_LIT, SELECT_ANTI_RR_OPTIMAL_LIT,
         SELECT_COMPLEX, SELECT_COMPLEX_EXCEPT_RR_HORN, SELECT_COMPLEX_PREFER_EQ,
         SELECT_COMPLEX_PREFER_NEQ, SELECT_COND_OPTIMAL_LIT, SELECT_DIFF_NEG_LIT, SELECT_DIV_LITS,
@@ -3633,7 +3687,7 @@ mod tests {
         SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2, SELECT_PURE_VAR_NEG_LITERALS,
         SELECT_SMALLEST_NEG_LIT, SELECT_SMALLEST_ORIENTABLE, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
         SELECT_UNLESS_POS_MAX, SELECT_UNLESS_UNIQ_MAX, SELECT_UNLESS_UNIQ_MAX_POS,
-        SELECT_UNLESS_UNIQ_POS_MAX,
+        SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE, SELECT_UNLESS_UNIQ_POS_MAX,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -4926,6 +4980,34 @@ mod tests {
     }
 
     #[test]
+    fn unless_uniq_max_smallest_orientable_uses_existing_orientable_selector() {
+        let mut bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut blocked = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut blocked, &[0]);
+
+        select_unless_uniq_max_smallest_orientable(&mut ocb, &bank, &mut blocked);
+
+        assert_eq!(selected_indices(&blocked), Vec::<usize>::new());
+        assert!(blocked.query_prop(CP_IS_ORIENTED));
+
+        let mut allowed = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut allowed, &[0, 1]);
+
+        select_unless_uniq_max_smallest_orientable(&mut ocb, &bank, &mut allowed);
+
+        assert_eq!(selected_indices(&allowed), vec![1]);
+        assert!(!allowed.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut positive_variant, &[0, 1]);
+
+        p_select_unless_uniq_max_smallest_orientable(&mut ocb, &bank, &mut positive_variant);
+
+        assert_eq!(selected_indices(&positive_variant), vec![0, 1]);
+    }
+
+    #[test]
     fn unless_positive_max_and_unique_positive_max_gates_match_c() {
         let mut bank = test_bank();
         let mut ocb = kbo_ocb(&bank);
@@ -5475,6 +5557,8 @@ mod tests {
         for name in [
             SELECT_UNLESS_UNIQ_MAX,
             P_SELECT_UNLESS_UNIQ_MAX,
+            SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE,
+            P_SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE,
             SELECT_UNLESS_POS_MAX,
             P_SELECT_UNLESS_POS_MAX,
             SELECT_UNLESS_UNIQ_POS_MAX,
@@ -5491,7 +5575,11 @@ mod tests {
                 .unwrap_or_else(|err| {
                     panic!("{err}");
                 });
-            assert_eq!(selected_indices(&clause), vec![1]);
+            if name == P_SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE {
+                assert_eq!(selected_indices(&clause), vec![0, 1]);
+            } else {
+                assert_eq!(selected_indices(&clause), vec![1]);
+            }
         }
     }
 
