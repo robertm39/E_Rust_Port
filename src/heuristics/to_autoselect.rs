@@ -27,6 +27,8 @@ pub const DEFAULT_COMCHAR_RAW: &str = "%";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutoOrderingMode {
     Auto,
+    AutoCasc,
+    AutoDev,
     AutoSched0,
     AutoSched1,
     AutoSched2,
@@ -43,7 +45,7 @@ impl AutoOrderingMode {
     #[must_use]
     pub const fn analysis_label(self) -> &'static str {
         match self {
-            Self::Auto => "Auto",
+            Self::Auto | Self::AutoCasc | Self::AutoDev => "Auto",
             Self::AutoSched0 => "AutoSched0",
             Self::AutoSched1 => "AutoSched1",
             Self::AutoSched2 => "AutoSched2",
@@ -54,6 +56,25 @@ impl AutoOrderingMode {
             Self::AutoSched7 => "AutoSched7",
             Self::AutoSched8 => "AutoSched8",
             Self::AutoSched9 => "AutoSched9",
+        }
+    }
+
+    #[must_use]
+    pub const fn selected_ordering_label(self) -> &'static str {
+        match self {
+            Self::AutoDev => "Auto-mode (Dev)",
+            Self::Auto
+            | Self::AutoCasc
+            | Self::AutoSched0
+            | Self::AutoSched1
+            | Self::AutoSched2
+            | Self::AutoSched3
+            | Self::AutoSched4
+            | Self::AutoSched5
+            | Self::AutoSched6
+            | Self::AutoSched7
+            | Self::AutoSched8
+            | Self::AutoSched9 => "Auto-mode",
         }
     }
 }
@@ -75,23 +96,35 @@ pub fn init_oparms(oparms: &mut OrderParmsCell) {
 
 #[must_use]
 pub fn print_oparms_string(oparms: &OrderParmsCell, output_level: i64) -> String {
+    print_oparms_for_mode_string(AutoOrderingMode::Auto, oparms, output_level)
+}
+
+#[must_use]
+pub fn print_oparms_for_mode_string(
+    mode: AutoOrderingMode,
+    oparms: &OrderParmsCell,
+    output_level: i64,
+) -> String {
     if output_level == 0 {
         return String::new();
     }
 
     let mut result = format!(
         concat!(
-            "{comment} Auto-mode selected ordering type {ordertype}\n",
-            "{comment} Auto-mode selected ordering precedence scheme <{prec}>\n"
+            "{comment} {label} selected ordering type {ordertype}\n",
+            "{comment} {label} selected ordering precedence scheme <{prec}>\n"
         ),
         comment = DEFAULT_COMCHAR_RAW,
+        label = mode.selected_ordering_label(),
         ordertype = oparms.ordertype.name(),
         prec = oparms.to_prec_gen.name().unwrap_or("")
     );
 
     if matches!(oparms.ordertype, TermOrdering::Kbo | TermOrdering::Kbo6) {
         result.push_str(DEFAULT_COMCHAR_RAW);
-        result.push_str(" Auto-mode selected weight ordering scheme <");
+        result.push(' ');
+        result.push_str(mode.selected_ordering_label());
+        result.push_str(" selected weight ordering scheme <");
         result.push_str(oparms.to_weight_gen.name().unwrap_or(""));
         result.push_str(">\n");
     }
@@ -261,6 +294,8 @@ pub fn auto_ordering_params(mode: AutoOrderingMode, ho_order_kind: HoOrderKind) 
     let mut params = OrderParmsCell::default();
     match mode {
         AutoOrderingMode::Auto
+        | AutoOrderingMode::AutoCasc
+        | AutoOrderingMode::AutoDev
         | AutoOrderingMode::AutoSched0
         | AutoOrderingMode::AutoSched1
         | AutoOrderingMode::AutoSched2
@@ -278,9 +313,10 @@ pub fn auto_ordering_params(mode: AutoOrderingMode, ho_order_kind: HoOrderKind) 
 
 /// Generate an initialized auto/AutoSched ordering.
 ///
-/// This covers C `generate_auto_ordering` and `generate_autosched0_ordering`
-/// through `generate_autosched9_ordering`, which all call `init_oparms` and
-/// then `TOCreateOrdering`.
+/// This covers C `generate_auto_ordering`, `generate_autocasc_ordering`,
+/// `generate_autodev_ordering`, and `generate_autosched0_ordering` through
+/// `generate_autosched9_ordering`. Rust initializes the full parameter cell
+/// for all modes before applying the visible C field assignments.
 ///
 /// # Errors
 ///
@@ -536,9 +572,9 @@ mod tests {
         auto_ordering_analysis_string, auto_ordering_params, describe_auto_ordering,
         generate_auto_ordering, init_oparms, order_evaluate, order_find_optimal_with_params,
         order_next_const_weight, order_next_ordering, order_next_prec_gen, order_next_type,
-        order_next_weight_gen, print_oparms_string, to_create_ordering, to_select_ordering,
-        AutoOrderingMode, KBO_BONUS, MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY,
-        UNORIENT_LITERAL_PENALTY,
+        order_next_weight_gen, print_oparms_for_mode_string, print_oparms_string,
+        to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS, MAX_CONST_WEIGHT,
+        MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::CompareResult;
@@ -737,13 +773,34 @@ mod tests {
                 "%\n"
             )
         );
+
+        params.ordertype = TermOrdering::Kbo6;
+        assert_eq!(
+            print_oparms_for_mode_string(AutoOrderingMode::AutoDev, &params, 1),
+            concat!(
+                "% Auto-mode (Dev) selected ordering type KBO6\n",
+                "% Auto-mode (Dev) selected ordering precedence scheme <unary_first>\n",
+                "% Auto-mode (Dev) selected weight ordering scheme <firstmaximal0>\n",
+                "%\n"
+            )
+        );
     }
 
     #[test]
     fn auto_ordering_modes_provide_c_analysis_labels() {
         assert_eq!(AutoOrderingMode::Auto.analysis_label(), "Auto");
+        assert_eq!(AutoOrderingMode::AutoCasc.analysis_label(), "Auto");
+        assert_eq!(AutoOrderingMode::AutoDev.analysis_label(), "Auto");
         assert_eq!(AutoOrderingMode::AutoSched0.analysis_label(), "AutoSched0");
         assert_eq!(AutoOrderingMode::AutoSched9.analysis_label(), "AutoSched9");
+        assert_eq!(
+            AutoOrderingMode::AutoCasc.selected_ordering_label(),
+            "Auto-mode"
+        );
+        assert_eq!(
+            AutoOrderingMode::AutoDev.selected_ordering_label(),
+            "Auto-mode (Dev)"
+        );
         assert_eq!(
             auto_ordering_analysis_string(AutoOrderingMode::AutoSched4.analysis_label()),
             "\n% AutoSched4-Ordering is analysing problem.\n"
@@ -754,6 +811,8 @@ mod tests {
     fn auto_ordering_params_match_initialized_c_auto_sched_variants() {
         for mode in [
             AutoOrderingMode::Auto,
+            AutoOrderingMode::AutoCasc,
+            AutoOrderingMode::AutoDev,
             AutoOrderingMode::AutoSched0,
             AutoOrderingMode::AutoSched1,
             AutoOrderingMode::AutoSched2,
@@ -798,6 +857,30 @@ mod tests {
         assert!(ocb.weights.is_some());
         assert!(ocb.prec_weights.is_some());
         assert_eq!(ocb.ho_order_kind, HoOrderKind::LfhoOrder);
+    }
+
+    #[test]
+    fn casc_and_dev_auto_orderings_use_initialized_kbo6_defaults() {
+        for mode in [AutoOrderingMode::AutoCasc, AutoOrderingMode::AutoDev] {
+            let mut signature = signature();
+            typed_symbol(&mut signature, "a", 0);
+            typed_symbol(&mut signature, "f", 1);
+
+            let ocb = generate_auto_ordering(
+                &mut signature,
+                &ClauseSet::new(),
+                mode,
+                HoOrderKind::LambdaOrder,
+                false,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+            assert_eq!(ocb.ordering_type, TermOrdering::Kbo6);
+            assert_eq!(ocb.lam_weight, DEFAULT_LAMBDA_WEIGHT);
+            assert_eq!(ocb.db_weight, DEFAULT_DB_WEIGHT);
+            assert_eq!(ocb.ho_order_kind, HoOrderKind::LambdaOrder);
+            assert_eq!(ocb.lit_cmp, LiteralCmp::Normal);
+        }
     }
 
     #[test]
