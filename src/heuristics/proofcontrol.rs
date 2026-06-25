@@ -767,6 +767,39 @@ fn proof_state_move_processed_set_to_tmp_by(
     moved
 }
 
+/// Queues one generated non-trivial clause into `eval_store`, matching the
+/// admission tail of C `insert_new_clauses`.
+///
+/// The C path reaches this point after generated-clause contraction and
+/// replacement filters. It clears stale orientation state, runs literal
+/// selection unless `select_on_proc_only` defers selection to processing time,
+/// stamps `create_date` from `proc_non_trivial_count`, increments
+/// `non_trivial_generated_count`, and queues the clause for later HCB
+/// evaluation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the configured literal-selection strategy has not
+/// been ported yet.
+pub fn proof_state_queue_generated_clause_for_eval(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut clause: Clause,
+) -> Result<(), Diagnostic> {
+    clause.del_prop(CP_IS_ORIENTED);
+    if control.heuristic_parms().select_on_proc_only {
+        clause.literals_mut().del_prop(EP_IS_SELECTED);
+    } else {
+        do_literal_selection_with_bank(control, state.terms(), &mut clause)
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    }
+    let create_date = i64::try_from(state.statistics().proc_non_trivial_count).unwrap_or(i64::MAX);
+    clause.set_create_date(create_date);
+    state.statistics_mut().non_trivial_generated_count += 1;
+    state.eval_store_mut().insert(clause);
+    Ok(())
+}
+
 /// Evaluates all clauses currently waiting in `eval_store`, matching C
 /// `eval_clause_set`.
 ///
@@ -1074,8 +1107,9 @@ mod tests {
         proof_control_reset_sat_solver, proof_state_eval_clause_set, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_reset_processed, select_inherited_literal,
-        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
+        proof_state_reset_processed, select_inherited_literal, LiteralSelectionOutcome,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1097,7 +1131,7 @@ mod tests {
     use crate::heuristics::hcb::{
         AcHandling, HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC,
     };
-    use crate::heuristics::litselection::SELECT_UNLESS_POS_MAX;
+    use crate::heuristics::litselection::{SELECT_NEGATIVE_LITERALS, SELECT_UNLESS_POS_MAX};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
@@ -1738,6 +1772,52 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         let clause = state.eval_store().find_by_id(4_062).unwrap();
         assert!(clause.evaluations().is_none());
+    }
+
+    #[test]
+    fn proof_state_queue_generated_clause_for_eval_selects_and_stamps_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.statistics_mut().proc_non_trivial_count = 77;
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().selection_strategy = SELECT_NEGATIVE_LITERALS.to_owned();
+        let mut clause = negative_clause(state.terms_mut());
+        clause.set_ident(4_063);
+        clause.set_prop(CP_IS_ORIENTED);
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_SELECTED);
+
+        proof_state_queue_generated_clause_for_eval(&mut state, &mut control, clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
+        assert_eq!(state.eval_store().members(), 1);
+        assert_eq!(state.unprocessed().members(), 0);
+        let queued = state.eval_store().find_by_id(4_063).unwrap();
+        assert_eq!(queued.create_date(), 77);
+        assert!(!queued.query_prop(CP_IS_ORIENTED));
+        assert_eq!(queued.prop_lit_number(EP_IS_SELECTED), 1);
+        assert!(queued.evaluations().is_none());
+    }
+
+    #[test]
+    fn proof_state_queue_generated_clause_for_eval_respects_select_on_proc_only() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.statistics_mut().proc_non_trivial_count = 88;
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().select_on_proc_only = true;
+        control.heuristic_parms_mut().selection_strategy = SELECT_NEGATIVE_LITERALS.to_owned();
+        let mut clause = negative_clause(state.terms_mut());
+        clause.set_ident(4_064);
+        clause.set_prop(CP_IS_ORIENTED);
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_SELECTED);
+
+        proof_state_queue_generated_clause_for_eval(&mut state, &mut control, clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
+        let queued = state.eval_store().find_by_id(4_064).unwrap();
+        assert_eq!(queued.create_date(), 88);
+        assert!(!queued.query_prop(CP_IS_ORIENTED));
+        assert_eq!(queued.prop_lit_number(EP_IS_SELECTED), 0);
     }
 
     #[test]
