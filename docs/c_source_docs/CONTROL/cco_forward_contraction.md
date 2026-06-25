@@ -106,4 +106,11 @@ Source files reviewed: `CONTROL/cco_forward_contraction.h`, `CONTROL/cco_forward
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `ForwardSubsumption` and the clause-level first-order/local `forward_contract_keep`/`ForwardContractClause` path are staged in Rust. The port now covers processed positive/negative unit subsumption, optional non-unit processed-clause subsumption, modifying contraction via the current `ForwardModifyClause` helper, empty-clause preservation, AC-redundancy filtering/`CPNoGeneration`, ground-completion tautology filtering, optional contextual simplify-reflect, final literal selection, maximal-term marking, and the C stats split for subsumed versus trivial clauses.
+- Set-level `ForwardContractSet`, `ForwardContractSetReweight`, `ClauseSetFilterReweigth`, and `ProofStateFilterUnprocessed` remain pending until the unprocessed-set filtering and reweighting call sites are wired.
+- C `BooleanSimplification`, `ResolveFlexClause`, higher-order naked-Boolean elimination in this wrapper, and proof-documentation quotes/derivation pushes are still deferred. The Rust wrapper keeps higher-order calls behind diagnostics rather than silently skipping those effects.
+- C `FVPackedClause_p` aliases the live clause pointer, so packing before final literal selection and maximal marking still observes later mutation. Rust currently returns an owned packed-clause clone after final mutation; revisit this representation when proof-state clause ownership has stable handles.
 <!-- END MANUAL REVIEW: c_source_docs -->

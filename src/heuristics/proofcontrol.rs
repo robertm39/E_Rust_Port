@@ -3,13 +3,16 @@ use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
-    CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_LIMITED_RW, CP_SUBSUMES_WATCH,
+    CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
 };
 use crate::clauses::clausefunc::{clause_remove_ac_resolved, clause_remove_superfluous_literals};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::condensation::condense;
+use crate::clauses::context_sr::clause_contextual_simplify_reflect;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
@@ -17,7 +20,10 @@ use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_r
 use crate::clauses::subsumption::{
     clause_negative_simplify_reflect, clause_positive_simplify_reflect,
     clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
+    clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
+    unit_clause_set_subsumes_clause,
 };
+use crate::clauses::tautologies::clause_is_tautology;
 use crate::heuristics::axiomscan::clause_set_scan_ac;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
@@ -158,6 +164,20 @@ pub struct ProofStateInitOutcome {
 pub struct ProofStateWatchlistOutcome {
     pub subsumes_watch: bool,
     pub removed: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForwardContractOptions {
+    pub non_unit_subsumption: bool,
+    pub context_sr: bool,
+    pub condense_clause: bool,
+    pub level: RewriteLevel,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ForwardContractCounts {
+    pub subsumed: u64,
+    pub trivial: u64,
 }
 
 pub struct ProofControl {
@@ -869,6 +889,172 @@ pub fn proof_state_forward_modify_clause(
     Ok(trivial)
 }
 
+/// Tries C `ForwardSubsumption` against the processed clause sets.
+///
+/// The returned packed clause owns a Rust clone of the current candidate until
+/// proof-state clause ownership can provide stable raw-pointer-shaped handles.
+#[must_use]
+pub fn proof_state_forward_subsumption(
+    state: &ProofState,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    non_unit_subsumption: bool,
+) -> Option<FvPackedClause> {
+    clause.set_weight(clause.standard_weight());
+
+    let mut subsumer_found = false;
+    if clause.positive_literal_count() != 0 {
+        subsumer_found =
+            unit_clause_set_subsumes_clause(state.processed_pos_eqns(), clause).is_some();
+    }
+    if !subsumer_found && clause.negative_literal_count() != 0 {
+        subsumer_found =
+            unit_clause_set_subsumes_clause(state.processed_neg_units(), clause).is_some();
+    }
+    if !subsumer_found && clause.literal_number() > 1 && non_unit_subsumption {
+        clause_subsume_order_sort_lits(clause, state.terms());
+        subsumer_found = clause_set_subsumes_clause_with_index(
+            state.processed_non_units(),
+            state.processed_non_units().fv_anchor(),
+            clause,
+            state.terms(),
+        )
+        .is_some();
+    }
+
+    if subsumer_found {
+        counts.subsumed += 1;
+        return None;
+    }
+
+    Some(fv_index_pack_clause(
+        clause.clone(),
+        state.processed_non_units().fv_anchor(),
+    ))
+}
+
+/// Applies the first-order/local body of C `forward_contract_keep`.
+///
+/// Higher-order-only hooks and proof-output side effects remain staged behind
+/// explicit diagnostics or documentation until their owning modules are ported.
+///
+/// # Errors
+///
+/// Returns diagnostics from modifying contraction, tautology checking, literal
+/// selection, or missing proof-control ordering.
+pub fn proof_state_forward_contract_keep(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    options: ForwardContractOptions,
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    if control.heuristic_parms().enable_given_forward_simpl {
+        if proof_state_forward_modify_clause(
+            state,
+            control,
+            clause,
+            options.context_sr,
+            options.condense_clause,
+            options.level,
+        )? {
+            counts.trivial += 1;
+            return Ok(None);
+        }
+
+        if clause.is_empty() {
+            return Ok(Some(fv_index_pack_clause(clause.clone(), None)));
+        }
+
+        if control.ac_handling_active() && clause.is_ac_redundant(state.terms()) {
+            let keep_orientable_unit = clause.is_unit()
+                && control.heuristic_parms().ac_handling == AcHandling::KeepOrientable
+                && clause
+                    .literals()
+                    .as_slice()
+                    .first()
+                    .is_some_and(crate::clauses::eqn::Eqn::is_oriented);
+            let keep_unit = clause.is_unit()
+                && matches!(control.heuristic_parms().ac_handling, AcHandling::KeepUnits);
+            if keep_orientable_unit || keep_unit {
+                clause.set_prop(CP_NO_GENERATION);
+            } else {
+                counts.trivial += 1;
+                return Ok(None);
+            }
+        }
+
+        if clause_is_tautology(state.terms_mut(), clause)? {
+            counts.trivial += 1;
+            return Ok(None);
+        }
+
+        debug_assert!(!clause.is_trivial(state.terms()));
+
+        if problem_type() == ProblemType::HigherOrder {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "forward_contract_keep higher-order flex/naked-boolean hooks are not ported yet",
+            ));
+        }
+
+        if proof_state_forward_subsumption(state, clause, counts, options.non_unit_subsumption)
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        if options.context_sr && clause.literal_number() > 1 {
+            let simplified = {
+                let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+                clause_contextual_simplify_reflect(processed_sets.non_units, clause, terms)
+            };
+            state.statistics_mut().context_sr_count +=
+                u64::try_from(simplified).unwrap_or(u64::MAX);
+            clause_subsume_order_sort_lits(clause, state.terms());
+        }
+    } else if clause.is_empty() {
+        return Ok(Some(fv_index_pack_clause(clause.clone(), None)));
+    } else {
+        clause.set_weight(clause.standard_weight());
+    }
+
+    clause.del_prop(CP_IS_ORIENTED);
+    do_literal_selection_with_bank(control, state.terms(), clause)
+        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    let ocb = control.ocb.as_mut().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "forward_contract_keep requires initialized proof-control ordering",
+        )
+    })?;
+    clause.cond_mark_maximal_terms(ocb, state.terms());
+
+    Ok(Some(fv_index_pack_clause(
+        clause.clone(),
+        state.processed_non_units().fv_anchor(),
+    )))
+}
+
+/// Applies C `ForwardContractClause`, consuming redundant clauses.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`proof_state_forward_contract_keep`].
+pub fn proof_state_forward_contract_clause(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut clause: Clause,
+    options: ForwardContractOptions,
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    let mut counts = ForwardContractCounts::default();
+    let result =
+        proof_state_forward_contract_keep(state, control, &mut clause, &mut counts, options)?;
+    state.statistics_mut().proc_forward_subsumed_count += counts.subsumed;
+    state.statistics_mut().proc_trivial_count += counts.trivial;
+    Ok(result)
+}
+
 /// Queues one generated non-trivial clause into `eval_store`, matching the
 /// admission tail of C `insert_new_clauses`.
 ///
@@ -1207,12 +1393,14 @@ mod tests {
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_eval_clause_set,
-        proof_state_forward_modify_clause, proof_state_init, proof_state_init_ac_handling,
+        proof_state_forward_contract_clause, proof_state_forward_modify_clause,
+        proof_state_forward_subsumption, proof_state_init, proof_state_init_ac_handling,
         proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
-        proof_state_reset_processed, select_inherited_literal, LiteralSelectionOutcome,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_reset_processed, select_inherited_literal, ForwardContractCounts,
+        ForwardContractOptions, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1902,6 +2090,119 @@ mod tests {
         assert_eq!(state.statistics().rw_count, 1);
         assert!(!clause.query_prop(CP_LIMITED_RW));
         assert!(!clause.query_prop(CP_INITIAL));
+    }
+
+    #[test]
+    fn proof_state_forward_subsumption_counts_processed_unit_subsumer() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (subsumer, mut clause) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let replacement = typed_const(terms, "pc_forward_subsumes_a");
+            let instance = typed_const(terms, "pc_forward_subsumes_b");
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &replacement,
+                true,
+            )]));
+            subsumer.set_ident(4_084);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &instance,
+                &replacement,
+                true,
+            )]));
+            clause.set_ident(4_085);
+            (subsumer, clause)
+        };
+        state.processed_pos_eqns_mut().insert(subsumer);
+        let mut counts = ForwardContractCounts::default();
+
+        let packed = proof_state_forward_subsumption(&state, &mut clause, &mut counts, false);
+
+        assert!(packed.is_none());
+        assert_eq!(counts.subsumed, 1);
+    }
+
+    #[test]
+    fn proof_state_forward_contract_clause_returns_selected_marked_survivor() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_forward_contract_a");
+            let right = typed_const(terms, "pc_forward_contract_b");
+            let guard = typed_const(terms, "pc_forward_contract_c");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left, &right, true),
+                literal(terms, &guard, &right, false),
+            ]));
+            clause.set_ident(4_086);
+            clause.set_prop(CP_IS_ORIENTED);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().selection_strategy = SELECT_NEGATIVE_LITERALS.to_owned();
+        let options = ForwardContractOptions {
+            non_unit_subsumption: true,
+            context_sr: false,
+            condense_clause: false,
+            level: RewriteLevel::RuleRewrite,
+        };
+
+        let packed = proof_state_forward_contract_clause(&mut state, &mut control, clause, options)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .expect("surviving clause should be packed");
+        let survivor = packed.clause();
+
+        assert_eq!(state.statistics().proc_forward_subsumed_count, 0);
+        assert_eq!(state.statistics().proc_trivial_count, 0);
+        assert!(survivor.query_prop(CP_IS_ORIENTED));
+        assert_eq!(survivor.prop_lit_number(EP_IS_SELECTED), 1);
+        assert!(survivor.literals().as_slice().iter().any(Eqn::is_maximal));
+    }
+
+    #[test]
+    fn proof_state_forward_contract_clause_updates_subsumed_stat() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (subsumer, clause) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let replacement = typed_const(terms, "pc_forward_contract_subsumes_a");
+            let instance = typed_const(terms, "pc_forward_contract_subsumes_b");
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &replacement,
+                true,
+            )]));
+            subsumer.set_ident(4_087);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &instance,
+                &replacement,
+                true,
+            )]));
+            clause.set_ident(4_088);
+            (subsumer, clause)
+        };
+        state.processed_pos_eqns_mut().insert(subsumer);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let options = ForwardContractOptions {
+            non_unit_subsumption: false,
+            context_sr: false,
+            condense_clause: false,
+            level: RewriteLevel::RuleRewrite,
+        };
+
+        let packed = proof_state_forward_contract_clause(&mut state, &mut control, clause, options)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(packed.is_none());
+        assert_eq!(state.statistics().proc_forward_subsumed_count, 1);
+        assert_eq!(state.statistics().proc_trivial_count, 0);
     }
 
     #[test]
