@@ -1,15 +1,21 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
-use crate::basics::simple_stuff::ProblemType;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
-use crate::clauses::clause_props::{CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_SUBSUMES_WATCH};
+use crate::clauses::clause_props::{
+    CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_LIMITED_RW, CP_SUBSUMES_WATCH,
+};
+use crate::clauses::clausefunc::{clause_remove_ac_resolved, clause_remove_superfluous_literals};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::condensation::condense;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
+use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
 use crate::clauses::subsumption::{
+    clause_negative_simplify_reflect, clause_positive_simplify_reflect,
     clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
 };
 use crate::heuristics::axiomscan::clause_set_scan_ac;
@@ -28,6 +34,7 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::RewriteLevel;
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -767,6 +774,101 @@ fn proof_state_move_processed_set_to_tmp_by(
     moved
 }
 
+/// Applies the currently ported modifying forward-inference prefix from C
+/// `ForwardModifyClause`.
+///
+/// This covers the first-order/local mutation path: demodulation by the
+/// processed positive-unit demodulator sets, superfluous literal removal,
+/// optional AC-resolved literal cleanup, optional local rewriting, literal
+/// orientation, optional condensation, triviality detection, and positive/negative
+/// simplify-reflect against processed unit sets.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-control ordering is missing, if a lower-level
+/// term operation fails, or if the current problem is higher-order and reaches
+/// higher-order-only normalization/pruning hooks that are not wired yet.
+pub fn proof_state_forward_modify_clause(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    _context_sr: bool,
+    condense_clause: bool,
+    level: RewriteLevel,
+) -> Result<bool, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ForwardModifyClause higher-order normalization/pruning is not ported yet",
+        ));
+    }
+
+    let prefer_general = control.heuristic_parms().prefer_general;
+    let lambda_demod = control.heuristic_parms().lambda_demod;
+    let local_rw = control.heuristic_parms().local_rw;
+    let ac_handling_active = control.ac_handling_active();
+    let ocb = control.ocb.as_mut().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ForwardModifyClause requires initialized proof-control ordering",
+        )
+    })?;
+
+    let mut rw_steps = 0_i64;
+    let trivial = {
+        let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+        let demodulators = [processed_sets.pos_rules, processed_sets.pos_eqns];
+        loop {
+            let steps = clause_compute_li_normalform_plain(
+                terms,
+                ocb,
+                clause,
+                &demodulators,
+                level,
+                prefer_general,
+                lambda_demod,
+            )?;
+            rw_steps += steps;
+
+            let limited_rw = clause.query_prop(CP_LIMITED_RW);
+            let _removed_lits = clause_remove_superfluous_literals(clause, terms);
+
+            if ac_handling_active {
+                let _ = clause_remove_ac_resolved(clause, terms);
+            }
+
+            if local_rw && clause_local_rw(ocb, terms, clause)? {
+                debug_assert_ne!(problem_type(), ProblemType::HigherOrder);
+            }
+
+            clause.orient_literals(ocb, terms);
+
+            if condense_clause && condense(clause, terms)? {
+                clause.orient_literals(ocb, terms);
+            }
+
+            if clause.is_trivial(terms) {
+                break true;
+            }
+
+            if clause.negative_literal_count() != 0 {
+                let _ = clause_positive_simplify_reflect(processed_sets.pos_eqns, clause);
+            }
+            if clause.positive_literal_count() != 0 {
+                let _ = clause_negative_simplify_reflect(processed_sets.neg_units, clause);
+            }
+            if clause.query_prop(CP_LIMITED_RW) == limited_rw {
+                break false;
+            }
+        }
+    };
+
+    if rw_steps > 0 {
+        state.statistics_mut().rw_count += u64::try_from(rw_steps).unwrap_or(u64::MAX);
+    }
+    Ok(trivial)
+}
+
 /// Queues one generated non-trivial clause into `eval_store`, matching the
 /// admission tail of C `insert_new_clauses`.
 ///
@@ -1104,8 +1206,9 @@ mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_eval_clause_set, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
+        proof_control_reset_sat_solver, proof_state_eval_clause_set,
+        proof_state_forward_modify_clause, proof_state_init, proof_state_init_ac_handling,
+        proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
         proof_state_reset_processed, select_inherited_literal, LiteralSelectionOutcome,
@@ -1114,14 +1217,17 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_SUBSUMES_WATCH,
-        CP_TYPE_CONJECTURE,
+        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_LIMITED_RW,
+        CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+    use crate::clauses::eqn_props::{
+        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
+    };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
@@ -1137,7 +1243,7 @@ mod tests {
     use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, RewriteLevel, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -1696,6 +1802,106 @@ mod tests {
         }
         let moved_rule = state.tmp_store().find_by_id(4_050).unwrap();
         assert_eq!(moved_rule.evaluations().unwrap().eval(0).priority(), 123);
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_rewrites_with_processed_demodulator() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, mut clause, target, replacement) = {
+            let terms = state.terms_mut();
+            let f_code = typed_binary_code(terms, "pc_forward_modify_f");
+            let x = typed_var(terms, -2);
+            let y = typed_var(terms, -4);
+            let replacement = typed_const(terms, "pc_forward_modify_a");
+            let first = typed_const(terms, "pc_forward_modify_b");
+            let second = typed_const(terms, "pc_forward_modify_c");
+            let rhs = typed_const(terms, "pc_forward_modify_d");
+            let pattern = typed_binary_with_code(terms, f_code, &x, &y);
+            let target = typed_binary_with_code(terms, f_code, &first, &second);
+            let mut demod_lit = literal(terms, &pattern, &replacement, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_080);
+            demodulator.set_date(SysDate::from_raw(5));
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &target, &rhs, true)]));
+            clause.set_ident(4_081);
+            clause.set_prop(CP_INITIAL);
+            (demodulator, clause, target, replacement)
+        };
+        state
+            .processed_pos_rules_mut()
+            .set_date(SysDate::from_raw(5));
+        state.processed_pos_rules_mut().insert(demodulator);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let trivial = proof_state_forward_modify_clause(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(state.statistics().rw_count, 1);
+        assert!(!clause.query_prop(CP_INITIAL));
+        let literal = &clause.literals().as_slice()[0];
+        assert_ne!(literal.left(), &target);
+        assert_ne!(literal.right(), &target);
+        assert!(literal.left() == &replacement || literal.right() == &replacement);
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_repeats_until_limited_rewrite_stabilizes() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, mut clause) = {
+            let terms = state.terms_mut();
+            let f_code = typed_binary_code(terms, "pc_forward_limited_f");
+            let x = typed_var(terms, -2);
+            let y = typed_var(terms, -4);
+            let replacement = typed_const(terms, "pc_forward_limited_a");
+            let first = typed_const(terms, "pc_forward_limited_b");
+            let second = typed_const(terms, "pc_forward_limited_c");
+            let rhs = typed_const(terms, "pc_forward_limited_d");
+            let pattern = typed_binary_with_code(terms, f_code, &x, &y);
+            let target = typed_binary_with_code(terms, f_code, &first, &second);
+            let mut demod_lit = literal(terms, &pattern, &replacement, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_082);
+            demodulator.set_date(SysDate::from_raw(5));
+            let mut target_lit = literal(terms, &target, &rhs, true);
+            target_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![target_lit]));
+            clause.set_ident(4_083);
+            clause.set_prop(CP_LIMITED_RW | CP_INITIAL);
+            (demodulator, clause)
+        };
+        state
+            .processed_pos_rules_mut()
+            .set_date(SysDate::from_raw(5));
+        state.processed_pos_rules_mut().insert(demodulator);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let trivial = proof_state_forward_modify_clause(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(state.statistics().rw_count, 1);
+        assert!(!clause.query_prop(CP_LIMITED_RW));
+        assert!(!clause.query_prop(CP_INITIAL));
     }
 
     #[test]

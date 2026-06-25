@@ -65,6 +65,14 @@ pub struct ProofStateStatistics {
     pub gc_used_count: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ProofStateProcessedSets<'a> {
+    pub pos_rules: &'a ClauseSet,
+    pub pos_eqns: &'a ClauseSet,
+    pub neg_units: &'a ClauseSet,
+    pub non_units: &'a ClauseSet,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProofState {
     terms: TermBank,
@@ -148,6 +156,26 @@ impl ProofState {
             terms, unprocessed, ..
         } = self;
         (terms, unprocessed)
+    }
+
+    pub fn terms_and_processed_sets_mut(&mut self) -> (&mut TermBank, ProofStateProcessedSets<'_>) {
+        let Self {
+            terms,
+            processed_pos_rules,
+            processed_pos_eqns,
+            processed_neg_units,
+            processed_non_units,
+            ..
+        } = self;
+        (
+            terms,
+            ProofStateProcessedSets {
+                pos_rules: processed_pos_rules,
+                pos_eqns: processed_pos_eqns,
+                neg_units: processed_neg_units,
+                non_units: processed_non_units,
+            },
+        )
     }
 
     #[must_use]
