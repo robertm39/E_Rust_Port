@@ -322,6 +322,26 @@ impl ClauseSet {
     }
 
     #[must_use]
+    pub fn verify_demod_clause_side(&self, clause: &Clause, side: EqnSide) -> bool {
+        if self.find_same(clause).is_none() {
+            return false;
+        }
+        if !clause.is_demodulator() {
+            return false;
+        }
+        if side == EqnSide::RightSide
+            && clause
+                .literals()
+                .as_slice()
+                .first()
+                .is_some_and(crate::clauses::eqn::Eqn::is_oriented)
+        {
+            return false;
+        }
+        true
+    }
+
+    #[must_use]
     pub fn find_by_id(&self, ident: i64) -> Option<&Clause> {
         self.clauses.iter().find(|clause| clause.ident() == ident)
     }
@@ -1231,7 +1251,7 @@ mod tests {
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL};
+    use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::freqvectors::{
         fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
@@ -1382,6 +1402,39 @@ mod tests {
             vec![first_id, second_id]
         );
         assert_eq!(target.literals(), 3);
+    }
+
+    #[test]
+    fn find_same_and_demod_verification_preserve_c_pointer_and_side_rules() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "demod_a");
+        let b = typed_const(&mut bank, "demod_b");
+        let c = typed_const(&mut bank, "demod_c");
+        let mut oriented_lit = literal(&mut bank, &a, &b, true);
+        oriented_lit.set_prop(EP_IS_ORIENTED);
+        let oriented = clause_from(vec![oriented_lit]);
+        let oriented_id = oriented.ident();
+        let oriented_copy = oriented.clone();
+        let unoriented = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        let unoriented_id = unoriented.ident();
+        let non_demod = clause_from(vec![
+            literal(&mut bank, &a, &b, true),
+            literal(&mut bank, &b, &c, false),
+        ]);
+        let non_demod_id = non_demod.ident();
+        let set = ClauseSet::from_clauses([oriented, unoriented, non_demod]);
+
+        let stored_oriented = set.find_by_id(oriented_id).unwrap();
+        assert!(set.find_same(stored_oriented).is_some());
+        assert!(set.find_same(&oriented_copy).is_none());
+        assert!(set.verify_demod_clause_side(stored_oriented, EqnSide::LeftSide));
+        assert!(!set.verify_demod_clause_side(stored_oriented, EqnSide::RightSide));
+
+        let stored_unoriented = set.find_by_id(unoriented_id).unwrap();
+        assert!(set.verify_demod_clause_side(stored_unoriented, EqnSide::RightSide));
+
+        let stored_non_demod = set.find_by_id(non_demod_id).unwrap();
+        assert!(!set.verify_demod_clause_side(stored_non_demod, EqnSide::LeftSide));
     }
 
     #[test]
