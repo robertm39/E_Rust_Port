@@ -1,6 +1,9 @@
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_GLOBAL_INDEXED;
+use crate::clauses::clausepos_tree::ClauseTPosTree;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::ext_index::ExtIndex;
 use crate::clauses::overlap_index::{
     overlap_index_delete_into_clause2, overlap_index_insert_into_clause2, OverlapIndex,
 };
@@ -21,7 +24,10 @@ pub struct GlobalIndices<'sig> {
     pm_from_index: Option<OverlapIndex<'sig>>,
     pm_into_index: Option<OverlapIndex<'sig>>,
     pm_negp_index: Option<OverlapIndex<'sig>>,
+    ext_sup_into_index: Option<ExtIndex>,
+    ext_sup_from_index: Option<ExtIndex>,
     ext_rules_max_depth: i32,
+    problem_type: ProblemType,
 }
 
 impl Default for GlobalIndices<'_> {
@@ -43,7 +49,10 @@ impl<'sig> GlobalIndices<'sig> {
             pm_from_index: None,
             pm_into_index: None,
             pm_negp_index: None,
+            ext_sup_into_index: None,
+            ext_sup_from_index: None,
             ext_rules_max_depth: 0,
+            problem_type: ProblemType::NotInitialized,
         }
     }
 
@@ -55,13 +64,33 @@ impl<'sig> GlobalIndices<'sig> {
         pm_into_index_type: &str,
         ext_rules_max_depth: i32,
     ) -> Self {
-        let mut indices = Self::null();
-        indices.init(
+        Self::new_for_problem(
             signature,
             rw_bw_index_type,
             pm_from_index_type,
             pm_into_index_type,
             ext_rules_max_depth,
+            ProblemType::FirstOrder,
+        )
+    }
+
+    #[must_use]
+    pub fn new_for_problem(
+        signature: &'sig Signature,
+        rw_bw_index_type: &str,
+        pm_from_index_type: &str,
+        pm_into_index_type: &str,
+        ext_rules_max_depth: i32,
+        problem_type: ProblemType,
+    ) -> Self {
+        let mut indices = Self::null();
+        indices.init_for_problem(
+            signature,
+            rw_bw_index_type,
+            pm_from_index_type,
+            pm_into_index_type,
+            ext_rules_max_depth,
+            problem_type,
         );
         indices
     }
@@ -74,6 +103,25 @@ impl<'sig> GlobalIndices<'sig> {
         pm_into_index_type: &str,
         ext_rules_max_depth: i32,
     ) {
+        self.init_for_problem(
+            signature,
+            rw_bw_index_type,
+            pm_from_index_type,
+            pm_into_index_type,
+            ext_rules_max_depth,
+            ProblemType::FirstOrder,
+        );
+    }
+
+    pub fn init_for_problem(
+        &mut self,
+        signature: &'sig Signature,
+        rw_bw_index_type: &str,
+        pm_from_index_type: &str,
+        pm_into_index_type: &str,
+        ext_rules_max_depth: i32,
+        problem_type: ProblemType,
+    ) {
         self.free_indices();
         self.signature = Some(signature);
         rw_bw_index_type.clone_into(&mut self.rw_bw_index_type);
@@ -81,6 +129,7 @@ impl<'sig> GlobalIndices<'sig> {
         pm_into_index_type.clone_into(&mut self.pm_into_index_type);
         pm_into_index_type.clone_into(&mut self.pm_negp_index_type);
         self.ext_rules_max_depth = ext_rules_max_depth;
+        self.problem_type = problem_type;
 
         self.bw_rw_index = get_fp_index_function(rw_bw_index_type)
             .map(|fp_fun| SubtermIndex::new(fp_fun, signature));
@@ -90,6 +139,10 @@ impl<'sig> GlobalIndices<'sig> {
             .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
         self.pm_negp_index = get_fp_index_function(pm_into_index_type)
             .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
+        if problem_type == ProblemType::HigherOrder {
+            self.ext_sup_into_index = Some(ExtIndex::new());
+            self.ext_sup_from_index = Some(ExtIndex::new());
+        }
     }
 
     pub fn free_indices(&mut self) {
@@ -97,6 +150,8 @@ impl<'sig> GlobalIndices<'sig> {
         self.pm_from_index = None;
         self.pm_into_index = None;
         self.pm_negp_index = None;
+        self.ext_sup_into_index = None;
+        self.ext_sup_from_index = None;
     }
 
     pub fn reset(&mut self) {
@@ -108,12 +163,14 @@ impl<'sig> GlobalIndices<'sig> {
         let pm_from_index_type = self.pm_from_index_type.clone();
         let pm_into_index_type = self.pm_into_index_type.clone();
         let ext_rules_max_depth = self.ext_rules_max_depth;
-        self.init(
+        let problem_type = self.problem_type;
+        self.init_for_problem(
             signature,
             &rw_bw_index_type,
             &pm_from_index_type,
             &pm_into_index_type,
             ext_rules_max_depth,
+            problem_type,
         );
     }
 
@@ -143,6 +200,11 @@ impl<'sig> GlobalIndices<'sig> {
     }
 
     #[must_use]
+    pub const fn problem_type(&self) -> ProblemType {
+        self.problem_type
+    }
+
+    #[must_use]
     pub const fn has_bw_rw_index(&self) -> bool {
         self.bw_rw_index.is_some()
     }
@@ -160,6 +222,16 @@ impl<'sig> GlobalIndices<'sig> {
     #[must_use]
     pub const fn has_pm_negp_index(&self) -> bool {
         self.pm_negp_index.is_some()
+    }
+
+    #[must_use]
+    pub const fn has_ext_into_index(&self) -> bool {
+        self.ext_sup_into_index.is_some()
+    }
+
+    #[must_use]
+    pub const fn has_ext_from_index(&self) -> bool {
+        self.ext_sup_from_index.is_some()
     }
 
     #[must_use]
@@ -190,6 +262,20 @@ impl<'sig> GlobalIndices<'sig> {
             .and_then(|index| index.find_occurrence(term))
     }
 
+    #[must_use]
+    pub fn find_ext_into_symbol(&self, f_code: i64) -> Option<&ClauseTPosTree> {
+        self.ext_sup_into_index
+            .as_ref()
+            .and_then(|index| index.find(f_code))
+    }
+
+    #[must_use]
+    pub fn find_ext_from_symbol(&self, f_code: i64) -> Option<&ClauseTPosTree> {
+        self.ext_sup_from_index
+            .as_ref()
+            .and_then(|index| index.find(f_code))
+    }
+
     /// # Panics
     ///
     /// Panics if `clause` is already marked as globally indexed.
@@ -211,6 +297,13 @@ impl<'sig> GlobalIndices<'sig> {
         }
         if let Some(index) = self.pm_from_index.as_mut() {
             index.insert_from_clause(clause);
+        }
+        if let Some(index) = self.ext_sup_into_index.as_mut() {
+            index.insert_into_clause(clause, self.ext_rules_max_depth);
+            self.ext_sup_from_index
+                .as_mut()
+                .expect("ExtSup into index requires matching from index")
+                .insert_from_clause(clause, self.ext_rules_max_depth);
         }
     }
 
@@ -235,6 +328,13 @@ impl<'sig> GlobalIndices<'sig> {
         }
         if let Some(index) = self.pm_from_index.as_mut() {
             index.delete_from_clause(clause);
+        }
+        if let Some(index) = self.ext_sup_into_index.as_mut() {
+            index.delete_into_clause(clause);
+            self.ext_sup_from_index
+                .as_mut()
+                .expect("ExtSup into index requires matching from index")
+                .delete_from_clause(clause);
         }
     }
 
@@ -264,6 +364,7 @@ pub fn global_indices_null<'sig>() -> GlobalIndices<'sig> {
 #[cfg(test)]
 mod tests {
     use super::{global_indices_null, GlobalIndices};
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_IS_GLOBAL_INDEXED;
     use crate::clauses::clausesets::ClauseSet;
@@ -271,7 +372,7 @@ mod tests {
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -282,32 +383,50 @@ mod tests {
         TermBank::new(signature).unwrap()
     }
 
-    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
-        let type_ = bank.signature().type_bank().default_type();
+    fn typed_const_of_type(bank: &mut TermBank, name: &str, type_: Type) -> Term {
         let f_code = bank.signature_mut().insert_id(name, 0, false);
         if bank.signature().get_type(f_code).is_none() {
             bank.signature_mut()
-                .declare_final_type(f_code, type_)
+                .declare_final_type(f_code, type_.clone())
                 .unwrap();
         }
-        bank.create_const_term(f_code).unwrap()
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
-    fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        typed_const_of_type(bank, name, type_)
+    }
+
+    fn typed_unary_with_return(
+        bank: &mut TermBank,
+        name: &str,
+        arg: &Term,
+        return_type: Type,
+    ) -> Term {
+        let arg_type = arg
+            .type_()
+            .unwrap_or_else(|| bank.signature().type_bank().default_type());
         let f_code = bank.signature_mut().insert_id(name, 1, false);
         if bank.signature().get_type(f_code).is_none() {
             bank.signature_mut()
                 .declare_final_type(
                     f_code,
-                    crate::terms::simpletypes::alloc_arrow_type(vec![type_.clone(), type_]),
+                    alloc_arrow_type(vec![arg_type, return_type.clone()]),
                 )
                 .unwrap();
         }
         let term = Term::top_alloc(f_code, 1);
-        term.set_type(Some(bank.signature().type_bank().default_type()));
+        term.set_type(Some(return_type));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        typed_unary_with_return(bank, name, arg, type_)
     }
 
     fn typed_predicate(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
@@ -373,8 +492,11 @@ mod tests {
         assert!(!indices.has_pm_from_index());
         assert!(!indices.has_pm_into_index());
         assert!(!indices.has_pm_negp_index());
+        assert!(!indices.has_ext_into_index());
+        assert!(!indices.has_ext_from_index());
         assert_eq!(indices.rw_bw_index_type(), "");
         assert_eq!(indices.ext_rules_max_depth(), 0);
+        assert_eq!(indices.problem_type(), ProblemType::NotInitialized);
     }
 
     #[test]
@@ -386,11 +508,36 @@ mod tests {
         assert!(!indices.has_pm_from_index());
         assert!(indices.has_pm_into_index());
         assert!(indices.has_pm_negp_index());
+        assert!(!indices.has_ext_into_index());
+        assert!(!indices.has_ext_from_index());
         assert_eq!(indices.rw_bw_index_type(), "FP1");
         assert_eq!(indices.pm_from_index_type(), "NoIndex");
         assert_eq!(indices.pm_into_index_type(), "FP7");
         assert_eq!(indices.pm_negp_index_type(), "FP7");
         assert_eq!(indices.ext_rules_max_depth(), -1);
+        assert_eq!(indices.problem_type(), ProblemType::FirstOrder);
+    }
+
+    #[test]
+    fn higher_order_init_allocates_extension_indexes() {
+        let bank = test_bank();
+        let indices = GlobalIndices::new_for_problem(
+            bank.signature(),
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            3,
+            ProblemType::HigherOrder,
+        );
+
+        assert!(!indices.has_bw_rw_index());
+        assert!(!indices.has_pm_from_index());
+        assert!(!indices.has_pm_into_index());
+        assert!(!indices.has_pm_negp_index());
+        assert!(indices.has_ext_into_index());
+        assert!(indices.has_ext_from_index());
+        assert_eq!(indices.ext_rules_max_depth(), 3);
+        assert_eq!(indices.problem_type(), ProblemType::HigherOrder);
     }
 
     #[test]
@@ -451,6 +598,80 @@ mod tests {
     }
 
     #[test]
+    fn insert_clause_populates_extension_indexes_for_higher_order_problem() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let arrow_type = alloc_arrow_type(vec![individual.clone(), individual.clone()]);
+        let arrow = typed_const_of_type(&mut bank, "gidx_ext_arrow", arrow_type);
+        let left = typed_unary_with_return(&mut bank, "gidx_ext_left", &arrow, individual.clone());
+        let right = typed_const(&mut bank, "gidx_ext_right");
+        let literal = Eqn::alloc(left.clone(), right, &mut bank, true).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(50);
+        let mut indices = GlobalIndices::new_for_problem(
+            bank.signature(),
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            5,
+            ProblemType::HigherOrder,
+        );
+
+        indices.insert_clause(&mut clause, &bank, false);
+
+        assert!(clause.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices
+            .find_ext_into_symbol(left.f_code())
+            .unwrap()
+            .find(&clause)
+            .is_some());
+        assert!(indices
+            .find_ext_from_symbol(left.f_code())
+            .unwrap()
+            .find(&clause)
+            .is_some());
+
+        indices.delete_clause(&mut clause, &bank, false);
+
+        assert!(!clause.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices.find_ext_into_symbol(left.f_code()).is_none());
+        assert!(indices.find_ext_from_symbol(left.f_code()).is_none());
+    }
+
+    #[test]
+    fn extension_indexes_keep_insert_depth_gate_through_global_owner() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let arrow_type = alloc_arrow_type(vec![individual.clone(), individual.clone()]);
+        let arrow = typed_const_of_type(&mut bank, "gidx_ext_deep_arrow", arrow_type);
+        let left =
+            typed_unary_with_return(&mut bank, "gidx_ext_deep_left", &arrow, individual.clone());
+        let right = typed_const(&mut bank, "gidx_ext_deep_right");
+        let literal = Eqn::alloc(left.clone(), right, &mut bank, true).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(51);
+        clause.set_proof_depth(6);
+        let mut indices = GlobalIndices::new_for_problem(
+            bank.signature(),
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            5,
+            ProblemType::HigherOrder,
+        );
+
+        indices.insert_clause(&mut clause, &bank, false);
+
+        assert!(clause.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices.find_ext_into_symbol(left.f_code()).is_none());
+        assert!(indices.find_ext_from_symbol(left.f_code()).is_none());
+
+        indices.delete_clause(&mut clause, &bank, false);
+
+        assert!(!clause.query_prop(CP_IS_GLOBAL_INDEXED));
+    }
+
+    #[test]
     fn insert_clause_set_is_noop_without_backward_index() {
         let mut bank = test_bank();
         let (clause, _) = unit_clause(&mut bank, "gidx_noindex", 20);
@@ -495,9 +716,44 @@ mod tests {
         assert!(indices.has_pm_from_index());
         assert!(indices.has_pm_into_index());
         assert!(indices.has_pm_negp_index());
+        assert!(!indices.has_ext_into_index());
+        assert!(!indices.has_ext_from_index());
         assert_eq!(indices.rw_bw_index_type(), "FP1");
         assert_eq!(indices.ext_rules_max_depth(), 2);
+        assert_eq!(indices.problem_type(), ProblemType::FirstOrder);
         assert!(indices.find_bw_rw_occurrence(&left).is_none());
         assert!(indices.find_pm_from_occurrence(&left).is_none());
+    }
+
+    #[test]
+    fn reset_rebuilds_higher_order_extension_indexes_empty() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let arrow_type = alloc_arrow_type(vec![individual.clone(), individual.clone()]);
+        let arrow = typed_const_of_type(&mut bank, "gidx_ext_reset_arrow", arrow_type);
+        let left =
+            typed_unary_with_return(&mut bank, "gidx_ext_reset_left", &arrow, individual.clone());
+        let right = typed_const(&mut bank, "gidx_ext_reset_right");
+        let literal = Eqn::alloc(left.clone(), right, &mut bank, true).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(52);
+        let mut indices = GlobalIndices::new_for_problem(
+            bank.signature(),
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            5,
+            ProblemType::HigherOrder,
+        );
+        indices.insert_clause(&mut clause, &bank, false);
+
+        indices.reset();
+
+        assert!(indices.has_ext_into_index());
+        assert!(indices.has_ext_from_index());
+        assert_eq!(indices.ext_rules_max_depth(), 5);
+        assert_eq!(indices.problem_type(), ProblemType::HigherOrder);
+        assert!(indices.find_ext_into_symbol(left.f_code()).is_none());
+        assert!(indices.find_ext_from_symbol(left.f_code()).is_none());
     }
 }

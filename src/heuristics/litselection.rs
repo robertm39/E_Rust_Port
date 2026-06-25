@@ -9,6 +9,8 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
 pub const NO_SELECTION: &str = "NoSelection";
 pub const NO_GENERATION: &str = "NoGeneration";
@@ -150,6 +152,8 @@ const VAR_FACTOR: i64 = 3;
 const CQ_FORBIDDEN_WEIGHT: i64 = 100_000;
 const CQ_GROUND_BIAS: i64 = 2_000_000;
 static LITERAL_WEIGHT_COUNTER: AtomicI64 = AtomicI64::new(0);
+#[cfg(test)]
+static LITERAL_WEIGHT_COUNTER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BasicLiteralSelector {
@@ -2709,6 +2713,13 @@ fn reset_literal_weight_counter_for_tests() {
     LITERAL_WEIGHT_COUNTER.store(0, AtomicOrdering::Relaxed);
 }
 
+#[cfg(test)]
+fn literal_weight_counter_test_guard() -> MutexGuard<'static, ()> {
+    LITERAL_WEIGHT_COUNTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn select_cond_optimal_literal_impl(
     ocb: Option<&mut OrderControlBlock>,
     clause: &mut Clause,
@@ -3578,19 +3589,19 @@ fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Optio
 mod tests {
     use super::{
         apply_ported_literal_selector, apply_ported_literal_selector_with_bank,
-        m_select_largest_orientable_literal, m_select_smallest_orientable_literal,
-        p_select_all_cond_optimal_literal, p_select_complex, p_select_complex_except_rr_horn,
-        p_select_complex_prefer_eq, p_select_complex_prefer_neq, p_select_cond_optimal_literal,
-        p_select_depth2_optimal_literal, p_select_diff_negative_literal,
-        p_select_first_variable_literal, p_select_ground_negative_literal, p_select_l_complex,
-        p_select_largest_negative_literal, p_select_largest_orientable_literal,
-        p_select_min_optimal_literal, p_select_negative_literals, p_select_optimal_literal,
-        p_select_smallest_negative_literal, p_select_smallest_orientable_literal,
-        p_select_strong_rr_non_rr_optimal_literal, p_select_unless_uniq_max_optimal_literal,
-        reset_literal_weight_counter_for_tests, select_all_cond_optimal_literal,
-        select_anti_rr_optimal_literal, select_complex, select_complex_except_rr_horn,
-        select_complex_prefer_eq, select_complex_prefer_neq, select_cond_optimal_literal,
-        select_depth2_optimal_literal, select_diff_negative_literal,
+        literal_weight_counter_test_guard, m_select_largest_orientable_literal,
+        m_select_smallest_orientable_literal, p_select_all_cond_optimal_literal, p_select_complex,
+        p_select_complex_except_rr_horn, p_select_complex_prefer_eq, p_select_complex_prefer_neq,
+        p_select_cond_optimal_literal, p_select_depth2_optimal_literal,
+        p_select_diff_negative_literal, p_select_first_variable_literal,
+        p_select_ground_negative_literal, p_select_l_complex, p_select_largest_negative_literal,
+        p_select_largest_orientable_literal, p_select_min_optimal_literal,
+        p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
+        p_select_smallest_orientable_literal, p_select_strong_rr_non_rr_optimal_literal,
+        p_select_unless_uniq_max_optimal_literal, reset_literal_weight_counter_for_tests,
+        select_all_cond_optimal_literal, select_anti_rr_optimal_literal, select_complex,
+        select_complex_except_rr_horn, select_complex_prefer_eq, select_complex_prefer_neq,
+        select_cond_optimal_literal, select_depth2_optimal_literal, select_diff_negative_literal,
         select_diversification_literals, select_diversification_prefer_into_literals,
         select_first_variable_literal, select_ground_negative_literal, select_l_complex,
         select_largest_negative_literal, select_largest_orientable_literal,
@@ -4851,6 +4862,7 @@ mod tests {
 
     #[test]
     fn diversification_selectors_preserve_c_counter_and_into_priority() {
+        let _guard = literal_weight_counter_test_guard();
         reset_literal_weight_counter_for_tests();
         let mut clause = diversification_clause();
         clause.set_prop(CP_IS_ORIENTED);
@@ -5014,6 +5026,7 @@ mod tests {
 
     #[test]
     fn generic_max_lcomplex_g_preserves_base_priority() {
+        let _guard = literal_weight_counter_test_guard();
         reset_literal_weight_counter_for_tests();
         let mut bank = test_bank();
         let mut clause = max_lcomplex_priority_clause(&mut bank);

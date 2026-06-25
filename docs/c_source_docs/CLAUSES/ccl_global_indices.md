@@ -111,10 +111,12 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 
 ### Compatibility Notes
 
-- Rust currently ports the `GlobalIndicesNull`/`GlobalIndicesInit`/`GlobalIndicesFreeIndices`/`GlobalIndicesReset` shape, the backward-rewrite subterm-index path, and the paramodulation overlap from/into/negative-atom index paths. LFHO extension indexes remain a later slice.
+- Rust currently ports the `GlobalIndicesNull`/`GlobalIndicesInit`/`GlobalIndicesFreeIndices`/`GlobalIndicesReset` shape, the backward-rewrite subterm-index path, the paramodulation overlap from/into/negative-atom index paths, and the higher-order-gated LFHO extension into/from index paths.
 - `GlobalIndicesInit` stores `pm_negp_index_type` from `pm_into_index_type`, not from a separate argument. Rust mirrors that derived field.
+- `GlobalIndicesInit` asserts that the process-global `problemType` is initialized, then allocates extension indexes only when it is `PROBLEM_HO`. Rust exposes the same gate through an explicit `ProblemType` initializer instead of reading global state at this boundary.
 - `GlobalIndicesInsertClause` marks the clause `CPIsGlobalIndexed` before inserting into optional indexes. `GlobalIndicesDeleteClause` clears the bit before deleting from optional indexes. Rust preserves that mutation order.
 - `GlobalIndicesInsertClause` calls `OverlapIndexInsertIntoClause2` when `pm_into_index` exists, so the matching negative-atom index is expected to exist too. Rust preserves that invariant with a paired `pm_negp_index` allocation and assertion.
+- Extension index insertion runs after backward-rewrite and PM indexes, applies the configured max-depth gate inside `ExtIndexInsert*Clause`, and deletes without a depth gate. Rust preserves that call order and gating.
 - `GlobalIndicesInsertClauseSet` returns immediately if `bw_rw_index` is null, so a PM-only configuration would not mark or insert the set through this helper. Rust preserves that no-op gate.
 
 ### Change Later Candidates
@@ -122,5 +124,5 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 - `GlobalIndicesReset` frees and reinitializes indexes but does not clear `CPIsGlobalIndexed` on any clauses; C callers reset after freeing clause sets. Rust mirrors the index reset and should keep clause-flag cleanup explicit if reset is ever exposed with live clauses.
 - Global indices in C store raw pointers to optional subterm, overlap, and extension indexes against the proof-state signature. Rust uses a borrowed-signature shell for now; later proof-state integration should avoid self-referential ownership, likely by moving the signature behind an explicit shared proof-session handle.
 - Rust global-index clause insert/delete take an explicit `&TermBank` so the overlap split helper can distinguish equational literals until equations have a typed owner-bank back-pointer.
-- LFHO extension indexes are still absent from the Rust shell. Add them before wiring higher-order proof search or global simplification through this owner.
+- C uses process-global `problemType` during initialization, so the same argument list can allocate different index sets depending on earlier parser/control state. Rust's explicit `ProblemType` initializer is easier to audit; keep proof-state construction responsible for passing the C-equivalent value once full input classification is wired.
 <!-- END MANUAL REVIEW: c_source_docs -->

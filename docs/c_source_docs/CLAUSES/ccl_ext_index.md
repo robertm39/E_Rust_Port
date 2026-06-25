@@ -123,5 +123,5 @@ Source files reviewed: `CLAUSES/ccl_ext_index.h`, `CLAUSES/ccl_ext_index.c`.
 
 - `MAYBE_NORMALIZE_APP_VAR` can rewrite applied higher-order pattern variables through `NormalizePatternAppVar`. Rust currently approximates this by skipping applied free-variable terms in this index path; replace it with real LFHO term-bank normalization once available.
 - C deletion obtains buckets with `IntMapGetRef`, which can create empty symbol slots during a delete. Rust drops empty `BTreeMap` entries; revisit this if storage accounting or debug tree shape needs to be C-identical.
-- Extension indexes are allocated from `GlobalIndices` only for higher-order problems in C. Rust has the standalone owner now; proof-state/global-index wiring still needs the same problem-type gate.
+- Extension indexes are allocated from `GlobalIndices` only for higher-order problems in C. Rust now wires them through an explicit problem-type initializer; proof-state construction still needs to pass that problem type from the full input pipeline.
 <!-- END MANUAL REVIEW: c_source_docs -->
