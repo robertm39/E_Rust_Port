@@ -466,6 +466,29 @@ impl ClauseSet {
         }
     }
 
+    pub fn rebuild_eval_indices(&mut self) {
+        self.eval_indices.clear();
+        self.eval_no = 0;
+        self.next_eval_object = 0;
+        for clause in &mut self.clauses {
+            index_clause_evaluations(
+                &mut self.eval_indices,
+                &mut self.eval_no,
+                &mut self.next_eval_object,
+                clause,
+            );
+        }
+    }
+
+    #[must_use]
+    pub fn eval_order_cloned(&self, idx: usize) -> Vec<Clause> {
+        self.eval_indices.get(idx).map_or_else(Vec::new, |root| {
+            root.iter()
+                .filter_map(|entry| self.find_by_eval_object(entry.object).cloned())
+                .collect()
+        })
+    }
+
     pub fn sort_by<F>(&mut self, mut compare: F)
     where
         F: FnMut(&Clause, &Clause) -> Ordering,

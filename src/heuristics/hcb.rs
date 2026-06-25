@@ -903,6 +903,19 @@ pub fn hcb_clause_evaluate<Data>(
     clause.add_eval_cell(evaluations);
 }
 
+pub fn hcb_clause_set_reweight<Data>(
+    hcb: &HcbCell<Data>,
+    admin: &mut WfcbAdmin,
+    bank: &TermBank,
+    set: &mut ClauseSet,
+) {
+    set.remove_evaluations();
+    for clause in set.iter_mut() {
+        hcb_clause_evaluate(hcb, admin, bank, clause);
+    }
+    set.rebuild_eval_indices();
+}
+
 /// Returns the current evaluation index and advances the standard-selection
 /// schedule.
 ///

@@ -1,12 +1,15 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
-use crate::clauses::clause_props::CP_IS_ORIENTED;
+use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
-use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType};
+use crate::heuristics::hcb::{
+    hcb_clause_evaluate, hcb_clause_set_reweight, HeuristicParmsCell, SplitClassType,
+};
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
 use crate::heuristics::litselection::{
@@ -117,6 +120,19 @@ pub enum LiteralSelectionOutcome {
     Inherited,
     SelectorApplied,
     SelectionSkipped,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofStateInitAxiomOutcome {
+    pub initial_clauses: i64,
+    pub sos_marked: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofStateInitOutcome {
+    pub watchlist_indexed: i64,
+    pub initial_clauses: i64,
+    pub sos_marked: i64,
 }
 
 pub struct ProofControl {
@@ -373,6 +389,111 @@ pub fn proof_state_init_indexing(
     Ok(state.init_watchlist(ocb))
 }
 
+/// Initializes the currently ported proof-state portions of C
+/// `ProofStateInit`.
+///
+/// This covers the processed-set precondition, FV-index/watchlist prefix,
+/// `Uniq` ordering of axioms, copying axioms into `unprocessed`, active-HCB
+/// evaluation, `prefer_initial_clauses` priority adjustment, and SOS marking.
+/// Watchlist hit checks, proof-documentation/derivation pushes, AC scanning,
+/// and global-index reset/initialization remain pending.
+///
+/// # Errors
+///
+/// Returns diagnostics if proof-control ordering or active heuristic state is
+/// missing, FV-index anchor construction fails, heuristic lookup fails, or an
+/// axiom copy cannot be represented in the proof-state term bank.
+pub fn proof_state_init(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
+    debug_assert!(state.processed_pos_rules().is_empty());
+    debug_assert!(state.processed_pos_eqns().is_empty());
+    debug_assert!(state.processed_neg_units().is_empty());
+    debug_assert!(state.processed_non_units().is_empty());
+
+    let watchlist_indexed = proof_state_init_indexing(state, control)?;
+    let axiom_outcome = proof_state_init_axioms(state, control)?;
+    Ok(ProofStateInitOutcome {
+        watchlist_indexed,
+        initial_clauses: axiom_outcome.initial_clauses,
+        sos_marked: axiom_outcome.sos_marked,
+    })
+}
+
+/// Runs the axiom-queue portion of C `ProofStateInit` after indexing setup.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the active HCB is missing, if `Uniq` lookup fails,
+/// or if copying a source axiom into the state term bank fails.
+pub fn proof_state_init_axioms(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
+    let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProofStateInit requires initialized proof-control heuristic",
+        )
+    })?;
+    let context = WeightParseContext::new(state.axioms());
+    let uniq_hcb_handle =
+        get_heuristic_handle_with_context("Uniq", &mut control.hcbs, &mut control.wfcbs, context)?;
+
+    {
+        let ProofControl { hcbs, wfcbs, .. } = control;
+        let uniq_hcb = hcbs
+            .hcb(uniq_hcb_handle)
+            .ok_or_else(|| unknown_heuristic_handle("Uniq"))?;
+        let (terms, axioms) = state.terms_and_axioms_mut();
+        hcb_clause_set_reweight(uniq_hcb, wfcbs, terms, axioms);
+    }
+
+    let ordered_axioms = state.axioms().eval_order_cloned(0);
+    let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
+    let use_tptp_sos = control.heuristic_parms.use_tptp_sos;
+    let mut initial_clauses = 0;
+
+    {
+        let ProofControl { hcbs, wfcbs, .. } = control;
+        let active_hcb = hcbs
+            .hcb(active_hcb_handle)
+            .ok_or_else(|| unknown_heuristic_handle("active"))?;
+        let (terms, unprocessed) = state.terms_and_unprocessed_mut();
+
+        for source in ordered_axioms {
+            let mut new = source.copy_to_bank(terms)?;
+            new.set_prop(CP_INITIAL);
+            hcb_clause_evaluate(active_hcb, wfcbs, terms, &mut new);
+            if prefer_initial {
+                let Some(evaluations) = new.evaluations_mut() else {
+                    return Err(Diagnostic::new(
+                        ErrorCode::OTHER_ERROR,
+                        "ProofStateInit HCB evaluation did not attach evaluations",
+                    ));
+                };
+                evaluations.change_priority(-PRIO_LARGEST_REASONABLE);
+            }
+            unprocessed.insert(new);
+            initial_clauses += 1;
+        }
+    }
+
+    let sos_marked = state.unprocessed_mut().mark_sos(use_tptp_sos);
+    Ok(ProofStateInitAxiomOutcome {
+        initial_clauses,
+        sos_marked,
+    })
+}
+
+fn unknown_heuristic_handle(name: &str) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        format!("ProofStateInit found missing {name} heuristic handle"),
+    )
+}
+
 fn install_default_weight_functions(
     control: &mut ProofControl,
     context: WeightParseContext<'_>,
@@ -568,19 +689,21 @@ mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_init_indexing, select_inherited_literal,
-        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_control_reset_sat_solver, proof_state_init, proof_state_init_indexing,
+        select_inherited_literal, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_CONJECTURE};
+    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
+    use crate::clauses::neweval::{PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC};
     use crate::heuristics::litselection::SELECT_UNLESS_POS_MAX;
@@ -785,6 +908,84 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(!state.fvi_initialized());
+    }
+
+    #[test]
+    fn proof_state_init_copies_evaluated_axioms_to_unprocessed() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom_id, conjecture_id) = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_init_ax_a");
+            let right = typed_const(terms, "pc_init_ax_b");
+            let mut axiom =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]));
+            axiom.set_ident(4_001);
+
+            let conj_left = typed_const(terms, "pc_init_conj_a");
+            let conj_right = typed_const(terms, "pc_init_conj_b");
+            let mut conjecture = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &conj_left,
+                &conj_right,
+                false,
+            )]));
+            conjecture.set_ident(4_002);
+            conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+
+            let axiom_id = axiom.ident();
+            let conjecture_id = conjecture.ident();
+            state.axioms_mut().insert(axiom);
+            state.axioms_mut().insert(conjecture);
+            (axiom_id, conjecture_id)
+        };
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "InitTest".to_owned(),
+            prefer_initial_clauses: true,
+            use_tptp_sos: true,
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["InitTest=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let outcome = proof_state_init(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome.watchlist_indexed, 0);
+        assert_eq!(outcome.initial_clauses, 2);
+        assert_eq!(outcome.sos_marked, 1);
+        assert_eq!(state.axioms().members(), 2);
+        assert_eq!(state.unprocessed().members(), 2);
+        assert!(state.fvi_initialized());
+        assert!(state
+            .axioms()
+            .iter()
+            .all(|clause| clause.evaluations().is_some()));
+
+        let copied_axiom = state.unprocessed().find_by_id(axiom_id).unwrap();
+        assert!(copied_axiom.query_prop(CP_INITIAL));
+        assert!(!copied_axiom.query_prop(CP_IS_SOS));
+        let copied_conjecture = state.unprocessed().find_by_id(conjecture_id).unwrap();
+        assert!(copied_conjecture.query_prop(CP_INITIAL | CP_IS_SOS));
+        for clause in state.unprocessed().iter() {
+            let evaluations = clause.evaluations().expect("copy is evaluated");
+            assert_eq!(evaluations.eval_no(), 1);
+            assert_eq!(
+                evaluations.eval(0).priority(),
+                PRIO_NORMAL - PRIO_LARGEST_REASONABLE
+            );
+        }
     }
 
     #[test]

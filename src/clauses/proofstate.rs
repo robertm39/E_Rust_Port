@@ -138,6 +138,18 @@ impl ProofState {
         &mut self.terms
     }
 
+    pub fn terms_and_axioms_mut(&mut self) -> (&TermBank, &mut ClauseSet) {
+        let Self { terms, axioms, .. } = self;
+        (terms, axioms)
+    }
+
+    pub fn terms_and_unprocessed_mut(&mut self) -> (&mut TermBank, &mut ClauseSet) {
+        let Self {
+            terms, unprocessed, ..
+        } = self;
+        (terms, unprocessed)
+    }
+
     #[must_use]
     pub const fn original_symbols(&self) -> usize {
         self.original_symbols
