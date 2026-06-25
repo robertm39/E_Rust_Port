@@ -5,7 +5,7 @@ pub const PSTACK_DEFAULT_SIZE: usize = 128;
 pub type PStackPointer = isize;
 pub type PStackInt = i64;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PStack<T> {
     size: usize,
     stack: Vec<T>,

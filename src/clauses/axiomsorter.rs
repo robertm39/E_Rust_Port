@@ -13,7 +13,7 @@ pub enum AxiomType {
 
 #[derive(Clone, Debug, PartialEq)]
 enum WAxiomPayload {
-    Clause(Clause),
+    Clause(Box<Clause>),
     FormulaFCodes(Vec<FunCode>),
 }
 
@@ -30,7 +30,7 @@ impl WAxiom {
         Self {
             axiom_type: AxiomType::ClauseAxiom,
             weight: 0.0,
-            payload: WAxiomPayload::Clause(clause.clone()),
+            payload: WAxiomPayload::Clause(Box::new(clause.clone())),
         }
     }
 

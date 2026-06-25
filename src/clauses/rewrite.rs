@@ -1,8 +1,12 @@
 use crate::basics::error::Diagnostic;
+use crate::basics::pstacks::PStack;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::Clause;
-use crate::clauses::clause_props::CP_IS_ORIENTED;
+use crate::clauses::clause_props::{
+    CP_INITIAL, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
+};
 use crate::clauses::clausefunc::clause_remove_superfluous_literals;
+use crate::clauses::clausepos::{term_compute_rw_sequence, RewriteSequenceEntry};
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
@@ -27,12 +31,44 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
 
+const DC_REWRITE: i32 = 516;
+
 pub static REWRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_UNBOUND_VAR_FAILS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_UNCACHED: AtomicU64 = AtomicU64::new(0);
 pub static BWRW_MATCH_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub static BWRW_MATCH_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Default)]
+struct PlainRewriteTrace {
+    sos_rewritten: bool,
+}
+
+struct TermRewriteTrace {
+    old: Term,
+    new: Term,
+}
+
+struct EqnNormalformTrace {
+    side: EqnSide,
+    left: Option<TermRewriteTrace>,
+    right: Option<TermRewriteTrace>,
+}
+
+impl EqnNormalformTrace {
+    fn new() -> Self {
+        Self {
+            side: EqnSide::NoSide,
+            left: None,
+            right: None,
+        }
+    }
+
+    fn has_rewrites(&self) -> bool {
+        self.left.is_some() || self.right.is_some()
+    }
+}
 
 /// Rewrites a clause with local rules extracted from that same clause.
 ///
@@ -364,6 +400,7 @@ pub fn term_li_normalform_plain(
     }
     let level_count = rewrite_level_count(level);
     let demod_date = clause_set_list_get_max_date(demodulators, level_count);
+    let mut trace = PlainRewriteTrace::default();
     term_li_normalform_plain_with_date(
         bank,
         ocb,
@@ -374,6 +411,7 @@ pub fn term_li_normalform_plain(
         prefer_general,
         restricted_rw,
         lambda_demod,
+        &mut trace,
     )
 }
 
@@ -391,10 +429,12 @@ fn term_li_normalform_plain_with_date(
     prefer_general: bool,
     restricted_rw: bool,
     lambda_demod: bool,
+    trace: &mut PlainRewriteTrace,
 ) -> Result<Term, Diagnostic> {
     debug_assert_ne!(level, RewriteLevel::NoRewrite);
 
-    let (mut current, _) = term_follow_top_rw_chain(term, restricted_rw);
+    let (mut current, sos_rewritten) = term_follow_top_rw_chain(term, restricted_rw);
+    trace.sos_rewritten |= sos_rewritten;
     assert!(
         !current.is_top_rewritten() || restricted_rw,
         "unrestricted normal-form traversal must follow top rewrite links"
@@ -423,11 +463,12 @@ fn term_li_normalform_plain_with_date(
             demod_date,
             prefer_general,
             lambda_demod,
+            trace,
         )?;
 
         if !current.is_free_var() {
             let follow_restricted = restricted_rw && !modified;
-            let (new_term, _) = if current.is_top_rewritten() {
+            let (new_term, sos_rewritten) = if current.is_top_rewritten() {
                 term_follow_top_rw_chain(&current, follow_restricted)
             } else {
                 let _ = rewrite_with_clause_set_list_plain(
@@ -441,6 +482,7 @@ fn term_li_normalform_plain_with_date(
                 )?;
                 term_follow_top_rw_chain(&current, follow_restricted)
             };
+            trace.sos_rewritten |= sos_rewritten;
             if current != new_term {
                 modified = true;
                 current = new_term;
@@ -470,6 +512,7 @@ fn term_subterm_rewrite_plain(
     demod_date: SysDate,
     prefer_general: bool,
     lambda_demod: bool,
+    trace: &mut PlainRewriteTrace,
 ) -> Result<bool, Diagnostic> {
     if !lambda_demod && term.is_lambda() {
         return Ok(false);
@@ -489,6 +532,7 @@ fn term_subterm_rewrite_plain(
             prefer_general,
             false,
             lambda_demod,
+            trace,
         )?;
         if normalized != arg {
             modified = true;
@@ -519,8 +563,7 @@ fn term_subterm_rewrite_plain(
 ///
 /// This mirrors C `eqn_li_normalform` for term mutation, maximality-cache
 /// invalidation, equality-literal normalization when the right side becomes
-/// `$true`, and the returned side mask. Derivation recording remains tied to
-/// the later proof-object port.
+/// `$true`, and the returned side mask.
 ///
 /// # Errors
 ///
@@ -543,12 +586,42 @@ pub fn eqn_li_normalform_plain(
     interred_rw: bool,
     lambda_demod: bool,
 ) -> Result<EqnSide, Diagnostic> {
+    let mut rewrite_trace = PlainRewriteTrace::default();
+    Ok(eqn_li_normalform_plain_trace(
+        bank,
+        ocb,
+        eqn,
+        demodulators,
+        level,
+        prefer_general,
+        interred_rw,
+        lambda_demod,
+        &mut rewrite_trace,
+    )?
+    .side)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Private worker returns side rewrite traces for ClauseComputeLINormalform"
+)]
+fn eqn_li_normalform_plain_trace(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    eqn: &mut Eqn,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    interred_rw: bool,
+    lambda_demod: bool,
+    rewrite_trace: &mut PlainRewriteTrace,
+) -> Result<EqnNormalformTrace, Diagnostic> {
     let left_old = eqn.left().clone();
     let right_old = eqn.right().clone();
     let restricted_rw = eqn.is_maximal() && eqn.is_positive() && eqn.is_oriented() && interred_rw;
-    let mut result = EqnSide::NoSide;
+    let mut result = EqnNormalformTrace::new();
 
-    let left_new = term_li_normalform_plain(
+    let left_new = term_li_normalform_plain_with_trace(
         bank,
         ocb,
         &left_old,
@@ -557,14 +630,19 @@ pub fn eqn_li_normalform_plain(
         prefer_general,
         restricted_rw,
         lambda_demod,
+        rewrite_trace,
     )?;
     if left_new != left_old {
-        eqn.set_left_raw(left_new);
+        eqn.set_left_raw(left_new.clone());
         eqn.del_prop(EP_MAX_IS_UP_TO_DATE);
-        result = MAX_SIDE;
+        result.side = MAX_SIDE;
+        result.left = Some(TermRewriteTrace {
+            old: left_old,
+            new: left_new,
+        });
     }
 
-    let right_new = term_li_normalform_plain(
+    let right_new = term_li_normalform_plain_with_trace(
         bank,
         ocb,
         &right_old,
@@ -573,21 +651,165 @@ pub fn eqn_li_normalform_plain(
         prefer_general,
         false,
         lambda_demod,
+        rewrite_trace,
     )?;
     if right_new != right_old {
-        eqn.set_right_raw(right_new);
+        eqn.set_right_raw(right_new.clone());
         if eqn.query_prop(EP_IS_EQU_LITERAL) && eqn.right() == bank.true_term() {
             eqn.del_prop(EP_IS_EQU_LITERAL);
         }
         if eqn.is_oriented() {
-            result = eqn_side_union(result, MIN_SIDE);
+            result.side = eqn_side_union(result.side, MIN_SIDE);
         } else {
-            result = eqn_side_union(result, MAX_SIDE);
+            result.side = eqn_side_union(result.side, MAX_SIDE);
             eqn.del_prop(EP_MAX_IS_UP_TO_DATE);
         }
+        result.right = Some(TermRewriteTrace {
+            old: right_old,
+            new: right_new,
+        });
     }
 
     Ok(result)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Trace-bearing wrapper keeps public TermComputeLINormalform signature unchanged"
+)]
+fn term_li_normalform_plain_with_trace(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    restricted_rw: bool,
+    lambda_demod: bool,
+    trace: &mut PlainRewriteTrace,
+) -> Result<Term, Diagnostic> {
+    if level == RewriteLevel::NoRewrite {
+        return Ok(term.clone());
+    }
+    let level_count = rewrite_level_count(level);
+    let demod_date = clause_set_list_get_max_date(demodulators, level_count);
+    term_li_normalform_plain_with_date(
+        bank,
+        ocb,
+        term,
+        demodulators,
+        level,
+        demod_date,
+        prefer_general,
+        restricted_rw,
+        lambda_demod,
+        trace,
+    )
+}
+
+/// Compute plain leftmost-innermost normal forms for every literal in a clause.
+///
+/// This ports C `ClauseComputeLINormalform`: each literal side is normalized,
+/// the compact rewrite derivation stack is extended from recovered term rewrite
+/// chains, `CPLimitedRW` is cleared and the scan repeated when C does so, and
+/// the return value is the derivation-stack delta divided by two.
+///
+/// # Errors
+///
+/// Returns a diagnostic if side normalization fails.
+///
+/// # Panics
+///
+/// Panics if the clause is already demodulation- or simplification-indexed, or
+/// if the active rewrite level exceeds the demodulator slice length.
+pub fn clause_compute_li_normalform_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &mut Clause,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    lambda_demod: bool,
+) -> Result<i64, Diagnostic> {
+    assert!(
+        !clause.is_any_prop_set(CP_IS_D_INDEXED | CP_IS_S_INDEXED),
+        "indexed clauses must be removed from rewrite indexes before normalization"
+    );
+
+    let old_deriv_sp = clause.derivation_stack_pointer();
+    let mut rewrite_trace = PlainRewriteTrace::default();
+    let mut done = false;
+    while !done {
+        done = true;
+        for index in 0..clause.literals().len() {
+            let interred_rw = clause.query_prop(CP_LIMITED_RW);
+            let eqn_trace = {
+                let literal = &mut clause.literals_mut().as_mut_slice()[index];
+                eqn_li_normalform_plain_trace(
+                    bank,
+                    ocb,
+                    literal,
+                    demodulators,
+                    level,
+                    prefer_general,
+                    interred_rw,
+                    lambda_demod,
+                    &mut rewrite_trace,
+                )?
+            };
+            let side = eqn_trace.side;
+            if eqn_trace.has_rewrites() {
+                record_eqn_normalform_trace(clause.ensure_derivation(), eqn_trace);
+            }
+
+            let literal = &clause.literals().as_slice()[index];
+            if eqn_side_contains(side, MAX_SIDE)
+                && literal.is_positive()
+                && literal.is_maximal()
+                && clause.query_prop(CP_LIMITED_RW)
+            {
+                clause.del_prop(CP_LIMITED_RW);
+                done = false;
+            }
+        }
+    }
+
+    if rewrite_trace.sos_rewritten {
+        clause.set_prop(CP_IS_SOS);
+    }
+
+    let new_deriv_sp = clause.derivation_stack_pointer();
+    let rewrite_steps = i64::try_from((new_deriv_sp - old_deriv_sp) / 2)
+        .unwrap_or_else(|_| panic!("rewrite derivation stack delta does not fit in i64"));
+    if rewrite_steps != 0 {
+        clause.del_prop(CP_INITIAL);
+    }
+
+    Ok(rewrite_steps)
+}
+
+fn record_eqn_normalform_trace(
+    stack: &mut PStack<RewriteSequenceEntry>,
+    trace: EqnNormalformTrace,
+) {
+    if let Some(left) = trace.left {
+        let recorded = term_compute_rw_sequence(stack, &left.old, &left.new, DC_REWRITE);
+        debug_assert!(
+            recorded,
+            "changed left side should expose at least one rewrite link"
+        );
+    }
+    if let Some(right) = trace.right {
+        let recorded = term_compute_rw_sequence(stack, &right.old, &right.new, DC_REWRITE);
+        debug_assert!(
+            recorded,
+            "changed right side should expose at least one rewrite link"
+        );
+    }
+}
+
+fn eqn_side_contains(side: EqnSide, needle: EqnSide) -> bool {
+    ((side as i32) & (needle as i32)) != 0
 }
 
 fn eqn_side_union(left: EqnSide, right: EqnSide) -> EqnSide {
@@ -1109,16 +1331,17 @@ fn map_literal_terms(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_local_rw, eqn_has_rw_side, eqn_li_normalform_plain, find_rewritable_clauses,
-        find_rewritable_clauses_indexed, rewrite_with_clause_set_list_plain,
-        rewrite_with_clause_set_plain, term_li_normalform_plain, BWRW_MATCH_ATTEMPTS,
-        BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS, REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
-        REWRITE_UNCACHED,
+        clause_compute_li_normalform_plain, clause_local_rw, eqn_has_rw_side,
+        eqn_li_normalform_plain, find_rewritable_clauses, find_rewritable_clauses_indexed,
+        rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain,
+        term_li_normalform_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
+        REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::CP_IS_ORIENTED;
+    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_LIMITED_RW};
+    use crate::clauses::clausepos::RewriteSequenceEntry;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -1133,9 +1356,14 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
+    use crate::terms::termtypes::{
+        DerefType, RewriteDemodulator, RewriteLevel, Term, TP_IS_REWRITABLE,
+    };
     use crate::terms::typebanks::TypeBank;
     use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, MutexGuard};
+
+    static REWRITE_COUNTER_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -1216,13 +1444,17 @@ mod tests {
         literal.set_prop(EP_IS_ORIENTED);
     }
 
-    fn reset_backward_rewrite_counters() {
+    fn reset_backward_rewrite_counters() -> MutexGuard<'static, ()> {
+        let guard = REWRITE_COUNTER_LOCK
+            .lock()
+            .expect("rewrite counter test lock should not be poisoned");
         REWRITE_ATTEMPTS.store(0, Ordering::Relaxed);
         REWRITE_SUCCESSES.store(0, Ordering::Relaxed);
         REWRITE_UNCACHED.store(0, Ordering::Relaxed);
         BWRW_MATCH_ATTEMPTS.store(0, Ordering::Relaxed);
         BWRW_MATCH_SUCCESSES.store(0, Ordering::Relaxed);
         REWRITE_UNBOUND_VAR_FAILS.store(0, Ordering::Relaxed);
+        guard
     }
 
     #[test]
@@ -1299,7 +1531,7 @@ mod tests {
 
     #[test]
     fn plain_backward_rewrite_scan_links_matching_child_terms() {
-        reset_backward_rewrite_counters();
+        let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "bwrw_a");
@@ -1375,7 +1607,7 @@ mod tests {
 
     #[test]
     fn indexed_backward_rewrite_deduplicates_full_and_restricted_hits() {
-        reset_backward_rewrite_counters();
+        let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "bwrw_idx_a");
@@ -1456,7 +1688,7 @@ mod tests {
 
     #[test]
     fn plain_clause_set_rewrite_links_first_matching_demodulator() {
-        reset_backward_rewrite_counters();
+        let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "rw_plain_a");
@@ -1493,7 +1725,7 @@ mod tests {
 
     #[test]
     fn plain_clause_set_rewrite_respects_normal_form_dates() {
-        reset_backward_rewrite_counters();
+        let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "rw_plain_nf_a");
@@ -1557,7 +1789,7 @@ mod tests {
 
     #[test]
     fn plain_clause_set_rewrite_counts_but_does_not_link_self_replacement() {
-        reset_backward_rewrite_counters();
+        let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "rw_plain_self_a");
@@ -1834,6 +2066,143 @@ mod tests {
     }
 
     #[test]
+    fn clause_li_normalform_records_derivation_and_clears_initial() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -2);
+        let left_replacement = typed_const(&mut bank, "clause_nf_a");
+        let left_arg = typed_const(&mut bank, "clause_nf_b");
+        let right_replacement = typed_const(&mut bank, "clause_nf_c");
+        let right_arg = typed_const(&mut bank, "clause_nf_d");
+        let f_variable = typed_unary(&mut bank, "clause_nf_f", &variable);
+        let f_left_arg = typed_unary(&mut bank, "clause_nf_f", &left_arg);
+        let g_variable = typed_unary(&mut bank, "clause_nf_g", &variable);
+        let g_right_arg = typed_unary(&mut bank, "clause_nf_g", &right_arg);
+        let mut first_lit = eqn(&mut bank, &f_variable, &left_replacement, true);
+        oriented_demod(&mut first_lit);
+        let mut second_lit = eqn(&mut bank, &g_variable, &right_replacement, true);
+        oriented_demod(&mut second_lit);
+        let mut first_demod = Clause::alloc(EqnList::from_vec(vec![first_lit]));
+        first_demod.set_ident(101);
+        first_demod.set_date(SysDate::from_raw(5));
+        let mut second_demod = Clause::alloc(EqnList::from_vec(vec![second_lit]));
+        second_demod.set_ident(102);
+        second_demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([first_demod, second_demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &f_left_arg, &g_right_arg, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_prop(CP_INITIAL);
+        let mut ocb = kbo_ocb(&bank);
+
+        let steps = clause_compute_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut clause,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 2);
+        let rewritten = &clause.literals().as_slice()[0];
+        assert_eq!(rewritten.left(), &left_replacement);
+        assert_eq!(rewritten.right(), &right_replacement);
+        assert!(!clause.query_prop(CP_INITIAL));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                RewriteSequenceEntry::InjectionOp(516),
+                RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(101)),
+                RewriteSequenceEntry::InjectionOp(516),
+                RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(102)),
+            ]
+        );
+    }
+
+    #[test]
+    fn clause_li_normalform_clears_limited_rewrite_after_max_side_change() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let replacement = typed_const(&mut bank, "clause_nf_limited_a");
+        let arg = typed_const(&mut bank, "clause_nf_limited_b");
+        let rhs = typed_const(&mut bank, "clause_nf_limited_c");
+        let f_x = typed_unary(&mut bank, "clause_nf_limited_f", &x);
+        let f_arg = typed_unary(&mut bank, "clause_nf_limited_f", &arg);
+        let mut demod_lit = eqn(&mut bank, &f_x, &replacement, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_ident(103);
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &f_arg, &rhs, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_prop(CP_LIMITED_RW | CP_INITIAL);
+        let mut ocb = kbo_ocb(&bank);
+
+        let steps = clause_compute_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut clause,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 1);
+        assert!(!clause.query_prop(CP_LIMITED_RW));
+        assert!(!clause.query_prop(CP_INITIAL));
+        assert_eq!(clause.literals().as_slice()[0].left(), &replacement);
+    }
+
+    #[test]
+    fn clause_li_normalform_sets_sos_when_demodulator_is_sos() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let replacement = typed_const(&mut bank, "clause_nf_sos_a");
+        let arg = typed_const(&mut bank, "clause_nf_sos_b");
+        let rhs = typed_const(&mut bank, "clause_nf_sos_c");
+        let f_x = typed_unary(&mut bank, "clause_nf_sos_f", &x);
+        let f_arg = typed_unary(&mut bank, "clause_nf_sos_f", &arg);
+        let mut demod_lit = eqn(&mut bank, &f_x, &replacement, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_ident(104);
+        demod.set_date(SysDate::from_raw(5));
+        demod.set_prop(CP_IS_SOS);
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &f_arg, &rhs, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let steps = clause_compute_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut clause,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 1);
+        assert!(clause.query_prop(CP_IS_SOS));
+        assert_eq!(clause.literals().as_slice()[0].left(), &replacement);
+    }
+
+    #[test]
     fn restricted_max_side_ignores_limited_renaming_rewrites() {
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
@@ -1865,7 +2234,7 @@ mod tests {
 
     #[test]
     fn strong_rhs_instantiation_completes_unbound_rhs_variables() {
-        reset_backward_rewrite_counters();
+        let _counter_guard = reset_backward_rewrite_counters();
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let y = typed_var(&bank, -4);

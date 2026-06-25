@@ -10,6 +10,7 @@ use crate::clauses::clause_props::{
     CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
+use crate::clauses::clausepos::RewriteSequenceEntry;
 use crate::clauses::eqn::{eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_PSEUDO_LIT,
@@ -63,6 +64,7 @@ pub struct Clause {
     create_date: i64,
     proof_depth: i64,
     proof_size: i64,
+    derivation: Option<PStack<RewriteSequenceEntry>>,
 }
 
 impl Clause {
@@ -81,6 +83,7 @@ impl Clause {
             create_date: 0,
             proof_depth: 0,
             proof_size: 0,
+            derivation: None,
         }
     }
 
@@ -310,6 +313,20 @@ impl Clause {
 
     pub const fn set_proof_size(&mut self, proof_size: i64) {
         self.proof_size = proof_size;
+    }
+
+    #[must_use]
+    pub const fn derivation(&self) -> Option<&PStack<RewriteSequenceEntry>> {
+        self.derivation.as_ref()
+    }
+
+    pub fn ensure_derivation(&mut self) -> &mut PStack<RewriteSequenceEntry> {
+        self.derivation.get_or_insert_with(PStack::new)
+    }
+
+    #[must_use]
+    pub fn derivation_stack_pointer(&self) -> isize {
+        self.derivation.as_ref().map_or(0, PStack::stack_pointer)
     }
 
     pub fn recompute_lit_counts(&mut self) {
@@ -1106,6 +1123,7 @@ impl Clause {
             create_date: self.create_date,
             proof_depth: self.proof_depth,
             proof_size: self.proof_size,
+            derivation: self.derivation.clone(),
         };
         copy.recompute_lit_counts();
         copy
