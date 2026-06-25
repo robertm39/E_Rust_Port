@@ -1,8 +1,10 @@
 use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::CP_IS_ORIENTED;
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_SELECTED};
+use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
+use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
 pub const NO_SELECTION: &str = "NoSelection";
 pub const NO_GENERATION: &str = "NoGeneration";
@@ -52,8 +54,11 @@ pub const SELECT_COMPLEX_PREFER_NEQ: &str = "SelectComplexPreferNEQ";
 pub const P_SELECT_COMPLEX_PREFER_NEQ: &str = "PSelectComplexPreferNEQ";
 pub const SELECT_COMPLEX_PREFER_EQ: &str = "SelectComplexPreferEQ";
 pub const P_SELECT_COMPLEX_PREFER_EQ: &str = "PSelectComplexPreferEQ";
+pub const SELECT_DIV_LITS: &str = "SelectDivLits";
+pub const SELECT_DIV_PREFER_INTO_LITS: &str = "SelectDivPreferIntoLits";
 
 const VAR_FACTOR: i64 = 3;
+static LITERAL_WEIGHT_COUNTER: AtomicI64 = AtomicI64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BasicLiteralSelector {
@@ -267,6 +272,50 @@ enum ComplexGroundChoice {
 enum EquationalPreference {
     Equation,
     NonEquation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiversificationLiteralSelector {
+    Diversification,
+    PreferInto,
+}
+
+impl DiversificationLiteralSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_DIV_LITS => Some(Self::Diversification),
+            SELECT_DIV_PREFER_INTO_LITS => Some(Self::PreferInto),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+        match self {
+            Self::Diversification => select_diversification_literals(ocb, clause),
+            Self::PreferInto => select_diversification_prefer_into_literals(ocb, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LitEval {
+    is_positive: bool,
+    forbidden: bool,
+    w1: i64,
+    w2: i64,
+    w3: i64,
+}
+
+impl LitEval {
+    const fn new(literal: &Eqn) -> Self {
+        Self {
+            is_positive: literal.is_positive(),
+            forbidden: false,
+            w1: 0,
+            w2: 0,
+            w3: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -673,6 +722,17 @@ pub fn p_select_complex_prefer_eq(_ocb: Option<&mut OrderControlBlock>, clause: 
     select_complex_prefer_impl(clause, true, EquationalPreference::Equation);
 }
 
+pub fn select_diversification_literals(_ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    generic_uniq_selection_no_ordering(clause, false, diversification_weight);
+}
+
+pub fn select_diversification_prefer_into_literals(
+    _ocb: Option<&mut OrderControlBlock>,
+    clause: &mut Clause,
+) {
+    generic_uniq_selection_no_ordering(clause, false, diversification_prefer_into_weight);
+}
+
 /// Applies the subset of literal-selection functions that has been ported.
 ///
 /// # Errors
@@ -693,6 +753,9 @@ pub fn apply_ported_literal_selector(
     } else if let Some(selector) = ComplexLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
         Ok(())
+    } else if let Some(selector) = DiversificationLiteralSelector::from_name(name) {
+        selector.apply(ocb, clause);
+        Ok(())
     } else {
         Err(UnsupportedLiteralSelection::new(name))
     }
@@ -705,6 +768,86 @@ fn select_positive_literals(clause: &mut Clause) {
             literal.set_prop(EP_IS_SELECTED);
         }
     }
+}
+
+fn generic_uniq_selection_no_ordering(
+    clause: &mut Clause,
+    positive: bool,
+    weight_fun: fn(&mut LitEval, &Eqn, &Clause),
+) {
+    debug_assert_ne!(clause.negative_literal_count(), 0);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+    let mut evals = clause
+        .literals()
+        .as_slice()
+        .iter()
+        .map(LitEval::new)
+        .collect::<Vec<_>>();
+
+    for (eval, literal) in evals.iter_mut().zip(clause.literals().as_slice()) {
+        weight_fun(eval, literal, clause);
+    }
+
+    let mut selected_index = 0;
+    for (index, eval) in evals.iter().enumerate().skip(1) {
+        if lit_eval_compare(eval, &evals[selected_index]).is_lt() {
+            selected_index = index;
+        }
+    }
+
+    debug_assert!(
+        !evals[selected_index].is_positive,
+        "generic literal selection candidate must be negative"
+    );
+
+    if !evals[selected_index].forbidden {
+        clause.literals_mut().as_mut_slice()[selected_index].set_prop(EP_IS_SELECTED);
+        clause.del_prop(CP_IS_ORIENTED);
+        if positive {
+            select_positive_literals(clause);
+        }
+    }
+}
+
+fn lit_eval_compare(left: &LitEval, right: &LitEval) -> std::cmp::Ordering {
+    left.is_positive
+        .cmp(&right.is_positive)
+        .then_with(|| left.w1.cmp(&right.w1))
+        .then_with(|| left.w2.cmp(&right.w2))
+        .then_with(|| left.w3.cmp(&right.w3))
+}
+
+fn diversification_weight(eval: &mut LitEval, literal: &Eqn, clause: &Clause) {
+    let counter = next_literal_weight_counter();
+    if literal.is_negative() {
+        eval.w1 = counter % negative_literal_count_i64(clause);
+    }
+}
+
+fn diversification_prefer_into_weight(eval: &mut LitEval, literal: &Eqn, clause: &Clause) {
+    let counter = next_literal_weight_counter();
+    eval.w1 = if literal.query_prop(EP_IS_PM_INTO_LIT) {
+        -1
+    } else {
+        0
+    };
+    if literal.is_negative() {
+        eval.w2 = counter % negative_literal_count_i64(clause);
+    }
+}
+
+fn next_literal_weight_counter() -> i64 {
+    LITERAL_WEIGHT_COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+}
+
+fn negative_literal_count_i64(clause: &Clause) -> i64 {
+    i64::try_from(clause.negative_literal_count()).expect("negative literal count fits in i64")
+}
+
+#[cfg(test)]
+fn reset_literal_weight_counter_for_tests() {
+    LITERAL_WEIGHT_COUNTER.store(0, AtomicOrdering::Relaxed);
 }
 
 fn select_cond_optimal_literal_impl(
@@ -947,9 +1090,11 @@ mod tests {
         p_select_ground_negative_literal, p_select_l_complex, p_select_largest_negative_literal,
         p_select_min_optimal_literal, p_select_negative_literals, p_select_optimal_literal,
         p_select_smallest_negative_literal, p_select_strong_rr_non_rr_optimal_literal,
-        select_all_cond_optimal_literal, select_anti_rr_optimal_literal, select_complex,
-        select_complex_except_rr_horn, select_complex_prefer_eq, select_complex_prefer_neq,
-        select_cond_optimal_literal, select_depth2_optimal_literal, select_diff_negative_literal,
+        reset_literal_weight_counter_for_tests, select_all_cond_optimal_literal,
+        select_anti_rr_optimal_literal, select_complex, select_complex_except_rr_horn,
+        select_complex_prefer_eq, select_complex_prefer_neq, select_cond_optimal_literal,
+        select_depth2_optimal_literal, select_diff_negative_literal,
+        select_diversification_literals, select_diversification_prefer_into_literals,
         select_first_variable_literal, select_ground_negative_literal, select_l_complex,
         select_largest_negative_literal, select_min_optimal_literal,
         select_n_depth2_optimal_literal, select_negative_literals,
@@ -968,15 +1113,17 @@ mod tests {
         P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, SELECT_ALL_COND_OPTIMAL_LIT,
         SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_COMPLEX, SELECT_COMPLEX_EXCEPT_RR_HORN,
         SELECT_COMPLEX_PREFER_EQ, SELECT_COMPLEX_PREFER_NEQ, SELECT_COND_OPTIMAL_LIT,
-        SELECT_DIFF_NEG_LIT, SELECT_GROUND_NEG_LIT, SELECT_LARGEST_NEG_LIT, SELECT_L_COMPLEX,
-        SELECT_MIN_OPTIMAL_LIT, SELECT_NEGATIVE_LITERALS, SELECT_NON_ANTI_RR_OPTIMAL_LIT,
-        SELECT_NON_RR_OPTIMAL_LIT, SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT,
-        SELECT_OPTIMAL_RESTR_DEPTH2, SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2,
-        SELECT_PURE_VAR_NEG_LITERALS, SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+        SELECT_DIFF_NEG_LIT, SELECT_DIV_LITS, SELECT_DIV_PREFER_INTO_LITS, SELECT_GROUND_NEG_LIT,
+        SELECT_LARGEST_NEG_LIT, SELECT_L_COMPLEX, SELECT_MIN_OPTIMAL_LIT, SELECT_NEGATIVE_LITERALS,
+        SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
+        SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT, SELECT_OPTIMAL_RESTR_DEPTH2,
+        SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2, SELECT_PURE_VAR_NEG_LITERALS,
+        SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::EP_IS_SELECTED;
+    use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -1271,6 +1418,21 @@ mod tests {
             literal(&mut bank, &y, &a, false),
             predicate_literal(&mut bank, &neq_ignored, false),
             literal(&mut bank, &x, &b, false),
+        ]))
+    }
+
+    fn diversification_clause() -> Clause {
+        let mut bank = test_bank();
+        let pos = predicate_const_atom(&mut bank, "div_pos");
+        let a = shared_const(&mut bank, "div_a");
+        let b = shared_const(&mut bank, "div_b");
+        let c = shared_const(&mut bank, "div_c");
+        let d = shared_const(&mut bank, "div_d");
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(&mut bank, &pos, true),
+            literal(&mut bank, &a, &b, false),
+            literal(&mut bank, &b, &c, false),
+            literal(&mut bank, &c, &d, false),
         ]))
     }
 
@@ -1613,6 +1775,42 @@ mod tests {
             select_mask(&equation_preferred),
             vec![true, false, true, false, false]
         );
+    }
+
+    #[test]
+    fn diversification_selectors_preserve_c_counter_and_into_priority() {
+        reset_literal_weight_counter_for_tests();
+        let mut clause = diversification_clause();
+        clause.set_prop(CP_IS_ORIENTED);
+
+        select_diversification_literals(None, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![3]);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+
+        reset_literal_weight_counter_for_tests();
+        let mut by_name = diversification_clause();
+        apply_ported_literal_selector(SELECT_DIV_LITS, None, &mut by_name).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+        assert_eq!(selected_indices(&by_name), vec![3]);
+
+        reset_literal_weight_counter_for_tests();
+        let mut clause = diversification_clause();
+        clause.literals_mut().as_mut_slice()[2].set_prop(EP_IS_PM_INTO_LIT);
+
+        select_diversification_prefer_into_literals(None, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+
+        reset_literal_weight_counter_for_tests();
+        let mut by_name = diversification_clause();
+        by_name.literals_mut().as_mut_slice()[2].set_prop(EP_IS_PM_INTO_LIT);
+        apply_ported_literal_selector(SELECT_DIV_PREFER_INTO_LITS, None, &mut by_name)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+        assert_eq!(selected_indices(&by_name), vec![2]);
     }
 
     #[test]
