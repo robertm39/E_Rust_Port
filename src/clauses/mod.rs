@@ -19,6 +19,7 @@ pub mod findex;
 pub mod freqvectors;
 pub mod g_lithash;
 pub mod garbage_coll;
+pub mod global_indices;
 pub mod groundconstr;
 pub mod grounding;
 pub mod neweval;

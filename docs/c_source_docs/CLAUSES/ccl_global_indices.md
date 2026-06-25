@@ -108,4 +108,17 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- Rust currently ports the `GlobalIndicesNull`/`GlobalIndicesInit`/`GlobalIndicesFreeIndices`/`GlobalIndicesReset` shape and the backward-rewrite subterm-index path. Paramodulation overlap indexes and LFHO extension indexes remain later slices.
+- `GlobalIndicesInit` stores `pm_negp_index_type` from `pm_into_index_type`, not from a separate argument. Rust mirrors that derived field.
+- `GlobalIndicesInsertClause` marks the clause `CPIsGlobalIndexed` before inserting into optional indexes. `GlobalIndicesDeleteClause` clears the bit before deleting from optional indexes. Rust preserves that mutation order.
+- `GlobalIndicesInsertClauseSet` returns immediately if `bw_rw_index` is null, so a PM-only configuration would not mark or insert the set through this helper. Rust preserves that no-op gate.
+
+### Change Later Candidates
+
+- `GlobalIndicesReset` frees and reinitializes indexes but does not clear `CPIsGlobalIndexed` on any clauses; C callers reset after freeing clause sets. Rust mirrors the index reset and should keep clause-flag cleanup explicit if reset is ever exposed with live clauses.
+- Global indices in C store raw pointers to optional subterm, overlap, and extension indexes against the proof-state signature. Rust uses a borrowed-signature shell for now; later proof-state integration should avoid self-referential ownership, likely by moving the signature behind an explicit shared proof-session handle.
+- Paramodulation overlap indexes and LFHO extension indexes are still absent from the Rust shell. Add them before wiring full proof search or global simplification through this owner.
 <!-- END MANUAL REVIEW: c_source_docs -->
