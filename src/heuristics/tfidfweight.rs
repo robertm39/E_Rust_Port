@@ -13,6 +13,7 @@ use crate::heuristics::termweights::{
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_copy_normalize_vars, VarNormStyle};
@@ -313,6 +314,40 @@ pub fn conjecture_term_tfidf_weight_compute(
     result
 }
 
+/// Computes C `ConjectureTermTfIdfWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+/// As in C, generated-document updates happen after term-extension scoring.
+#[must_use]
+pub fn conjecture_term_tfidf_weight_compute_with_ocb(
+    param: &mut TfIdfWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    param.ensure_init(bank.signature());
+    clause.cond_mark_maximal_terms(ocb, bank);
+    let extension = TermWeightExtension::new(
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.ext_style,
+        tfidf_weight_extension,
+        &*param,
+    );
+    let result = clause.term_ext_weight(&extension);
+    if param.update_docs != 0 {
+        let mut eval = param.eval.borrow_mut();
+        let state = eval
+            .as_mut()
+            .unwrap_or_else(|| panic!("ConjectureTermTfIdfWeight eval bank must be initialized"));
+        tfidf_documents_add_clause_to_state(state, clause, param.var_norm);
+    }
+    result
+}
+
 fn conjecture_term_tfidf_weight_wfcb_compute(
     data: Option<&mut TfIdfWeightParam>,
     bank: &TermBank,
@@ -384,16 +419,19 @@ fn usize_to_f64(value: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        conjecture_term_tfidf_weight_compute, conjecture_term_tfidf_weight_parse,
-        tfidf_weight_param_alloc,
+        conjecture_term_tfidf_weight_compute, conjecture_term_tfidf_weight_compute_with_ocb,
+        conjecture_term_tfidf_weight_parse, tfidf_weight_param_alloc,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::heuristics::termweights::RelatedTermSet;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::VarNormStyle;
@@ -418,6 +456,15 @@ mod tests {
         conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
         let document = unit_clause(bank, "f(a)", "d", false);
         ClauseSet::from_clauses([conjecture, document])
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     fn assert_f64_bits_eq(actual: f64, expected: f64) {
@@ -507,6 +554,56 @@ mod tests {
             second_expected,
         );
         assert_eq!(param.document_count(), Some(7));
+    }
+
+    #[test]
+    fn conjecture_tfidf_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let axioms = mixed_axioms(&mut bank);
+        let mut target = unit_clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = tfidf_weight_param_alloc(
+            &axioms,
+            VarNormStyle::None,
+            RelatedTermSet::ConjectureTerms,
+            1,
+            1.0,
+            TermWeightExtensionStyle::Simple,
+            1.0,
+            7.0,
+            1.0,
+        );
+        let expected =
+            conjecture_term_tfidf_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut actual_param = tfidf_weight_param_alloc(
+            &axioms,
+            VarNormStyle::None,
+            RelatedTermSet::ConjectureTerms,
+            1,
+            1.0,
+            TermWeightExtensionStyle::Simple,
+            1.0,
+            7.0,
+            1.0,
+        );
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = conjecture_term_tfidf_weight_compute_with_ocb(
+            &mut actual_param,
+            &mut ocb,
+            &bank,
+            &mut target,
+        );
+
+        assert_f64_bits_eq(actual, expected);
+        assert_eq!(
+            actual_param.document_count(),
+            expected_param.document_count()
+        );
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]
