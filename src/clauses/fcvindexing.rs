@@ -1,6 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clausepos_tree::clause_key;
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::freqvectors::{
     bill_features_collect_alloc, bill_plus_features_collect_alloc, fv_pack_clause,
     optimized_var_freq_vector_compute, FreqVector, FvCollect, FvCollectLayout, FvIndexType,
@@ -116,11 +117,49 @@ impl FvIndexInitSpecs {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct FvIndexInitAnchors {
+    processed_non_units: Option<FvIndexAnchor>,
+    processed_pos_rules: Option<FvIndexAnchor>,
+    processed_pos_eqns: Option<FvIndexAnchor>,
+    processed_neg_units: Option<FvIndexAnchor>,
+    watchlist: Option<FvIndexAnchor>,
+    def_store: FvIndexAnchor,
+}
+
+impl FvIndexInitAnchors {
+    #[must_use]
+    pub fn processed_non_units(&self) -> Option<&FvIndexAnchor> {
+        self.processed_non_units.as_ref()
+    }
+
+    #[must_use]
+    pub fn processed_pos_rules(&self) -> Option<&FvIndexAnchor> {
+        self.processed_pos_rules.as_ref()
+    }
+
+    #[must_use]
+    pub fn processed_pos_eqns(&self) -> Option<&FvIndexAnchor> {
+        self.processed_pos_eqns.as_ref()
+    }
+
+    #[must_use]
+    pub fn processed_neg_units(&self) -> Option<&FvIndexAnchor> {
+        self.processed_neg_units.as_ref()
+    }
+
+    #[must_use]
+    pub fn watchlist(&self) -> Option<&FvIndexAnchor> {
+        self.watchlist.as_ref()
+    }
+
+    #[must_use]
+    pub const fn def_store(&self) -> &FvIndexAnchor {
+        &self.def_store
+    }
+}
+
 /// Computes the feature-vector collection specs built by C `fvi_param_init`.
-///
-/// The returned specs cover the pure parameter calculation. Installing
-/// `FvIndexAnchor`s into proof-state clause sets remains with the future
-/// proof-state owner.
 ///
 /// # Errors
 ///
@@ -155,6 +194,44 @@ pub fn fvi_param_init_specs(
         cspec,
         def_store_cspec,
     })
+}
+
+/// Builds the empty feature-vector anchors installed by C `fvi_param_init`.
+///
+/// The caller still owns attaching these anchors to concrete proof-state clause
+/// sets. The active processed/watchlist anchors all receive copies of the same
+/// permutation vector computed from the active spec; the definition-store anchor
+/// receives the same effective vector with its separate AC-fold collection spec.
+#[must_use]
+pub fn fvi_param_init_anchors(
+    axioms: &ClauseSet,
+    specs: &FvIndexInitSpecs,
+    params: &FvIndexParams,
+    include_watchlist: bool,
+) -> FvIndexInitAnchors {
+    let perm = axioms.perm_vector_compute(specs.cspec(), params.eliminate_uninformative());
+    let active_enabled = params.cspec().features() != FvIndexType::NoFeatures;
+
+    FvIndexInitAnchors {
+        processed_non_units: optional_anchor(active_enabled, specs.cspec(), perm.as_ref()),
+        processed_pos_rules: optional_anchor(active_enabled, specs.cspec(), perm.as_ref()),
+        processed_pos_eqns: optional_anchor(active_enabled, specs.cspec(), perm.as_ref()),
+        processed_neg_units: optional_anchor(active_enabled, specs.cspec(), perm.as_ref()),
+        watchlist: optional_anchor(
+            active_enabled && include_watchlist,
+            specs.cspec(),
+            perm.as_ref(),
+        ),
+        def_store: FvIndexAnchor::new(specs.def_store_cspec().clone(), perm),
+    }
+}
+
+fn optional_anchor(
+    enabled: bool,
+    cspec: &FvCollect,
+    perm: Option<&PermVector>,
+) -> Option<FvIndexAnchor> {
+    enabled.then(|| FvIndexAnchor::new(cspec.clone(), perm.cloned()))
 }
 
 fn ac_fold_collect(symbols: usize) -> Result<FvCollect, Diagnostic> {
@@ -530,10 +607,11 @@ pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> F
 #[cfg(test)]
 mod tests {
     use super::{
-        fv_index_pack_clause, fv_index_storage, fvi_param_init_specs, FvIndex, FvIndexAnchor,
-        FvIndexParams,
+        fv_index_pack_clause, fv_index_storage, fvi_param_init_anchors, fvi_param_init_specs,
+        FvIndex, FvIndexAnchor, FvIndexParams,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::freqvectors::{
@@ -592,6 +670,16 @@ mod tests {
         let mut cspec = FvCollect::new(FvCollectLayout::new(FvIndexType::AcFeatures, false, 0, 0));
         cspec.set_max_symbols(max_symbols);
         FvIndexAnchor::new(cspec, None)
+    }
+
+    fn two_clause_axioms(bank: &mut TermBank) -> ClauseSet {
+        let first = typed_const(bank, "fvi_anchor_a");
+        let second = typed_const(bank, "fvi_anchor_b");
+        let third = typed_const(bank, "fvi_anchor_c");
+        ClauseSet::from_clauses([
+            clause_from(vec![literal(bank, &first, &second, true)], 100),
+            clause_from(vec![literal(bank, &second, &third, false)], 101),
+        ])
     }
 
     #[test]
@@ -670,6 +758,70 @@ mod tests {
         assert_eq!(specs.cspec().features(), FvIndexType::NoFeatures);
         assert_eq!(specs.cspec().result_len(), 0);
         assert_eq!(specs.cspec().max_symbols(), original + 2);
+    }
+
+    #[test]
+    fn fvi_param_init_anchors_build_processed_watchlist_and_def_store_anchors() {
+        let mut bank = test_bank();
+        let axioms = two_clause_axioms(&mut bank);
+        let params = FvIndexParams::new(FvIndexType::AcFold, false, true, 9, 1);
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+        let expected_perm = axioms.perm_vector_compute(specs.cspec(), true);
+
+        let anchors = fvi_param_init_anchors(&axioms, &specs, &params, true);
+
+        for anchor in [
+            anchors.processed_non_units(),
+            anchors.processed_pos_rules(),
+            anchors.processed_pos_eqns(),
+            anchors.processed_neg_units(),
+            anchors.watchlist(),
+        ] {
+            let anchor = anchor.unwrap_or_else(|| panic!("active FV anchor should be installed"));
+            assert_eq!(anchor.cspec(), specs.cspec());
+            assert_eq!(anchor.perm_vector(), expected_perm.as_ref());
+            assert_eq!(anchor.index().clause_count(), 0);
+        }
+        assert_eq!(anchors.def_store().cspec(), specs.def_store_cspec());
+        assert_eq!(anchors.def_store().perm_vector(), expected_perm.as_ref());
+        assert_eq!(anchors.def_store().index().clause_count(), 0);
+    }
+
+    #[test]
+    fn fvi_param_init_anchors_skip_processed_sets_for_no_features() {
+        let mut bank = test_bank();
+        let axioms = two_clause_axioms(&mut bank);
+        let params = FvIndexParams::new(FvIndexType::NoFeatures, false, false, 9, 1);
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+
+        let anchors = fvi_param_init_anchors(&axioms, &specs, &params, true);
+
+        assert!(anchors.processed_non_units().is_none());
+        assert!(anchors.processed_pos_rules().is_none());
+        assert!(anchors.processed_pos_eqns().is_none());
+        assert!(anchors.processed_neg_units().is_none());
+        assert!(anchors.watchlist().is_none());
+        assert_eq!(anchors.def_store().cspec(), specs.def_store_cspec());
+        assert!(anchors.def_store().perm_vector().is_none());
+    }
+
+    #[test]
+    fn fvi_param_init_anchors_omit_watchlist_when_state_has_none() {
+        let mut bank = test_bank();
+        let axioms = two_clause_axioms(&mut bank);
+        let params = FvIndexParams::new(FvIndexType::AcFold, true, false, 9, 1);
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+
+        let anchors = fvi_param_init_anchors(&axioms, &specs, &params, false);
+
+        assert!(anchors.processed_non_units().is_some());
+        assert!(anchors.processed_pos_rules().is_some());
+        assert!(anchors.processed_pos_eqns().is_some());
+        assert!(anchors.processed_neg_units().is_some());
+        assert!(anchors.watchlist().is_none());
     }
 
     #[test]
