@@ -12,7 +12,10 @@ use crate::inout::basicparser::{parse_float, parse_int, parse_plain_filename};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::simpletypes::{type_get_order, type_has_bool, var_order};
 use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::Term;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ClauseSetArityInformation {
@@ -25,6 +28,15 @@ pub struct ClauseSetArityInformation {
     pub non_const_funs: i32,
     pub non_const_preds: i32,
     pub fun_const_count: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClauseSetHoFeatures {
+    pub has_ho_features: bool,
+    pub order: i32,
+    pub quantifies_booleans: bool,
+    pub has_defined_choice: bool,
+    pub perc_app_var_lits: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -972,6 +984,88 @@ pub fn clause_set_collect_arity_information(
     }
 }
 
+/// Computes the clause-set higher-order statistics from
+/// `ClauseSetComputeHOFeatures`.
+///
+/// C also recognizes defined-choice clauses through `ClauseRecognizeChoice`,
+/// which beta/eta-normalizes lambda/DB terms and optionally records the
+/// recognized choice symbol in a side map. That map and normalization pipeline
+/// are not available at this layer yet, so callers supply the boolean
+/// recognizer. Passing `|_| false` preserves the non-choice parts exactly.
+///
+/// # Panics
+///
+/// Panics if an external signature symbol or collected variable has no type, or
+/// if the computed type order cannot fit the C `int` result type.
+#[must_use]
+pub fn clause_set_compute_ho_features<F>(
+    set: &ClauseSet,
+    signature: &Signature,
+    mut recognize_choice: F,
+) -> ClauseSetHoFeatures
+where
+    F: FnMut(&Clause) -> bool,
+{
+    let mut is_fo = true;
+    let mut quantifies_booleans = false;
+    let mut has_defined_choice = false;
+    let mut app_var_lit_count = 0;
+    let mut order = 0;
+
+    for symbol in (signature.internal_symbols() + 1)..=signature.f_count() {
+        let type_ = signature
+            .get_type(symbol)
+            .unwrap_or_else(|| panic!("external signature symbol {symbol} must have a type"));
+        order = order.max(type_get_order(type_));
+    }
+
+    for clause in set.iter() {
+        let mut variables = BTreeMap::new();
+        clause.collect_variables(&mut variables);
+        for variable in variables.values() {
+            let type_ = variable
+                .type_()
+                .unwrap_or_else(|| panic!("collected variable must have a type"));
+            order = order.max(var_order(&type_));
+            quantifies_booleans = quantifies_booleans || type_has_bool(&type_);
+        }
+
+        let mut has_app_var = false;
+        for literal in clause.literals().as_slice() {
+            is_fo = is_fo
+                && term_is_first_order_for_ho_features(literal.left())
+                && term_is_first_order_for_ho_features(literal.right());
+            has_app_var = has_app_var
+                || literal.left().is_applied_free_var()
+                || literal.right().is_applied_free_var();
+        }
+
+        has_defined_choice = has_defined_choice || recognize_choice(clause);
+        app_var_lit_count += i64::from(has_app_var);
+    }
+
+    ClauseSetHoFeatures {
+        has_ho_features: !is_fo,
+        order: i32::try_from(order)
+            .unwrap_or_else(|_| panic!("higher-order feature order must fit C int")),
+        quantifies_booleans,
+        has_defined_choice,
+        perc_app_var_lits: if set.members() == 0 {
+            0.0
+        } else {
+            app_var_lit_count as f64 / set.members() as f64
+        },
+    }
+}
+
+#[must_use]
+pub fn clause_set_compute_ho_features_without_choice(
+    set: &ClauseSet,
+    signature: &Signature,
+) -> ClauseSetHoFeatures {
+    clause_set_compute_ho_features(set, signature, |_| false)
+}
+
 #[must_use]
 pub fn clause_set_count_maximal_terms(set: &ClauseSet) -> i64 {
     set.iter().map(clause_count_maximal_terms).sum()
@@ -1063,6 +1157,10 @@ where
     F: Fn(&Clause) -> bool,
 {
     usize_to_i64(set.iter().filter(|clause| predicate(clause)).count())
+}
+
+fn term_is_first_order_for_ho_features(term: &Term) -> bool {
+    !(term.is_non_fo_pattern() || term.has_lambda_subterm() || term.has_db_subterm())
 }
 
 fn clause_set_print_filtered_string<P, R>(
@@ -1261,7 +1359,8 @@ fn clause_weight_to_i64(weight: f64) -> i64 {
 mod tests {
     use super::{
         clause_set_axioms_are_horn, clause_set_axioms_are_unit,
-        clause_set_collect_arity_information, clause_set_count_axioms,
+        clause_set_collect_arity_information, clause_set_compute_ho_features,
+        clause_set_compute_ho_features_without_choice, clause_set_count_axioms,
         clause_set_count_eqn_literals, clause_set_count_equational, clause_set_count_goals,
         clause_set_count_ground, clause_set_count_ground_goals,
         clause_set_count_ground_positive_axioms, clause_set_count_ground_unit_axioms,
@@ -1282,8 +1381,9 @@ mod tests {
         clause_set_print_pos_units_string, clause_set_term_cells, clause_set_tptp_depth_info_add,
         create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
         spec_features_parse, spec_features_print_string, spec_limits_print_string,
-        spec_type_print_string, spec_type_string_for_problem, SpecFeatureCell, SpecFeatureClass,
-        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
+        spec_type_print_string, spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell,
+        SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR,
+        SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1300,7 +1400,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, Term, TP_HAS_LAMBDA_SUBTERM};
     use crate::terms::typebanks::TypeBank;
 
     fn term_bank() -> TermBank {
@@ -1851,6 +1951,72 @@ mod tests {
         assert_eq!(info.max_pred_arity, 2);
         assert_eq!(info.sum_pred_arity, 2);
         assert_eq!(info.avg_pred_arity, 2);
+    }
+
+    #[test]
+    fn ho_feature_extraction_matches_c_symbol_variable_and_literal_scans() {
+        let mut bank = term_bank();
+        let individual = individual(&bank);
+        let bool_type = bank.signature().type_bank().bool_type();
+        let pred_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![individual.clone(), bool_type]));
+        let higher_order_type =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    pred_type.clone(),
+                    individual.clone(),
+                ]));
+        let ho_symbol = bank
+            .signature_mut()
+            .insert_id("ho_feature_symbol", 1, false);
+        bank.signature_mut()
+            .declare_final_type(ho_symbol, higher_order_type)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let x = bank.vars().var_assert_alloc(-2, &individual);
+        let p = bank.vars().var_assert_alloc(-4, &pred_type);
+        let app = bank.term_apply_arg(&p, &x);
+        let mut app_clause = clause_from(vec![predicate_literal(&mut bank, &app)]);
+        app_clause.set_ident(1001);
+
+        let marked = typed_const(&mut bank, "lambda_marked_feature_term");
+        marked.set_prop(TP_HAS_LAMBDA_SUBTERM);
+        let a = typed_const(&mut bank, "ho_feature_a");
+        let mut non_fo_clause = clause_from(vec![equation(&mut bank, &marked, &a, true)]);
+        non_fo_clause.set_ident(1002);
+
+        let set = ClauseSet::from_clauses([app_clause, non_fo_clause]);
+
+        let features =
+            clause_set_compute_ho_features(&set, bank.signature(), |clause| clause.ident() == 1002);
+
+        assert_eq!(
+            features,
+            ClauseSetHoFeatures {
+                has_ho_features: true,
+                order: 2,
+                quantifies_booleans: true,
+                has_defined_choice: true,
+                perc_app_var_lits: 0.5,
+            }
+        );
+        assert!(
+            !clause_set_compute_ho_features_without_choice(&set, bank.signature())
+                .has_defined_choice
+        );
+    }
+
+    #[test]
+    fn ho_feature_extraction_handles_empty_sets_like_c() {
+        let bank = term_bank();
+
+        assert_eq!(
+            clause_set_compute_ho_features_without_choice(&ClauseSet::new(), bank.signature()),
+            ClauseSetHoFeatures::default()
+        );
     }
 
     #[test]

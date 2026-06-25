@@ -252,6 +252,7 @@ Source files reviewed: `HEURISTICS/che_clausesetfeatures.h`, `HEURISTICS/che_cla
 - `SpecTypeString` builds 21 classification bytes in a 22-byte local buffer, accepts masks with length 13 through 22, and returns only 21 bytes via `SecureStrndup(result, 21)`. A 22nd mask byte can affect only the C buffer terminator and is not observable in the returned string.
 - `SpecFeaturesParse` accepts `G`, `H`, or `U` for the axiom class but only `H` or `U` for the goal class, even though `SpecTypeString` can encode general goals as `G`.
 - `ClauseSetPrintNegUnits` is named as if it prints all negative unit clauses, but it filters on `ClauseIsUnit && ClauseIsGoal`; with the current clause predicates this means unit goal clauses. Rust preserves that filter in both the caller-rendered helper and the default LOP wrapper.
+- `ClauseSetComputeHOFeatures` computes `has_defined_choice` by calling `ClauseRecognizeChoice(NULL, clause)`, which beta-normalizes and eta-reduces the two predicate terms before recognizing `~P X | P (f P)`. Rust now ports the non-choice HO statistics and exposes the choice result as a caller-supplied predicate until lambda normalization and the choice-symbol map are ported.
 - `ClauseSetHasHOFeatures` and `ClauseSetComputeMaxOrder` are declared in `che_clausesetfeatures.h` but have no implementation in this checkout; leave them documented as header-only surface until a C definition or real caller appears.
 
 ### Porting Focus
