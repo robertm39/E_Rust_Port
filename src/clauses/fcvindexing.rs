@@ -1,11 +1,14 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clausepos_tree::clause_key;
 use crate::clauses::freqvectors::{
-    fv_pack_clause, optimized_var_freq_vector_compute, FreqVector, FvCollect, FvCollectLayout,
-    FvIndexType, FvPackedClause, PermVector, FVINDEX_MAX_FEATURES_DEFAULT,
+    bill_features_collect_alloc, bill_plus_features_collect_alloc, fv_pack_clause,
+    optimized_var_freq_vector_compute, FreqVector, FvCollect, FvCollectLayout, FvIndexType,
+    FvOverflowSpec, FvPackedClause, PermVector, FVINDEX_MAX_FEATURES_DEFAULT,
     FVINDEX_SYMBOL_SLACK_DEFAULT,
 };
 use crate::clauses::subsumption::clause_subsume_order_sort_lits;
+use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::fmt::Write as _;
@@ -81,6 +84,161 @@ impl FvIndexParams {
     pub const fn set_symbol_slack(&mut self, symbol_slack: usize) {
         self.symbol_slack = symbol_slack;
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FvIndexInitSpecs {
+    original_symbols: usize,
+    symbols: usize,
+    cspec: FvCollect,
+    def_store_cspec: FvCollect,
+}
+
+impl FvIndexInitSpecs {
+    #[must_use]
+    pub const fn original_symbols(&self) -> usize {
+        self.original_symbols
+    }
+
+    #[must_use]
+    pub const fn symbols(&self) -> usize {
+        self.symbols
+    }
+
+    #[must_use]
+    pub const fn cspec(&self) -> &FvCollect {
+        &self.cspec
+    }
+
+    #[must_use]
+    pub const fn def_store_cspec(&self) -> &FvCollect {
+        &self.def_store_cspec
+    }
+}
+
+/// Computes the feature-vector collection specs built by C `fvi_param_init`.
+///
+/// The returned specs cover the pure parameter calculation. Installing
+/// `FvIndexAnchor`s into proof-state clause sets remains with the future
+/// proof-state owner.
+///
+/// # Errors
+///
+/// Returns a diagnostic if C-shaped symbol counts cannot be represented in the
+/// Rust index layout.
+pub fn fvi_param_init_specs(
+    signature: &Signature,
+    params: &FvIndexParams,
+) -> Result<FvIndexInitSpecs, Diagnostic> {
+    let original_symbols = usize_from_i64(signature.f_count(), "signature f_count")?;
+    let symbols = original_symbols
+        .saturating_add(params.symbol_slack)
+        .min(params.max_symbols);
+    let mut cspec = match params.cspec.features() {
+        FvIndexType::BillFeatures => {
+            bill_features_collect_alloc(signature, symbols_times_two_plus(symbols, 2)?)
+        }
+        FvIndexType::BillPlusFeatures => {
+            bill_plus_features_collect_alloc(signature, symbols_times_two_plus(symbols, 4)?)
+        }
+        FvIndexType::AcFold => ac_fold_collect(symbols)?,
+        FvIndexType::AcStagger => ac_stagger_collect(symbols)?,
+        FvIndexType::CollectFeatures => collect_features_from_params(params, symbols),
+        features => FvCollect::new(FvCollectLayout::new(features, false, 0, 0)),
+    };
+    cspec.set_max_symbols(symbols);
+    let def_store_cspec = ac_fold_collect(symbols)?;
+
+    Ok(FvIndexInitSpecs {
+        original_symbols,
+        symbols,
+        cspec,
+        def_store_cspec,
+    })
+}
+
+fn ac_fold_collect(symbols: usize) -> Result<FvCollect, Diagnostic> {
+    let symbols = usize_to_i64(symbols, "FV index symbols")?;
+    let result_len = symbols_times_two_plus_i64(symbols, 2)?;
+    let mut layout = FvCollectLayout::new(FvIndexType::CollectFeatures, true, 0, result_len);
+    layout.pos_count = FvOverflowSpec::new(2, 0, symbols);
+    layout.neg_count =
+        FvOverflowSpec::new(checked_i64_add(symbols, 2, "FV index symbols")?, 0, symbols);
+    Ok(FvCollect::new(layout))
+}
+
+fn ac_stagger_collect(symbols: usize) -> Result<FvCollect, Diagnostic> {
+    let symbols = usize_to_i64(symbols, "FV index symbols")?;
+    let double_symbols = checked_i64_mul(symbols, 2, "FV index symbols")?;
+    let result_len = checked_i64_add(double_symbols, 2, "FV index result length")?;
+    let mut layout = FvCollectLayout::new(
+        FvIndexType::CollectFeatures,
+        true,
+        0,
+        i64_to_usize(result_len, "FV index result length")?,
+    );
+    layout.pos_count = FvOverflowSpec::new(2, 0, double_symbols);
+    layout.neg_count = FvOverflowSpec::new(
+        2,
+        checked_i64_add(symbols, 2, "FV index symbols")?,
+        double_symbols,
+    );
+    Ok(FvCollect::new(layout))
+}
+
+fn collect_features_from_params(params: &FvIndexParams, symbols: usize) -> FvCollect {
+    let mut layout = FvCollectLayout::new(
+        params.cspec.features(),
+        params.cspec.use_litcount(),
+        params.cspec.assembly_vector().len(),
+        symbols,
+    );
+    layout.pos_count = params.cspec.pos_count_overflow();
+    layout.neg_count = params.cspec.neg_count_overflow();
+    layout.pos_depth = params.cspec.pos_depth_overflow();
+    layout.neg_depth = params.cspec.neg_depth_overflow();
+    FvCollect::new(layout)
+}
+
+fn symbols_times_two_plus(symbols: usize, addend: usize) -> Result<usize, Diagnostic> {
+    symbols
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(addend))
+        .ok_or_else(|| fv_index_error("FV index symbol-derived vector length overflows usize"))
+}
+
+fn symbols_times_two_plus_i64(symbols: i64, addend: i64) -> Result<usize, Diagnostic> {
+    let doubled = checked_i64_mul(symbols, 2, "FV index symbols")?;
+    i64_to_usize(
+        checked_i64_add(doubled, addend, "FV index result length")?,
+        "FV index result length",
+    )
+}
+
+fn usize_from_i64(value: i64, context: &str) -> Result<usize, Diagnostic> {
+    usize::try_from(value).map_err(|_| fv_index_error(&format!("{context} must fit usize")))
+}
+
+fn usize_to_i64(value: usize, context: &str) -> Result<i64, Diagnostic> {
+    i64::try_from(value).map_err(|_| fv_index_error(&format!("{context} must fit i64")))
+}
+
+fn i64_to_usize(value: i64, context: &str) -> Result<usize, Diagnostic> {
+    usize::try_from(value).map_err(|_| fv_index_error(&format!("{context} must fit usize")))
+}
+
+fn checked_i64_add(lhs: i64, rhs: i64, context: &str) -> Result<i64, Diagnostic> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| fv_index_error(&format!("{context} addition overflows i64")))
+}
+
+fn checked_i64_mul(lhs: i64, rhs: i64, context: &str) -> Result<i64, Diagnostic> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(|| fv_index_error(&format!("{context} multiplication overflows i64")))
+}
+
+fn fv_index_error(message: &str) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, message.to_owned())
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -371,11 +529,17 @@ pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> F
 
 #[cfg(test)]
 mod tests {
-    use super::{fv_index_pack_clause, fv_index_storage, FvIndex, FvIndexAnchor, FvIndexParams};
+    use super::{
+        fv_index_pack_clause, fv_index_storage, fvi_param_init_specs, FvIndex, FvIndexAnchor,
+        FvIndexParams,
+    };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
-    use crate::clauses::freqvectors::{FreqVector, FvCollect, FvCollectLayout, FvIndexType};
+    use crate::clauses::freqvectors::{
+        FreqVector, FvCollect, FvCollectLayout, FvIndexType, FvOverflowSpec,
+        FVINDEX_MAX_FEATURES_DEFAULT,
+    };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -439,6 +603,73 @@ mod tests {
         assert_eq!(params.max_symbols(), 17);
         assert_eq!(params.symbol_slack(), 0);
         assert_eq!(params.cspec().max_symbols(), 0);
+    }
+
+    #[test]
+    fn fvi_param_init_specs_builds_ac_fold_and_def_store_shapes() {
+        let bank = test_bank();
+        let params = FvIndexParams::new(FvIndexType::AcFold, false, false, 5, 3);
+
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            specs.original_symbols(),
+            usize::try_from(bank.signature().f_count()).unwrap()
+        );
+        assert_eq!(specs.symbols(), 5);
+        assert_eq!(specs.cspec().features(), FvIndexType::CollectFeatures);
+        assert!(specs.cspec().use_litcount());
+        assert_eq!(specs.cspec().result_len(), 12);
+        assert_eq!(specs.cspec().max_symbols(), 5);
+        assert_eq!(
+            specs.cspec().pos_count_overflow(),
+            FvOverflowSpec::new(2, 0, 5)
+        );
+        assert_eq!(
+            specs.cspec().neg_count_overflow(),
+            FvOverflowSpec::new(7, 0, 5)
+        );
+        assert_eq!(
+            specs.def_store_cspec().max_symbols(),
+            FVINDEX_MAX_FEATURES_DEFAULT
+        );
+        assert_eq!(specs.def_store_cspec().result_len(), 12);
+    }
+
+    #[test]
+    fn fvi_param_init_specs_builds_ac_stagger_shape() {
+        let bank = test_bank();
+        let params = FvIndexParams::new(FvIndexType::AcStagger, false, false, 4, 0);
+
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(specs.symbols(), 4);
+        assert_eq!(specs.cspec().result_len(), 10);
+        assert_eq!(
+            specs.cspec().pos_count_overflow(),
+            FvOverflowSpec::new(2, 0, 8)
+        );
+        assert_eq!(
+            specs.cspec().neg_count_overflow(),
+            FvOverflowSpec::new(2, 6, 8)
+        );
+    }
+
+    #[test]
+    fn fvi_param_init_specs_preserves_no_feature_request_with_symbol_cap() {
+        let bank = test_bank();
+        let original = usize::try_from(bank.signature().f_count()).unwrap();
+        let params = FvIndexParams::new(FvIndexType::NoFeatures, false, false, original + 3, 2);
+
+        let specs =
+            fvi_param_init_specs(bank.signature(), &params).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(specs.symbols(), original + 2);
+        assert_eq!(specs.cspec().features(), FvIndexType::NoFeatures);
+        assert_eq!(specs.cspec().result_len(), 0);
+        assert_eq!(specs.cspec().max_symbols(), original + 2);
     }
 
     #[test]
