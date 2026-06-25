@@ -1,9 +1,10 @@
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_ORIENTED;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType};
 use crate::heuristics::hcbadmin::HcbAdmin;
@@ -338,6 +339,40 @@ pub fn proof_control_init_heuristics(
     Ok(())
 }
 
+/// Initializes the currently ported proof-state indexing portion of C
+/// `ProofStateInit`.
+///
+/// This covers the `fvi_param_init` call and watchlist local indexed rebuild.
+/// Axiom reweighting, copying into `unprocessed`, watchlist checks, and global
+/// index insertion remain with the later proof-process initialization slice.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-control ordering is not initialized, or if
+/// feature-vector anchor construction fails.
+pub fn proof_state_init_indexing(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<i64, Diagnostic> {
+    if control.ocb.is_none() {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProofStateInit requires initialized proof-control ordering",
+        ));
+    }
+
+    if !state.fvi_initialized() {
+        state.init_fvi_anchors(control.fvi_parms())?;
+    }
+    let Some(ocb) = control.ocb.as_mut() else {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProofStateInit requires initialized proof-control ordering",
+        ));
+    };
+    Ok(state.init_watchlist(ocb))
+}
+
 fn install_default_weight_functions(
     control: &mut ProofControl,
     context: WeightParseContext<'_>,
@@ -533,9 +568,10 @@ mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, select_inherited_literal, LiteralSelectionOutcome,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_control_reset_sat_solver, proof_state_init_indexing, select_inherited_literal,
+        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
+    use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_CONJECTURE};
@@ -545,11 +581,12 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
+    use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC};
     use crate::heuristics::litselection::SELECT_UNLESS_POS_MAX;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, FP_IGNORE_PROPS};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
@@ -711,6 +748,43 @@ mod tests {
         .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(control.fvi_parms().symbol_slack(), 11);
+    }
+
+    #[test]
+    fn proof_state_init_indexing_installs_fvi_and_rebuilds_watchlist() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let watch = {
+            let terms = state.terms_mut();
+            negative_clause(terms)
+        };
+        state.watchlist_mut().unwrap().insert(watch);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.set_fvi_parms(FvIndexParams::new(FvIndexType::AcFold, false, true, 11, 2));
+
+        let indexed = proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(indexed, 1);
+        assert!(state.fvi_initialized());
+        assert!(state.processed_non_units().fv_anchor().is_some());
+        assert!(state.definition_store().fv_anchor().is_some());
+        let watchlist = state.watchlist().unwrap();
+        assert!(watchlist.fv_anchor().is_some());
+        assert_eq!(watchlist.members(), 1);
+    }
+
+    #[test]
+    fn proof_state_init_indexing_requires_initialized_ocb_before_mutation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+
+        let error = proof_state_init_indexing(&mut state, &mut control).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(!state.fvi_initialized());
     }
 
     #[test]
