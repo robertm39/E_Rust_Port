@@ -82,6 +82,10 @@ pub const SELECT_MAX_L_COMPLEX_NO_TYPE_PRED: &str = "SelectMaxLComplexNoTypePred
 pub const P_SELECT_MAX_L_COMPLEX_NO_TYPE_PRED: &str = "PSelectMaxLComplexNoTypePred";
 pub const SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED: &str = "SelectMaxLComplexNoXTypePred";
 pub const P_SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED: &str = "PSelectMaxLComplexNoXTypePred";
+pub const SELECT_NEW_COMPLEX: &str = "SelectNewComplex";
+pub const P_SELECT_NEW_COMPLEX: &str = "PSelectNewComplex";
+pub const SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "SelectNewComplexExceptUniqMaxHorn";
+pub const P_SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "PSelectNewComplexExceptUniqMaxHorn";
 pub const SELECT_DIV_LITS: &str = "SelectDivLits";
 pub const SELECT_DIV_PREFER_INTO_LITS: &str = "SelectDivPreferIntoLits";
 
@@ -402,6 +406,39 @@ impl MaxLComplexSelector {
             Self::PositiveNoTypePred => p_select_max_l_complex_no_type_pred(ocb, bank, clause),
             Self::NoXTypePred => select_max_l_complex_no_x_type_pred(ocb, bank, clause),
             Self::PositiveNoXTypePred => p_select_max_l_complex_no_x_type_pred(ocb, bank, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NewComplexSelector {
+    Standard,
+    Positive,
+    ExceptUniqueMaxHorn,
+    PositiveExceptUniqueMaxHorn,
+}
+
+impl NewComplexSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_NEW_COMPLEX => Some(Self::Standard),
+            P_SELECT_NEW_COMPLEX => Some(Self::Positive),
+            SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN => Some(Self::ExceptUniqueMaxHorn),
+            P_SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN => Some(Self::PositiveExceptUniqueMaxHorn),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::Standard => select_new_complex(ocb, bank, clause),
+            Self::Positive => p_select_new_complex(ocb, bank, clause),
+            Self::ExceptUniqueMaxHorn => {
+                select_new_complex_except_uniq_max_horn(ocb, bank, clause);
+            }
+            Self::PositiveExceptUniqueMaxHorn => {
+                p_select_new_complex_except_uniq_max_horn(ocb, bank, clause);
+            }
         }
     }
 }
@@ -1171,6 +1208,30 @@ pub fn p_select_max_l_complex_no_x_type_pred(
     );
 }
 
+pub fn select_new_complex(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_new_complex_impl(ocb, bank, clause, false);
+}
+
+pub fn p_select_new_complex(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_new_complex_impl(ocb, bank, clause, true);
+}
+
+pub fn select_new_complex_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_new_complex_except_uniq_max_horn_impl(ocb, bank, clause, false);
+}
+
+pub fn p_select_new_complex_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_new_complex_except_uniq_max_horn_impl(ocb, bank, clause, true);
+}
+
 pub fn select_l_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
     select_complex_impl(ocb, clause, false, ComplexGroundChoice::LargestDiff);
 }
@@ -1265,6 +1326,15 @@ pub fn apply_ported_literal_selector_with_bank(
         selector.apply(ocb, bank, clause);
         Ok(())
     } else if let Some(selector) = MaxLComplexSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
+        Ok(())
+    } else if let Some(selector) = NewComplexSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(UnsupportedLiteralSelection::new(name));
         };
@@ -1824,6 +1894,100 @@ fn find_preferred_complex_negative_literal(
     selected
 }
 
+fn select_new_complex_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) {
+    clause.cond_mark_maximal_terms(ocb, bank);
+
+    let selected = find_smallest_max_negative_ground_literal(clause)
+        .or_else(|| find_non_ground_min11_infpos_no_x_type_literal(clause, bank))
+        .or_else(|| find_max_x_type_no_type_literal(clause, bank));
+
+    if let Some(index) = selected {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        clause.del_prop(CP_IS_ORIENTED);
+        if positive_variant {
+            select_positive_literals(clause);
+        }
+    }
+}
+
+fn select_new_complex_except_uniq_max_horn_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+) {
+    if clause.is_horn() {
+        clause.cond_mark_maximal_terms(ocb, bank);
+        if clause.literals().query_prop_number(EP_IS_MAXIMAL) == 1 {
+            return;
+        }
+    }
+
+    select_new_complex_impl(ocb, bank, clause, positive_variant);
+}
+
+fn find_smallest_max_negative_ground_literal(clause: &Clause) -> Option<usize> {
+    let mut selected = None;
+    let mut select_weight = i64::MAX;
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative() && literal.is_ground() {
+            let weight = literal.left().weight();
+            if weight < select_weight {
+                select_weight = weight;
+                selected = Some(index);
+            }
+        }
+    }
+
+    selected
+}
+
+fn find_non_ground_min11_infpos_no_x_type_literal(
+    clause: &Clause,
+    bank: &TermBank,
+) -> Option<usize> {
+    let mut selected = None;
+    let mut select_weight = i64::MAX;
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative() && !literal.is_ground() && !literal.is_x_type_pred(bank) {
+            let mut weight = term_weight_compute(literal.left(), 1, 1);
+            if !literal.is_oriented() {
+                weight += term_weight_compute(literal.right(), 1, 1);
+            }
+            if weight < select_weight {
+                select_weight = weight;
+                selected = Some(index);
+            }
+        }
+    }
+
+    selected
+}
+
+fn find_max_x_type_no_type_literal(clause: &Clause, bank: &TermBank) -> Option<usize> {
+    let mut selected = None;
+    let mut select_weight = -1;
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative() && literal.is_x_type_pred(bank) && !literal.is_type_pred(bank) {
+            let weight = literal.left().weight();
+            if weight > select_weight {
+                select_weight = weight;
+                selected = Some(index);
+            }
+        }
+    }
+
+    selected
+}
+
 fn find_max_diff_negative_literal(clause: &Clause, ground_only: bool) -> Option<usize> {
     let mut selected = None;
     let mut select_weight = -1;
@@ -2002,6 +2166,26 @@ mod tests {
             .declare_type(f_code, predicate_type.clone())
             .unwrap();
         let atom = unary(f_code, arg);
+        atom.set_type(Some(predicate_type));
+        atom.set_weight(weight);
+        atom
+    }
+
+    fn weighted_predicate_binary_atom(
+        bank: &mut TermBank,
+        name: &str,
+        left: &Term,
+        right: &Term,
+        weight: i64,
+    ) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let default_type = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        let predicate_type = alloc_arrow_type(vec![default_type.clone(), default_type, bool_type]);
+        bank.signature_mut()
+            .declare_type(f_code, predicate_type.clone())
+            .unwrap();
+        let atom = binary(f_code, left, right);
         atom.set_type(Some(predicate_type));
         atom.set_weight(weight);
         atom
@@ -2355,6 +2539,59 @@ mod tests {
             predicate_literal(bank, &maximal_x_type, false),
             literal(bank, &f_x, &a, false),
         ]))
+    }
+
+    fn new_complex_ground_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "new_complex_ground_pos");
+        let heavy = shared_const(bank, "new_complex_heavy");
+        let light = shared_const(bank, "new_complex_light");
+        let right_a = shared_const(bank, "new_complex_right_a");
+        let right_b = shared_const(bank, "new_complex_right_b");
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &heavy, &right_a, false),
+            literal(bank, &light, &right_b, false),
+        ]));
+        clause.literals().as_slice()[1].left().set_weight(30);
+        clause.literals().as_slice()[2].left().set_weight(3);
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn new_complex_infpos_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "new_complex_infpos_pos");
+        let x = var_term(-340);
+        let y = var_term(-342);
+        let larger = unary(340, &unary(341, &x));
+        let smaller = unary(342, &y);
+        let right = const_term(343);
+        let x_type = weighted_predicate_binary_atom(bank, "new_complex_infpos_xtype", &x, &y, 9);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &larger, &right, false),
+            literal(bank, &smaller, &right, false),
+            predicate_literal(bank, &x_type, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn new_complex_x_type_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "new_complex_xtype_pos");
+        let x = var_term(-350);
+        let y = var_term(-352);
+        let small = weighted_predicate_binary_atom(bank, "new_complex_xtype_small", &x, &y, 4);
+        let large = weighted_predicate_binary_atom(bank, "new_complex_xtype_large", &x, &y, 8);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &small, false),
+            predicate_literal(bank, &large, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
     }
 
     fn maximal_gate_clause(bank: &mut TermBank) -> Clause {
@@ -2979,6 +3216,64 @@ mod tests {
     }
 
     #[test]
+    fn new_complex_selects_ground_literal_with_smallest_max_side() {
+        let mut bank = test_bank();
+        let mut clause = new_complex_ground_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_new_complex(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = new_complex_ground_clause(&mut bank);
+
+        super::p_select_new_complex(&mut ocb, &bank, &mut positive_variant);
+        assert_eq!(selected_indices(&positive_variant), vec![0, 2]);
+    }
+
+    #[test]
+    fn new_complex_uses_min_inference_position_before_x_type() {
+        let mut bank = test_bank();
+        let mut clause = new_complex_infpos_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_new_complex(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+    }
+
+    #[test]
+    fn new_complex_falls_back_to_largest_non_type_x_type_literal() {
+        let mut bank = test_bank();
+        let mut clause = new_complex_x_type_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_new_complex(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+    }
+
+    #[test]
+    fn new_complex_unique_max_horn_wrapper_preserves_c_gate() {
+        let mut bank = test_bank();
+        let mut blocked = new_complex_ground_clause(&mut bank);
+        mark_maximal_literals(&mut blocked, &[1]);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_new_complex_except_uniq_max_horn(&mut ocb, &bank, &mut blocked);
+
+        assert_eq!(selected_indices(&blocked), Vec::<usize>::new());
+        assert!(blocked.query_prop(CP_IS_ORIENTED));
+
+        let mut allowed = new_complex_ground_clause(&mut bank);
+        mark_maximal_literals(&mut allowed, &[1, 2]);
+
+        super::p_select_new_complex_except_uniq_max_horn(&mut ocb, &bank, &mut allowed);
+        assert_eq!(selected_indices(&allowed), vec![0, 2]);
+    }
+
+    #[test]
     fn bank_aware_unless_max_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_UNLESS_UNIQ_MAX,
@@ -3016,6 +3311,26 @@ mod tests {
             let mut bank = test_bank();
             let mut clause = max_lcomplex_priority_clause(&mut bank);
             mark_maximal_literals(&mut clause, &[0, 1, 2]);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
+    fn bank_aware_new_complex_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_NEW_COMPLEX,
+            super::P_SELECT_NEW_COMPLEX,
+            super::SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::P_SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = new_complex_ground_clause(&mut bank);
             let mut ocb = kbo_ocb(&bank);
 
             apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
@@ -3131,9 +3446,9 @@ mod tests {
     fn unported_selector_reports_name() {
         let mut clause = Clause::empty();
         let error =
-            apply_ported_literal_selector("SelectNewComplex", None, &mut clause).unwrap_err();
+            apply_ported_literal_selector("SelectMinInfpos", None, &mut clause).unwrap_err();
 
-        assert_eq!(error.strategy(), "SelectNewComplex");
+        assert_eq!(error.strategy(), "SelectMinInfpos");
         assert!(error.to_string().contains("not ported yet"));
     }
 }
