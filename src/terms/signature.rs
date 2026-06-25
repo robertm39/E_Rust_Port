@@ -315,6 +315,10 @@ impl Signature {
         self.distinct_props
     }
 
+    pub fn remove_distinct_props(&mut self, properties: FunctionProperties) {
+        self.distinct_props.remove(properties);
+    }
+
     #[must_use]
     pub const fn type_bank(&self) -> &TypeBank {
         &self.type_bank

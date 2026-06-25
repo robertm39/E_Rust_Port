@@ -322,6 +322,10 @@ impl ClauseSet {
         moved
     }
 
+    pub fn clear(&mut self) {
+        while self.extract_first().is_some() {}
+    }
+
     pub fn indexed_insert_clause(
         &mut self,
         clause: Clause,

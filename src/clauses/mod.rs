@@ -22,6 +22,7 @@ pub mod garbage_coll;
 pub mod groundconstr;
 pub mod grounding;
 pub mod neweval;
+pub mod proofstate;
 pub mod propclauses;
 pub mod relevance;
 pub mod sine;

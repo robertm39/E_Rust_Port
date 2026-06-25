@@ -255,9 +255,9 @@ pub fn proof_control_reset_sat_solver(control: &mut ProofControl) {
 /// Initializes the currently ported proof-control state handled by C
 /// `ProofControlInit`.
 ///
-/// The later proof-state setup in C `ProofStateInit`, including FV-index anchor
-/// creation and clause-set insertion, is kept outside this helper until the
-/// Rust proof-state owner is available.
+/// Proof-state-owned setup from C `ProofStateInit`, including FV-index anchor
+/// creation and clause-set insertion, is kept outside this helper so
+/// proof-control initialization remains separate from proof-state mutation.
 ///
 /// # Errors
 ///
