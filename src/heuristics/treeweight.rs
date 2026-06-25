@@ -9,6 +9,7 @@ use crate::heuristics::termweights::{
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -246,6 +247,31 @@ pub fn conjecture_tree_distance_weight_compute(
     clause.term_ext_weight(&extension)
 }
 
+/// Computes C `ConjectureTreeDistanceWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn conjecture_tree_distance_weight_compute_with_ocb(
+    param: &mut TreeWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    param.ensure_init(bank.signature());
+    clause.cond_mark_maximal_terms(ocb, bank);
+    let extension = TermWeightExtension::new(
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.ext_style,
+        tree_weight_extension,
+        &*param,
+    );
+    clause.term_ext_weight(&extension)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TedTraversal {
     leftmost: Vec<usize>,
@@ -426,17 +452,20 @@ fn tree_weight_exit(_data: TreeWeightParam) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        conjecture_tree_distance_weight_compute, conjecture_tree_distance_weight_parse,
-        ted_term_distance, ted_term_weight, ted_traversal, tree_weight_param_alloc,
-        TreeDistanceCosts,
+        conjecture_tree_distance_weight_compute, conjecture_tree_distance_weight_compute_with_ocb,
+        conjecture_tree_distance_weight_parse, ted_term_distance, ted_term_weight, ted_traversal,
+        tree_weight_param_alloc, TreeDistanceCosts,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
+    use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::heuristics::termweights::RelatedTermSet;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -484,6 +513,15 @@ mod tests {
         let mut clause = clause(bank, "f(a)", "b", false);
         clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
         ClauseSet::from_clauses([clause])
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     #[test]
@@ -569,6 +607,50 @@ mod tests {
             2.0,
         );
         assert_eq!(param.terms().expect("terms should be initialized").len(), 2);
+    }
+
+    #[test]
+    fn conjecture_tree_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let axioms = negated_conjecture_axioms(&mut bank);
+        let mut target = clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = tree_weight_param_alloc(
+            &axioms,
+            VarNormStyle::Univar,
+            RelatedTermSet::ConjectureTerms,
+            costs(1, 1, 5),
+            TermWeightExtensionStyle::Simple,
+            1.0,
+            7.0,
+            1.0,
+        );
+        let expected =
+            conjecture_tree_distance_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut actual_param = tree_weight_param_alloc(
+            &axioms,
+            VarNormStyle::Univar,
+            RelatedTermSet::ConjectureTerms,
+            costs(1, 1, 5),
+            TermWeightExtensionStyle::Simple,
+            1.0,
+            7.0,
+            1.0,
+        );
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = conjecture_tree_distance_weight_compute_with_ocb(
+            &mut actual_param,
+            &mut ocb,
+            &bank,
+            &mut target,
+        );
+
+        assert_f64_bits_eq(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]

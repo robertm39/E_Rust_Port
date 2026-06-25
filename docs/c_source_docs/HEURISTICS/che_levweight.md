@@ -103,6 +103,7 @@ Source files reviewed: `HEURISTICS/che_levweight.h`, `HEURISTICS/che_levweight.c
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
+- `ConjectureLevDistanceWeightCompute` lazily initializes conjecture term codes, then calls `ClauseCondMarkMaximalTerms` before `ClauseTermExtWeight`. Rust preserves this through an explicit OCB-backed compute helper until WFCB/proof-state ownership can pass mutable clauses directly.
 
 ### Porting Focus
 
