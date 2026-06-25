@@ -8,6 +8,7 @@ pub mod clausepos;
 pub mod clausepos_tree;
 pub mod clausesets;
 pub mod condensation;
+pub mod context_sr;
 pub mod diseq_decomp;
 pub mod eqn;
 pub mod eqn_props;
