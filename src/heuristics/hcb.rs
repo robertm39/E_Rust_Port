@@ -300,36 +300,30 @@ impl SplitType {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[repr(i32)]
-pub enum SplitClassType {
-    #[default]
-    None = 0,
-    Horn = 1,
-    NonHorn = 2,
-    Negative = 4,
-    Positive = 8,
-    Mixed = 16,
-    All = 7,
-}
+pub struct SplitClassType(i32);
 
 impl SplitClassType {
+    pub const NONE: Self = Self(0);
+    pub const HORN: Self = Self(1);
+    pub const NON_HORN: Self = Self(2);
+    pub const NEGATIVE: Self = Self(4);
+    pub const POSITIVE: Self = Self(8);
+    pub const MIXED: Self = Self(16);
+    pub const ALL: Self = Self(7);
+
     #[must_use]
-    pub const fn from_c_value(value: i32) -> Option<Self> {
-        match value {
-            0 => Some(Self::None),
-            1 => Some(Self::Horn),
-            2 => Some(Self::NonHorn),
-            4 => Some(Self::Negative),
-            8 => Some(Self::Positive),
-            16 => Some(Self::Mixed),
-            7 => Some(Self::All),
-            _ => None,
-        }
+    pub const fn from_c_value(value: i32) -> Self {
+        Self(value)
     }
 
     #[must_use]
     pub const fn c_value(self) -> i32 {
-        self as i32
+        self.0
+    }
+
+    #[must_use]
+    pub const fn contains(self, flag: Self) -> bool {
+        (self.0 & flag.0) != 0
     }
 }
 
@@ -672,7 +666,7 @@ impl Default for HeuristicParmsCell {
             er_varlit_destructive: false,
             er_strong_destructive: false,
             er_aggressive: false,
-            split_clauses: SplitClassType::None,
+            split_clauses: SplitClassType::NONE,
             split_method: SplitType::GroundNone,
             split_aggressive: false,
             split_fresh_defs: true,
@@ -1904,8 +1898,7 @@ fn parse_split_class_field(
     if parse_field_prefix(scanner, "split_clauses")? {
         let parsed = parse_int(scanner)?;
         let value = i64_to_i32(scanner, parsed)?;
-        handle.split_clauses = SplitClassType::from_c_value(value)
-            .ok_or_else(|| enum_value_error(scanner, "SplitClassType"))?;
+        handle.split_clauses = SplitClassType::from_c_value(value);
     } else {
         note_missing(report, "split_clauses", warn_missing);
     }
@@ -2515,13 +2508,16 @@ mod tests {
         assert_eq!(SplitType::GroundOne.c_value(), 1);
         assert_eq!(SplitType::GroundFull.c_value(), 2);
 
-        assert_eq!(SplitClassType::None.c_value(), 0);
-        assert_eq!(SplitClassType::Horn.c_value(), 1);
-        assert_eq!(SplitClassType::NonHorn.c_value(), 2);
-        assert_eq!(SplitClassType::Negative.c_value(), 4);
-        assert_eq!(SplitClassType::Positive.c_value(), 8);
-        assert_eq!(SplitClassType::Mixed.c_value(), 16);
-        assert_eq!(SplitClassType::All.c_value(), 7);
+        assert_eq!(SplitClassType::NONE.c_value(), 0);
+        assert_eq!(SplitClassType::HORN.c_value(), 1);
+        assert_eq!(SplitClassType::NON_HORN.c_value(), 2);
+        assert_eq!(SplitClassType::NEGATIVE.c_value(), 4);
+        assert_eq!(SplitClassType::POSITIVE.c_value(), 8);
+        assert_eq!(SplitClassType::MIXED.c_value(), 16);
+        assert_eq!(SplitClassType::ALL.c_value(), 7);
+        assert!(SplitClassType::from_c_value(3).contains(SplitClassType::HORN));
+        assert!(SplitClassType::from_c_value(3).contains(SplitClassType::NON_HORN));
+        assert!(!SplitClassType::ALL.contains(SplitClassType::POSITIVE));
 
         assert_eq!(GroundingStrategy::NoGrounding.c_value(), 0);
         assert_eq!(GroundingStrategy::PseudoVar.c_value(), 1);
@@ -2554,7 +2550,6 @@ mod tests {
         assert_eq!(AcHandling::from_c_value(4), None);
         assert_eq!(ParamodulationType::from_c_value(7), None);
         assert_eq!(SplitType::from_c_value(3), None);
-        assert_eq!(SplitClassType::from_c_value(3), None);
         assert_eq!(GroundingStrategy::from_c_value(9), None);
         assert_eq!(ExtInferenceType::from_c_value(-1), None);
         assert_eq!(PrimEnumMode::from_c_value(7), None);
@@ -2703,7 +2698,7 @@ mod tests {
         assert!(!handle.er_varlit_destructive);
         assert!(!handle.er_strong_destructive);
         assert!(!handle.er_aggressive);
-        assert_eq!(handle.split_clauses, SplitClassType::None);
+        assert_eq!(handle.split_clauses, SplitClassType::NONE);
         assert_eq!(handle.split_method, SplitType::GroundNone);
         assert!(!handle.split_aggressive);
         assert!(handle.split_fresh_defs);
@@ -2825,7 +2820,7 @@ mod tests {
             pm_type: ParamodulationType::OrientedSuperSim,
             ac_handling: AcHandling::KeepUnits,
             forward_demod: RewriteLevel::RuleRewrite,
-            split_clauses: SplitClassType::All,
+            split_clauses: SplitClassType::ALL,
             split_method: SplitType::GroundFull,
             split_aggressive: true,
             sat_check_grounding: GroundingStrategy::GlobalMin,
@@ -2886,7 +2881,7 @@ mod tests {
             pm_type: ParamodulationType::SuperSim,
             ac_handling: AcHandling::KeepUnits,
             forward_demod: RewriteLevel::RuleRewrite,
-            split_clauses: SplitClassType::All,
+            split_clauses: SplitClassType::ALL,
             split_method: SplitType::GroundOne,
             rw_bw_index_type: "FP6".to_owned(),
             pm_from_index_type: "FP5".to_owned(),
@@ -2908,6 +2903,24 @@ mod tests {
             heuristic_parms_parse(&mut scanner, true).unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(parsed, original);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn heuristic_parms_parse_accepts_split_class_bitmasks_like_c() {
+        let mut scanner = scanner("{ split_clauses: 3 } tail");
+        let mut params = HeuristicParmsCell::default();
+
+        let complete =
+            heuristic_parms_parse_into(&mut scanner, &mut params, false).unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert!(!complete);
+        assert_eq!(params.split_clauses.c_value(), 3);
+        assert!(params.split_clauses.contains(SplitClassType::HORN));
+        assert!(params.split_clauses.contains(SplitClassType::NON_HORN));
+        assert!(!params.split_clauses.contains(SplitClassType::NEGATIVE));
         assert_eq!(scanner.current_token().literal(), "tail");
     }
 

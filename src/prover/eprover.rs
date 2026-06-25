@@ -8,6 +8,8 @@ use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
+use crate::heuristics::hcb::{self, HeuristicParmsCell};
+use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
@@ -1164,6 +1166,324 @@ impl Default for EProverConfig {
             flags: EProverFlags::default(),
         }
     }
+}
+
+/// Builds the C-shaped ordering parameter cell from parsed executable options.
+///
+/// # Errors
+///
+/// Returns a diagnostic if manually constructed config values do not match
+/// known C ordering names.
+pub fn order_parms_from_config(config: &TermOrderingConfig) -> Result<OrderParmsCell, Diagnostic> {
+    let weight_generation = translate_weight_generation(&config.weight_generation)?;
+    let precedence_generation = translate_precedence_generation(&config.precedence_generation)?;
+    let modifiers = config.precedence_modifiers;
+
+    Ok(OrderParmsCell {
+        ordertype: to_params_term_ordering(config.ordering),
+        to_weight_gen: weight_generation,
+        to_prec_gen: precedence_generation,
+        conj_only_mod: modifiers.conjecture_only,
+        conj_axiom_mod: modifiers.conjecture_axiom,
+        axiom_only_mod: modifiers.axiom_only,
+        skolem_mod: modifiers.skolem,
+        defpred_mod: modifiers.defpred,
+        force_kbo_var_weight: false,
+        rewrite_strong_rhs_inst: config.rewrite_strong_rhs_inst,
+        to_pre_prec: config.precedence.clone(),
+        to_pre_weights: config.weight_overrides.clone(),
+        to_const_weight: config.constant_weight,
+        to_defs_min: false,
+        lit_cmp: i64::from(to_params_literal_cmp(config.literal_comparison).c_value()),
+        ho_order_kind: config.ho_order_kind,
+        lam_w: config.lambda_weight,
+        db_w: config.db_weight,
+    })
+}
+
+/// Builds the C-shaped heuristic parameter cell from parsed executable options.
+///
+/// # Errors
+///
+/// Returns a diagnostic if manually constructed config values cannot be
+/// represented by the C-width fields expected by `HeuristicParmsCell`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "C executable option state maps one-for-one into HeuristicParmsCell fields"
+)]
+pub fn heuristic_parms_from_config(
+    config: &EProverConfig,
+) -> Result<HeuristicParmsCell, Diagnostic> {
+    let preprocessing = &config.preprocessing;
+    let search = &config.search;
+    let heuristic = &search.heuristic;
+    let literal_selection = &search.literal_selection;
+    let inference = &search.inference;
+    let ho_inference = &inference.higher_order;
+    let ho_preprocessing = &inference.higher_order_preprocessing;
+    let ho_search = &inference.higher_order_search;
+    let ho_unification = &inference.higher_order_unification;
+    let pred_elim = &preprocessing.predicate_elimination;
+    let splitting = &search.splitting;
+    let sat_check = &search.sat_check;
+    let fingerprint_index = &search.fingerprint_index;
+
+    Ok(HeuristicParmsCell {
+        order_params: order_parms_from_config(&search.ordering)?,
+        no_preproc: preprocessing.no_preprocessing,
+        eqdef_maxclauses: preprocessing.eqdef_maxclauses,
+        eqdef_incrlimit: preprocessing.eqdef_incrlimit,
+        formula_def_limit: preprocessing.formula_def_limit,
+        miniscope_limit: preprocessing.miniscope_limit,
+        sine: config.sine.clone(),
+        add_goal_defs_pos: preprocessing.goal_definitions.positive,
+        add_goal_defs_neg: preprocessing.goal_definitions.negative,
+        add_goal_defs_subterms: preprocessing.goal_definitions.subterms,
+        bce: preprocessing.bce.enabled,
+        bce_max_occs: i32_from_i64_config("bce_max_occs", preprocessing.bce.max_occs)?,
+        pred_elim: pred_elim.enabled,
+        pred_elim_gates: pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::RecognizeGates),
+        pred_elim_max_occs: i32_from_i64_config("pred_elim_max_occs", pred_elim.max_occs)?,
+        pred_elim_tolerance: i32_from_i64_config("pred_elim_tolerance", pred_elim.tolerance)?,
+        pred_elim_force_mu_decrease: pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::ForceMuDecrease),
+        pred_elim_ignore_conj_syms: pred_elim
+            .flags
+            .contains(PredicateEliminationFlag::IgnoreConjectureSymbols),
+        heuristic_name: heuristic.name.clone(),
+        heuristic_def: heuristic.heuristic_definitions.last().cloned(),
+        prefer_initial_clauses: heuristic.prefer_initial_clauses,
+        selection_strategy: literal_selection.strategy.clone(),
+        pos_lit_sel_min: literal_selection.limits.positive_min,
+        pos_lit_sel_max: literal_selection.limits.positive_max,
+        neg_lit_sel_min: literal_selection.limits.negative_min,
+        neg_lit_sel_max: literal_selection.limits.negative_max,
+        all_lit_sel_min: literal_selection.limits.all_min,
+        all_lit_sel_max: literal_selection.limits.all_max,
+        weight_sel_min: literal_selection.limits.weight_min,
+        select_on_proc_only: literal_selection.select_on_processing_only,
+        inherit_paramod_lit: literal_selection.inherit_paramod_literals.any_clause,
+        inherit_goal_pm_lit: literal_selection.inherit_paramod_literals.goal_clause,
+        inherit_conj_pm_lit: literal_selection.inherit_paramod_literals.conjecture_clause,
+        enable_eq_factoring: inference.enable_eq_factoring,
+        enable_neg_unit_paramod: inference.enable_neg_unit_paramod,
+        enable_given_forward_simpl: inference.enable_given_forward_simplification,
+        pm_type: hcb_paramodulation_type(inference.paramodulation),
+        ac_handling: hcb_ac_handling(preprocessing.ac_handling),
+        ac_res_aggressive: preprocessing.ac_res_aggressive,
+        forward_context_sr: inference.context_simplification.forward,
+        forward_context_sr_aggressive: inference.context_simplification.forward_aggressive,
+        backward_context_sr: inference.context_simplification.backward,
+        forward_subsumption_aggressive: inference.subsumption.forward_aggressive,
+        forward_demod: inference.demodulation.forward_demod,
+        prefer_general: inference.demodulation.prefer_general,
+        lambda_demod: inference.demodulation.lambda_demod,
+        condensing: inference.condensing.enabled,
+        condensing_aggressive: inference.condensing.aggressive,
+        er_varlit_destructive: inference.equality_resolution.destructive,
+        er_strong_destructive: inference.equality_resolution.strong_destructive,
+        er_aggressive: inference.equality_resolution.aggressive,
+        split_clauses: hcb_split_class_type(splitting.classes)?,
+        split_method: hcb_split_type(splitting.method)?,
+        split_aggressive: splitting.aggressive,
+        split_fresh_defs: splitting.fresh_defs,
+        diseq_decomposition: splitting.diseq_decomposition,
+        diseq_decomp_maxarity: splitting.diseq_decomp_maxarity,
+        rw_bw_index_type: fingerprint_index.rw_bw_index_type.clone(),
+        pm_from_index_type: fingerprint_index.pm_from_index_type.clone(),
+        pm_into_index_type: fingerprint_index.pm_into_index_type.clone(),
+        sat_check_grounding: hcb_grounding_strategy(sat_check.grounding),
+        sat_check_step_limit: sat_check.step_limit,
+        sat_check_size_limit: sat_check.size_limit,
+        sat_check_ttinsert_limit: sat_check.ttinsert_limit,
+        sat_check_normconst: sat_check.normconst,
+        sat_check_normalize: sat_check.normalize,
+        sat_check_decision_limit: i32_from_i64_config(
+            "sat_check_decision_limit",
+            sat_check.decision_limit,
+        )?,
+        filter_orphans_limit: heuristic.filter_orphans_limit,
+        forward_contract_limit: heuristic.forward_contract_limit,
+        delete_bad_limit: config.delete_bad_limit,
+        mem_limit: config.memory_limit,
+        watchlist_simplify: search.watchlist.simplify,
+        watchlist_is_static: search.watchlist.is_static,
+        use_tptp_sos: search.support.use_tptp_sos,
+        presat_interreduction: preprocessing.presat_interreduction,
+        detsort_bw_rw: config.flags.contains(EProverFlag::DeterministicRewriteSort),
+        detsort_tmpset: config.flags.contains(EProverFlag::DeterministicNewSort),
+        arg_cong: hcb_ext_inference_type(ho_inference.arg_cong),
+        neg_ext: hcb_ext_inference_type(ho_inference.neg_ext),
+        pos_ext: hcb_ext_inference_type(ho_inference.pos_ext),
+        ext_rules_max_depth: i32_from_i64_config(
+            "ext_rules_max_depth",
+            ho_inference.ext_rules_max_depth,
+        )?,
+        inverse_recognition: ho_inference.inverse_recognition,
+        replace_inj_defs: ho_inference.replace_inj_defs,
+        lift_lambdas: search.support.lift_lambdas,
+        lambda_to_forall: ho_preprocessing.lambda_to_forall,
+        unroll_only_formulas: ho_preprocessing.unroll_only_formulas,
+        elim_leibniz_max_depth: i32_from_i64_config(
+            "elim_leibniz_max_depth",
+            ho_preprocessing.elim_leibniz_max_depth,
+        )?,
+        prim_enum_mode: hcb_prim_enum_mode(ho_search.primitive_enumeration.mode),
+        prim_enum_max_depth: i32_from_i64_config(
+            "prim_enum_max_depth",
+            ho_search.primitive_enumeration.max_depth,
+        )?,
+        inst_choice_max_depth: i32_from_i64_config(
+            "inst_choice_max_depth",
+            ho_preprocessing.inst_choice_max_depth,
+        )?,
+        local_rw: ho_search.local_rw,
+        prune_args: ho_search.prune_args,
+        preinstantiate_induction: ho_preprocessing.preinstantiate_induction,
+        fool_unroll: matches!(preprocessing.fool_unroll, FoolUnroll::Enabled),
+        func_proj_limit: i32_from_i64_config("func_proj_limit", ho_unification.func_proj_limit)?,
+        imit_limit: i32_from_i64_config("imit_limit", ho_unification.imit_limit)?,
+        ident_limit: i32_from_i64_config("ident_limit", ho_unification.ident_limit)?,
+        elim_limit: i32_from_i64_config("elim_limit", ho_unification.elim_limit)?,
+        unif_mode: hcb_unif_mode(ho_unification.mode),
+        pattern_oracle: ho_unification.pattern_oracle,
+        fixpoint_oracle: ho_unification.fixpoint_oracle,
+        max_unifiers: i32_from_i64_config("max_unifiers", ho_unification.max_unifiers)?,
+        max_unif_steps: i32_from_i64_config("max_unif_steps", ho_unification.max_unif_steps)?,
+    })
+}
+
+fn translate_weight_generation(name: &str) -> Result<to_params::TOWeightGenMethod, Diagnostic> {
+    if to_params::TO_WEIGHT_GEN_NAMES.contains(&name) {
+        Ok(to_params::to_translate_weight_gen_method(name))
+    } else {
+        Err(config_conversion_error(format!(
+            "Unknown order weight generation method '{name}'"
+        )))
+    }
+}
+
+fn translate_precedence_generation(name: &str) -> Result<to_params::TOPrecGenMethod, Diagnostic> {
+    if to_params::TO_PREC_GEN_NAMES.contains(&name) {
+        Ok(to_params::to_translate_prec_gen_method(name))
+    } else {
+        Err(config_conversion_error(format!(
+            "Unknown order precedence generation method '{name}'"
+        )))
+    }
+}
+
+const fn to_params_term_ordering(value: TermOrdering) -> to_params::TermOrdering {
+    match value {
+        TermOrdering::NoOrdering => to_params::TermOrdering::NoOrdering,
+        TermOrdering::Optimize => to_params::TermOrdering::Optimize,
+        TermOrdering::Kbo => to_params::TermOrdering::Kbo,
+        TermOrdering::Kbo6 => to_params::TermOrdering::Kbo6,
+        TermOrdering::Lpo => to_params::TermOrdering::Lpo,
+        TermOrdering::LpoCopy => to_params::TermOrdering::LpoCopy,
+        TermOrdering::Lpo4 => to_params::TermOrdering::Lpo4,
+        TermOrdering::Lpo4Copy => to_params::TermOrdering::Lpo4Copy,
+        TermOrdering::Rpo => to_params::TermOrdering::Rpo,
+        TermOrdering::Empty => to_params::TermOrdering::Empty,
+    }
+}
+
+const fn to_params_literal_cmp(value: LiteralComparison) -> to_params::LiteralCmp {
+    match value {
+        LiteralComparison::None => to_params::LiteralCmp::NoCmp,
+        LiteralComparison::Normal => to_params::LiteralCmp::Normal,
+        LiteralComparison::TfoEqMax => to_params::LiteralCmp::TfoEqMax,
+        LiteralComparison::TfoEqMin => to_params::LiteralCmp::TfoEqMin,
+    }
+}
+
+const fn hcb_ac_handling(value: AcHandling) -> hcb::AcHandling {
+    match value {
+        AcHandling::None => hcb::AcHandling::None,
+        AcHandling::DiscardAll => hcb::AcHandling::DiscardAll,
+        AcHandling::KeepUnits => hcb::AcHandling::KeepUnits,
+        AcHandling::KeepOrientable => hcb::AcHandling::KeepOrientable,
+    }
+}
+
+const fn hcb_paramodulation_type(value: ParamodulationType) -> hcb::ParamodulationType {
+    match value {
+        ParamodulationType::Plain => hcb::ParamodulationType::Plain,
+        ParamodulationType::Sim => hcb::ParamodulationType::Sim,
+        ParamodulationType::OrientedSim => hcb::ParamodulationType::OrientedSim,
+        ParamodulationType::SuperSim => hcb::ParamodulationType::SuperSim,
+        ParamodulationType::OrientedSuperSim => hcb::ParamodulationType::OrientedSuperSim,
+        ParamodulationType::DecreasingSim => hcb::ParamodulationType::DecreasingSim,
+        ParamodulationType::SizeDecreasingSim => hcb::ParamodulationType::SizeDecreasingSim,
+    }
+}
+
+fn hcb_split_class_type(value: i64) -> Result<hcb::SplitClassType, Diagnostic> {
+    Ok(hcb::SplitClassType::from_c_value(i32_from_i64_config(
+        "split_clauses",
+        value,
+    )?))
+}
+
+fn hcb_split_type(value: i64) -> Result<hcb::SplitType, Diagnostic> {
+    hcb::SplitType::from_c_value(i32_from_i64_config("split_method", value)?)
+        .ok_or_else(|| config_conversion_error(format!("Invalid split_method value '{value}'")))
+}
+
+const fn hcb_grounding_strategy(value: GroundingStrategy) -> hcb::GroundingStrategy {
+    match value {
+        GroundingStrategy::NoGrounding => hcb::GroundingStrategy::NoGrounding,
+        GroundingStrategy::PseudoVar => hcb::GroundingStrategy::PseudoVar,
+        GroundingStrategy::FirstConst => hcb::GroundingStrategy::FirstConst,
+        GroundingStrategy::ConjMinMinFreq => hcb::GroundingStrategy::ConjMinMinFreq,
+        GroundingStrategy::ConjMaxMinFreq => hcb::GroundingStrategy::ConjMaxMinFreq,
+        GroundingStrategy::ConjMinMaxFreq => hcb::GroundingStrategy::ConjMinMaxFreq,
+        GroundingStrategy::ConjMaxMaxFreq => hcb::GroundingStrategy::ConjMaxMaxFreq,
+        GroundingStrategy::GlobalMax => hcb::GroundingStrategy::GlobalMax,
+        GroundingStrategy::GlobalMin => hcb::GroundingStrategy::GlobalMin,
+    }
+}
+
+const fn hcb_ext_inference_type(value: ExtInferenceType) -> hcb::ExtInferenceType {
+    match value {
+        ExtInferenceType::AllLits => hcb::ExtInferenceType::AllLits,
+        ExtInferenceType::MaxLits => hcb::ExtInferenceType::MaxLits,
+        ExtInferenceType::NoLits => hcb::ExtInferenceType::NoLits,
+    }
+}
+
+const fn hcb_prim_enum_mode(value: PrimEnumMode) -> hcb::PrimEnumMode {
+    match value {
+        PrimEnumMode::Neg => hcb::PrimEnumMode::Neg,
+        PrimEnumMode::And => hcb::PrimEnumMode::And,
+        PrimEnumMode::Or => hcb::PrimEnumMode::Or,
+        PrimEnumMode::Eq => hcb::PrimEnumMode::Eq,
+        PrimEnumMode::Pragmatic => hcb::PrimEnumMode::Pragmatic,
+        PrimEnumMode::Full => hcb::PrimEnumMode::Full,
+        PrimEnumMode::LogSymbol => hcb::PrimEnumMode::LogSymbol,
+    }
+}
+
+const fn hcb_unif_mode(value: UnificationMode) -> hcb::UnifMode {
+    match value {
+        UnificationMode::Single => hcb::UnifMode::Single,
+        UnificationMode::Multi => hcb::UnifMode::Multi,
+    }
+}
+
+fn i32_from_i64_config(field_name: &str, value: i64) -> Result<i32, Diagnostic> {
+    i32::try_from(value).map_err(|_| {
+        config_conversion_error(format!(
+            "Configuration field '{field_name}' value '{value}' does not fit C int"
+        ))
+    })
+}
+
+fn config_conversion_error(message: String) -> Diagnostic {
+    Diagnostic::new(ErrorCode::USAGE_ERROR, message)
 }
 
 #[derive(Debug)]
@@ -3236,15 +3556,17 @@ fn parse_clause_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, process_options, run, AcHandling, DocOutputFormat,
-        EProverAction, EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
-        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
-        PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA,
+        auto_memory_limit_from_system_mb, heuristic_parms_from_config, order_parms_from_config,
+        process_options, run, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
+        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
+        PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING,
+        MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
+    use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
     use crate::inout::scanner::IoFormat;
     use crate::inout::signals::{
@@ -4592,6 +4914,275 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.search.ordering.precedence.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn order_parms_from_config_maps_cli_ordering_state() {
+        let config = run_config_from([
+            "eprover",
+            "-t",
+            "LPO4Copy",
+            "-w",
+            "invfreqrank",
+            "--order-weights=f:2,g:3",
+            "-G",
+            "invfreq",
+            "--prec-pure-conj",
+            "--prec-conj-axiom=6",
+            "--prec-pure-axiom",
+            "--prec-skolem=4",
+            "--prec-defpred",
+            "-c",
+            "3",
+            "--precedence=f>g",
+            "--literal-comparison=TFOEqMin",
+            "--kbo-lam-weight=30",
+            "--kbo-db-weight=12",
+            "--strong-rw-inst",
+            "--ho-order-kind=lambda",
+        ]);
+
+        let params =
+            order_parms_from_config(&config.search.ordering).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(params.ordertype, to_params::TermOrdering::Lpo4Copy);
+        assert_eq!(
+            params.to_weight_gen,
+            to_params::TOWeightGenMethod::InvFrequencyRank
+        );
+        assert_eq!(
+            params.to_prec_gen,
+            to_params::TOPrecGenMethod::ByInvFrequency
+        );
+        assert_eq!(params.conj_only_mod, 10);
+        assert_eq!(params.conj_axiom_mod, 6);
+        assert_eq!(params.axiom_only_mod, 2);
+        assert_eq!(params.skolem_mod, 4);
+        assert_eq!(params.defpred_mod, 2);
+        assert_eq!(params.to_const_weight, 3);
+        assert_eq!(params.to_pre_prec.as_deref(), Some("f>g"));
+        assert_eq!(params.to_pre_weights.as_deref(), Some("f:2,g:3"));
+        assert_eq!(
+            params.lit_cmp,
+            i64::from(to_params::LiteralCmp::TfoEqMin.c_value())
+        );
+        assert_eq!(params.lam_w, 30);
+        assert_eq!(params.db_w, 12);
+        assert!(params.rewrite_strong_rhs_inst);
+        assert_eq!(params.ho_order_kind, HoOrderKind::LambdaOrder);
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one regression test covers the one-to-one executable config to HeuristicParmsCell field map"
+    )]
+    fn heuristic_parms_from_config_maps_cli_search_state() {
+        let config = run_config_from([
+            "eprover",
+            "--memory-limit=2",
+            "--delete-bad-limit=77",
+            "--no-preprocessing",
+            "--eq-unfold-limit=7",
+            "--eq-unfold-maxclauses=11",
+            "--goal-defs=Neg",
+            "--goal-subterm-defs",
+            "--sine=Auto",
+            "--ac-handling=KeepOrientable",
+            "--ac-non-aggressive",
+            "--fool-unroll=false",
+            "--bce=true",
+            "--bce-max-occs=9",
+            "--pred-elim=true",
+            "--pred-elim-recognize-gates=true",
+            "--pred-elim-force-mu-decrease=true",
+            "--pred-elim-ignore-conj-syms=true",
+            "--pred-elim-max-occs=10",
+            "--pred-elim-tolerance=3",
+            "--prefer-initial-clauses",
+            "-x",
+            "Auto",
+            "-H",
+            "h1",
+            "--define-heuristic=h2",
+            "-W",
+            "SelectMaxLComplex",
+            "--select-on-processing-only",
+            "-i",
+            "-j",
+            "--inherit-conjecture-pm-literals",
+            "--selection-pos-min=1",
+            "--selection-neg-max=9",
+            "--disable-eq-factoring",
+            "--disable-paramod-into-neg-units",
+            "--condense-aggressive",
+            "--disable-given-clause-fw-contraction",
+            "--oriented-supersimul-paramod",
+            "--split-clauses=3",
+            "--split-method=2",
+            "--split-aggressive",
+            "--split-reuse-defs",
+            "--disequality-decomposition=5",
+            "--disequality-decomp-maxarity=4",
+            "--rw-bw-index=FP0",
+            "--pm-from-index=NoIndex",
+            "--pm-into-index=NPDT",
+            "--sos-uses-input-types",
+            "--destructive-er",
+            "--strong-destructive-er",
+            "--destructive-er-aggressive",
+            "--forward-context-sr-aggressive",
+            "--backward-context-sr",
+            "--fw-subsumption-aggressive",
+            "--prefer-general-demodulators",
+            "--forward-demod-level=1",
+            "--demod-under-lambda=true",
+            "--satcheck=ConjMinMinFreq",
+            "--satcheck-proc-interval=6",
+            "--satcheck-gen-interval=7",
+            "--satcheck-ttinsert-interval=8",
+            "--satcheck-decision-limit=-1",
+            "--satcheck-normalize-const",
+            "--satcheck-normalize-unproc",
+            "--static-watchlist=watch.p",
+            "--no-watchlist-simplification",
+            "--presat-simplify=true",
+            "--detsort-rw",
+            "--detsort-new",
+            "--arg-cong=max",
+            "--neg-ext=all",
+            "--pos-ext=off",
+            "--ext-sup-max-depth=4",
+            "--inverse-recognition",
+            "--replace-inj-defs",
+            "--lift-lambdas=false",
+            "--cnf-lambda-to-forall=false",
+            "--unroll-formulas-only=false",
+            "--eliminate-leibniz-eq=5",
+            "--prim-enum-mode=full",
+            "--prim-enum-max-depth=6",
+            "--inst-choice-max-depth=7",
+            "--local-rw=true",
+            "--prune-args=true",
+            "--preinstantiate-induction=true",
+            "--func-proj-limit=1",
+            "--imit-limit=2",
+            "--ident-limit=3",
+            "--elim-limit=4",
+            "--unif-mode=multi",
+            "--pattern-oracle=false",
+            "--fixpoint-oracle=false",
+            "--max-unifiers=8",
+            "--max-unif-steps=9",
+        ]);
+
+        let params = heuristic_parms_from_config(&config).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(params.mem_limit, 2 * MEGA);
+        assert_eq!(params.delete_bad_limit, 77);
+        assert!(params.no_preproc);
+        assert_eq!(params.eqdef_incrlimit, 7);
+        assert_eq!(params.eqdef_maxclauses, 11);
+        assert!(!params.add_goal_defs_pos);
+        assert!(params.add_goal_defs_neg);
+        assert!(params.add_goal_defs_subterms);
+        assert_eq!(params.sine.as_deref(), Some("Auto"));
+        assert_eq!(params.ac_handling, hcb_params::AcHandling::KeepOrientable);
+        assert!(!params.ac_res_aggressive);
+        assert!(!params.fool_unroll);
+        assert!(params.bce);
+        assert_eq!(params.bce_max_occs, 9);
+        assert!(params.pred_elim);
+        assert!(params.pred_elim_gates);
+        assert_eq!(params.pred_elim_max_occs, 10);
+        assert_eq!(params.pred_elim_tolerance, 3);
+        assert!(params.pred_elim_force_mu_decrease);
+        assert!(params.pred_elim_ignore_conj_syms);
+        assert_eq!(params.heuristic_name, "Auto");
+        assert_eq!(params.heuristic_def.as_deref(), Some("h2"));
+        assert!(params.prefer_initial_clauses);
+        assert_eq!(params.selection_strategy, "SelectMaxLComplex");
+        assert_eq!(params.pos_lit_sel_min, 1);
+        assert_eq!(params.neg_lit_sel_max, 9);
+        assert!(params.select_on_proc_only);
+        assert!(params.inherit_paramod_lit);
+        assert!(params.inherit_goal_pm_lit);
+        assert!(params.inherit_conj_pm_lit);
+        assert!(!params.enable_eq_factoring);
+        assert!(!params.enable_neg_unit_paramod);
+        assert!(!params.enable_given_forward_simpl);
+        assert_eq!(
+            params.pm_type,
+            hcb_params::ParamodulationType::OrientedSuperSim
+        );
+        assert!(params.condensing);
+        assert!(params.condensing_aggressive);
+        assert_eq!(params.split_clauses.c_value(), 3);
+        assert!(params
+            .split_clauses
+            .contains(hcb_params::SplitClassType::HORN));
+        assert!(params
+            .split_clauses
+            .contains(hcb_params::SplitClassType::NON_HORN));
+        assert_eq!(params.split_method, hcb_params::SplitType::GroundFull);
+        assert!(params.split_aggressive);
+        assert!(!params.split_fresh_defs);
+        assert_eq!(params.diseq_decomposition, 5);
+        assert_eq!(params.diseq_decomp_maxarity, 4);
+        assert_eq!(params.rw_bw_index_type, "FP0");
+        assert_eq!(params.pm_from_index_type, "NoIndex");
+        assert_eq!(params.pm_into_index_type, "NPDT");
+        assert!(params.use_tptp_sos);
+        assert!(params.er_varlit_destructive);
+        assert!(params.er_strong_destructive);
+        assert!(params.er_aggressive);
+        assert!(params.forward_context_sr);
+        assert!(params.forward_context_sr_aggressive);
+        assert!(params.backward_context_sr);
+        assert!(params.forward_subsumption_aggressive);
+        assert!(params.prefer_general);
+        assert_eq!(params.forward_demod, RewriteLevel::RuleRewrite);
+        assert!(params.lambda_demod);
+        assert_eq!(
+            params.sat_check_grounding,
+            hcb_params::GroundingStrategy::ConjMinMinFreq
+        );
+        assert_eq!(params.sat_check_step_limit, 6);
+        assert_eq!(params.sat_check_size_limit, 7);
+        assert_eq!(params.sat_check_ttinsert_limit, 8);
+        assert_eq!(params.sat_check_decision_limit, -1);
+        assert!(params.sat_check_normconst);
+        assert!(params.sat_check_normalize);
+        assert!(params.watchlist_is_static);
+        assert!(!params.watchlist_simplify);
+        assert!(params.presat_interreduction);
+        assert!(params.detsort_bw_rw);
+        assert!(params.detsort_tmpset);
+        assert_eq!(params.arg_cong, hcb_params::ExtInferenceType::MaxLits);
+        assert_eq!(params.neg_ext, hcb_params::ExtInferenceType::AllLits);
+        assert_eq!(params.pos_ext, hcb_params::ExtInferenceType::NoLits);
+        assert_eq!(params.ext_rules_max_depth, 4);
+        assert!(params.inverse_recognition);
+        assert!(params.replace_inj_defs);
+        assert!(!params.lift_lambdas);
+        assert!(!params.lambda_to_forall);
+        assert!(!params.unroll_only_formulas);
+        assert_eq!(params.elim_leibniz_max_depth, 5);
+        assert_eq!(params.prim_enum_mode, hcb_params::PrimEnumMode::Full);
+        assert_eq!(params.prim_enum_max_depth, 6);
+        assert_eq!(params.inst_choice_max_depth, 7);
+        assert!(params.local_rw);
+        assert!(params.prune_args);
+        assert!(params.preinstantiate_induction);
+        assert_eq!(params.func_proj_limit, 1);
+        assert_eq!(params.imit_limit, 2);
+        assert_eq!(params.ident_limit, 3);
+        assert_eq!(params.elim_limit, 4);
+        assert_eq!(params.unif_mode, hcb_params::UnifMode::Multi);
+        assert!(!params.pattern_oracle);
+        assert!(!params.fixpoint_oracle);
+        assert_eq!(params.max_unifiers, 8);
+        assert_eq!(params.max_unif_steps, 9);
     }
 
     #[test]
