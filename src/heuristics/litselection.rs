@@ -87,6 +87,7 @@ pub const P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "PSelectComplexExceptUni
 pub const M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "MSelectComplexExceptUniqMaxHorn";
 pub const SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN: &str = "SelectComplexExceptUniqMaxPosHorn";
 pub const P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN: &str = "PSelectComplexExceptUniqMaxPosHorn";
+pub const SELECT_COMPLEX_G: &str = "SelectComplexG";
 pub const SELECT_L_COMPLEX: &str = "SelectLComplex";
 pub const P_SELECT_L_COMPLEX: &str = "PSelectLComplex";
 pub const SELECT_COMPLEX_PREFER_NEQ: &str = "SelectComplexPreferNEQ";
@@ -925,6 +926,7 @@ enum ComplexLiteralSelector {
     PComplexExceptRRHorn,
     LComplex,
     PLComplex,
+    Generic,
     PreferNEQ,
     PPreferNEQ,
     PreferEQ,
@@ -940,6 +942,7 @@ impl ComplexLiteralSelector {
             P_SELECT_COMPLEX_EXCEPT_RR_HORN => Some(Self::PComplexExceptRRHorn),
             SELECT_L_COMPLEX => Some(Self::LComplex),
             P_SELECT_L_COMPLEX => Some(Self::PLComplex),
+            SELECT_COMPLEX_G => Some(Self::Generic),
             SELECT_COMPLEX_PREFER_NEQ => Some(Self::PreferNEQ),
             P_SELECT_COMPLEX_PREFER_NEQ => Some(Self::PPreferNEQ),
             SELECT_COMPLEX_PREFER_EQ => Some(Self::PreferEQ),
@@ -956,6 +959,7 @@ impl ComplexLiteralSelector {
             Self::PComplexExceptRRHorn => p_select_complex_except_rr_horn(ocb, clause),
             Self::LComplex => select_l_complex(ocb, clause),
             Self::PLComplex => p_select_l_complex(ocb, clause),
+            Self::Generic => select_complex_g(ocb, clause),
             Self::PreferNEQ => select_complex_prefer_neq(ocb, clause),
             Self::PPreferNEQ => p_select_complex_prefer_neq(ocb, clause),
             Self::PreferEQ => select_complex_prefer_eq(ocb, clause),
@@ -1601,6 +1605,10 @@ pub fn select_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) 
 
 pub fn p_select_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
     select_complex_impl(ocb, clause, true, ComplexGroundChoice::SmallestStandard);
+}
+
+pub fn select_complex_g(_ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    generic_uniq_selection_no_ordering(clause, false, complex_g_weight);
 }
 
 pub fn select_complex_except_rr_horn(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
@@ -2890,6 +2898,20 @@ fn diversification_prefer_into_weight(eval: &mut LitEval, literal: &Eqn, clause:
     };
     if literal.is_negative() {
         eval.w2 = counter % negative_literal_count_i64(clause);
+    }
+}
+
+fn complex_g_weight(eval: &mut LitEval, literal: &Eqn, _clause: &Clause) {
+    if literal.is_negative() {
+        if literal.is_pure_var() {
+            eval.w1 = 0;
+        } else if literal.is_ground() {
+            eval.w1 = 10;
+            eval.w2 = literal.standard_weight();
+        } else {
+            eval.w1 = 20;
+            eval.w2 = -literal_selection_diff_weight(literal);
+        }
     }
 }
 
@@ -5183,6 +5205,25 @@ mod tests {
     }
 
     #[test]
+    fn complex_g_uses_generic_complex_weight_order_without_positives() {
+        let mut bank = test_bank();
+        let mut pure = max_lcomplex_priority_clause(&mut bank);
+        pure.set_prop(CP_IS_ORIENTED);
+
+        super::select_complex_g(None, &mut pure);
+        assert_eq!(selected_indices(&pure), vec![2]);
+        assert!(!pure.query_prop(CP_IS_ORIENTED));
+
+        let mut ground = ground_and_nonground_clause(true);
+        ground.set_prop(CP_IS_ORIENTED);
+
+        super::select_complex_g(None, &mut ground);
+        assert_eq!(selected_indices(&ground), vec![2]);
+        assert_eq!(select_mask(&ground), vec![false, false, true]);
+        assert!(!ground.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
     fn complex_rr_horn_wrappers_skip_only_range_restricted_horn_clauses() {
         let mut rr_horn = range_restricted_clause();
         rr_horn.literals_mut().set_prop(EP_IS_SELECTED);
@@ -6197,6 +6238,7 @@ mod tests {
             P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
             SELECT_COMPLEX,
             P_SELECT_COMPLEX,
+            super::SELECT_COMPLEX_G,
             SELECT_COMPLEX_EXCEPT_RR_HORN,
             P_SELECT_COMPLEX_EXCEPT_RR_HORN,
             SELECT_L_COMPLEX,
