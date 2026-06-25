@@ -397,13 +397,12 @@ mod tests {
             index.collect_matchable_occurrences(&f_x, &mut occurrences),
             2
         );
-        assert_eq!(
-            occurrences
-                .iter()
-                .flat_map(|occurrence| occurrence.full_clauses().values())
-                .map(Clause::ident)
-                .collect::<Vec<_>>(),
-            vec![21, 22]
-        );
+        let mut identifiers = occurrences
+            .iter()
+            .flat_map(|occurrence| occurrence.full_clauses().values())
+            .map(Clause::ident)
+            .collect::<Vec<_>>();
+        identifiers.sort_unstable();
+        assert_eq!(identifiers, vec![21, 22]);
     }
 }

@@ -515,6 +515,91 @@ fn term_subterm_rewrite_plain(
     Ok(modified)
 }
 
+/// Compute plain leftmost-innermost normal forms for an equation's sides.
+///
+/// This mirrors C `eqn_li_normalform` for term mutation, maximality-cache
+/// invalidation, equality-literal normalization when the right side becomes
+/// `$true`, and the returned side mask. Derivation recording remains tied to
+/// the later proof-object port.
+///
+/// # Errors
+///
+/// Returns a diagnostic if side normalization fails.
+///
+/// # Panics
+///
+/// Panics if the active rewrite level exceeds the demodulator slice length.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C eqn_li_normalform inputs before ClausePos/RWDesc ownership is ported"
+)]
+pub fn eqn_li_normalform_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    eqn: &mut Eqn,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    interred_rw: bool,
+    lambda_demod: bool,
+) -> Result<EqnSide, Diagnostic> {
+    let left_old = eqn.left().clone();
+    let right_old = eqn.right().clone();
+    let restricted_rw = eqn.is_maximal() && eqn.is_positive() && eqn.is_oriented() && interred_rw;
+    let mut result = EqnSide::NoSide;
+
+    let left_new = term_li_normalform_plain(
+        bank,
+        ocb,
+        &left_old,
+        demodulators,
+        level,
+        prefer_general,
+        restricted_rw,
+        lambda_demod,
+    )?;
+    if left_new != left_old {
+        eqn.set_left_raw(left_new);
+        eqn.del_prop(EP_MAX_IS_UP_TO_DATE);
+        result = MAX_SIDE;
+    }
+
+    let right_new = term_li_normalform_plain(
+        bank,
+        ocb,
+        &right_old,
+        demodulators,
+        level,
+        prefer_general,
+        false,
+        lambda_demod,
+    )?;
+    if right_new != right_old {
+        eqn.set_right_raw(right_new);
+        if eqn.query_prop(EP_IS_EQU_LITERAL) && eqn.right() == bank.true_term() {
+            eqn.del_prop(EP_IS_EQU_LITERAL);
+        }
+        if eqn.is_oriented() {
+            result = eqn_side_union(result, MIN_SIDE);
+        } else {
+            result = eqn_side_union(result, MAX_SIDE);
+            eqn.del_prop(EP_MAX_IS_UP_TO_DATE);
+        }
+    }
+
+    Ok(result)
+}
+
+fn eqn_side_union(left: EqnSide, right: EqnSide) -> EqnSide {
+    match (left as i32) | (right as i32) {
+        0 => EqnSide::NoSide,
+        1 => EqnSide::LeftSide,
+        2 => EqnSide::RightSide,
+        3 => EqnSide::BothSides,
+        _ => unreachable!("EqnSide only uses the low two bits"),
+    }
+}
+
 struct PlainDemodulatorMatch<'a> {
     clause: &'a Clause,
     replacement: &'a Term,
@@ -1024,10 +1109,11 @@ fn map_literal_terms(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_local_rw, eqn_has_rw_side, find_rewritable_clauses, find_rewritable_clauses_indexed,
-        rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain,
-        term_li_normalform_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
-        REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
+        clause_local_rw, eqn_has_rw_side, eqn_li_normalform_plain, find_rewritable_clauses,
+        find_rewritable_clauses_indexed, rewrite_with_clause_set_list_plain,
+        rewrite_with_clause_set_plain, term_li_normalform_plain, BWRW_MATCH_ATTEMPTS,
+        BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS, REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
+        REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::sysdate::SysDate;
@@ -1035,7 +1121,10 @@ mod tests {
     use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE};
+    use crate::clauses::eqn_props::{
+        EqnSide, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
+        EP_MAX_IS_UP_TO_DATE,
+    };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::subterm_index::SubtermIndex;
     use crate::heuristics::to_params::TermOrdering;
@@ -1621,6 +1710,127 @@ mod tests {
         assert_eq!(normal, a);
         assert_eq!(a.nf_date(RewriteLevel::RuleRewrite), SysDate::from_raw(7));
         assert_eq!(a.nf_date(RewriteLevel::FullRewrite), SysDate::from_raw(7));
+    }
+
+    #[test]
+    fn eqn_li_normalform_rewrites_oriented_left_and_right_sides() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -2);
+        let left_replacement = typed_const(&mut bank, "eqn_nf_a");
+        let left_arg = typed_const(&mut bank, "eqn_nf_b");
+        let right_replacement = typed_const(&mut bank, "eqn_nf_c");
+        let right_arg = typed_const(&mut bank, "eqn_nf_d");
+        let f_variable = typed_unary(&mut bank, "eqn_nf_f", &variable);
+        let f_left_arg = typed_unary(&mut bank, "eqn_nf_f", &left_arg);
+        let g_variable = typed_unary(&mut bank, "eqn_nf_g", &variable);
+        let g_right_arg = typed_unary(&mut bank, "eqn_nf_g", &right_arg);
+        let mut first_lit = eqn(&mut bank, &f_variable, &left_replacement, true);
+        oriented_demod(&mut first_lit);
+        let mut second_lit = eqn(&mut bank, &g_variable, &right_replacement, true);
+        oriented_demod(&mut second_lit);
+        let mut first_demod = Clause::alloc(EqnList::from_vec(vec![first_lit]));
+        first_demod.set_date(SysDate::from_raw(5));
+        let mut second_demod = Clause::alloc(EqnList::from_vec(vec![second_lit]));
+        second_demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([first_demod, second_demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &f_left_arg, &g_right_arg, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+        let mut ocb = kbo_ocb(&bank);
+
+        let side = eqn_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut literal,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(side, EqnSide::BothSides);
+        assert_eq!(literal.left(), &left_replacement);
+        assert_eq!(literal.right(), &right_replacement);
+        assert!(literal.is_oriented());
+        assert!(!literal.query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn eqn_li_normalform_reports_right_rewrite_as_max_side_when_unoriented() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "eqn_nf_unor_a");
+        let b = typed_const(&mut bank, "eqn_nf_unor_b");
+        let c = typed_const(&mut bank, "eqn_nf_unor_c");
+        let f_x = typed_unary(&mut bank, "eqn_nf_unor_f", &x);
+        let f_b = typed_unary(&mut bank, "eqn_nf_unor_f", &b);
+        let mut demod_lit = eqn(&mut bank, &f_x, &c, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &a, &f_b, true);
+        literal.del_prop(EP_IS_ORIENTED);
+        literal.set_prop(EP_MAX_IS_UP_TO_DATE);
+        let mut ocb = kbo_ocb(&bank);
+
+        let side = eqn_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut literal,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(side, EqnSide::LeftSide);
+        assert_eq!(literal.right(), &c);
+        assert!(!literal.query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn eqn_li_normalform_clears_equ_literal_when_right_becomes_true() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let b = typed_const(&mut bank, "eqn_nf_bool_b");
+        let p_b = bool_predicate(&mut bank, "eqn_nf_bool_p", &b);
+        let q_x = bool_predicate(&mut bank, "eqn_nf_bool_q", &x);
+        let q_b = bool_predicate(&mut bank, "eqn_nf_bool_q", &b);
+        let true_term = bank.true_term().clone();
+        let mut demod_lit = eqn(&mut bank, &q_x, &true_term, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &p_b, &q_b, true);
+        assert!(literal.query_prop(EP_IS_EQU_LITERAL));
+        let mut ocb = kbo_ocb(&bank);
+
+        let side = eqn_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &mut literal,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(side, EqnSide::LeftSide);
+        assert_eq!(literal.right(), &true_term);
+        assert!(!literal.query_prop(EP_IS_EQU_LITERAL));
     }
 
     #[test]
