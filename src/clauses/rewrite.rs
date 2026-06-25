@@ -3,7 +3,7 @@ use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_ORIENTED;
 use crate::clauses::clausefunc::clause_remove_superfluous_literals;
-use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
     EqnSide, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE, MAX_SIDE,
@@ -14,10 +14,10 @@ use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_match_complete;
-use crate::terms::replace::{term_add_rw_link, RwResultType};
+use crate::terms::replace::{term_add_rw_link, term_follow_top_rw_chain, RwResultType};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_has_unbound_variables;
+use crate::terms::termfunc::{term_has_unbound_variables, term_is_db_closed};
 use crate::terms::termtypes::{
     term_identity_id, DerefType, RewriteDemodulator, RewriteLevel, Term, TP_IS_REWRITABLE,
     TP_IS_REWRITTEN, TP_IS_RREWRITABLE, TP_IS_RREWRITTEN,
@@ -268,6 +268,253 @@ pub fn rewrite_with_clause_set_plain(
     Ok(replacement)
 }
 
+/// Rewrite a term at top level with the active prefix of demodulator sets.
+///
+/// This mirrors C `rewrite_with_clause_set_list`: only DB-closed terms are
+/// considered, each set is skipped when the term's normal-form date for the
+/// selected level is current enough, and scanning stops after the first
+/// replacement.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a selected demodulator needs ordering checks or term
+/// creation that fails.
+///
+/// # Panics
+///
+/// Panics if `level` is `NoRewrite`, if the demodulator slice is shorter than
+/// the active rewrite level, if `term` is a free variable, or if `term` already
+/// has a top rewrite link. These are the C caller preconditions.
+pub fn rewrite_with_clause_set_list_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    restricted_rw: bool,
+) -> Result<Term, Diagnostic> {
+    let level_count = rewrite_level_count(level);
+    assert!(level_count != 0, "rewrite level must be active");
+    assert!(
+        level_count <= demodulators.len(),
+        "demodulator set prefix must cover the rewrite level"
+    );
+    assert!(!term.is_free_var(), "free variables are not rewritten");
+    assert!(
+        !term.is_top_rewritten(),
+        "top-level rewrite expects no existing top rewrite link"
+    );
+
+    let date_level = rewrite_date_level(level);
+    let mut result = term.clone();
+    for demodulator_set in demodulators.iter().take(level_count) {
+        if term_is_db_closed(term)
+            && term
+                .nf_date(date_level)
+                .is_earlier_than(demodulator_set.date())
+        {
+            result = rewrite_with_clause_set_plain(
+                bank,
+                ocb,
+                term,
+                term.nf_date(date_level),
+                demodulator_set,
+                prefer_general,
+                restricted_rw,
+            )?;
+            if result != *term {
+                break;
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Compute a plain leftmost-innermost normal form with a set-list scan.
+///
+/// This ports C `term_li_normalform` around the plain demodulator primitive.
+/// The public wrapper computes `demod_date` as the maximum date of the active
+/// demodulator-set prefix, matching the usual `RWDesc` setup.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rewriting, ordering checks, or term-bank insertion
+/// fail.
+///
+/// # Panics
+///
+/// Panics if the active rewrite level exceeds the demodulator slice length.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C term_li_normalform inputs before RWDesc ownership is ported"
+)]
+pub fn term_li_normalform_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    restricted_rw: bool,
+    lambda_demod: bool,
+) -> Result<Term, Diagnostic> {
+    if level == RewriteLevel::NoRewrite {
+        return Ok(term.clone());
+    }
+    let level_count = rewrite_level_count(level);
+    let demod_date = clause_set_list_get_max_date(demodulators, level_count);
+    term_li_normalform_plain_with_date(
+        bank,
+        ocb,
+        term,
+        demodulators,
+        level,
+        demod_date,
+        prefer_general,
+        restricted_rw,
+        lambda_demod,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Private recursive worker keeps the computed demodulator date stable"
+)]
+fn term_li_normalform_plain_with_date(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &Term,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    demod_date: SysDate,
+    prefer_general: bool,
+    restricted_rw: bool,
+    lambda_demod: bool,
+) -> Result<Term, Diagnostic> {
+    debug_assert_ne!(level, RewriteLevel::NoRewrite);
+
+    let (mut current, _) = term_follow_top_rw_chain(term, restricted_rw);
+    assert!(
+        !current.is_top_rewritten() || restricted_rw,
+        "unrestricted normal-form traversal must follow top rewrite links"
+    );
+
+    let date_level = rewrite_date_level(level);
+    if !current.is_rewritten() && !current.nf_date(date_level).is_earlier_than(demod_date) {
+        return Ok(current);
+    }
+    if current.is_free_var() {
+        assert!(
+            !current.is_rewritten(),
+            "rewritten free variables are outside the C rewrite contract"
+        );
+        return Ok(current);
+    }
+
+    let mut modified = true;
+    while modified {
+        modified = term_subterm_rewrite_plain(
+            bank,
+            ocb,
+            &mut current,
+            demodulators,
+            level,
+            demod_date,
+            prefer_general,
+            lambda_demod,
+        )?;
+
+        if !current.is_free_var() {
+            let follow_restricted = restricted_rw && !modified;
+            let (new_term, _) = if current.is_top_rewritten() {
+                term_follow_top_rw_chain(&current, follow_restricted)
+            } else {
+                let _ = rewrite_with_clause_set_list_plain(
+                    bank,
+                    ocb,
+                    &current,
+                    demodulators,
+                    level,
+                    prefer_general,
+                    follow_restricted,
+                )?;
+                term_follow_top_rw_chain(&current, follow_restricted)
+            };
+            if current != new_term {
+                modified = true;
+                current = new_term;
+            }
+        }
+    }
+
+    if !current.is_rewritten() && !restricted_rw {
+        current.set_nf_date(RewriteLevel::RuleRewrite, demod_date);
+        if level == RewriteLevel::FullRewrite {
+            current.set_nf_date(RewriteLevel::FullRewrite, demod_date);
+        }
+    }
+    Ok(current)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Recursive subterm rewrite mirrors C term_subterm_rewrite context"
+)]
+fn term_subterm_rewrite_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    term: &mut Term,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    demod_date: SysDate,
+    prefer_general: bool,
+    lambda_demod: bool,
+) -> Result<bool, Diagnostic> {
+    if !lambda_demod && term.is_lambda() {
+        return Ok(false);
+    }
+
+    let new_term = Term::top_copy_without_args(term);
+    let mut modified = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let normalized = term_li_normalform_plain_with_date(
+            bank,
+            ocb,
+            &arg,
+            demodulators,
+            level,
+            demod_date,
+            prefer_general,
+            false,
+            lambda_demod,
+        )?;
+        if normalized != arg {
+            modified = true;
+        }
+        new_term.set_argument(index, normalized);
+    }
+
+    if modified {
+        let replacement = bank.term_top_insert(new_term)?;
+        assert_ne!(
+            replacement, *term,
+            "changed subterms must produce a different shared term"
+        );
+        term_add_rw_link(
+            term,
+            &replacement,
+            None,
+            false,
+            RwResultType::AlwaysRewritable,
+        );
+        *term = replacement;
+    }
+
+    Ok(modified)
+}
+
 struct PlainDemodulatorMatch<'a> {
     clause: &'a Clause,
     replacement: &'a Term,
@@ -334,6 +581,22 @@ fn demodulator_date_blocks_term(term: &Term, clause: &Clause, eqn: &Eqn) -> bool
         RewriteLevel::FullRewrite
     };
     !term.nf_date(level).is_earlier_than(clause.date())
+}
+
+fn rewrite_level_count(level: RewriteLevel) -> usize {
+    match level {
+        RewriteLevel::NoRewrite => 0,
+        RewriteLevel::RuleRewrite => 1,
+        RewriteLevel::FullRewrite => 2,
+    }
+}
+
+fn rewrite_date_level(level: RewriteLevel) -> RewriteLevel {
+    match level {
+        RewriteLevel::NoRewrite => panic!("no rewrite level has no normal-form date"),
+        RewriteLevel::RuleRewrite => RewriteLevel::RuleRewrite,
+        RewriteLevel::FullRewrite => RewriteLevel::FullRewrite,
+    }
 }
 
 #[expect(
@@ -762,7 +1025,8 @@ fn map_literal_terms(
 mod tests {
     use super::{
         clause_local_rw, eqn_has_rw_side, find_rewritable_clauses, find_rewritable_clauses_indexed,
-        rewrite_with_clause_set_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
+        rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain,
+        term_li_normalform_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
         REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1232,6 +1496,131 @@ mod tests {
         assert!(!f_a.is_top_rewritten());
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn plain_clause_set_list_uses_active_level_prefix() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "rw_list_a");
+        let b = typed_const(&mut bank, "rw_list_b");
+        let f_x = typed_unary(&mut bank, "rw_list_f", &x);
+        let f_b = typed_unary(&mut bank, "rw_list_f", &b);
+        let mut demod_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_date(SysDate::from_raw(5));
+        let mut rule_set = ClauseSet::new();
+        rule_set.set_date(SysDate::from_raw(5));
+        let mut full_set = ClauseSet::from_clauses([demod]);
+        full_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&rule_set, &full_set];
+        let mut ocb = kbo_ocb(&bank);
+
+        let rule_result = rewrite_with_clause_set_list_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(rule_result, f_b);
+        assert!(!f_b.is_top_rewritten());
+
+        let full_result = rewrite_with_clause_set_list_plain(
+            &mut bank,
+            &mut ocb,
+            &f_b,
+            &demodulators,
+            RewriteLevel::FullRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(full_result, a);
+        assert_eq!(f_b.rw_replace_field(), Some(a));
+    }
+
+    #[test]
+    fn plain_li_normalform_rewrites_subterm_then_top() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "li_plain_a");
+        let b = typed_const(&mut bank, "li_plain_b");
+        let c = typed_const(&mut bank, "li_plain_c");
+        let f_x = typed_unary(&mut bank, "li_plain_f", &x);
+        let f_b = typed_unary(&mut bank, "li_plain_f", &b);
+        let h_x = typed_unary(&mut bank, "li_plain_h", &x);
+        let h_a = typed_unary(&mut bank, "li_plain_h", &a);
+        let h_f_b = typed_unary(&mut bank, "li_plain_h", &f_b);
+        let mut inner_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut inner_lit);
+        let mut outer_lit = eqn(&mut bank, &h_x, &c, true);
+        oriented_demod(&mut outer_lit);
+        let mut inner_demod = Clause::alloc(EqnList::from_vec(vec![inner_lit]));
+        inner_demod.set_date(SysDate::from_raw(5));
+        let mut outer_demod = Clause::alloc(EqnList::from_vec(vec![outer_lit]));
+        outer_demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([inner_demod, outer_demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut ocb = kbo_ocb(&bank);
+
+        let normal = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &h_f_b,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(normal, c);
+        assert_eq!(f_b.rw_replace_field(), Some(a));
+        assert!(f_b.is_top_rewritten());
+        assert_eq!(h_f_b.rw_replace_field(), Some(h_a.clone()));
+        assert!(h_f_b.is_rewritten());
+        assert!(!h_f_b.is_top_rewritten());
+        assert_eq!(h_a.rw_replace_field(), Some(c));
+        assert!(h_a.is_top_rewritten());
+    }
+
+    #[test]
+    fn plain_li_normalform_records_full_nf_dates_when_unrewritten() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "li_plain_nf_a");
+        a.set_nf_date(RewriteLevel::RuleRewrite, SysDate::from_raw(0));
+        a.set_nf_date(RewriteLevel::FullRewrite, SysDate::from_raw(0));
+        let mut rule_set = ClauseSet::new();
+        rule_set.set_date(SysDate::from_raw(3));
+        let mut full_set = ClauseSet::new();
+        full_set.set_date(SysDate::from_raw(7));
+        let demodulators = [&rule_set, &full_set];
+        let mut ocb = kbo_ocb(&bank);
+
+        let normal = term_li_normalform_plain(
+            &mut bank,
+            &mut ocb,
+            &a,
+            &demodulators,
+            RewriteLevel::FullRewrite,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(normal, a);
+        assert_eq!(a.nf_date(RewriteLevel::RuleRewrite), SysDate::from_raw(7));
+        assert_eq!(a.nf_date(RewriteLevel::FullRewrite), SysDate::from_raw(7));
     }
 
     #[test]
