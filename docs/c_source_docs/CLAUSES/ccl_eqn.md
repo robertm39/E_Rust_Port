@@ -339,6 +339,7 @@ Source files reviewed: `CLAUSES/ccl_eqn.h`, `CLAUSES/ccl_eqn.c`.
 - `EqnTSTPPrint` special-cases any negative `lterm == rterm` literal as `$false` before checking equational shape, and consults the process-global `EqnPrintOriented` for `->`/`!->` output. Rust preserves the same spellings through an explicit TSTP writer and a `print_oriented` argument; the C global is a good candidate to keep explicit in future Rust call paths.
 - `EqnOrient` trusts `EPMaxIsUpToDate` as a complete cache-validity guard and returns before checking whether the current side terms still match the stored orientation bit. Rust preserves that behavior; later side-mutation APIs should clear the flag explicitly instead of making orientation recompute defensively.
 - `compare_poseqn_negeqn` labels one mixed positive/negative lesser branch as `Buggy, changed by StS` and uses a broad disjunction over both equation sides. Rust preserves the implementation; defer cleanup until maximal-literal and proof-search comparisons can show the change is unobservable.
+- `EqnTermExtWeight` always applies `max_term_multiplier` to the left term, and applies it to the right term only when the literal is not oriented. `LiteralTermExtWeight` then applies the maximal-literal multiplier before the positive-equation multiplier. Rust preserves this order; later heuristic APIs may want names that make the left-side-as-potentially-maximal convention explicit.
 
 ### Porting Focus
 
