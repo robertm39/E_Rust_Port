@@ -62,6 +62,11 @@ impl HcbAdmin {
             .map(|entry| &entry.hcb)
     }
 
+    #[must_use]
+    pub fn find_hcb_handle(&self, name: &str) -> Option<usize> {
+        self.entries.iter().rposition(|entry| entry.name == name)
+    }
+
     pub fn find_hcb_mut(&mut self, name: &str) -> Option<&mut HcbCell<()>> {
         self.entries
             .iter_mut()

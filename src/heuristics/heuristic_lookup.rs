@@ -43,6 +43,30 @@ pub fn get_heuristic_with_context<'a>(
     wfcbs: &mut WfcbAdmin,
     context: WeightParseContext<'_>,
 ) -> Result<&'a HcbCell<()>, Diagnostic> {
+    let handle = get_heuristic_handle_with_context(source, hcbs, wfcbs, context)?;
+    let Some(hcb) = hcbs.hcb(handle) else {
+        return Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!("Heuristic '{source}' unknown\n"),
+        ));
+    };
+    Ok(hcb)
+}
+
+pub fn get_heuristic_handle(
+    source: &str,
+    hcbs: &mut HcbAdmin,
+    wfcbs: &mut WfcbAdmin,
+) -> Result<usize, Diagnostic> {
+    get_heuristic_handle_with_context(source, hcbs, wfcbs, WeightParseContext::empty())
+}
+
+pub fn get_heuristic_handle_with_context(
+    source: &str,
+    hcbs: &mut HcbAdmin,
+    wfcbs: &mut WfcbAdmin,
+    context: WeightParseContext<'_>,
+) -> Result<usize, Diagnostic> {
     let mut scanner = Scanner::from_option_string(source, true)?;
     let name = if scanner.test_tok(TokenType::OPEN_BRACKET) {
         heuristic_def_parse_with_context(hcbs, &mut scanner, wfcbs, context)?;
@@ -55,7 +79,7 @@ pub fn get_heuristic_with_context<'a>(
         name
     };
 
-    hcbs.find_hcb(&name).ok_or_else(|| {
+    hcbs.find_hcb_handle(&name).ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::USAGE_ERROR,
             format!("Heuristic '{name}' unknown\n"),

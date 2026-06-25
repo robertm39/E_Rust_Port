@@ -77,6 +77,10 @@ impl FvIndexParams {
     pub const fn symbol_slack(&self) -> usize {
         self.symbol_slack
     }
+
+    pub const fn set_symbol_slack(&mut self, symbol_slack: usize) {
+        self.symbol_slack = symbol_slack;
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

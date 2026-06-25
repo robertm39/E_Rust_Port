@@ -1,14 +1,18 @@
+use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_ORIENTED;
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
-use crate::heuristics::hcb::HeuristicParmsCell;
+use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType};
 use crate::heuristics::hcbadmin::HcbAdmin;
+use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
 use crate::heuristics::litselection::{
     apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection,
 };
-use crate::heuristics::wfcbadmin::WfcbAdmin;
+use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 
@@ -246,6 +250,111 @@ pub fn proof_control_reset_sat_solver(control: &mut ProofControl) {
     control.reset_sat_solver();
 }
 
+/// Installs the heuristic definition state handled by C `ProofControlInit`.
+///
+/// The remaining proof-state setup in `ProofControlInit`, including ordering
+/// selection and FV-index anchor creation, is kept outside this helper until
+/// the Rust proof-state owner is available.
+///
+/// # Errors
+///
+/// Returns a diagnostic when a built-in or user-supplied weight/heuristic
+/// definition cannot be parsed, or when the requested active heuristic is
+/// unknown.
+pub fn proof_control_init_heuristics(
+    control: &mut ProofControl,
+    axioms: &ClauseSet,
+    params: &mut HeuristicParmsCell,
+    fvi_params: &FvIndexParams,
+    wfcb_defs: &[String],
+    hcb_defs: &mut Vec<String>,
+) -> Result<(), Diagnostic> {
+    debug_assert!(control.ocb.is_none());
+    debug_assert!(control.active_hcb.is_none());
+
+    let context = WeightParseContext::new(axioms);
+    install_default_weight_functions(control, context)?;
+    for definition in wfcb_defs {
+        install_option_weight_functions(control, definition, context)?;
+    }
+
+    install_default_heuristics(control, context)?;
+    if let Some(heuristic_def) = params.heuristic_def.clone() {
+        hcb_defs.push(heuristic_def);
+    } else if let Some(heuristic_def) = hcb_defs.last() {
+        params.heuristic_def = Some(heuristic_def.clone());
+    }
+    for definition in hcb_defs.iter() {
+        install_option_heuristics(control, definition, context)?;
+    }
+
+    control.heuristic_parms = params.clone();
+    control.active_hcb = Some(get_heuristic_handle_with_context(
+        &params.heuristic_name,
+        &mut control.hcbs,
+        &mut control.wfcbs,
+        context,
+    )?);
+    control.fvi_parms = fvi_params.clone();
+    if control.heuristic_parms.split_clauses == SplitClassType::NONE {
+        control.fvi_parms.set_symbol_slack(0);
+    }
+    *params = control.heuristic_parms.clone();
+
+    Ok(())
+}
+
+fn install_default_weight_functions(
+    control: &mut ProofControl,
+    context: WeightParseContext<'_>,
+) -> Result<(), Diagnostic> {
+    let mut scanner = Scanner::from_internal_string(DEFAULT_WEIGHT_FUNCTIONS, true)?;
+    control
+        .wfcbs
+        .weight_fun_def_list_parse_with_context(&mut scanner, context)?;
+    scanner.check_tok(TokenType::NO_TOKEN)
+}
+
+fn install_option_weight_functions(
+    control: &mut ProofControl,
+    definition: &str,
+    context: WeightParseContext<'_>,
+) -> Result<(), Diagnostic> {
+    let mut scanner = Scanner::from_option_string(definition, true)?;
+    control
+        .wfcbs
+        .weight_fun_def_list_parse_with_context(&mut scanner, context)?;
+    scanner.check_tok(TokenType::NO_TOKEN)
+}
+
+fn install_default_heuristics(
+    control: &mut ProofControl,
+    context: WeightParseContext<'_>,
+) -> Result<(), Diagnostic> {
+    let mut scanner = Scanner::from_internal_string(DEFAULT_HEURISTICS, true)?;
+    control.hcbs.heuristic_def_list_parse_with_context(
+        &mut scanner,
+        &mut control.wfcbs,
+        context,
+    )?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    scanner.check_tok(TokenType::NO_TOKEN)
+}
+
+fn install_option_heuristics(
+    control: &mut ProofControl,
+    definition: &str,
+    context: WeightParseContext<'_>,
+) -> Result<(), Diagnostic> {
+    let mut scanner = Scanner::from_option_string(definition, true)?;
+    control.hcbs.heuristic_def_list_parse_with_context(
+        &mut scanner,
+        &mut control.wfcbs,
+        context,
+    )?;
+    scanner.check_tok(TokenType::NO_TOKEN)
+}
+
 #[must_use]
 pub fn select_inherited_literal(clause: &mut Clause) -> bool {
     if clause.negative_literal_count() == 0 {
@@ -389,17 +498,20 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_reset_sat_solver, select_inherited_literal,
-        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_control_alloc, proof_control_init_heuristics, proof_control_reset_sat_solver,
+        select_inherited_literal, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_CONJECTURE};
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
-    use crate::heuristics::hcb::{HeuristicParmsCell, HCB_DEFAULT_HEURISTIC};
+    use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC};
     use crate::heuristics::litselection::SELECT_UNLESS_POS_MAX;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
@@ -508,6 +620,126 @@ mod tests {
         assert!(DEFAULT_HEURISTICS.contains("Default    = (3*rweight21_a, 1*rweight21_g)"));
         assert!(DEFAULT_HEURISTICS.contains("UseWatchlist = \n"));
         assert!(DEFAULT_HEURISTICS.ends_with(" 1*FIFOWeight(PreferWatchlist))."));
+    }
+
+    #[test]
+    fn proof_control_init_installs_default_definitions_and_active_hcb() {
+        let mut control = proof_control_alloc();
+        let axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell::default();
+        let fvi_params = FvIndexParams::new(FvIndexType::AcFold, true, true, 19, 7);
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init_heuristics(
+            &mut control,
+            &axioms,
+            &mut params,
+            &fvi_params,
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(control.wfcbs().find_wfcb_handle("rweight21_a").is_some());
+        assert!(control.wfcbs().find_wfcb_handle("TSMRDefault").is_some());
+        let default_hcb = control
+            .hcbs()
+            .find_hcb_handle(HCB_DEFAULT_HEURISTIC)
+            .unwrap_or_else(|| panic!("Default HCB should be installed"));
+        assert_eq!(control.active_hcb(), Some(default_hcb));
+        assert_eq!(control.fvi_parms().symbol_slack(), 0);
+        assert_eq!(control.fvi_parms().max_symbols(), 19);
+        assert!(control.fvi_parms().use_perm_vectors());
+        assert!(control.fvi_parms().eliminate_uninformative());
+        assert!(params.heuristic_def.is_none());
+        assert!(hcb_defs.is_empty());
+    }
+
+    #[test]
+    fn proof_control_init_preserves_symbol_slack_when_splitting_is_enabled() {
+        let mut control = proof_control_alloc();
+        let axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell {
+            split_clauses: SplitClassType::ALL,
+            ..HeuristicParmsCell::default()
+        };
+        let fvi_params = FvIndexParams::new(FvIndexType::AcFold, false, false, 23, 11);
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init_heuristics(
+            &mut control,
+            &axioms,
+            &mut params,
+            &fvi_params,
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(control.fvi_parms().symbol_slack(), 11);
+    }
+
+    #[test]
+    fn proof_control_init_uses_user_definition_stack_like_c() {
+        let mut control = proof_control_alloc();
+        let axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "Alt".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let fvi_params = FvIndexParams::default();
+        let wfcb_defs = vec!["custom = FIFOWeight(ConstPrio)".to_owned()];
+        let mut hcb_defs = vec!["Alt=(1*custom)".to_owned()];
+
+        proof_control_init_heuristics(
+            &mut control,
+            &axioms,
+            &mut params,
+            &fvi_params,
+            &wfcb_defs,
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(control.wfcbs().find_wfcb_handle("custom").is_some());
+        let alt_hcb = control
+            .hcbs()
+            .find_hcb_handle("Alt")
+            .unwrap_or_else(|| panic!("user HCB should be installed"));
+        assert_eq!(control.active_hcb(), Some(alt_hcb));
+        assert_eq!(params.heuristic_def.as_deref(), Some("Alt=(1*custom)"));
+        assert_eq!(hcb_defs, ["Alt=(1*custom)"]);
+    }
+
+    #[test]
+    fn proof_control_init_pushes_direct_heuristic_def_like_c() {
+        let mut control = proof_control_alloc();
+        let axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "Injected".to_owned(),
+            heuristic_def: Some("Injected=(1*fifo_f)".to_owned()),
+            ..HeuristicParmsCell::default()
+        };
+        let fvi_params = FvIndexParams::default();
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init_heuristics(
+            &mut control,
+            &axioms,
+            &mut params,
+            &fvi_params,
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let injected_hcb = control
+            .hcbs()
+            .find_hcb_handle("Injected")
+            .unwrap_or_else(|| panic!("direct HCB should be installed"));
+        assert_eq!(control.active_hcb(), Some(injected_hcb));
+        assert_eq!(hcb_defs, ["Injected=(1*fifo_f)"]);
+        assert_eq!(params.heuristic_def.as_deref(), Some("Injected=(1*fifo_f)"));
     }
 
     #[test]
