@@ -145,9 +145,36 @@ impl Clause {
     /// Orient literals and mark maximal literals, matching C
     /// `ClauseMarkMaximalTerms`.
     pub fn mark_maximal_terms(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) {
-        self.literals.orient(ocb, bank);
-        self.literals.mark_maximal_literals(ocb, bank);
+        self.orient_literals(ocb, bank);
+        self.mark_maximal_literals(ocb, bank);
         self.set_prop(CP_IS_ORIENTED);
+    }
+
+    /// Conditionally mark maximal terms, matching C
+    /// `ClauseCondMarkMaximalTerms`.
+    ///
+    /// Returns whether marking was performed.
+    pub fn cond_mark_maximal_terms(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+    ) -> bool {
+        if self.query_prop(CP_IS_ORIENTED) {
+            false
+        } else {
+            self.mark_maximal_terms(ocb, bank);
+            true
+        }
+    }
+
+    /// Orient all literals, matching C `ClauseOrientLiterals`.
+    pub fn orient_literals(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> usize {
+        self.literals.orient(ocb, bank)
+    }
+
+    /// Mark maximal literals, matching C `ClauseMarkMaximalLiterals`.
+    pub fn mark_maximal_literals(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> usize {
+        self.literals.mark_maximal_literals(ocb, bank)
     }
 
     #[must_use]
@@ -524,6 +551,17 @@ impl Clause {
             literal.canonize();
         }
         self.sort_literals_by(|left, right| left.struct_weight_lex_compare(right, bank));
+    }
+
+    pub fn subsume_order_sort_literals(&mut self, bank: &TermBank) {
+        self.sort_literals_by(|left, right| {
+            i64::from(left.subsume_inverse_refined_compare(right, bank))
+        });
+    }
+
+    #[must_use]
+    pub fn is_subsume_ordered(&self, bank: &TermBank) -> bool {
+        self.is_sorted_by(|left, right| i64::from(left.subsume_inverse_compare(right, bank)))
     }
 
     #[must_use]
@@ -1987,6 +2025,42 @@ mod tests {
     }
 
     #[test]
+    fn clause_ordering_wrappers_match_c_macro_behaviour() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &f_a, true),
+            eqn(&mut bank, &a, &a, true),
+        ]));
+        let mut ocb = kbo_ocb(&bank);
+
+        assert_eq!(clause.orient_literals(&mut ocb, &bank), 1);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+        assert!(clause.literals().as_slice()[0].is_oriented());
+        assert_eq!(clause.literals().as_slice()[0].left(), &f_a);
+
+        assert_eq!(clause.mark_maximal_literals(&mut ocb, &bank), 1);
+        assert!(clause.literals().as_slice()[0].is_maximal());
+        assert!(!clause.literals().as_slice()[1].is_maximal());
+
+        let mut conditional = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &f_a, true),
+            eqn(&mut bank, &a, &a, true),
+        ]));
+        assert!(conditional.cond_mark_maximal_terms(&mut ocb, &bank));
+        assert!(conditional.query_prop(CP_IS_ORIENTED));
+        assert_eq!(conditional.literals().as_slice()[0].left(), &f_a);
+        assert!(conditional.literals().as_slice()[0].is_maximal());
+
+        let mut stale_flag = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &f_a, true)]));
+        stale_flag.set_prop(CP_IS_ORIENTED);
+        assert!(!stale_flag.cond_mark_maximal_terms(&mut ocb, &bank));
+        assert_eq!(stale_flag.literals().as_slice()[0].left(), &a);
+        assert!(!stale_flag.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
     fn not_greater_equal_preserves_c_multiset_scan_and_flags() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a");
@@ -2391,6 +2465,25 @@ mod tests {
         clause.set_weight(clause.standard_weight());
         assert!(clause.struct_weight_lex_compare(&other, &bank) < 0);
         assert_eq!(clause.cmp_by_struct_weight(&other, &bank), -1);
+    }
+
+    #[test]
+    fn subsume_order_wrappers_sort_and_check_like_c_macros() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &a, true),
+            eqn(&mut bank, &f_a, &a, true),
+        ]));
+
+        assert!(!clause.is_subsume_ordered(&bank));
+        clause.subsume_order_sort_literals(&bank);
+
+        assert!(clause.is_subsume_ordered(&bank));
+        assert_eq!(clause.literals().as_slice()[0].left(), &f_a);
+        assert_eq!(clause.literals().as_slice()[0].position(), 1);
+        assert_eq!(clause.literals().as_slice()[1].position(), 0);
     }
 
     #[test]
