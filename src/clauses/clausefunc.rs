@@ -1,13 +1,21 @@
 use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
-use crate::clauses::clause_props::{CP_INITIAL, CP_IS_D_INDEXED, CP_IS_S_INDEXED, CP_LIMITED_RW};
+use crate::clauses::clause_props::{
+    CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
+};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::eqnlist::EqnList;
+use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::signature::FP_IS_INJ_DEF_SKOLEM;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::term_standard_weight;
+use crate::terms::termtypes::{
+    term_del_prop, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_OP_FLAG,
+};
 use std::cmp::Ordering;
 
 #[must_use]
@@ -221,9 +229,308 @@ pub fn clause_eliminate_naked_boolean_variables(
     Ok(result)
 }
 
+/// Recognizes an injectivity definition and creates the inverse-function clause.
+///
+/// This is the plain clause-building part of C `ClauseRecognizeInjectivity`;
+/// proof-documentation and derivation-stack updates remain tied to the later
+/// derivation port.
+///
+/// # Errors
+///
+/// Returns a diagnostic if typed Skolem creation, term-bank insertion, or
+/// equation allocation fails.
+///
+/// # Panics
+///
+/// Panics if a syntactically accepted candidate has uninitialized term
+/// arguments or non-variable argument pairs where the C code asserts.
+pub fn clause_recognize_injectivity(
+    bank: &mut TermBank,
+    clause: &Clause,
+) -> Result<Option<Clause>, Diagnostic> {
+    if clause.positive_literal_count() != 1 || clause.negative_literal_count() != 1 {
+        return Ok(None);
+    }
+
+    let (pos_lit, neg_lit) = split_injectivity_literals(clause);
+    if !pos_lit.is_equ_lit(bank)
+        || !neg_lit.is_equ_lit(bank)
+        || !pos_lit.left().is_free_var()
+        || !pos_lit.right().is_free_var()
+        || pos_lit.left() == pos_lit.right()
+        || neg_lit.left().is_top_level_any_var()
+        || neg_lit.right().is_top_level_any_var()
+        || neg_lit.left().f_code() != neg_lit.right().f_code()
+        || neg_lit.left().f_code() <= bank.signature().internal_symbols()
+        || neg_lit.left().type_().is_none_or(|type_| type_.is_arrow())
+        || bank
+            .signature()
+            .query_prop(neg_lit.left().f_code(), FP_IS_INJ_DEF_SKOLEM)
+        || neg_lit.left().arity() == 0
+        || neg_lit.left().arity() != neg_lit.right().arity()
+    {
+        return Ok(None);
+    }
+
+    let arity = neg_lit.left().arity();
+    let var_tuple_weight = DEFAULT_FWEIGHT + usize_to_i64(arity) * DEFAULT_VWEIGHT;
+    if term_standard_weight(neg_lit.left()) != term_standard_weight(neg_lit.right())
+        || term_standard_weight(neg_lit.left()) != var_tuple_weight
+    {
+        return Ok(None);
+    }
+
+    let Some(index) = injectivity_variable_index(pos_lit, neg_lit) else {
+        return Ok(None);
+    };
+    let Some(skolem_vars) = collect_injectivity_skolem_vars(neg_lit) else {
+        return Ok(None);
+    };
+
+    build_injectivity_inverse_clause(bank, clause, neg_lit, index, skolem_vars).map(Some)
+}
+
+/// Checks whether an inverse-function definition is already represented modulo
+/// variable renaming in `all_defs`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if copying the generated definition into the current
+/// term bank with disjoint variables fails.
+///
+/// # Panics
+///
+/// Panics if `inj_def` or a candidate definition is not a positive unit clause,
+/// matching the C assertions.
+pub fn clause_set_injectivity_is_defined(
+    all_defs: &ClauseSet,
+    inj_def: &Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    assert_eq!(inj_def.positive_literal_count(), 1);
+    assert_eq!(inj_def.negative_literal_count(), 0);
+
+    let inj_literal = &inj_def.literals().as_slice()[0];
+    let lhs = bank.insert_disjoint(inj_literal.left())?;
+    let rhs = bank.insert_disjoint(inj_literal.right())?;
+
+    for candidate in all_defs.iter() {
+        assert_eq!(candidate.positive_literal_count(), 1);
+        assert_eq!(candidate.negative_literal_count(), 0);
+
+        let cand_literal = &candidate.literals().as_slice()[0];
+        let cand_lhs = cand_literal.left();
+        if cand_lhs.arity() != lhs.arity() {
+            continue;
+        }
+
+        let mut pairs = Vec::with_capacity(2 + 2 * lhs.arity());
+        pairs.push(rhs.clone());
+        pairs.push(cand_literal.right().clone());
+        for index in 0..cand_lhs.arity() {
+            pairs.push(required_arg(&lhs, index));
+            pairs.push(required_arg(cand_lhs, index));
+        }
+
+        let mut subst = Substitution::new();
+        let is_defined = unif_all_pairs(&mut pairs, &mut subst) && subst.is_renaming();
+        subst.delete();
+        if is_defined {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Replaces recognized injectivity definitions by inverse-function clauses.
+///
+/// The originals that produce a new definition are moved to `archive`; duplicate
+/// recognized definitions keep their original clause in `set`, matching C
+/// `ClauseSetReplaceInjectivityDefs`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if recognition, duplicate checking, or generated term
+/// construction fails.
+///
+/// # Panics
+///
+/// Panics under the same internal candidate-shape invariants as
+/// [`clause_recognize_injectivity`] and [`clause_set_injectivity_is_defined`].
+pub fn clause_set_replace_injectivity_defs(
+    set: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let ids = set.iter().map(Clause::ident).collect::<Vec<_>>();
+    let mut replacements = ClauseSet::new();
+    let mut archived_ids = Vec::new();
+    let mut count = 0;
+
+    for id in ids {
+        let Some(clause) = set.find_by_id(id) else {
+            continue;
+        };
+        let Some(replacement) = clause_recognize_injectivity(bank, clause)? else {
+            continue;
+        };
+        if replacement.query_prop(CP_IS_PURE_INJECTIVITY)
+            && !clause_set_injectivity_is_defined(&replacements, &replacement, bank)?
+        {
+            archived_ids.push(id);
+            replacements.insert(replacement);
+            count += 1;
+        }
+    }
+
+    for id in archived_ids {
+        if let Some(clause) = set.extract_by_id(id) {
+            archive.insert(clause);
+        }
+    }
+    set.insert_set(&mut replacements);
+    Ok(count)
+}
+
 #[must_use]
 pub fn clause_canon_compare_ref(left: &Clause, right: &Clause, bank: &TermBank) -> i32 {
     left.cmp_by_struct_weight(right, bank)
+}
+
+fn split_injectivity_literals(clause: &Clause) -> (&Eqn, &Eqn) {
+    let first = &clause.literals().as_slice()[0];
+    let second = &clause.literals().as_slice()[1];
+    if first.is_positive() {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+fn injectivity_variable_index(pos_lit: &Eqn, neg_lit: &Eqn) -> Option<usize> {
+    for index in 0..neg_lit.left().arity() {
+        let left_arg = required_arg(neg_lit.left(), index);
+        let right_arg = required_arg(neg_lit.right(), index);
+        if (&left_arg == pos_lit.left() && &right_arg == pos_lit.right())
+            || (&left_arg == pos_lit.right() && &right_arg == pos_lit.left())
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn collect_injectivity_skolem_vars(neg_lit: &Eqn) -> Option<Vec<Term>> {
+    clear_injectivity_marks(neg_lit);
+    let mut skolem_vars = Vec::new();
+    let mut applicable = true;
+
+    for index in 0..neg_lit.left().arity() {
+        let left_var = required_arg(neg_lit.left(), index);
+        let right_var = required_arg(neg_lit.right(), index);
+        assert!(left_var.is_free_var());
+        assert!(right_var.is_free_var());
+
+        if left_var == right_var {
+            if left_var.query_prop(TP_CHECK_FLAG) || right_var.query_prop(TP_CHECK_FLAG) {
+                applicable = false;
+                break;
+            }
+            if !left_var.query_prop(TP_OP_FLAG) {
+                left_var.set_prop(TP_OP_FLAG);
+                skolem_vars.push(left_var);
+            }
+        } else if left_var.is_any_prop_set(TP_CHECK_FLAG | TP_OP_FLAG)
+            || right_var.is_any_prop_set(TP_CHECK_FLAG | TP_OP_FLAG)
+        {
+            applicable = false;
+            break;
+        } else {
+            left_var.set_prop(TP_CHECK_FLAG);
+            right_var.set_prop(TP_CHECK_FLAG);
+        }
+    }
+
+    clear_injectivity_marks(neg_lit);
+    applicable.then_some(skolem_vars)
+}
+
+fn clear_injectivity_marks(neg_lit: &Eqn) {
+    let flags = TP_OP_FLAG | TP_CHECK_FLAG;
+    term_del_prop(neg_lit.left(), DerefType::Never, flags);
+    term_del_prop(neg_lit.right(), DerefType::Never, flags);
+}
+
+fn build_injectivity_inverse_clause(
+    bank: &mut TermBank,
+    source: &Clause,
+    neg_lit: &Eqn,
+    index: usize,
+    skolem_vars: Vec<Term>,
+) -> Result<Clause, Diagnostic> {
+    let inverse_arg = neg_lit.left().clone();
+    let inverse_var = required_arg(neg_lit.left(), index);
+    let ret_type = inverse_var
+        .type_()
+        .expect("injectivity inverse variable has a type");
+    let mut args = skolem_vars;
+    args.push(inverse_arg);
+    let arg_types = args
+        .iter()
+        .map(|arg| {
+            arg.type_()
+                .expect("injectivity inverse argument has a type")
+        })
+        .collect::<Vec<_>>();
+
+    let inverse_code = bank
+        .signature_mut()
+        .get_new_typed_skolem(&arg_types, &ret_type)?;
+    bank.signature_mut()
+        .set_func_prop(inverse_code, FP_IS_INJ_DEF_SKOLEM);
+
+    let inverse_term = Term::top_alloc(inverse_code, args.len());
+    for (arg_index, arg) in args.into_iter().enumerate() {
+        inverse_term.set_argument(arg_index, arg);
+    }
+    inverse_term.set_type(Some(ret_type));
+    let inverse_term = bank.term_top_insert(inverse_term)?;
+    let equation = Eqn::alloc(inverse_term, inverse_var, bank, true)?;
+    let mut result = Clause::alloc(EqnList::from_vec(vec![equation]));
+    result.set_proof_depth(source.proof_depth() + 1);
+    result.set_proof_size(source.proof_size() + 1);
+    result.set_tptp_type(source.query_tptp_type());
+    result.set_prop(source.give_props(CP_IS_SOS));
+    result.set_prop(CP_IS_PURE_INJECTIVITY);
+    result.set_weight(result.standard_weight());
+    Ok(result)
+}
+
+fn required_arg(term: &Term, index: usize) -> Term {
+    term.argument(index)
+        .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
+}
+
+fn unif_all_pairs(pairs: &mut Vec<Term>, subst: &mut Substitution) -> bool {
+    assert_eq!(pairs.len() % 2, 0);
+    let pos = subst.len();
+    let mut unifies = true;
+
+    while unifies && !pairs.is_empty() {
+        let left = pairs
+            .pop()
+            .expect("even-sized unification pair stack has a left term");
+        let right = pairs
+            .pop()
+            .expect("even-sized unification pair stack has a right term");
+        unifies = subst_mgu_complete(&left, &right, subst);
+    }
+
+    if !unifies {
+        subst.backtrack_to_pos(pos);
+    }
+    unifies
 }
 
 fn cmp_i64_to_order(value: i64) -> Ordering {
@@ -238,19 +545,24 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
-        clause_flip_literal_sign_index, clause_remove_ac_resolved, clause_remove_literal,
-        clause_remove_literal_index, clause_remove_superfluous_literals, clause_set_canonize,
-        clause_set_remove_superfluous_literals, clause_unit_simplify_test,
+        clause_flip_literal_sign_index, clause_recognize_injectivity, clause_remove_ac_resolved,
+        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
+        clause_set_canonize, clause_set_remove_superfluous_literals,
+        clause_set_replace_injectivity_defs, clause_unit_simplify_test,
         pstack_clause_print_lop_string,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_INITIAL, CP_LIMITED_RW};
+    use crate::clauses::clause_props::{
+        CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW, CP_TYPE_AXIOM,
+    };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
-    use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
+    use crate::terms::signature::{
+        Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM,
+    };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -290,6 +602,20 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![type_.clone(), type_.clone(), type_]),
+                )
+                .unwrap();
+        }
+        f_code
     }
 
     fn ac_code(bank: &mut TermBank) -> i64 {
@@ -559,6 +885,122 @@ mod tests {
         assert!(clause.is_trivial(&bank));
         assert!(variable.binding().is_none());
         assert_eq!(clause.weight(), clause.standard_weight());
+    }
+
+    #[test]
+    fn recognize_injectivity_builds_inverse_definition_clause() {
+        let mut bank = test_bank();
+        let f_code = typed_binary_code(&mut bank, "inj_f");
+        let x = typed_var(&bank, -30);
+        let y = typed_var(&bank, -31);
+        let z = typed_var(&bank, -32);
+        let left = typed_binary_with_code(&mut bank, f_code, &x, &z);
+        let right = typed_binary_with_code(&mut bank, f_code, &y, &z);
+        let mut source = clause_from(vec![
+            literal(&mut bank, &left, &right, false),
+            literal(&mut bank, &x, &y, true),
+        ]);
+        source.set_tptp_type(CP_TYPE_AXIOM);
+        source.set_prop(CP_IS_SOS);
+        source.set_proof_depth(4);
+        source.set_proof_size(7);
+
+        let recognized = clause_recognize_injectivity(&mut bank, &source)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(recognized.positive_literal_count(), 1);
+        assert_eq!(recognized.negative_literal_count(), 0);
+        assert!(recognized.query_prop(CP_IS_PURE_INJECTIVITY));
+        assert!(recognized.query_prop(CP_IS_SOS));
+        assert_eq!(recognized.query_tptp_type(), CP_TYPE_AXIOM);
+        assert_eq!(recognized.proof_depth(), 5);
+        assert_eq!(recognized.proof_size(), 8);
+        assert_eq!(recognized.weight(), recognized.standard_weight());
+
+        let inverse_literal = &recognized.literals().as_slice()[0];
+        let inverse = inverse_literal.left();
+        assert!(bank
+            .signature()
+            .query_prop(inverse.f_code(), FP_IS_INJ_DEF_SKOLEM));
+        assert_eq!(inverse.arity(), 2);
+        assert_eq!(inverse.argument(0), Some(z));
+        assert_eq!(inverse.argument(1), Some(left));
+        assert_eq!(inverse_literal.right(), &x);
+    }
+
+    #[test]
+    fn recognize_injectivity_rejects_repeated_variable_conflicts() {
+        let mut bank = test_bank();
+        let f_code = typed_binary_code(&mut bank, "bad_inj_f");
+        let x = typed_var(&bank, -40);
+        let y = typed_var(&bank, -41);
+        let left = typed_binary_with_code(&mut bank, f_code, &x, &x);
+        let right = typed_binary_with_code(&mut bank, f_code, &y, &x);
+        let source = clause_from(vec![
+            literal(&mut bank, &left, &right, false),
+            literal(&mut bank, &x, &y, true),
+        ]);
+
+        assert!(clause_recognize_injectivity(&mut bank, &source)
+            .unwrap()
+            .is_none());
+        assert!(!x.query_prop(crate::terms::termtypes::TP_CHECK_FLAG));
+        assert!(!x.query_prop(crate::terms::termtypes::TP_OP_FLAG));
+        assert!(!y.query_prop(crate::terms::termtypes::TP_CHECK_FLAG));
+        assert!(!y.query_prop(crate::terms::termtypes::TP_OP_FLAG));
+    }
+
+    #[test]
+    fn replace_injectivity_defs_archives_first_definition_and_keeps_duplicate_original() {
+        let mut bank = test_bank();
+        let f_code = typed_binary_code(&mut bank, "replace_inj_f");
+        let first_x = typed_var(&bank, -50);
+        let first_y = typed_var(&bank, -51);
+        let first_shared = typed_var(&bank, -52);
+        let first_left = typed_binary_with_code(&mut bank, f_code, &first_x, &first_shared);
+        let first_right = typed_binary_with_code(&mut bank, f_code, &first_y, &first_shared);
+        let mut first = clause_from(vec![
+            literal(&mut bank, &first_left, &first_right, false),
+            literal(&mut bank, &first_x, &first_y, true),
+        ]);
+        first.set_prop(CP_IS_SOS);
+        let first_id = first.ident();
+
+        let duplicate_x = typed_var(&bank, -60);
+        let duplicate_y = typed_var(&bank, -61);
+        let duplicate_shared = typed_var(&bank, -62);
+        let duplicate_left =
+            typed_binary_with_code(&mut bank, f_code, &duplicate_x, &duplicate_shared);
+        let duplicate_right =
+            typed_binary_with_code(&mut bank, f_code, &duplicate_y, &duplicate_shared);
+        let duplicate = clause_from(vec![
+            literal(&mut bank, &duplicate_left, &duplicate_right, false),
+            literal(&mut bank, &duplicate_x, &duplicate_y, true),
+        ]);
+        let duplicate_id = duplicate.ident();
+
+        let noise = clause_from(vec![literal(&mut bank, &first_x, &first_shared, true)]);
+        let noise_id = noise.ident();
+        let mut set = ClauseSet::from_clauses([first, duplicate, noise]);
+        let mut archive = ClauseSet::new();
+
+        assert_eq!(
+            clause_set_replace_injectivity_defs(&mut set, &mut archive, &mut bank).unwrap(),
+            1
+        );
+
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.iter().next().map(Clause::ident), Some(first_id));
+        assert!(set.find_by_id(first_id).is_none());
+        assert!(set.find_by_id(duplicate_id).is_some());
+        assert!(set.find_by_id(noise_id).is_some());
+        let generated = set
+            .iter()
+            .find(|clause| clause.query_prop(CP_IS_PURE_INJECTIVITY))
+            .expect("replacement clause inserted");
+        assert!(generated.query_prop(CP_IS_SOS));
+        assert_eq!(set.len(), 3);
     }
 
     #[test]
