@@ -1,24 +1,28 @@
 use std::fmt;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clausesets::ClauseSet;
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
 use crate::inout::output::set_output_level;
-use crate::inout::scanner::IoFormat;
+use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 use crate::terms::signature::{
-    FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+    FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
+    FP_IS_RATIONAL,
 };
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::RewriteLevel;
+use crate::terms::typebanks::TypeBank;
 
 const MEGA: u64 = 1_048_576;
 const C_INT_MAX: i64 = i32::MAX as i64;
@@ -3103,11 +3107,96 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     }
     output.flush()?;
 
+    if config.flags.contains(EProverFlag::SyntaxOnly) {
+        run_syntax_only(&mut output, config)?;
+        return Ok(ErrorCode::NO_ERROR.exit_status());
+    }
+
     Err(Diagnostic::new(
         ErrorCode::OTHER_ERROR,
         "Rust eprover proof search is not implemented yet",
     )
     .into())
+}
+
+fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
+    let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
+    let mut clauses = ClauseSet::new();
+
+    for file in &config.files {
+        let before = clauses.len();
+        parse_clause_file(file, config.parse_format, &mut bank, &mut clauses)?;
+        if config.flags.contains(EProverFlag::RequireNonempty) && clauses.len() == before {
+            return Err(Diagnostic::new(
+                ErrorCode::INPUT_SEMANTIC_ERROR,
+                format!("Input file {file} did not contain any clauses"),
+            )
+            .into());
+        }
+    }
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && clauses.is_empty() {
+        return Err(Diagnostic::new(
+            ErrorCode::INPUT_SEMANTIC_ERROR,
+            "Input did not contain any clauses",
+        )
+        .into());
+    }
+
+    if config.flags.contains(EProverFlag::PrintFormulas) {
+        match config.output_format {
+            IoFormat::Tstp | IoFormat::Tptp => {
+                let rendered = clauses.tstp_print_string(
+                    &bank,
+                    true,
+                    crate::basics::simple_stuff::ProblemType::FirstOrder,
+                )?;
+                output.write_all(rendered.as_bytes())?;
+            }
+            IoFormat::Auto | IoFormat::Lop => {
+                output.write_all(clauses.print_lop_string(&bank, true).as_bytes())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_clause_file(
+    file: &str,
+    parse_format: IoFormat,
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    let mut scanner = if file == "-" {
+        let mut input = String::new();
+        io::stdin().read_to_string(&mut input).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read standard input: {error}"),
+            )
+        })?;
+        Scanner::from_user_string(&input, false)?
+    } else {
+        Scanner::from_file_following_includes(Path::new(file), false, "include")?
+    };
+    scanner.set_format(parse_format);
+    clauses.parse_list(
+        &mut scanner,
+        bank,
+        crate::basics::simple_stuff::ProblemType::FirstOrder,
+    )?;
+    if !scanner.test_tok(TokenType::NO_TOKEN) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{}(just read '{}'): Unexpected token after clause list",
+                token_pos_rep(scanner.current_token()),
+                scanner.current_token().literal()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4758,5 +4847,101 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!("# Version: {VERSION}\n")
         );
+    }
+
+    #[test]
+    fn run_syntax_only_parses_supported_lop_clause_files() {
+        let path = temp_path("syntax-only");
+        std::fs::write(&path, "p(a).\nq(a) <- p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_renders_parsed_lop_clauses() {
+        let path = temp_path("print-formulas");
+        std::fs::write(&path, "p(a).\nq(a) <- p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "p(a) <- .\nq(a) <- p(a).\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_trailing_tokens_after_clause_list() {
+        let path = temp_path("syntax-junk");
+        std::fs::write(&path, "p(a). )").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Unexpected token after clause list"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_observes_error_on_empty() {
+        let path = temp_path("syntax-empty");
+        std::fs::write(&path, "").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--syntax-only",
+                "--error-on-empty",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+        assert!(error.message().contains("did not contain any clauses"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
     }
 }

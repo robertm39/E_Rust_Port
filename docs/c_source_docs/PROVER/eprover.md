@@ -121,6 +121,11 @@ Source files reviewed: `PROVER/eprover.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
+### Change-Later Observations
+
+- `eprover.c` handles syntax-only parsing through the same proof-state scanner/parser setup used by ordinary input processing. The Rust executable now has a parse-only path for the currently supported clause syntax, but it should be rejoined with the full proof-state/formula parser once `WFormula`/formula-list parsing and the remaining scanner owners are ported.
+- `CreateScanner(StreamTypeFile, "-", ...)` keeps stdin as a real scanner stream with stdin source identity. The current Rust syntax-only implementation reads stdin into an in-memory scanner first; revisit that once exact stdin diagnostics and streaming include behavior are compatibility-tested.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
