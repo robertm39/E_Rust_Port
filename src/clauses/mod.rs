@@ -13,6 +13,7 @@ pub mod diseq_decomp;
 pub mod eqn;
 pub mod eqn_props;
 pub mod eqnlist;
+pub mod ext_index;
 pub mod f_generality;
 pub mod fcvindexing;
 pub mod findex;

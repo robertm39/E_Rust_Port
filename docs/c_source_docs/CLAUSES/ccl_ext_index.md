@@ -109,4 +109,19 @@ Source files reviewed: `CLAUSES/ccl_ext_index.h`, `CLAUSES/ccl_ext_index.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- `ExtIndex_p` is an `IntMap` from function code to `ClauseTPosTree`; insertion creates the per-symbol tree lazily and deletion removes all positions for the clause under each collected symbol.
+- Into-position collection scans every literal and both sides. It does not apply maximality, orientation, or sign gates; a term is pushed only when it is not arrow-typed, not a top-level any variable, not normalized as an applied pattern variable, and has an immediate or descendant Boolean/arrow-typed eligible subterm.
+- From-position collection is narrower: it only considers positive literals whose left side is not arrow-typed, then checks the left side at the literal start position and the right side at the offset after the left side.
+- The C right-side from-position gate also calls `MAYBE_NORMALIZE_APP_VAR(handle->lterm)`, not the right term. The Rust port preserves that left-term check for compatibility.
+- Both insertion and deletion consume the collected `(f_code, compact_pos)` pairs by popping the stack, so observable duplicate-collapsing and tree insertion order are the reverse of collection order.
+- Clause insertion is gated by `clause->proof_depth <= max_depth`; deletion has no depth gate.
+
+### Change Later Candidates
+
+- `MAYBE_NORMALIZE_APP_VAR` can rewrite applied higher-order pattern variables through `NormalizePatternAppVar`. Rust currently approximates this by skipping applied free-variable terms in this index path; replace it with real LFHO term-bank normalization once available.
+- C deletion obtains buckets with `IntMapGetRef`, which can create empty symbol slots during a delete. Rust drops empty `BTreeMap` entries; revisit this if storage accounting or debug tree shape needs to be C-identical.
+- Extension indexes are allocated from `GlobalIndices` only for higher-order problems in C. Rust has the standalone owner now; proof-state/global-index wiring still needs the same problem-type gate.
 <!-- END MANUAL REVIEW: c_source_docs -->
