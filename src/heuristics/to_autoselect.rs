@@ -554,6 +554,11 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::float_cmp,
+        reason = "test asserts exact C-shaped integer penalty accumulation as double"
+    )]
     fn order_evaluate_marks_axioms_and_scores_c_penalty_sum() {
         let mut bank = term_bank();
         let individual = individual(&bank);

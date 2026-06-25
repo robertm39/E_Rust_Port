@@ -101,6 +101,15 @@ Source files reviewed: `CLAUSES/ccl_relevance.h`, `CLAUSES/ccl_relevance.c`.
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `RelevanceDataInit` splits conjecture and non-conjecture clauses/formulas into `PList` buckets with `PListStoreP(anchor, ...)`; because insertion is after the anchor, each bucket is reversed relative to source set traversal.
+- `RelevanceDataCompute` records clause and formula core lists before allocating fresh empty cores, then `extract_new_core` moves matching rest-list cells into the new cores through the function-symbol index.
+- `proofstate_rel_prune` treats level `0` outside the helper: `ProofStateRelevancyProcess` returns before pruning. For requested levels beyond computed relevance levels, it moves all remaining rest clauses/formulas into the new axiom sets.
+
+### Change-Later Notes
+
+- The C relevance implementation exposes raw `PList` list order in pruning results. If reference tests show the order does not matter, later Rust code could prefer source-order stable vectors for readability, but the current port should preserve the C-shaped reversed buckets.
+- `extract_new_core` repeatedly consumes the root of a `PTree` bucket keyed by raw `PList` cell addresses. That root depends on allocation addresses and splay-tree history; replacing it with deterministic handle order is a good Rust cleanup candidate only if proof/pruning behavior tests allow it.
+- The clause and formula relevance paths are duplicated structurally in C. Once `WFormula`/`FormulaSet` are ported, Rust can share the traversal/indexing scaffolding while keeping compatibility-visible mutation order explicit.
 
 ### Porting Focus
 

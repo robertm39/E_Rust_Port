@@ -36,6 +36,11 @@ impl FIndex {
         self.plist_clause_index.get(&f_code)
     }
 
+    #[must_use]
+    pub fn first_pl_clause(&self, f_code: FunCode) -> Option<PListHandle> {
+        self.plist_clause_bucket(f_code)?.values().next().copied()
+    }
+
     /// Adds `clause` under every function symbol returned by
     /// `ClauseReturnFCodes`.
     ///

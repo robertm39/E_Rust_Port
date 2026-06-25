@@ -998,6 +998,10 @@ pub fn clause_set_collect_arity_information(
 /// Panics if an external signature symbol or collected variable has no type, or
 /// if the computed type order cannot fit the C `int` result type.
 #[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "C computes this higher-order feature ratio as double"
+)]
 pub fn clause_set_compute_ho_features<F>(
     set: &ClauseSet,
     signature: &Signature,

@@ -1409,6 +1409,11 @@ pub fn generic_fun_weight_compute(
 ///
 /// The existing WFCB compute callback cannot mutate clauses yet, so this
 /// explicit entry point is used by callers that already own a mutable clause.
+///
+/// # Panics
+///
+/// Panics if fun-weight initialization did not populate the function-weight
+/// vector, which would violate the parameter-cell invariant.
 #[must_use]
 pub fn generic_fun_weight_compute_with_ocb(
     param: &mut FunWeightParam,
@@ -1489,6 +1494,11 @@ pub fn sym_offset_weight_compute(
 ///
 /// The existing WFCB compute callback cannot mutate clauses yet, so this
 /// explicit entry point is used by callers that already own a mutable clause.
+///
+/// # Panics
+///
+/// Panics if the parameter cell was not initialized for symbol-offset scoring,
+/// or if occurrence-array index conversion fails for a positive f-code.
 #[must_use]
 pub fn sym_offset_weight_compute_with_ocb(
     param: &mut FunWeightParam,

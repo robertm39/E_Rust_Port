@@ -55,6 +55,11 @@ pub fn clause_contextual_simplify_reflect(
 ///
 /// A target clause may be pushed more than once when different flipped literals
 /// make the query subsume it, matching the C stack behavior.
+///
+/// # Panics
+///
+/// Panics if the query clause weight does not match its standard weight. This
+/// mirrors the C assertion before contextual simplify-reflect lookup.
 pub fn clause_set_find_context_sr_clauses<'set>(
     set: &'set ClauseSet,
     clause: &mut Clause,

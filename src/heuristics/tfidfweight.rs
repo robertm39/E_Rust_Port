@@ -320,6 +320,11 @@ pub fn conjecture_term_tfidf_weight_compute(
 /// The existing WFCB compute callback cannot mutate clauses yet, so this
 /// explicit entry point is used by callers that already own a mutable clause.
 /// As in C, generated-document updates happen after term-extension scoring.
+///
+/// # Panics
+///
+/// Panics if TF-IDF initialization did not populate the evaluation bank while
+/// generated-document updates are enabled.
 #[must_use]
 pub fn conjecture_term_tfidf_weight_compute_with_ocb(
     param: &mut TfIdfWeightParam,

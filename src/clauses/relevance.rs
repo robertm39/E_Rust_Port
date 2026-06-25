@@ -1,41 +1,53 @@
+use crate::basics::plist::{PListArena, PListHandle};
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::findex::FIndex;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
-use std::collections::BTreeSet;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RelevanceData {
     max_level: i64,
     f_code_relevance: Vec<i64>,
+    clause_levels: Vec<Vec<Clause>>,
+    clauses_rest: Vec<Clause>,
 }
 
 impl RelevanceData {
     #[must_use]
     pub fn compute(signature: &Signature, axioms: &ClauseSet) -> Self {
-        let mut core = Vec::new();
-        let mut rest = Vec::new();
-        for clause in axioms.iter() {
-            if clause.is_conjecture() {
-                core.push(clause.clone());
-            } else {
-                rest.push(clause.clone());
-            }
-        }
-
+        let mut work = ClauseRelevanceWork::new(axioms);
         let mut f_code_relevance = vec![0; signature_f_limit(signature)];
         let mut level = 1;
-        while !core.is_empty() {
-            let new_codes = find_level_f_codes(signature, &core, level, &mut f_code_relevance);
-            let (next_core, next_rest) = extract_new_core(rest, &new_codes);
-            core = next_core;
-            rest = next_rest;
+
+        while !work.clauses.is_empty(work.clauses_core) {
+            find_level_f_codes(
+                signature,
+                &work.clauses,
+                work.clauses_core,
+                level,
+                &mut f_code_relevance,
+                &mut work.new_codes,
+            );
+
+            work.relevance_levels.push(work.clauses_core);
+            work.clauses_core = work.clauses.alloc_list();
+            extract_new_core(&mut work);
             level += 1;
         }
+
+        let clause_levels = work
+            .relevance_levels
+            .iter()
+            .map(|&anchor| clone_list_clauses(&work.clauses, anchor))
+            .collect();
+        let clauses_rest = clone_list_clauses(&work.clauses, work.clauses_rest);
 
         Self {
             max_level: level,
             f_code_relevance,
+            clause_levels,
+            clauses_rest,
         }
     }
 
@@ -52,16 +64,105 @@ impl RelevanceData {
             .copied()
             .unwrap_or(0)
     }
+
+    #[must_use]
+    pub fn clause_levels(&self) -> &[Vec<Clause>] {
+        &self.clause_levels
+    }
+
+    #[must_use]
+    pub fn clauses_rest(&self) -> &[Clause] {
+        &self.clauses_rest
+    }
+
+    #[must_use]
+    pub fn pruned_clause_set(&self, level: i64) -> ClauseSet {
+        let mut result = ClauseSet::new();
+        if level <= 0 {
+            return result;
+        }
+
+        let requested = usize::try_from(level).unwrap_or(usize::MAX);
+        for clauses in self.clause_levels.iter().take(requested) {
+            for clause in clauses {
+                result.insert(clause.clone());
+            }
+        }
+        if requested > self.clause_levels.len() {
+            for clause in &self.clauses_rest {
+                result.insert(clause.clone());
+            }
+        }
+        result
+    }
+}
+
+#[must_use]
+pub fn clause_set_relevance_prune(
+    signature: &Signature,
+    axioms: &ClauseSet,
+    level: i64,
+) -> (ClauseSet, i64) {
+    if level == 0 {
+        return (axioms.clone(), 0);
+    }
+
+    let reldata = RelevanceData::compute(signature, axioms);
+    let pruned = reldata.pruned_clause_set(level);
+    let removed = axioms.members() - pruned.members();
+    (pruned, removed)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ClauseRelevanceWork {
+    clauses: PListArena<Clause>,
+    clauses_core: PListHandle,
+    clauses_rest: PListHandle,
+    clauses_index: FIndex,
+    new_codes: Vec<FunCode>,
+    relevance_levels: Vec<PListHandle>,
+}
+
+impl ClauseRelevanceWork {
+    fn new(axioms: &ClauseSet) -> Self {
+        let mut clauses = PListArena::new();
+        let clauses_core = clauses.alloc_list();
+        let clauses_rest = clauses.alloc_list();
+        let mut conjecture_count = 0;
+
+        for clause in axioms.iter() {
+            if clause.is_conjecture() {
+                store_clause_after_anchor(&mut clauses, clauses_core, clause);
+                conjecture_count += 1;
+            } else {
+                store_clause_after_anchor(&mut clauses, clauses_rest, clause);
+            }
+        }
+
+        let mut clauses_index = FIndex::new();
+        let _ = clauses_index.add_pl_clause_set(&clauses, clauses_rest);
+
+        Self {
+            clauses,
+            clauses_core,
+            clauses_rest,
+            clauses_index,
+            new_codes: Vec::new(),
+            relevance_levels: Vec::with_capacity(conjecture_count),
+        }
+    }
 }
 
 fn find_level_f_codes(
     signature: &Signature,
-    core: &[Clause],
+    clauses: &PListArena<Clause>,
+    clauses_core: PListHandle,
     level: i64,
     f_code_relevance: &mut Vec<i64>,
-) -> BTreeSet<FunCode> {
-    let mut new_codes = BTreeSet::new();
-    for clause in core {
+    new_codes: &mut Vec<FunCode>,
+) {
+    debug_assert!(new_codes.is_empty());
+    for (_handle, clause) in clauses.entries(clauses_core) {
         let mut f_codes = Vec::new();
         clause.return_fcodes(&mut f_codes);
         for f_code in f_codes {
@@ -74,38 +175,40 @@ fn find_level_f_codes(
             }
             if f_code_relevance[index] == 0 {
                 f_code_relevance[index] = level;
-                new_codes.insert(f_code);
+                new_codes.push(f_code);
             }
         }
     }
-    new_codes
 }
 
-fn extract_new_core(
-    rest: Vec<Clause>,
-    new_codes: &BTreeSet<FunCode>,
-) -> (Vec<Clause>, Vec<Clause>) {
-    let mut core = Vec::new();
-    let mut remaining = Vec::new();
-    for clause in rest {
-        if clause_mentions_any(&clause, new_codes) {
-            core.push(clause);
-        } else {
-            remaining.push(clause);
+fn extract_new_core(work: &mut ClauseRelevanceWork) {
+    while let Some(f_code) = work.new_codes.pop() {
+        while let Some(entry) = work.clauses_index.first_pl_clause(f_code) {
+            let _ = work.clauses_index.remove_pl_clause(&work.clauses, entry);
+            if work.clauses.extract(entry).is_none() {
+                break;
+            }
+            let inserted = work.clauses.insert_after(work.clauses_core, entry);
+            debug_assert!(inserted);
         }
     }
-    (core, remaining)
 }
 
-fn clause_mentions_any(clause: &Clause, f_codes: &BTreeSet<FunCode>) -> bool {
-    if f_codes.is_empty() {
-        return false;
-    }
-    let mut clause_f_codes = Vec::new();
-    clause.return_fcodes(&mut clause_f_codes);
-    clause_f_codes
+fn clone_list_clauses(clauses: &PListArena<Clause>, anchor: PListHandle) -> Vec<Clause> {
+    clauses
+        .entries(anchor)
         .into_iter()
-        .any(|f_code| f_codes.contains(&f_code))
+        .map(|(_handle, clause)| clause.clone())
+        .collect()
+}
+
+fn store_clause_after_anchor(
+    clauses: &mut PListArena<Clause>,
+    anchor: PListHandle,
+    clause: &Clause,
+) {
+    let stored = clauses.store_after(anchor, clause.clone());
+    debug_assert!(stored.is_some());
 }
 
 fn signature_f_limit(signature: &Signature) -> usize {
@@ -119,7 +222,7 @@ fn f_code_index(f_code: FunCode) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::RelevanceData;
+    use super::{clause_set_relevance_prune, RelevanceData};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{FormulaProperties, CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
@@ -180,6 +283,14 @@ mod tests {
         bank.signature().find_f_code(name)
     }
 
+    fn clause_ids(clauses: &[Clause]) -> Vec<i64> {
+        clauses.iter().map(Clause::ident).collect()
+    }
+
+    fn set_ids(clauses: &ClauseSet) -> Vec<i64> {
+        clauses.iter().map(Clause::ident).collect()
+    }
+
     #[test]
     fn relevance_data_expands_from_conjectures_by_shared_symbols() {
         let mut bank = test_bank();
@@ -224,5 +335,82 @@ mod tests {
         assert_eq!(data.f_code_relevance(f_code(&bank, "special")), 0);
         assert_eq!(data.f_code_relevance(f_code(&bank, "other")), 0);
         assert_eq!(data.max_level(), 2);
+    }
+
+    #[test]
+    fn relevance_data_retains_c_style_clause_levels_and_rest() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a", false);
+        let b = typed_const(&mut bank, "b", false);
+        let c = typed_const(&mut bank, "c", false);
+        let f_of_a = typed_unary(&mut bank, "f", &a);
+        let f_of_b = typed_unary(&mut bank, "f", &b);
+        let g_of_b = typed_unary(&mut bank, "g", &b);
+        let unrelated = typed_unary(&mut bank, "u", &c);
+        let conjecture = unit_clause(&mut bank, &f_of_a, &a, CP_TYPE_NEG_CONJECTURE);
+        let relevant = unit_clause(&mut bank, &f_of_b, &g_of_b, CP_TYPE_AXIOM);
+        let irrelevant = unit_clause(&mut bank, &unrelated, &c, CP_TYPE_AXIOM);
+        let conjecture_id = conjecture.ident();
+        let relevant_id = relevant.ident();
+        let irrelevant_id = irrelevant.ident();
+
+        let data = RelevanceData::compute(
+            bank.signature(),
+            &ClauseSet::from_clauses([conjecture, relevant, irrelevant]),
+        );
+
+        assert_eq!(data.clause_levels().len(), 2);
+        assert_eq!(clause_ids(&data.clause_levels()[0]), vec![conjecture_id]);
+        assert_eq!(clause_ids(&data.clause_levels()[1]), vec![relevant_id]);
+        assert_eq!(clause_ids(data.clauses_rest()), vec![irrelevant_id]);
+    }
+
+    #[test]
+    fn relevance_pruning_keeps_requested_levels_and_reports_removed_count() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a", false);
+        let b = typed_const(&mut bank, "b", false);
+        let c = typed_const(&mut bank, "c", false);
+        let f_of_a = typed_unary(&mut bank, "f", &a);
+        let f_of_b = typed_unary(&mut bank, "f", &b);
+        let g_of_b = typed_unary(&mut bank, "g", &b);
+        let unrelated = typed_unary(&mut bank, "u", &c);
+        let conjecture = unit_clause(&mut bank, &f_of_a, &a, CP_TYPE_NEG_CONJECTURE);
+        let relevant = unit_clause(&mut bank, &f_of_b, &g_of_b, CP_TYPE_AXIOM);
+        let irrelevant = unit_clause(&mut bank, &unrelated, &c, CP_TYPE_AXIOM);
+        let conjecture_id = conjecture.ident();
+        let relevant_id = relevant.ident();
+        let irrelevant_id = irrelevant.ident();
+        let axioms = ClauseSet::from_clauses([conjecture, relevant, irrelevant]);
+
+        let (level_one, removed) = clause_set_relevance_prune(bank.signature(), &axioms, 1);
+        assert_eq!(set_ids(&level_one), vec![conjecture_id]);
+        assert_eq!(removed, 2);
+
+        let (level_two, removed) = clause_set_relevance_prune(bank.signature(), &axioms, 2);
+        assert_eq!(set_ids(&level_two), vec![conjecture_id, relevant_id]);
+        assert_eq!(removed, 1);
+
+        let (all, removed) = clause_set_relevance_prune(bank.signature(), &axioms, 99);
+        assert_eq!(
+            set_ids(&all),
+            vec![conjecture_id, relevant_id, irrelevant_id]
+        );
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn relevance_pruning_level_zero_returns_original_set() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a", false);
+        let conjecture = unit_clause(&mut bank, &a, &a, CP_TYPE_NEG_CONJECTURE);
+        let axiom = unit_clause(&mut bank, &a, &a, CP_TYPE_AXIOM);
+        let original_ids = vec![conjecture.ident(), axiom.ident()];
+        let axioms = ClauseSet::from_clauses([conjecture, axiom]);
+
+        let (same, removed) = clause_set_relevance_prune(bank.signature(), &axioms, 0);
+
+        assert_eq!(set_ids(&same), original_ids);
+        assert_eq!(removed, 0);
     }
 }

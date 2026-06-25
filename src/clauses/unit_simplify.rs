@@ -75,6 +75,10 @@ pub fn find_signed_top_simplifying_unit<'set>(
 }
 
 #[must_use]
+/// # Panics
+///
+/// Panics if matching nonvariable terms report an arity but do not expose
+/// initialized arguments. This is an internal term-bank invariant.
 pub fn find_simplifying_unit<'set>(
     units: &'set ClauseSet,
     left: &Term,
