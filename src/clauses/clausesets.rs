@@ -7,10 +7,11 @@ use crate::clauses::clause::{
     clause_write_tstp, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_TYPE_CONJECTURE,
+    FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_CONJECTURE,
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::eqn_props::EqnSide;
+use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
 use crate::clauses::freqvectors::{
     fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
     FvIndexType, PermVector,
@@ -769,6 +770,23 @@ impl ClauseSet {
         Ok(self.members())
     }
 
+    pub fn fv_indexify(&mut self, anchor: &mut FvIndexAnchor, bank: &TermBank) -> i64 {
+        let mut stack = Vec::with_capacity(self.clauses.len());
+        while let Some(clause) = self.extract_first() {
+            stack.push(clause);
+        }
+
+        while let Some(clause) = stack.pop() {
+            debug_assert_eq!(clause.weight(), clause.standard_weight());
+            let mut packed = fv_index_pack_clause(clause, Some(anchor));
+            anchor.insert(&mut packed, bank);
+            let mut clause = packed.into_clause();
+            clause.set_prop(CP_IS_S_INDEXED);
+            self.insert(clause);
+        }
+        self.members()
+    }
+
     pub fn push_clause_refs<'a>(&'a self, stack: &mut PStack<&'a Clause>) -> i64 {
         let mut pushed = 0;
         for clause in &self.clauses {
@@ -1247,12 +1265,13 @@ mod tests {
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
-        CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
+        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_AXIOM,
+        CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::fcvindexing::FvIndexAnchor;
     use crate::clauses::freqvectors::{
         fv_size, perm_vector_compute_internal, var_freq_vector_compute, FreqVector, FvCollect,
         FvCollectLayout, FvIndexType,
@@ -1357,6 +1376,12 @@ mod tests {
             .unwrap();
     }
 
+    fn ac_anchor(max_symbols: usize) -> FvIndexAnchor {
+        let mut cspec = FvCollect::new(FvCollectLayout::new(FvIndexType::AcFeatures, false, 0, 0));
+        cspec.set_max_symbols(max_symbols);
+        FvIndexAnchor::new(cspec, None)
+    }
+
     #[test]
     fn insert_extract_and_transfer_preserve_order_and_accounting() {
         let mut bank = test_bank();
@@ -1402,6 +1427,30 @@ mod tests {
             vec![first_id, second_id]
         );
         assert_eq!(target.literals(), 3);
+    }
+
+    #[test]
+    fn fv_indexify_reinserts_from_stack_and_marks_s_indexed_clauses() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "fv_a");
+        let b = typed_const(&mut bank, "fv_b");
+        let c = typed_const(&mut bank, "fv_c");
+        let first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let second = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let mut set = ClauseSet::from_clauses([first, second]);
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        let mut anchor = ac_anchor(max_symbols);
+
+        assert_eq!(set.fv_indexify(&mut anchor, &bank), 2);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![second_id, first_id]
+        );
+        assert!(set.iter().all(|clause| clause.query_prop(CP_IS_S_INDEXED)));
+        assert!(anchor.count_nodes(false, false) > 0);
+        assert_eq!(anchor.count_nodes(true, false), 2);
     }
 
     #[test]
