@@ -17,7 +17,7 @@ use crate::clauses::freqvectors::{
 };
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::clauses::tautologies::clause_is_tautology;
-use crate::inout::scanner::Scanner;
+use crate::inout::scanner::{IoFormat, Scanner};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -956,6 +956,94 @@ pub fn clause_set_list_get_max_date(sets: &[&ClauseSet], limit: usize) -> SysDat
         })
 }
 
+/// Writes the C `EqAxiomsPrint` shape with an explicit output format.
+///
+/// # Errors
+///
+/// Returns a diagnostic for TSTP, matching the C fatal-error branch, or if the
+/// formatter fails.
+pub fn eq_axioms_write(
+    output: &mut impl fmt::Write,
+    sig: &Signature,
+    format: IoFormat,
+    single_subst: bool,
+) -> Result<(), Diagnostic> {
+    match format {
+        IoFormat::Tptp => {
+            output
+                .write_str(
+                    "input_clause(eq_reflexive, axiom, [++equal(X,X)]).\n\
+                     input_clause(eq_symmetric, axiom, [++equal(X,Y),--equal(Y,X)]).\n\
+                     input_clause(eq_transitive, axiom, [++equal(X,Z),--equal(X,Y),--equal(Y,Z)]).\n",
+                )
+                .map_err(eq_axioms_write_error)?;
+            for f_code in (sig.internal_symbols() + 1)..=sig.f_count() {
+                let Some(arity) = sig.find_arity(f_code) else {
+                    continue;
+                };
+                if arity == 0 {
+                    continue;
+                }
+                let Some(symbol) = sig.find_name(f_code) else {
+                    continue;
+                };
+                if sig.is_predicate(f_code) {
+                    tptp_eq_pred_axiom_write(output, symbol, arity, single_subst)?;
+                } else {
+                    tptp_eq_func_axiom_write(output, symbol, arity, single_subst)?;
+                }
+            }
+        }
+        IoFormat::Tstp => {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "Adding of equality axioms not (yet) supported for TSTP/TPTP-3 format.",
+            ));
+        }
+        IoFormat::Auto | IoFormat::Lop => {
+            output
+                .write_str(
+                    "equal(X,X) <- .\n\
+                     equal(X,Y) <- equal(Y,X).\n\
+                     equal(X,Z) <- equal(X,Y), equal(Y,Z).\n",
+                )
+                .map_err(eq_axioms_write_error)?;
+            for f_code in (sig.internal_symbols() + 1)..=sig.f_count() {
+                let Some(arity) = sig.find_arity(f_code) else {
+                    continue;
+                };
+                if arity == 0 {
+                    continue;
+                }
+                let Some(symbol) = sig.find_name(f_code) else {
+                    continue;
+                };
+                if sig.is_predicate(f_code) {
+                    eq_pred_axiom_write(output, symbol, arity, single_subst)?;
+                } else {
+                    eq_func_axiom_write(output, symbol, arity, single_subst)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the C `EqAxiomsPrint` shape with an explicit output format.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`eq_axioms_write`].
+pub fn eq_axioms_print_string(
+    sig: &Signature,
+    format: IoFormat,
+    single_subst: bool,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    eq_axioms_write(&mut output, sig, format, single_subst)?;
+    Ok(output)
+}
+
 fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
@@ -973,11 +1061,165 @@ fn clause_set_tstp_write_error(_error: fmt::Error) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause set")
 }
 
+fn eq_axioms_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equality axioms")
+}
+
+fn print_var_pattern(
+    output: &mut impl fmt::Write,
+    symbol: &str,
+    arity: i32,
+    var: &str,
+    alt_var: Option<&str>,
+    exception: i32,
+) -> Result<(), Diagnostic> {
+    write!(output, "{symbol}(").map_err(eq_axioms_write_error)?;
+    for i in 1..=arity {
+        if i != 1 {
+            output.write_str(",").map_err(eq_axioms_write_error)?;
+        }
+        if i == exception {
+            output
+                .write_str(alt_var.unwrap_or(""))
+                .map_err(eq_axioms_write_error)?;
+        } else {
+            write!(output, "{var}{i}").map_err(eq_axioms_write_error)?;
+        }
+    }
+    output.write_str(")").map_err(eq_axioms_write_error)
+}
+
+fn eq_func_axiom_write(
+    output: &mut impl fmt::Write,
+    symbol: &str,
+    arity: i32,
+    single_subst: bool,
+) -> Result<(), Diagnostic> {
+    if single_subst {
+        for i in 1..=arity {
+            output.write_str("equal(").map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Y"), i)?;
+            output.write_str(",").map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Z"), i)?;
+            output
+                .write_str(") <- equal(Y,Z).\n")
+                .map_err(eq_axioms_write_error)?;
+        }
+    } else {
+        output.write_str("equal(").map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "X", None, 0)?;
+        output.write_str(",").map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "Y", None, 0)?;
+        output.write_str(") <- ").map_err(eq_axioms_write_error)?;
+        for i in 1..=arity {
+            if i != 1 {
+                output.write_str(",").map_err(eq_axioms_write_error)?;
+            }
+            write!(output, "equal(X{i},Y{i})").map_err(eq_axioms_write_error)?;
+        }
+        output.write_str(".\n").map_err(eq_axioms_write_error)?;
+    }
+    Ok(())
+}
+
+fn eq_pred_axiom_write(
+    output: &mut impl fmt::Write,
+    symbol: &str,
+    arity: i32,
+    single_subst: bool,
+) -> Result<(), Diagnostic> {
+    if single_subst {
+        for i in 1..=arity {
+            print_var_pattern(output, symbol, arity, "X", Some("Y"), i)?;
+            output.write_str(" <- ").map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Z"), i)?;
+            output
+                .write_str(", equal(Y,Z).\n")
+                .map_err(eq_axioms_write_error)?;
+        }
+    } else {
+        print_var_pattern(output, symbol, arity, "X", None, 0)?;
+        output.write_str(" <- ").map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "Y", None, 0)?;
+        for i in 1..=arity {
+            write!(output, ",equal(X{i},Y{i})").map_err(eq_axioms_write_error)?;
+        }
+        output.write_str(".\n").map_err(eq_axioms_write_error)?;
+    }
+    Ok(())
+}
+
+fn tptp_eq_func_axiom_write(
+    output: &mut impl fmt::Write,
+    symbol: &str,
+    arity: i32,
+    single_subst: bool,
+) -> Result<(), Diagnostic> {
+    if single_subst {
+        for i in 1..=arity {
+            write!(
+                output,
+                "input_clause(eq_subst_{symbol}{i}, axiom, [++equal("
+            )
+            .map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Y"), i)?;
+            output.write_str(",").map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Z"), i)?;
+            output
+                .write_str("),--equal(Y,Z)]).\n")
+                .map_err(eq_axioms_write_error)?;
+        }
+    } else {
+        write!(output, "input_clause(eq_subst_{symbol}, axiom, [++equal(")
+            .map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "X", None, 0)?;
+        output.write_str(",").map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "Y", None, 0)?;
+        output.write_str(")").map_err(eq_axioms_write_error)?;
+        for i in 1..=arity {
+            write!(output, ",--equal(X{i},Y{i})").map_err(eq_axioms_write_error)?;
+        }
+        output.write_str("]).\n").map_err(eq_axioms_write_error)?;
+    }
+    Ok(())
+}
+
+fn tptp_eq_pred_axiom_write(
+    output: &mut impl fmt::Write,
+    symbol: &str,
+    arity: i32,
+    single_subst: bool,
+) -> Result<(), Diagnostic> {
+    if single_subst {
+        for i in 1..=arity {
+            write!(output, "input_clause(eq_subst_{symbol}{i}, axiom, [++")
+                .map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Y"), i)?;
+            output.write_str(",--").map_err(eq_axioms_write_error)?;
+            print_var_pattern(output, symbol, arity, "X", Some("Z"), i)?;
+            output
+                .write_str(",--equal(Y,Z)]).\n")
+                .map_err(eq_axioms_write_error)?;
+        }
+    } else {
+        write!(output, "input_clause(eq_subst_{symbol}, axiom, [++")
+            .map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "X", None, 0)?;
+        output.write_str(",--").map_err(eq_axioms_write_error)?;
+        print_var_pattern(output, symbol, arity, "Y", None, 0)?;
+        for i in 1..=arity {
+            write!(output, ",--equal(X{i},Y{i})").map_err(eq_axioms_write_error)?;
+        }
+        output.write_str("]).\n").map_err(eq_axioms_write_error)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         clause_set_list_get_max_date, clause_set_ref_stack_cardinality,
-        clause_set_stack_cardinality, ClauseSet,
+        clause_set_stack_cardinality, eq_axioms_print_string, ClauseSet,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
@@ -1070,6 +1312,31 @@ mod tests {
         clause
     }
 
+    fn declare_typed_function(bank: &mut TermBank, name: &str, arity: usize) {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank
+            .signature_mut()
+            .insert_id(name, i32::try_from(arity).unwrap(), false);
+        let mut args = vec![type_.clone(); arity];
+        args.push(type_);
+        bank.signature_mut()
+            .declare_final_type(f_code, alloc_arrow_type(args))
+            .unwrap();
+    }
+
+    fn declare_typed_predicate(bank: &mut TermBank, name: &str, arity: usize) {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank
+            .signature_mut()
+            .insert_id(name, i32::try_from(arity).unwrap(), false);
+        let mut args = vec![arg_type; arity];
+        args.push(bool_type);
+        bank.signature_mut()
+            .declare_final_type(f_code, alloc_arrow_type(args))
+            .unwrap();
+    }
+
     #[test]
     fn insert_extract_and_transfer_preserve_order_and_accounting() {
         let mut bank = test_bank();
@@ -1159,6 +1426,46 @@ mod tests {
                 .unwrap(),
             "cnf(c_0_101, plain, (set_tstp_a=set_tstp_b)).\n\
              cnf(c_0_102, negated_conjecture, (set_tstp_b!=set_tstp_a)).\n"
+        );
+    }
+
+    #[test]
+    fn equality_axiom_lop_printing_matches_c_substitutivity_shapes() {
+        let mut bank = test_bank();
+        declare_typed_function(&mut bank, "eq_lop_f", 2);
+        declare_typed_predicate(&mut bank, "eq_lop_p", 1);
+
+        assert_eq!(
+            eq_axioms_print_string(bank.signature(), IoFormat::Lop, false).unwrap(),
+            "equal(X,X) <- .\n\
+             equal(X,Y) <- equal(Y,X).\n\
+             equal(X,Z) <- equal(X,Y), equal(Y,Z).\n\
+             equal(eq_lop_f(X1,X2),eq_lop_f(Y1,Y2)) <- equal(X1,Y1),equal(X2,Y2).\n\
+             eq_lop_p(X1) <- eq_lop_p(Y1),equal(X1,Y1).\n"
+        );
+    }
+
+    #[test]
+    fn equality_axiom_tptp_single_substitution_and_tstp_error_match_c() {
+        let mut bank = test_bank();
+        declare_typed_function(&mut bank, "eq_tptp_f", 2);
+        declare_typed_predicate(&mut bank, "eq_tptp_p", 1);
+
+        assert_eq!(
+            eq_axioms_print_string(bank.signature(), IoFormat::Tptp, true).unwrap(),
+            "input_clause(eq_reflexive, axiom, [++equal(X,X)]).\n\
+             input_clause(eq_symmetric, axiom, [++equal(X,Y),--equal(Y,X)]).\n\
+             input_clause(eq_transitive, axiom, [++equal(X,Z),--equal(X,Y),--equal(Y,Z)]).\n\
+             input_clause(eq_subst_eq_tptp_f1, axiom, [++equal(eq_tptp_f(Y,X2),eq_tptp_f(Z,X2)),--equal(Y,Z)]).\n\
+             input_clause(eq_subst_eq_tptp_f2, axiom, [++equal(eq_tptp_f(X1,Y),eq_tptp_f(X1,Z)),--equal(Y,Z)]).\n\
+             input_clause(eq_subst_eq_tptp_p1, axiom, [++eq_tptp_p(Y),--eq_tptp_p(Z),--equal(Y,Z)]).\n"
+        );
+
+        assert!(
+            eq_axioms_print_string(bank.signature(), IoFormat::Tstp, false)
+                .unwrap_err()
+                .message()
+                .contains("TSTP/TPTP-3")
         );
     }
 
