@@ -28,6 +28,7 @@ pub mod overlap_index;
 pub mod proofstate;
 pub mod propclauses;
 pub mod relevance;
+pub mod rewrite;
 pub mod sine;
 pub mod subsumption;
 pub mod subterm_index;

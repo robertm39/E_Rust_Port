@@ -145,4 +145,17 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `ClauseLocalRW` is ported in `src/clauses/rewrite.rs` as a clause-local mutation helper. It preserves the C order: orient literals, collect local rules, skip rule-source literals while rewriting, then recompute literal counts, remove superfluous literals, and clear the clause orientation cache on modification.
+- The temporary local rewrite system is keyed by shared-term identity, matching C's pointer-keyed `PObjMap`; duplicate rule keys overwrite earlier values like `PObjMapStore`.
+- C treats any negative oriented literal as a local rule source, not just equational literals. This means an oriented negative predicate literal can be skipped as a source instead of rewritten by a positive-atom rule. Rust preserves that classification.
+- `replace_term` recursively follows rule replacements and rebuilds changed top cells through the term bank. This matches `TermMap` restart behavior when the mapper returns a different shared term.
+
+### Change Later Candidates
+
+- C records `DCLocalRewrite` with `ClausePushDerivation` after a successful local rewrite. Rust currently omits that side effect until clause derivation ownership is ported.
+- C does not directly refresh the cached clause weight after `ClauseLocalRW` unless `ClauseRemoveSuperfluousLiterals` removes something. Rust refreshes after any local rewrite to preserve the current Rust cached-weight invariant; revisit this when forward-contraction reference tests cover stale-weight observability.
+- Positive-atom local rewriting uses `$false` as an intermediate replacement and relies on `EqnMap` to normalize `$false`/`$true` and flip polarity. A later typed API could expose this as a Boolean-literal transformation, but compatibility code should keep the C normalization path visible.
 <!-- END MANUAL REVIEW: c_source_docs -->
