@@ -4,6 +4,7 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_MAX_MULT: f64 = 1.5;
@@ -223,6 +224,22 @@ pub fn clause_refined_weight_compute(
     )
 }
 
+/// Computes C `ClauseRefinedWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn clause_refined_weight_compute_with_ocb(
+    param: &RefinedWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    clause_refined_weight_compute(param, bank, clause)
+}
+
 #[must_use]
 pub fn clause_refined_weight2_compute(
     param: &RefinedWeightParam,
@@ -239,6 +256,22 @@ pub fn clause_refined_weight2_compute(
         param.app_var_mult,
         true,
     )
+}
+
+/// Computes C `ClauseRefinedWeight2Compute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn clause_refined_weight2_compute_with_ocb(
+    param: &RefinedWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    clause_refined_weight2_compute(param, bank, clause)
 }
 
 fn clause_refined_weight_wfcb_compute(
@@ -268,16 +301,21 @@ fn refined_weight_exit(_data: RefinedWeightParam) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_refined_weight2_compute, clause_refined_weight2_parse,
-        clause_refined_weight_compute, clause_refined_weight_init, clause_refined_weight_parse,
-        DEFAULT_MAX_MULT,
+        clause_refined_weight2_compute, clause_refined_weight2_compute_with_ocb,
+        clause_refined_weight2_parse, clause_refined_weight_compute,
+        clause_refined_weight_compute_with_ocb, clause_refined_weight_init,
+        clause_refined_weight_parse, DEFAULT_MAX_MULT,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -317,6 +355,29 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![positive, negative]))
     }
 
+    fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        bank.parse_term_simple(&mut scanner).unwrap()
+    }
+
+    fn parsed_unit_clause(bank: &mut TermBank, left: &str, right: &str, positive: bool) -> Clause {
+        let left = parse_in_bank(bank, left);
+        let right = parse_in_bank(bank, right);
+        Clause::alloc(EqnList::from_vec(vec![Eqn::alloc(
+            left, right, bank, positive,
+        )
+        .unwrap()]))
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     #[test]
     fn refined_weight_uses_stored_maximal_and_orientation_flags() {
         let mut bank = test_bank();
@@ -343,6 +404,42 @@ mod tests {
             clause_refined_weight2_compute(&param, &bank, &clause),
             436.0,
         );
+    }
+
+    #[test]
+    fn refined_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut target = parsed_unit_clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let param = clause_refined_weight_init(2, 1, 7.0, 5.0, 3.0, 1.0);
+        let expected = clause_refined_weight_compute(&param, &bank, &manually_marked);
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = clause_refined_weight_compute_with_ocb(&param, &mut ocb, &bank, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn refined_weight2_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut target = parsed_unit_clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let param = clause_refined_weight_init(2, 1, 7.0, 5.0, 3.0, 1.0);
+        let expected = clause_refined_weight2_compute(&param, &bank, &manually_marked);
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = clause_refined_weight2_compute_with_ocb(&param, &mut ocb, &bank, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]

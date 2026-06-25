@@ -4,6 +4,7 @@ use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_bool, parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_dag_weight;
 use crate::terms::termtypes::TP_OP_FLAG;
@@ -525,6 +526,22 @@ pub fn rdag_weight_compute(param: &RDagWeightParam, clause: &Clause) -> f64 {
         .sum()
 }
 
+/// Computes C `RDAGWeightCompute` with the OCB-backed
+/// `ClauseCondMarkMaximalTerms` side effect.
+///
+/// The existing WFCB compute callback cannot mutate clauses yet, so this
+/// explicit entry point is used by callers that already own a mutable clause.
+#[must_use]
+pub fn rdag_weight_compute_with_ocb(
+    param: &RDagWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> f64 {
+    clause.cond_mark_maximal_terms(ocb, bank);
+    rdag_weight_compute(param, clause)
+}
+
 #[must_use]
 pub const fn rdag_weight2_init(
     fweight: i64,
@@ -842,15 +859,19 @@ mod tests {
     use super::{
         dag_weight_compute, dag_weight_init, dag_weight_parse, rdag_weight2_compute,
         rdag_weight2_init, rdag_weight2_parse, rdag_weight3_compute, rdag_weight3_init,
-        rdag_weight3_parse, rdag_weight_compute, rdag_weight_init, rdag_weight_parse,
-        DEFAULT_DAG_DUP_WEIGHT,
+        rdag_weight3_parse, rdag_weight_compute, rdag_weight_compute_with_ocb, rdag_weight_init,
+        rdag_weight_parse, DEFAULT_DAG_DUP_WEIGHT,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -939,6 +960,15 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![positive_eq, pred_lit, negative_eq]))
     }
 
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     #[test]
     fn dag_weight_compute_preserves_positive_negative_reset_boundary() {
         let mut bank = test_bank();
@@ -1020,6 +1050,24 @@ mod tests {
         assert_close(param.max_term_multiplier(), 2.0);
         assert_close(param.max_literal_multiplier(), 7.0);
         assert_close(param.pos_multiplier(), 4.0);
+    }
+
+    #[test]
+    fn refined_dag_weight_compute_with_ocb_marks_clause_like_c() {
+        let mut bank = test_bank();
+        let mut target = positive_equation_clause(&mut bank);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let param = rdag_weight_init(10, 3, 1, 5.0, 2.0, 7.0, 4.0);
+        let expected = rdag_weight_compute(&param, &manually_marked);
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = rdag_weight_compute_with_ocb(&param, &mut ocb, &bank, &mut target);
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
     }
 
     #[test]
