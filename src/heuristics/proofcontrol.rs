@@ -1055,6 +1055,266 @@ pub fn proof_state_forward_contract_clause(
     Ok(result)
 }
 
+/// Applies C `ForwardContractSet` over `set`.
+///
+/// The set is drained in order into a temporary owner and reconstructed on every
+/// return path, preserving the C behavior where earlier clauses have already
+/// been contracted/deleted and later clauses remain untouched when
+/// `terminate_on_empty` returns an extracted empty clause.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`proof_state_forward_contract_keep`].
+pub fn proof_state_forward_contract_set(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    non_unit_subsumption: bool,
+    level: RewriteLevel,
+    count_eliminated: &mut u64,
+    terminate_on_empty: bool,
+) -> Result<Option<Clause>, Diagnostic> {
+    let mut rebuilt = ClauseSet::new();
+    while let Some(mut clause) = set.extract_first() {
+        let mut counts = ForwardContractCounts::default();
+        let options = ForwardContractOptions {
+            non_unit_subsumption,
+            context_sr: false,
+            condense_clause: false,
+            level,
+        };
+        let contracted = match proof_state_forward_contract_keep(
+            state,
+            control,
+            &mut clause,
+            &mut counts,
+            options,
+        ) {
+            Ok(contracted) => contracted,
+            Err(err) => {
+                rebuilt.insert(clause);
+                restore_forward_contract_set(set, &mut rebuilt);
+                return Err(err);
+            }
+        };
+        *count_eliminated += counts.subsumed + counts.trivial;
+
+        if contracted.is_some() {
+            if terminate_on_empty && clause.is_empty() {
+                restore_forward_contract_set(set, &mut rebuilt);
+                return Ok(Some(clause));
+            }
+            rebuilt.insert(clause);
+        }
+    }
+
+    set.insert_set(&mut rebuilt);
+    Ok(None)
+}
+
+fn restore_forward_contract_set(set: &mut ClauseSet, rebuilt: &mut ClauseSet) {
+    rebuilt.insert_set(set);
+    set.insert_set(rebuilt);
+}
+
+/// Re-evaluates every clause in a set, matching C `ClauseSetReweight`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-control has no active HCB.
+pub fn proof_control_clause_set_reweight(
+    control: &mut ProofControl,
+    terms: &TermBank,
+    set: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ClauseSetReweight requires initialized proof-control heuristic",
+        )
+    })?;
+    let ProofControl { hcbs, wfcbs, .. } = control;
+    let active_hcb = hcbs
+        .hcb(active_hcb_handle)
+        .ok_or_else(|| unknown_heuristic_handle("active"))?;
+    hcb_clause_set_reweight(active_hcb, wfcbs, terms, set);
+    Ok(())
+}
+
+/// Applies C `ForwardContractSetReweight`.
+///
+/// # Errors
+///
+/// Returns diagnostics from set contraction or HCB reweighting.
+pub fn proof_state_forward_contract_set_reweight(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    non_unit_subsumption: bool,
+    level: RewriteLevel,
+    count_eliminated: &mut u64,
+) -> Result<Option<Clause>, Diagnostic> {
+    let empty = proof_state_forward_contract_set(
+        state,
+        control,
+        set,
+        non_unit_subsumption,
+        level,
+        count_eliminated,
+        true,
+    )?;
+    if empty.is_some() {
+        return Ok(empty);
+    }
+    proof_control_clause_set_reweight(control, state.terms(), set)?;
+    Ok(None)
+}
+
+/// Removes trivial clauses and re-evaluates the set, matching C's misspelled
+/// `ClauseSetFilterReweigth`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if HCB reweighting is not initialized.
+pub fn proof_control_clause_set_filter_reweigth(
+    control: &mut ProofControl,
+    terms: &TermBank,
+    set: &mut ClauseSet,
+    count_eliminated: &mut u64,
+) -> Result<(), Diagnostic> {
+    *count_eliminated += i64_to_u64_saturating(set.filter_trivial(terms));
+    proof_control_clause_set_reweight(control, terms, set)
+}
+
+/// Correctly spelled alias for [`proof_control_clause_set_filter_reweigth`].
+///
+/// # Errors
+///
+/// Returns a diagnostic if HCB reweighting is not initialized.
+pub fn proof_control_clause_set_filter_reweight(
+    control: &mut ProofControl,
+    terms: &TermBank,
+    set: &mut ClauseSet,
+    count_eliminated: &mut u64,
+) -> Result<(), Diagnostic> {
+    proof_control_clause_set_filter_reweigth(control, terms, set, count_eliminated)
+}
+
+/// Applies C `ProofStateFilterUnprocessed` to the state-owned unprocessed set.
+///
+/// # Errors
+///
+/// Returns diagnostics from forward contraction.
+pub fn proof_state_filter_unprocessed(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    desc: &str,
+) -> Result<Option<Clause>, Diagnostic> {
+    let mut unprocessed = std::mem::take(state.unprocessed_mut());
+    let result = proof_state_filter_unprocessed_set(state, control, &mut unprocessed, desc);
+    *state.unprocessed_mut() = unprocessed;
+    result
+}
+
+/// Applies C `ProofStateFilterUnprocessed` operations to a caller-provided set.
+///
+/// # Errors
+///
+/// Returns diagnostics from forward contraction.
+pub fn proof_state_filter_unprocessed_set(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    desc: &str,
+) -> Result<Option<Clause>, Diagnostic> {
+    for op in desc.bytes() {
+        let empty = match op {
+            b'u' => {
+                let deleted = set.delete_non_units();
+                state.statistics_mut().non_redundant_deleted += i64_to_u64_saturating(deleted);
+                None
+            }
+            b'c' => {
+                let deleted = set.delete_copies();
+                state.statistics_mut().other_redundant_count += i64_to_u64_saturating(deleted);
+                None
+            }
+            b'n' => proof_state_filter_contract_step(
+                state,
+                control,
+                set,
+                false,
+                RewriteLevel::NoRewrite,
+            )?,
+            b'N' => proof_state_filter_contract_step(
+                state,
+                control,
+                set,
+                true,
+                RewriteLevel::NoRewrite,
+            )?,
+            b'r' => proof_state_filter_contract_step(
+                state,
+                control,
+                set,
+                false,
+                RewriteLevel::RuleRewrite,
+            )?,
+            b'R' => proof_state_filter_contract_step(
+                state,
+                control,
+                set,
+                true,
+                RewriteLevel::RuleRewrite,
+            )?,
+            b'f' => proof_state_filter_contract_step(
+                state,
+                control,
+                set,
+                false,
+                RewriteLevel::FullRewrite,
+            )?,
+            b'F' => proof_state_filter_contract_step(
+                state,
+                control,
+                set,
+                true,
+                RewriteLevel::FullRewrite,
+            )?,
+            _ => None,
+        };
+        if empty.is_some() {
+            return Ok(empty);
+        }
+    }
+    Ok(None)
+}
+
+fn proof_state_filter_contract_step(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    set: &mut ClauseSet,
+    non_unit_subsumption: bool,
+    level: RewriteLevel,
+) -> Result<Option<Clause>, Diagnostic> {
+    let mut count = 0;
+    let empty = proof_state_forward_contract_set(
+        state,
+        control,
+        set,
+        non_unit_subsumption,
+        level,
+        &mut count,
+        true,
+    )?;
+    state.statistics_mut().proc_trivial_count += count;
+    Ok(empty)
+}
+
+fn i64_to_u64_saturating(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
 /// Queues one generated non-trivial clause into `eval_store`, matching the
 /// admission tail of C `insert_new_clauses`.
 ///
@@ -1391,11 +1651,12 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_eval_clause_set,
-        proof_state_forward_contract_clause, proof_state_forward_modify_clause,
-        proof_state_forward_subsumption, proof_state_init, proof_state_init_ac_handling,
-        proof_state_init_global_indices, proof_state_init_indexing,
+        proof_control_alloc, proof_control_clause_set_filter_reweigth, proof_control_init,
+        proof_control_init_heuristics, proof_control_reset_sat_solver, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_subsumption, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
         proof_state_reset_processed, select_inherited_literal, ForwardContractCounts,
@@ -1421,7 +1682,7 @@ mod tests {
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::global_indices_null;
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
-    use crate::clauses::proofstate::proof_state_alloc;
+    use crate::clauses::proofstate::{proof_state_alloc, ProofState};
     use crate::heuristics::hcb::{
         AcHandling, HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC,
     };
@@ -1558,6 +1819,23 @@ mod tests {
         let mut clause = unit_clause_with_id(bank, stem, ident);
         clause.set_prop(CP_IS_PROCESSED | CP_IS_ORIENTED);
         clause
+    }
+
+    fn init_fifo_hcb(control: &mut super::ProofControl, state: &ProofState, name: &str) {
+        let mut params = HeuristicParmsCell {
+            heuristic_name: name.to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec![format!("{name}=(1*FIFOWeight(ConstPrio))")];
+        proof_control_init_heuristics(
+            control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
     }
 
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
@@ -2203,6 +2481,213 @@ mod tests {
         assert!(packed.is_none());
         assert_eq!(state.statistics().proc_forward_subsumed_count, 1);
         assert_eq!(state.statistics().proc_trivial_count, 0);
+    }
+
+    #[test]
+    fn proof_state_forward_contract_set_deletes_subsumed_and_counts_eliminated() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (processed_unit, redundant_clause, survivor) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let replacement = typed_const(terms, "pc_forward_set_subsumes_a");
+            let instance = typed_const(terms, "pc_forward_set_subsumes_b");
+            let other = typed_const(terms, "pc_forward_set_survives");
+            let other_rhs = typed_const(terms, "pc_forward_set_survives_rhs");
+            let mut processed_unit = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &replacement,
+                true,
+            )]));
+            processed_unit.set_ident(4_089);
+            let mut redundant_clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &instance,
+                &replacement,
+                true,
+            )]));
+            redundant_clause.set_ident(4_090);
+            let mut survivor = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &other, &other_rhs, true,
+            )]));
+            survivor.set_ident(4_091);
+            (processed_unit, redundant_clause, survivor)
+        };
+        state.processed_pos_eqns_mut().insert(processed_unit);
+        let mut set = ClauseSet::new();
+        set.insert(redundant_clause);
+        set.insert(survivor);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut eliminated = 0;
+
+        let empty = proof_state_forward_contract_set(
+            &mut state,
+            &mut control,
+            &mut set,
+            false,
+            RewriteLevel::NoRewrite,
+            &mut eliminated,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(eliminated, 1);
+        assert_eq!(set.members(), 1);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![4_091]
+        );
+    }
+
+    #[test]
+    fn proof_state_forward_contract_set_returns_empty_and_preserves_tail() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (survivor, tail) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_forward_set_before_empty", 4_092),
+                unit_clause_with_id(terms, "pc_forward_set_after_empty", 4_094),
+            )
+        };
+        let mut empty_clause = Clause::empty();
+        empty_clause.set_ident(4_093);
+        let mut set = ClauseSet::new();
+        set.insert(survivor);
+        set.insert(empty_clause);
+        set.insert(tail);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut eliminated = 0;
+
+        let empty = proof_state_forward_contract_set(
+            &mut state,
+            &mut control,
+            &mut set,
+            false,
+            RewriteLevel::NoRewrite,
+            &mut eliminated,
+            true,
+        )
+        .unwrap_or_else(|err| panic!("{err}"))
+        .expect("empty clause should terminate contraction");
+
+        assert!(empty.is_empty());
+        assert_eq!(empty.ident(), 4_093);
+        assert_eq!(eliminated, 0);
+        assert_eq!(
+            set.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![4_092, 4_094]
+        );
+    }
+
+    #[test]
+    fn proof_state_forward_contract_set_reweight_evaluates_survivors() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (first, second) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_forward_set_reweight_first", 4_095),
+                unit_clause_with_id(terms, "pc_forward_set_reweight_second", 4_096),
+            )
+        };
+        let mut set = ClauseSet::new();
+        set.insert(first);
+        set.insert(second);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ForwardSetReweightTest");
+        let mut eliminated = 0;
+
+        let empty = proof_state_forward_contract_set_reweight(
+            &mut state,
+            &mut control,
+            &mut set,
+            false,
+            RewriteLevel::NoRewrite,
+            &mut eliminated,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(eliminated, 0);
+        assert_eq!(set.members(), 2);
+        for clause in set.iter() {
+            let evaluations = clause
+                .evaluations()
+                .expect("reweighted forward-contract survivor is evaluated");
+            assert_eq!(evaluations.eval_no(), 1);
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+        }
+        assert_eq!(set.eval_order_cloned(0).len(), 2);
+    }
+
+    #[test]
+    fn proof_control_clause_set_filter_reweigth_removes_trivial_and_reweights() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (trivial, survivor) = {
+            let terms = state.terms_mut();
+            let same = typed_const(terms, "pc_filter_reweight_same");
+            let survivor = unit_clause_with_id(terms, "pc_filter_reweight_survivor", 4_098);
+            let mut trivial =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &same, &same, true)]));
+            trivial.set_ident(4_097);
+            (trivial, survivor)
+        };
+        let mut set = ClauseSet::new();
+        set.insert(trivial);
+        set.insert(survivor);
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "FilterReweightTest");
+        let mut eliminated = 0;
+
+        proof_control_clause_set_filter_reweigth(
+            &mut control,
+            state.terms(),
+            &mut set,
+            &mut eliminated,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(eliminated, 1);
+        assert_eq!(set.members(), 1);
+        let survivor = set.find_by_id(4_098).unwrap();
+        assert!(survivor.evaluations().is_some());
+    }
+
+    #[test]
+    fn proof_state_filter_unprocessed_contracts_and_restores_state_set() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (survivor, tail) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_filter_unprocessed_before", 4_099),
+                unit_clause_with_id(terms, "pc_filter_unprocessed_after", 4_101),
+            )
+        };
+        let mut empty_clause = Clause::empty();
+        empty_clause.set_ident(4_100);
+        state.unprocessed_mut().insert(survivor);
+        state.unprocessed_mut().insert(empty_clause);
+        state.unprocessed_mut().insert(tail);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let empty = proof_state_filter_unprocessed(&mut state, &mut control, "n")
+            .unwrap_or_else(|err| panic!("{err}"))
+            .expect("filter descriptor should return an empty clause");
+
+        assert_eq!(empty.ident(), 4_100);
+        assert_eq!(state.statistics().proc_trivial_count, 0);
+        assert_eq!(
+            state
+                .unprocessed()
+                .iter()
+                .map(Clause::ident)
+                .collect::<Vec<_>>(),
+            vec![4_099, 4_101]
+        );
     }
 
     #[test]
