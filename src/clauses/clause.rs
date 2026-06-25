@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::partial_orderings::CompareResult;
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
@@ -10,7 +11,9 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::eqn::{eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
-use crate::clauses::eqn_props::{EqnProperties, EqnSide, EP_PSEUDO_LIT};
+use crate::clauses::eqn_props::{
+    EqnProperties, EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_PSEUDO_LIT,
+};
 use crate::clauses::eqnlist::{EqnList, EQN_LIST_LONG_LIMIT};
 use crate::clauses::neweval::{EvalCell, EvalObjectHandle};
 use crate::inout::basicparser::parse_skip_parenthesized_expr;
@@ -874,8 +877,77 @@ impl Clause {
         self.literals.depth()
     }
 
-    #[must_use]
-    pub fn is_not_greater_equal_deferred(&self) -> bool {
+    /// Return whether this clause is not greater-or-equal to `other` under
+    /// the multiset extension of the selected literal ordering.
+    ///
+    /// This preserves C `ClauseNotGreaterEqual`, including its temporary
+    /// mutation of `EPHasEquiv`, `EPDominates`, and `EPIsDominated` flags.
+    ///
+    /// # Panics
+    ///
+    /// Panics if literal comparison returns one of the C-unexpected partial
+    /// ordering sentinels.
+    pub fn not_greater_equal(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &TermBank,
+        other: &mut Self,
+    ) -> bool {
+        self.literals.del_prop(EP_HAS_EQUIV | EP_DOMINATES);
+
+        let left_literals = self.literals.as_mut_slice();
+        let right_literals = other.literals.as_mut_slice();
+        let mut left_index = 0;
+
+        for right_index in 0..right_literals.len() {
+            let (through_current, later_right) = right_literals.split_at_mut(right_index + 1);
+            let current_right = &mut through_current[right_index];
+            current_right.del_prop(EP_HAS_EQUIV | EP_IS_DOMINATED);
+
+            let mut found_equal = false;
+            let mut found_greater = false;
+
+            while left_index < left_literals.len() && !current_right.has_equiv() {
+                if !left_literals[left_index].has_equiv() {
+                    let relation =
+                        left_literals[left_index].literal_compare(ocb, bank, current_right);
+                    match relation {
+                        CompareResult::Greater => {
+                            let mut found_equal_later = false;
+                            if !left_literals[left_index].dominates() {
+                                found_equal_later = found_eq_lit_later(
+                                    ocb,
+                                    bank,
+                                    &mut left_literals[left_index],
+                                    later_right,
+                                );
+                            }
+                            if !found_equal_later {
+                                left_literals[left_index].set_prop(EP_DOMINATES);
+                                current_right.set_prop(EP_IS_DOMINATED);
+                                found_greater = true;
+                            }
+                        }
+                        CompareResult::Equal => {
+                            left_literals[left_index].set_prop(EP_HAS_EQUIV);
+                            current_right.set_prop(EP_HAS_EQUIV);
+                            found_equal = true;
+                        }
+                        CompareResult::Lesser | CompareResult::Uncomparable => {}
+                        CompareResult::Unknown
+                        | CompareResult::NotGreaterEqual
+                        | CompareResult::NotLessEqual => {
+                            panic!("unexpected literal comparison relation: {relation:?}");
+                        }
+                    }
+                }
+                left_index += 1;
+            }
+
+            if !found_equal && !found_greater {
+                return true;
+            }
+        }
         false
     }
 
@@ -1740,6 +1812,22 @@ fn clause_polarity_class(clause: &Clause) -> i64 {
     }
 }
 
+fn found_eq_lit_later(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    left: &mut Eqn,
+    later_right: &mut [Eqn],
+) -> bool {
+    for right in later_right {
+        if !right.has_equiv() && left.literal_compare(ocb, bank, right) == CompareResult::Equal {
+            left.set_prop(EP_HAS_EQUIV);
+            right.set_prop(EP_HAS_EQUIV);
+            return true;
+        }
+    }
+    false
+}
+
 fn is_key_subset(left: &BTreeMap<usize, Term>, right: &BTreeMap<usize, Term>) -> bool {
     left.keys().all(|key| right.contains_key(key))
 }
@@ -1764,7 +1852,10 @@ mod tests {
     };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_PSEUDO_LIT};
+    use crate::clauses::eqn_props::{
+        EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_IS_MAXIMAL, EP_IS_ORIENTED,
+        EP_PSEUDO_LIT,
+    };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::evals_alloc;
     use crate::heuristics::to_params::TermOrdering;
@@ -1893,6 +1984,41 @@ mod tests {
         assert_eq!(clause.literals().as_slice()[0].left(), &f_a);
         assert!(clause.literals().as_slice()[0].is_maximal());
         assert!(!clause.literals().as_slice()[1].is_maximal());
+    }
+
+    #[test]
+    fn not_greater_equal_preserves_c_multiset_scan_and_flags() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let f_a = typed_unary(&mut bank, "f", &a);
+        let mut ocb = kbo_ocb(&bank);
+
+        let mut greater = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_a, &a, true)]));
+        let mut lesser = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &a, true)]));
+        assert!(!greater.not_greater_equal(&mut ocb, &bank, &mut lesser));
+        assert!(greater.literals().as_slice()[0].query_prop(EP_DOMINATES));
+        assert!(lesser.literals().as_slice()[0].query_prop(EP_IS_DOMINATED));
+
+        let mut equal_left = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_a, &a, true)]));
+        let mut equal_right =
+            Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_a, &a, true)]));
+        assert!(!equal_left.not_greater_equal(&mut ocb, &bank, &mut equal_right));
+        assert!(equal_left.literals().as_slice()[0].query_prop(EP_HAS_EQUIV));
+        assert!(equal_right.literals().as_slice()[0].query_prop(EP_HAS_EQUIV));
+
+        let mut smaller = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &a, true)]));
+        let mut larger = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_a, &a, true)]));
+        assert!(smaller.not_greater_equal(&mut ocb, &bank, &mut larger));
+
+        let mut reserved_for_later =
+            Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_a, &a, true)]));
+        let mut later_equal = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &a, true),
+            eqn(&mut bank, &f_a, &a, true),
+        ]));
+        assert!(reserved_for_later.not_greater_equal(&mut ocb, &bank, &mut later_equal));
+        assert!(reserved_for_later.literals().as_slice()[0].query_prop(EP_HAS_EQUIV));
+        assert!(later_equal.literals().as_slice()[1].query_prop(EP_HAS_EQUIV));
     }
 
     #[test]
@@ -2463,7 +2589,6 @@ mod tests {
         ]));
         assert!(more_positive.compare_fun(&rw_clause) < 0);
         assert_eq!(rw_clause.cmp_by_id(&rw_clause), 0);
-        assert!(!rw_clause.is_not_greater_equal_deferred());
         assert_eq!(rw_clause.query_tptp_type().bits(), 0);
     }
 
