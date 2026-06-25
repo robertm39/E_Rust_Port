@@ -384,49 +384,136 @@ pub fn to_create_ordering(
     Ok(handle)
 }
 
-/// Select and create the term ordering requested by C `HeuristicParmsCell`.
+/// Search the C `OrderFindOptimal` candidate space and return the best OCB.
 ///
-/// This ports the non-`Optimize` branch of `TOSelectOrdering`; the optimizing
-/// search still needs `OrderFindOptimal` and axiom maximality scoring.
+/// C's `TOSelectOrdering` has a latent bug when passing `OPTIMIZE_AX` directly
+/// as the mask ordering type. Rust treats `Optimize` as the wildcard ordering
+/// mask that the helper comment describes, while copying the remaining mask
+/// fields from the initialized parameter cell instead of reading indeterminate
+/// stack data.
 ///
 /// # Errors
 ///
-/// Returns diagnostics from [`to_create_ordering`] or an explicit diagnostic
-/// for the still-pending optimize search.
+/// Returns diagnostics from candidate ordering creation, including unsupported
+/// precedence/weight methods.
+///
+/// # Panics
+///
+/// Panics under the same internal-invariant conditions as
+/// [`to_create_ordering`] and [`order_next_ordering`].
+pub fn order_find_optimal(
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
+    mask: &OrderParmsCell,
+    higher_order_problem: bool,
+) -> Result<OrderControlBlock, Diagnostic> {
+    order_find_optimal_with_params(bank, axioms, mask, higher_order_problem)
+        .map(|(ocb, _params)| ocb)
+}
+
+fn order_find_optimal_with_params(
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
+    mask: &OrderParmsCell,
+    higher_order_problem: bool,
+) -> Result<(OrderControlBlock, OrderParmsCell), Diagnostic> {
+    let mut search_mask = mask.clone();
+    if search_mask.ordertype == TermOrdering::Optimize {
+        search_mask.ordertype = TermOrdering::NoOrdering;
+    }
+
+    let mut local = search_mask.clone();
+    local.ordertype = match search_mask.ordertype {
+        TermOrdering::NoOrdering => TermOrdering::Kbo,
+        other => other,
+    };
+    local.to_weight_gen = if search_mask.to_weight_gen == TOWeightGenMethod::NoMethod {
+        TOWeightGenMethod::SelectMaximal
+    } else {
+        search_mask.to_weight_gen
+    };
+    local.to_prec_gen = if search_mask.to_prec_gen == TOPrecGenMethod::NoMethod {
+        TOPrecGenMethod::UnaryFirst
+    } else {
+        search_mask.to_prec_gen
+    };
+    local.to_const_weight = if search_mask.to_const_weight == W_CONST_NO_WEIGHT {
+        1
+    } else {
+        search_mask.to_const_weight
+    };
+
+    let mut best_params = local.clone();
+    let mut best_ocb = to_create_ordering(
+        bank.signature_mut(),
+        axioms,
+        &local,
+        None,
+        None,
+        higher_order_problem,
+    )?;
+    let mut best_eval = order_evaluate(&mut best_ocb, bank, axioms);
+
+    while order_next_ordering(&mut local, &search_mask) {
+        let mut next_ocb = to_create_ordering(
+            bank.signature_mut(),
+            axioms,
+            &local,
+            None,
+            None,
+            higher_order_problem,
+        )?;
+        let next_eval = order_evaluate(&mut next_ocb, bank, axioms);
+        if next_eval < best_eval {
+            best_ocb = next_ocb;
+            best_eval = next_eval;
+            best_params = local.clone();
+        }
+    }
+
+    Ok((best_ocb, best_params))
+}
+
+/// Select and create the term ordering requested by C `HeuristicParmsCell`.
+///
+/// This ports `TOSelectOrdering`, including the optimizing `OrderFindOptimal`
+/// branch over the explicit Rust term bank and axiom set.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`to_create_ordering`] or [`order_find_optimal`].
 ///
 /// # Panics
 ///
 /// Panics under the same internal-invariant conditions as
 /// [`to_create_ordering`].
 pub fn to_select_ordering(
-    signature: &mut Signature,
-    axioms: &ClauseSet,
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
     params: &HeuristicParmsCell,
     higher_order_problem: bool,
 ) -> Result<OrderControlBlock, Diagnostic> {
     let mut tmp = params.order_params.clone();
 
-    if tmp.ordertype == TermOrdering::Optimize {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "OrderFindOptimal is not yet implemented",
-        ));
-    }
-    if tmp.ordertype == TermOrdering::NoOrdering {
-        tmp.ordertype = TermOrdering::Kbo;
-    }
-    if tmp.to_const_weight == W_CONST_NO_WEIGHT {
-        tmp.to_const_weight = W_CONST_NO_SPECIAL_WEIGHT;
-    }
+    let mut result = if tmp.ordertype == TermOrdering::Optimize {
+        order_find_optimal(bank, axioms, &tmp, higher_order_problem)?
+    } else {
+        if tmp.ordertype == TermOrdering::NoOrdering {
+            tmp.ordertype = TermOrdering::Kbo;
+        }
+        if tmp.to_const_weight == W_CONST_NO_WEIGHT {
+            tmp.to_const_weight = W_CONST_NO_SPECIAL_WEIGHT;
+        }
 
-    let mut result = to_create_ordering(
-        signature,
-        axioms,
-        &tmp,
-        params.order_params.to_pre_prec.as_deref(),
-        params.order_params.to_pre_weights.as_deref(),
-        higher_order_problem,
-    )?;
+        to_create_ordering(
+            bank.signature_mut(),
+            axioms,
+            &tmp,
+            params.order_params.to_pre_prec.as_deref(),
+            params.order_params.to_pre_weights.as_deref(),
+            higher_order_problem,
+        )?
+    };
     result.rewrite_strong_rhs_inst = params.order_params.rewrite_strong_rhs_inst;
     Ok(result)
 }
@@ -447,10 +534,11 @@ fn literal_cmp_from_raw(value: i64) -> Result<LiteralCmp, Diagnostic> {
 mod tests {
     use super::{
         auto_ordering_analysis_string, auto_ordering_params, describe_auto_ordering,
-        generate_auto_ordering, init_oparms, order_evaluate, order_next_const_weight,
-        order_next_ordering, order_next_prec_gen, order_next_type, order_next_weight_gen,
-        print_oparms_string, to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS,
-        MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
+        generate_auto_ordering, init_oparms, order_evaluate, order_find_optimal_with_params,
+        order_next_const_weight, order_next_ordering, order_next_prec_gen, order_next_type,
+        order_next_weight_gen, print_oparms_string, to_create_ordering, to_select_ordering,
+        AutoOrderingMode, KBO_BONUS, MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY,
+        UNORIENT_LITERAL_PENALTY,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::CompareResult;
@@ -883,9 +971,10 @@ mod tests {
 
     #[test]
     fn to_select_ordering_defaults_no_ordering_and_zero_const_weight_like_c() {
-        let mut signature = signature();
-        typed_symbol(&mut signature, "a", 0);
-        typed_symbol(&mut signature, "f", 1);
+        let mut bank = term_bank();
+        typed_symbol(bank.signature_mut(), "a", 0);
+        typed_symbol(bank.signature_mut(), "f", 1);
+        let mut axioms = ClauseSet::new();
         let params = HeuristicParmsCell {
             order_params: OrderParmsCell {
                 ordertype: TermOrdering::NoOrdering,
@@ -898,7 +987,7 @@ mod tests {
             ..HeuristicParmsCell::default()
         };
 
-        let ocb = to_select_ordering(&mut signature, &ClauseSet::new(), &params, false)
+        let ocb = to_select_ordering(&mut bank, &mut axioms, &params, false)
             .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(ocb.ordering_type, TermOrdering::Kbo);
@@ -909,9 +998,10 @@ mod tests {
 
     #[test]
     fn to_select_ordering_uses_original_predefined_strings() {
-        let mut signature = signature();
-        let constant = typed_symbol(&mut signature, "a", 0);
-        let unary = typed_symbol(&mut signature, "f", 1);
+        let mut bank = term_bank();
+        let constant = typed_symbol(bank.signature_mut(), "a", 0);
+        let unary = typed_symbol(bank.signature_mut(), "f", 1);
+        let mut axioms = ClauseSet::new();
         let params = HeuristicParmsCell {
             order_params: OrderParmsCell {
                 ordertype: TermOrdering::Kbo,
@@ -924,32 +1014,70 @@ mod tests {
             ..HeuristicParmsCell::default()
         };
 
-        let ocb = to_select_ordering(&mut signature, &ClauseSet::new(), &params, false)
+        let ocb = to_select_ordering(&mut bank, &mut axioms, &params, false)
             .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(
-            ocb.fun_compare(&signature, unary, constant),
+            ocb.fun_compare(bank.signature(), unary, constant),
             CompareResult::Greater
         );
         assert_eq!(ocb.fun_weight(constant), 11);
     }
 
     #[test]
-    fn to_select_ordering_reports_pending_optimize_branch() {
-        let mut signature = signature();
+    fn order_find_optimal_treats_optimize_as_wildcard_order_type() {
+        let mut bank = term_bank();
+        typed_symbol(bank.signature_mut(), "a", 0);
+        typed_symbol(bank.signature_mut(), "f", 1);
+        let mut axioms = ClauseSet::new();
+        let mask = OrderParmsCell {
+            ordertype: TermOrdering::Optimize,
+            to_weight_gen: TOWeightGenMethod::ConstantWeight,
+            to_prec_gen: TOPrecGenMethod::UnaryFirst,
+            to_const_weight: W_CONST_NO_SPECIAL_WEIGHT,
+            ..OrderParmsCell::default()
+        };
+
+        let (ocb, selected) = order_find_optimal_with_params(&mut bank, &mut axioms, &mask, false)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(matches!(
+            selected.ordertype,
+            TermOrdering::Kbo | TermOrdering::Lpo
+        ));
+        assert_eq!(ocb.ordering_type, selected.ordertype);
+        assert_eq!(selected.to_weight_gen, TOWeightGenMethod::ConstantWeight);
+        assert_eq!(selected.to_prec_gen, TOPrecGenMethod::UnaryFirst);
+        assert_eq!(selected.lit_cmp, i64::from(LiteralCmp::Normal.c_value()));
+        assert_eq!(selected.ho_order_kind, HoOrderKind::LfhoOrder);
+    }
+
+    #[test]
+    fn to_select_ordering_uses_optimized_branch_and_propagates_rewrite_flag() {
+        let mut bank = term_bank();
+        typed_symbol(bank.signature_mut(), "a", 0);
+        typed_symbol(bank.signature_mut(), "f", 1);
+        let mut axioms = ClauseSet::new();
         let params = HeuristicParmsCell {
             order_params: OrderParmsCell {
                 ordertype: TermOrdering::Optimize,
+                to_weight_gen: TOWeightGenMethod::ConstantWeight,
+                to_prec_gen: TOPrecGenMethod::UnaryFirst,
+                to_const_weight: W_CONST_NO_SPECIAL_WEIGHT,
+                rewrite_strong_rhs_inst: true,
                 ..OrderParmsCell::default()
             },
             ..HeuristicParmsCell::default()
         };
 
-        let error =
-            to_select_ordering(&mut signature, &ClauseSet::new(), &params, false).unwrap_err();
+        let ocb = to_select_ordering(&mut bank, &mut axioms, &params, false)
+            .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("OrderFindOptimal"));
+        assert!(matches!(
+            ocb.ordering_type,
+            TermOrdering::Kbo | TermOrdering::Lpo
+        ));
+        assert!(ocb.rewrite_strong_rhs_inst);
     }
 
     #[test]
