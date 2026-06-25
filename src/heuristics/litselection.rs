@@ -42,6 +42,16 @@ pub const SELECT_OPTIMAL_RESTR_P_DEPTH2: &str = "SelectOptimalRestrPDepth2";
 pub const P_SELECT_OPTIMAL_RESTR_P_DEPTH2: &str = "PSelectOptimalRestrPDepth2";
 pub const SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "SelectOptimalRestrNDepth2";
 pub const P_SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "PSelectOptimalRestrNDepth2";
+pub const SELECT_COMPLEX: &str = "SelectComplex";
+pub const P_SELECT_COMPLEX: &str = "PSelectComplex";
+pub const SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "SelectComplexExceptRRHorn";
+pub const P_SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "PSelectComplexExceptRRHorn";
+pub const SELECT_L_COMPLEX: &str = "SelectLComplex";
+pub const P_SELECT_L_COMPLEX: &str = "PSelectLComplex";
+pub const SELECT_COMPLEX_PREFER_NEQ: &str = "SelectComplexPreferNEQ";
+pub const P_SELECT_COMPLEX_PREFER_NEQ: &str = "PSelectComplexPreferNEQ";
+pub const SELECT_COMPLEX_PREFER_EQ: &str = "SelectComplexPreferEQ";
+pub const P_SELECT_COMPLEX_PREFER_EQ: &str = "PSelectComplexPreferEQ";
 
 const VAR_FACTOR: i64 = 3;
 
@@ -198,6 +208,65 @@ enum Depth2Scope {
     All,
     Positive,
     Negative,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComplexLiteralSelector {
+    Complex,
+    PComplex,
+    ComplexExceptRRHorn,
+    PComplexExceptRRHorn,
+    LComplex,
+    PLComplex,
+    PreferNEQ,
+    PPreferNEQ,
+    PreferEQ,
+    PPreferEQ,
+}
+
+impl ComplexLiteralSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_COMPLEX => Some(Self::Complex),
+            P_SELECT_COMPLEX => Some(Self::PComplex),
+            SELECT_COMPLEX_EXCEPT_RR_HORN => Some(Self::ComplexExceptRRHorn),
+            P_SELECT_COMPLEX_EXCEPT_RR_HORN => Some(Self::PComplexExceptRRHorn),
+            SELECT_L_COMPLEX => Some(Self::LComplex),
+            P_SELECT_L_COMPLEX => Some(Self::PLComplex),
+            SELECT_COMPLEX_PREFER_NEQ => Some(Self::PreferNEQ),
+            P_SELECT_COMPLEX_PREFER_NEQ => Some(Self::PPreferNEQ),
+            SELECT_COMPLEX_PREFER_EQ => Some(Self::PreferEQ),
+            P_SELECT_COMPLEX_PREFER_EQ => Some(Self::PPreferEQ),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+        match self {
+            Self::Complex => select_complex(ocb, clause),
+            Self::PComplex => p_select_complex(ocb, clause),
+            Self::ComplexExceptRRHorn => select_complex_except_rr_horn(ocb, clause),
+            Self::PComplexExceptRRHorn => p_select_complex_except_rr_horn(ocb, clause),
+            Self::LComplex => select_l_complex(ocb, clause),
+            Self::PLComplex => p_select_l_complex(ocb, clause),
+            Self::PreferNEQ => select_complex_prefer_neq(ocb, clause),
+            Self::PPreferNEQ => p_select_complex_prefer_neq(ocb, clause),
+            Self::PreferEQ => select_complex_prefer_eq(ocb, clause),
+            Self::PPreferEQ => p_select_complex_prefer_eq(ocb, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComplexGroundChoice {
+    SmallestStandard,
+    LargestDiff,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EquationalPreference {
+    Equation,
+    NonEquation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -560,6 +629,50 @@ pub fn p_select_n_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, cl
     select_depth2_optimal_literal_impl(ocb, clause, true, Depth2Scope::Negative);
 }
 
+pub fn select_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_impl(ocb, clause, false, ComplexGroundChoice::SmallestStandard);
+}
+
+pub fn p_select_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_impl(ocb, clause, true, ComplexGroundChoice::SmallestStandard);
+}
+
+pub fn select_complex_except_rr_horn(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    if !(clause.is_horn() && clause.is_range_restricted()) {
+        select_complex(ocb, clause);
+    }
+}
+
+pub fn p_select_complex_except_rr_horn(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    if !(clause.is_horn() && clause.is_range_restricted()) {
+        p_select_complex(ocb, clause);
+    }
+}
+
+pub fn select_l_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_impl(ocb, clause, false, ComplexGroundChoice::LargestDiff);
+}
+
+pub fn p_select_l_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_impl(ocb, clause, true, ComplexGroundChoice::LargestDiff);
+}
+
+pub fn select_complex_prefer_neq(_ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_prefer_impl(clause, false, EquationalPreference::NonEquation);
+}
+
+pub fn p_select_complex_prefer_neq(_ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_prefer_impl(clause, true, EquationalPreference::NonEquation);
+}
+
+pub fn select_complex_prefer_eq(_ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_prefer_impl(clause, false, EquationalPreference::Equation);
+}
+
+pub fn p_select_complex_prefer_eq(_ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_complex_prefer_impl(clause, true, EquationalPreference::Equation);
+}
+
 /// Applies the subset of literal-selection functions that has been ported.
 ///
 /// # Errors
@@ -575,6 +688,9 @@ pub fn apply_ported_literal_selector(
         selector.apply(ocb, clause);
         Ok(())
     } else if let Some(selector) = OptimalLiteralSelector::from_name(name) {
+        selector.apply(ocb, clause);
+        Ok(())
+    } else if let Some(selector) = ComplexLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
         Ok(())
     } else {
@@ -666,6 +782,123 @@ fn apply_optimal_variant(
     }
 }
 
+fn select_complex_impl(
+    ocb: Option<&mut OrderControlBlock>,
+    clause: &mut Clause,
+    positive_variant: bool,
+    ground_choice: ComplexGroundChoice,
+) {
+    let selected = clause
+        .literals()
+        .find_neg_pure_var_lit_index()
+        .or_else(|| find_ground_negative_for_complex(clause, ground_choice));
+
+    if let Some(index) = selected {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+    } else if positive_variant {
+        p_select_diff_negative_literal(ocb, clause);
+    } else {
+        select_diff_negative_literal(ocb, clause);
+    }
+}
+
+fn find_ground_negative_for_complex(
+    clause: &Clause,
+    ground_choice: ComplexGroundChoice,
+) -> Option<usize> {
+    let mut selected = None;
+    let mut selected_weight = match ground_choice {
+        ComplexGroundChoice::SmallestStandard => i64::MAX,
+        ComplexGroundChoice::LargestDiff => -1,
+    };
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative() && literal.is_ground() {
+            let current_weight = match ground_choice {
+                ComplexGroundChoice::SmallestStandard => literal.standard_weight(),
+                ComplexGroundChoice::LargestDiff => literal_selection_diff_weight(literal),
+            };
+            let is_better = match ground_choice {
+                ComplexGroundChoice::SmallestStandard => current_weight < selected_weight,
+                ComplexGroundChoice::LargestDiff => current_weight > selected_weight,
+            };
+            if is_better {
+                selected_weight = current_weight;
+                selected = Some(index);
+            }
+        }
+    }
+
+    selected
+}
+
+fn select_complex_prefer_impl(
+    clause: &mut Clause,
+    positive_variant: bool,
+    preference: EquationalPreference,
+) {
+    if let Some(index) = find_preferred_complex_negative_literal(clause, preference) {
+        if positive_variant {
+            select_positive_literals(clause);
+        }
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+    }
+}
+
+fn find_preferred_complex_negative_literal(
+    clause: &Clause,
+    preference: EquationalPreference,
+) -> Option<usize> {
+    let mut selected = None;
+    let mut selected_preferred = false;
+    let mut selected_var = false;
+    let mut selected_ground = false;
+    let mut selected_weight = -1;
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative() {
+            let current_preferred = match preference {
+                EquationalPreference::Equation => literal.query_prop(EP_IS_EQU_LITERAL),
+                EquationalPreference::NonEquation => !literal.query_prop(EP_IS_EQU_LITERAL),
+            };
+            let current_var = literal.is_pure_var();
+            let current_ground = literal.is_ground();
+            let mut current_weight = -1;
+
+            if selected_preferred && !current_preferred {
+                break;
+            }
+            if current_preferred == selected_preferred {
+                if selected_var && !current_var {
+                    break;
+                }
+                if current_var == selected_var {
+                    if selected_ground && !current_ground {
+                        break;
+                    }
+                    if current_ground == selected_ground {
+                        current_weight = literal_selection_diff_weight(literal);
+                        if current_weight <= selected_weight {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if current_weight == -1 {
+                current_weight = literal_selection_diff_weight(literal);
+            }
+            selected = Some(index);
+            selected_weight = current_weight;
+            selected_ground = current_ground;
+            selected_var = current_var;
+            selected_preferred = current_preferred;
+        }
+    }
+
+    selected
+}
+
 fn find_max_diff_negative_literal(clause: &Clause, ground_only: bool) -> Option<usize> {
     let mut selected = None;
     let mut select_weight = -1;
@@ -707,34 +940,39 @@ fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_ported_literal_selector, p_select_all_cond_optimal_literal,
+        apply_ported_literal_selector, p_select_all_cond_optimal_literal, p_select_complex,
+        p_select_complex_except_rr_horn, p_select_complex_prefer_eq, p_select_complex_prefer_neq,
         p_select_cond_optimal_literal, p_select_depth2_optimal_literal,
         p_select_diff_negative_literal, p_select_first_variable_literal,
-        p_select_ground_negative_literal, p_select_largest_negative_literal,
+        p_select_ground_negative_literal, p_select_l_complex, p_select_largest_negative_literal,
         p_select_min_optimal_literal, p_select_negative_literals, p_select_optimal_literal,
         p_select_smallest_negative_literal, p_select_strong_rr_non_rr_optimal_literal,
-        select_all_cond_optimal_literal, select_anti_rr_optimal_literal,
+        select_all_cond_optimal_literal, select_anti_rr_optimal_literal, select_complex,
+        select_complex_except_rr_horn, select_complex_prefer_eq, select_complex_prefer_neq,
         select_cond_optimal_literal, select_depth2_optimal_literal, select_diff_negative_literal,
-        select_first_variable_literal, select_ground_negative_literal,
+        select_first_variable_literal, select_ground_negative_literal, select_l_complex,
         select_largest_negative_literal, select_min_optimal_literal,
         select_n_depth2_optimal_literal, select_negative_literals,
         select_non_anti_rr_optimal_literal, select_non_rr_optimal_literal,
         select_non_strong_rr_optimal_literal, select_optimal_literal,
         select_p_depth2_optimal_literal, select_smallest_negative_literal,
         select_strong_rr_non_rr_optimal_literal, NO_GENERATION, NO_SELECTION,
-        P_SELECT_ALL_COND_OPTIMAL_LIT, P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COND_OPTIMAL_LIT,
-        P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT, P_SELECT_LARGEST_NEG_LIT,
-        P_SELECT_MIN_OPTIMAL_LIT, P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT,
-        P_SELECT_NON_RR_OPTIMAL_LIT, P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT,
-        P_SELECT_OPTIMAL_RESTR_DEPTH2, P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
-        P_SELECT_OPTIMAL_RESTR_P_DEPTH2, P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
+        P_SELECT_ALL_COND_OPTIMAL_LIT, P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COMPLEX,
+        P_SELECT_COMPLEX_EXCEPT_RR_HORN, P_SELECT_COMPLEX_PREFER_EQ, P_SELECT_COMPLEX_PREFER_NEQ,
+        P_SELECT_COND_OPTIMAL_LIT, P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT,
+        P_SELECT_LARGEST_NEG_LIT, P_SELECT_L_COMPLEX, P_SELECT_MIN_OPTIMAL_LIT,
+        P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT, P_SELECT_NON_RR_OPTIMAL_LIT,
+        P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT, P_SELECT_OPTIMAL_RESTR_DEPTH2,
+        P_SELECT_OPTIMAL_RESTR_N_DEPTH2, P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
+        P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
         P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, SELECT_ALL_COND_OPTIMAL_LIT,
-        SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_COND_OPTIMAL_LIT, SELECT_DIFF_NEG_LIT,
-        SELECT_GROUND_NEG_LIT, SELECT_LARGEST_NEG_LIT, SELECT_MIN_OPTIMAL_LIT,
-        SELECT_NEGATIVE_LITERALS, SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
-        SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT, SELECT_OPTIMAL_RESTR_DEPTH2,
-        SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2, SELECT_PURE_VAR_NEG_LITERALS,
-        SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+        SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_COMPLEX, SELECT_COMPLEX_EXCEPT_RR_HORN,
+        SELECT_COMPLEX_PREFER_EQ, SELECT_COMPLEX_PREFER_NEQ, SELECT_COND_OPTIMAL_LIT,
+        SELECT_DIFF_NEG_LIT, SELECT_GROUND_NEG_LIT, SELECT_LARGEST_NEG_LIT, SELECT_L_COMPLEX,
+        SELECT_MIN_OPTIMAL_LIT, SELECT_NEGATIVE_LITERALS, SELECT_NON_ANTI_RR_OPTIMAL_LIT,
+        SELECT_NON_RR_OPTIMAL_LIT, SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT,
+        SELECT_OPTIMAL_RESTR_DEPTH2, SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2,
+        SELECT_PURE_VAR_NEG_LITERALS, SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
@@ -790,6 +1028,22 @@ mod tests {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
 
+    fn predicate_const_atom(bank: &mut TermBank, name: &str) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, bool_type.clone())
+            .unwrap();
+        let atom = Term::const_cell_alloc(f_code);
+        atom.set_type(Some(bool_type));
+        bank.insert(&atom, DerefType::Never).unwrap()
+    }
+
+    fn predicate_literal(bank: &mut TermBank, atom: &Term, positive: bool) -> Eqn {
+        let true_term = bank.true_term().clone();
+        literal(bank, atom, &true_term, positive)
+    }
+
     fn select_mask(clause: &Clause) -> Vec<bool> {
         clause
             .literals()
@@ -797,6 +1051,46 @@ mod tests {
             .iter()
             .map(|literal| literal.query_prop(EP_IS_SELECTED))
             .collect()
+    }
+
+    fn selected_indices(clause: &Clause) -> Vec<usize> {
+        clause
+            .literals()
+            .as_slice()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, literal)| literal.query_prop(EP_IS_SELECTED).then_some(index))
+            .collect()
+    }
+
+    fn first_smallest_ground_negative_index(clause: &Clause) -> usize {
+        let mut selected = None;
+        let mut selected_weight = i64::MAX;
+        for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+            if literal.is_negative() && literal.is_ground() {
+                let current_weight = literal.standard_weight();
+                if current_weight < selected_weight {
+                    selected_weight = current_weight;
+                    selected = Some(index);
+                }
+            }
+        }
+        selected.unwrap()
+    }
+
+    fn first_largest_diff_ground_negative_index(clause: &Clause) -> usize {
+        let mut selected = None;
+        let mut selected_weight = -1;
+        for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+            if literal.is_negative() && literal.is_ground() {
+                let current_weight = 100 * literal.standard_diff() + literal.standard_weight();
+                if current_weight > selected_weight {
+                    selected_weight = current_weight;
+                    selected = Some(index);
+                }
+            }
+        }
+        selected.unwrap()
     }
 
     fn clear_selection(clause: &mut Clause) {
@@ -944,6 +1238,39 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![
             literal(&mut bank, &deep, &y, true),
             literal(&mut bank, &x, &a, false),
+        ]))
+    }
+
+    fn complex_diff_fallback_clause() -> Clause {
+        let mut bank = test_bank();
+        let x = var_term(-90);
+        let a = const_term(150);
+        let b = const_term(151);
+        let deeper = unary(152, &unary(153, &x));
+        Clause::alloc(EqnList::from_vec(vec![
+            literal(&mut bank, &a, &b, true),
+            literal(&mut bank, &x, &a, false),
+            literal(&mut bank, &deeper, &a, false),
+        ]))
+    }
+
+    fn complex_prefer_order_clause() -> Clause {
+        let mut bank = test_bank();
+        let x = var_term(-100);
+        x.set_type(Some(bank.signature().type_bank().default_type()));
+        let y = var_term(-102);
+        y.set_type(Some(bank.signature().type_bank().default_type()));
+        let a = shared_const(&mut bank, "complex_pref_a");
+        let b = shared_const(&mut bank, "complex_pref_b");
+        let pos = predicate_const_atom(&mut bank, "complex_pref_pos");
+        let neq_first = predicate_const_atom(&mut bank, "complex_pref_neq_first");
+        let neq_ignored = predicate_const_atom(&mut bank, "complex_pref_neq_ignored");
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(&mut bank, &pos, true),
+            predicate_literal(&mut bank, &neq_first, false),
+            literal(&mut bank, &y, &a, false),
+            predicate_literal(&mut bank, &neq_ignored, false),
+            literal(&mut bank, &x, &b, false),
         ]))
     }
 
@@ -1194,6 +1521,101 @@ mod tests {
     }
 
     #[test]
+    fn complex_selectors_preserve_pure_var_and_ground_choice_priority() {
+        let mut pure = pure_var_clause();
+        select_complex(None, &mut pure);
+        assert_eq!(select_mask(&pure), vec![false, false, true]);
+
+        clear_selection(&mut pure);
+        p_select_complex(None, &mut pure);
+        assert_eq!(select_mask(&pure), vec![false, false, true]);
+
+        let mut ground = ground_and_nonground_clause(true);
+        let smallest_ground = first_smallest_ground_negative_index(&ground);
+        let largest_diff_ground = first_largest_diff_ground_negative_index(&ground);
+        select_complex(None, &mut ground);
+        assert_eq!(selected_indices(&ground), vec![smallest_ground]);
+
+        clear_selection(&mut ground);
+        p_select_complex(None, &mut ground);
+        assert_eq!(selected_indices(&ground), vec![smallest_ground]);
+
+        clear_selection(&mut ground);
+        select_l_complex(None, &mut ground);
+        assert_eq!(selected_indices(&ground), vec![largest_diff_ground]);
+
+        clear_selection(&mut ground);
+        p_select_l_complex(None, &mut ground);
+        assert_eq!(selected_indices(&ground), vec![largest_diff_ground]);
+    }
+
+    #[test]
+    fn complex_positive_variants_select_positives_only_in_diff_fallback() {
+        let mut fallback = complex_diff_fallback_clause();
+        select_complex(None, &mut fallback);
+        assert_eq!(select_mask(&fallback), vec![false, false, true]);
+
+        clear_selection(&mut fallback);
+        p_select_complex(None, &mut fallback);
+        assert_eq!(select_mask(&fallback), vec![true, false, true]);
+
+        clear_selection(&mut fallback);
+        p_select_l_complex(None, &mut fallback);
+        assert_eq!(select_mask(&fallback), vec![true, false, true]);
+    }
+
+    #[test]
+    fn complex_rr_horn_wrappers_skip_only_range_restricted_horn_clauses() {
+        let mut rr_horn = range_restricted_clause();
+        rr_horn.literals_mut().set_prop(EP_IS_SELECTED);
+        select_complex_except_rr_horn(None, &mut rr_horn);
+        assert_eq!(select_mask(&rr_horn), vec![true, true]);
+
+        clear_selection(&mut rr_horn);
+        p_select_complex_except_rr_horn(None, &mut rr_horn);
+        assert_eq!(select_mask(&rr_horn), vec![false, false]);
+
+        let mut non_rr = non_range_restricted_clause();
+        select_complex_except_rr_horn(None, &mut non_rr);
+        assert_eq!(select_mask(&non_rr), vec![false, true]);
+
+        clear_selection(&mut non_rr);
+        p_select_complex_except_rr_horn(None, &mut non_rr);
+        assert_eq!(select_mask(&non_rr), vec![true, true]);
+    }
+
+    #[test]
+    fn complex_prefer_selectors_keep_c_early_break_scan() {
+        let mut non_equation_preferred = complex_prefer_order_clause();
+        select_complex_prefer_neq(None, &mut non_equation_preferred);
+        assert_eq!(
+            select_mask(&non_equation_preferred),
+            vec![false, true, false, false, false]
+        );
+
+        clear_selection(&mut non_equation_preferred);
+        p_select_complex_prefer_neq(None, &mut non_equation_preferred);
+        assert_eq!(
+            select_mask(&non_equation_preferred),
+            vec![true, true, false, false, false]
+        );
+
+        let mut equation_preferred = complex_prefer_order_clause();
+        select_complex_prefer_eq(None, &mut equation_preferred);
+        assert_eq!(
+            select_mask(&equation_preferred),
+            vec![false, false, true, false, false]
+        );
+
+        clear_selection(&mut equation_preferred);
+        p_select_complex_prefer_eq(None, &mut equation_preferred);
+        assert_eq!(
+            select_mask(&equation_preferred),
+            vec![true, false, true, false, false]
+        );
+    }
+
+    #[test]
     fn simple_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_NEGATIVE_LITERALS,
@@ -1232,6 +1654,16 @@ mod tests {
             P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
             SELECT_OPTIMAL_RESTR_N_DEPTH2,
             P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
+            SELECT_COMPLEX,
+            P_SELECT_COMPLEX,
+            SELECT_COMPLEX_EXCEPT_RR_HORN,
+            P_SELECT_COMPLEX_EXCEPT_RR_HORN,
+            SELECT_L_COMPLEX,
+            P_SELECT_L_COMPLEX,
+            SELECT_COMPLEX_PREFER_NEQ,
+            P_SELECT_COMPLEX_PREFER_NEQ,
+            SELECT_COMPLEX_PREFER_EQ,
+            P_SELECT_COMPLEX_PREFER_EQ,
         ] {
             let mut clause = ground_and_nonground_clause(true);
             apply_ported_literal_selector(name, None, &mut clause).unwrap_or_else(|err| {
