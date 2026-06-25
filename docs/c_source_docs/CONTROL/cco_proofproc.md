@@ -145,14 +145,14 @@ Source files reviewed: `CONTROL/cco_proofproc.h`, `CONTROL/cco_proofproc.c`.
 
 ### Compatibility Notes
 
-- `ProofControlInit` assumes a freshly allocated proof-control cell with no OCB or selected HCB, selects the ordering, installs built-in and user weight-function/heuristic definitions, then copies the finalized `HeuristicParmsCell` and `FVIndexParmsCell` into the control. Rust now has a proof-state-aware helper for the definition-installation, active-HCB lookup, `heuristic_def` stack mutation, and split-dependent FV-index slack normalization portion. OCB selection, final unification-limit initialization, `fvi_param_init`, and proof-state mutation remain part of the later proof-control initialization slice.
+- `ProofControlInit` assumes a freshly allocated proof-control cell with no OCB or selected HCB, selects the ordering, installs built-in and user weight-function/heuristic definitions, then copies the finalized `HeuristicParmsCell` and `FVIndexParmsCell` into the control. Rust now has a proof-state-aware helper for the OCB selection, definition-installation, active-HCB lookup, `heuristic_def` stack mutation, and split-dependent FV-index slack normalization portion. The higher-order CSU unification-limit global hook, `fvi_param_init`, and proof-state mutation remain part of the later proof-control initialization slice.
 - After copying `FVIndexParmsCell`, `ProofControlInit` forces `fvi_parms.symbol_slack=0` when splitting is disabled. Keep that normalization at proof-control initialization time rather than in raw option parsing because it depends on the finalized heuristic split setting.
 - `fvi_param_init` derives the actual collection spec from the proof state's original symbol count, `symbol_slack`, and `max_symbols`, then installs shared FV-index anchors on each processed set. The raw `FVIndexParmsCell` is not the final index spec by itself.
 
 ### Change-Later Observations
 
 - `ProofControlInit` mutates both the caller's heuristic-definition stack and the caller's heuristic parameter object while reconciling direct `heuristic_def` text with stacked `--define-heuristic` options. Rust preserves this in the current compatibility helper, but a later higher-level API could return an initialized control object and normalized parameter snapshot instead of exposing caller-side mutation.
-- `ProofControlInit` calls `InitUnifLimits` after writing initialized params back to the caller. Rust already stores the parsed unification limit fields, but the final derived-limit initialization still needs a dedicated audit before full proof-state initialization is considered complete.
+- `ProofControlInit` calls `InitUnifLimits` after writing initialized params back to the caller. In C this stores a process-global pointer to `control->heuristic_parms` for higher-order CSU enumeration rather than deriving new values. Rust already stores the parsed unification limit fields, but the global hook should be revisited when the HO CSU iterator is ported.
 
 ### Porting Focus
 

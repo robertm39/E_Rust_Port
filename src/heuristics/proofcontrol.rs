@@ -11,6 +11,7 @@ use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
 use crate::heuristics::litselection::{
     apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection,
 };
+use crate::heuristics::to_autoselect::to_select_ordering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -250,11 +251,43 @@ pub fn proof_control_reset_sat_solver(control: &mut ProofControl) {
     control.reset_sat_solver();
 }
 
+/// Initializes the currently ported proof-control state handled by C
+/// `ProofControlInit`.
+///
+/// The later proof-state setup in C `ProofStateInit`, including FV-index anchor
+/// creation and clause-set insertion, is kept outside this helper until the
+/// Rust proof-state owner is available.
+///
+/// # Errors
+///
+/// Returns diagnostics from ordering selection, built-in or user-supplied
+/// weight/heuristic definition parsing, or active heuristic lookup.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible ProofControlInit bridge keeps the original inputs visible"
+)]
+pub fn proof_control_init(
+    control: &mut ProofControl,
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
+    params: &mut HeuristicParmsCell,
+    fvi_params: &FvIndexParams,
+    wfcb_defs: &[String],
+    hcb_defs: &mut Vec<String>,
+    higher_order_problem: bool,
+) -> Result<(), Diagnostic> {
+    debug_assert!(control.ocb.is_none());
+    debug_assert!(control.active_hcb.is_none());
+
+    let ocb = to_select_ordering(bank, axioms, params, higher_order_problem)?;
+    control.ocb = Some(ocb);
+    proof_control_init_heuristics(control, axioms, params, fvi_params, wfcb_defs, hcb_defs)
+}
+
 /// Installs the heuristic definition state handled by C `ProofControlInit`.
 ///
-/// The remaining proof-state setup in `ProofControlInit`, including ordering
-/// selection and FV-index anchor creation, is kept outside this helper until
-/// the Rust proof-state owner is available.
+/// This helper is available separately for tests and staged integration points
+/// that already own an OCB.
 ///
 /// # Errors
 ///
@@ -269,7 +302,6 @@ pub fn proof_control_init_heuristics(
     wfcb_defs: &[String],
     hcb_defs: &mut Vec<String>,
 ) -> Result<(), Diagnostic> {
-    debug_assert!(control.ocb.is_none());
     debug_assert!(control.active_hcb.is_none());
 
     let context = WeightParseContext::new(axioms);
@@ -498,9 +530,9 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_init_heuristics, proof_control_reset_sat_solver,
-        select_inherited_literal, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_control_alloc, proof_control_init, proof_control_init_heuristics,
+        proof_control_reset_sat_solver, select_inherited_literal, LiteralSelectionOutcome,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -740,6 +772,40 @@ mod tests {
         assert_eq!(control.active_hcb(), Some(injected_hcb));
         assert_eq!(hcb_defs, ["Injected=(1*fifo_f)"]);
         assert_eq!(params.heuristic_def.as_deref(), Some("Injected=(1*fifo_f)"));
+    }
+
+    #[test]
+    fn proof_control_init_selects_ordering_then_initializes_heuristics() {
+        let mut control = proof_control_alloc();
+        let mut bank = test_bank();
+        typed_const(&mut bank, "pc_init_order_a");
+        let mut axioms = ClauseSet::new();
+        let mut params = HeuristicParmsCell::default();
+        params.order_params.ordertype = TermOrdering::NoOrdering;
+        let fvi_params = FvIndexParams::default();
+        let mut hcb_defs = Vec::new();
+
+        proof_control_init(
+            &mut control,
+            &mut bank,
+            &mut axioms,
+            &mut params,
+            &fvi_params,
+            &[],
+            &mut hcb_defs,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            control.ocb().map(|ocb| ocb.ordering_type),
+            Some(TermOrdering::Kbo)
+        );
+        assert_eq!(
+            control.active_hcb(),
+            control.hcbs().find_hcb_handle(HCB_DEFAULT_HEURISTIC)
+        );
+        assert!(control.wfcbs().find_wfcb_handle("weight21_ugg").is_some());
     }
 
     #[test]
