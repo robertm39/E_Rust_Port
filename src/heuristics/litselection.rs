@@ -65,6 +65,11 @@ pub const SELECT_COMPLEX: &str = "SelectComplex";
 pub const P_SELECT_COMPLEX: &str = "PSelectComplex";
 pub const SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "SelectComplexExceptRRHorn";
 pub const P_SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "PSelectComplexExceptRRHorn";
+pub const SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "SelectComplexExceptUniqMaxHorn";
+pub const P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "PSelectComplexExceptUniqMaxHorn";
+pub const M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN: &str = "MSelectComplexExceptUniqMaxHorn";
+pub const SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN: &str = "SelectComplexExceptUniqMaxPosHorn";
+pub const P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN: &str = "PSelectComplexExceptUniqMaxPosHorn";
 pub const SELECT_L_COMPLEX: &str = "SelectLComplex";
 pub const P_SELECT_L_COMPLEX: &str = "PSelectLComplex";
 pub const SELECT_COMPLEX_PREFER_NEQ: &str = "SelectComplexPreferNEQ";
@@ -325,9 +330,51 @@ enum MaximalGate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaximalComplexSelector {
+    Standard,
+    Positive,
+    Mixed,
+    StandardPositiveMax,
+    PositivePositiveMax,
+}
+
+impl MaximalComplexSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN => Some(Self::Standard),
+            P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN => Some(Self::Positive),
+            M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN => Some(Self::Mixed),
+            SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN => Some(Self::StandardPositiveMax),
+            P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN => Some(Self::PositivePositiveMax),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::Standard => select_complex_except_uniq_max_horn(ocb, bank, clause),
+            Self::Positive => p_select_complex_except_uniq_max_horn(ocb, bank, clause),
+            Self::Mixed => m_select_complex_except_uniq_max_horn(ocb, bank, clause),
+            Self::StandardPositiveMax => {
+                select_complex_except_uniq_max_pos_horn(ocb, bank, clause);
+            }
+            Self::PositivePositiveMax => {
+                p_select_complex_except_uniq_max_pos_horn(ocb, bank, clause);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OrientableWeightChoice {
     Largest,
     Smallest,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComplexMaxGate {
+    UniqueMaximal,
+    UniquePositiveMaximal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -957,6 +1004,62 @@ pub fn p_select_complex_except_rr_horn(ocb: Option<&mut OrderControlBlock>, clau
     }
 }
 
+pub fn select_complex_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_complex_except_max_horn_impl(ocb, bank, clause, false, ComplexMaxGate::UniqueMaximal);
+}
+
+pub fn p_select_complex_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_complex_except_max_horn_impl(ocb, bank, clause, true, ComplexMaxGate::UniqueMaximal);
+}
+
+pub fn m_select_complex_except_uniq_max_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if clause.is_horn() {
+        p_select_complex_except_uniq_max_horn(ocb, bank, clause);
+    } else {
+        select_complex_except_uniq_max_horn(ocb, bank, clause);
+    }
+}
+
+pub fn select_complex_except_uniq_max_pos_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_complex_except_max_horn_impl(
+        ocb,
+        bank,
+        clause,
+        false,
+        ComplexMaxGate::UniquePositiveMaximal,
+    );
+}
+
+pub fn p_select_complex_except_uniq_max_pos_horn(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_complex_except_max_horn_impl(
+        ocb,
+        bank,
+        clause,
+        true,
+        ComplexMaxGate::UniquePositiveMaximal,
+    );
+}
+
 pub fn select_l_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
     select_complex_impl(ocb, clause, false, ComplexGroundChoice::LargestDiff);
 }
@@ -1041,6 +1144,15 @@ pub fn apply_ported_literal_selector_with_bank(
         };
         selector.apply(ocb, bank, clause);
         Ok(())
+    } else if let Some(selector) = MaximalComplexSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
+        Ok(())
     } else if let Some(selector) = MaximalGateSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(UnsupportedLiteralSelection::new(name));
@@ -1116,6 +1228,42 @@ fn find_orientable_negative_literal(
     }
 
     selected
+}
+
+fn select_complex_except_max_horn_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    gate: ComplexMaxGate,
+) {
+    if clause.is_horn() {
+        clause.cond_mark_maximal_terms(ocb, bank);
+        if complex_max_horn_gate_blocks(clause, gate) {
+            return;
+        }
+    }
+
+    if positive_variant {
+        p_select_complex(Some(ocb), clause);
+    } else {
+        select_complex(Some(ocb), clause);
+    }
+    clause.del_prop(CP_IS_ORIENTED);
+}
+
+fn complex_max_horn_gate_blocks(clause: &Clause, gate: ComplexMaxGate) -> bool {
+    let maximal = clause.literals().query_prop_number(EP_IS_MAXIMAL);
+    match gate {
+        ComplexMaxGate::UniqueMaximal => maximal == 1,
+        ComplexMaxGate::UniquePositiveMaximal => {
+            maximal == 1
+                && clause
+                    .literals()
+                    .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+                    == 1
+        }
+    }
 }
 
 fn select_unless_maximal_gate_optimal_literal(
@@ -2267,6 +2415,51 @@ mod tests {
     }
 
     #[test]
+    fn complex_unique_max_horn_wrappers_preserve_c_gates() {
+        let mut bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut unique_negative = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut unique_negative, &[1]);
+
+        super::select_complex_except_uniq_max_horn(&mut ocb, &bank, &mut unique_negative);
+        assert_eq!(selected_indices(&unique_negative), Vec::<usize>::new());
+
+        let mut unique_positive = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut unique_positive, &[0]);
+
+        super::select_complex_except_uniq_max_pos_horn(&mut ocb, &bank, &mut unique_positive);
+        assert_eq!(selected_indices(&unique_positive), Vec::<usize>::new());
+
+        let mut unique_negative_allowed = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut unique_negative_allowed, &[1]);
+
+        super::select_complex_except_uniq_max_pos_horn(
+            &mut ocb,
+            &bank,
+            &mut unique_negative_allowed,
+        );
+        assert_eq!(selected_indices(&unique_negative_allowed), vec![1]);
+        assert!(!unique_negative_allowed.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn complex_unique_max_horn_positive_and_mixed_wrappers_match_c() {
+        let bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut positive_variant = complex_diff_fallback_clause();
+        mark_maximal_literals(&mut positive_variant, &[1, 2]);
+
+        super::p_select_complex_except_uniq_max_horn(&mut ocb, &bank, &mut positive_variant);
+        assert_eq!(select_mask(&positive_variant), vec![true, false, true]);
+
+        let mut mixed_variant = complex_diff_fallback_clause();
+        mark_maximal_literals(&mut mixed_variant, &[1, 2]);
+
+        super::m_select_complex_except_uniq_max_horn(&mut ocb, &bank, &mut mixed_variant);
+        assert_eq!(select_mask(&mixed_variant), vec![true, false, true]);
+    }
+
+    #[test]
     fn complex_prefer_selectors_keep_c_early_break_scan() {
         let mut non_equation_preferred = complex_prefer_order_clause();
         select_complex_prefer_neq(None, &mut non_equation_preferred);
@@ -2442,6 +2635,28 @@ mod tests {
         ] {
             let mut bank = test_bank();
             let mut clause = orientable_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+    }
+
+    #[test]
+    fn bank_aware_complex_max_horn_wrappers_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+            super::SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+            super::P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+        ] {
+            let bank = test_bank();
+            let mut clause = complex_diff_fallback_clause();
+            mark_maximal_literals(&mut clause, &[1, 2]);
             let mut ocb = kbo_ocb(&bank);
 
             apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
