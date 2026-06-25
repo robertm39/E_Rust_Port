@@ -36,6 +36,12 @@ pub const SELECT_OPTIMAL_LIT: &str = "SelectOptimalLit";
 pub const P_SELECT_OPTIMAL_LIT: &str = "PSelectOptimalLit";
 pub const SELECT_MIN_OPTIMAL_LIT: &str = "SelectMinOptimalLit";
 pub const P_SELECT_MIN_OPTIMAL_LIT: &str = "PSelectMinOptimalLit";
+pub const SELECT_MIN_OPTIMAL_NO_TYPE_PRED: &str = "SelectMinOptimalNoTypePred";
+pub const P_SELECT_MIN_OPTIMAL_NO_TYPE_PRED: &str = "PSelectMinOptimalNoTypePred";
+pub const SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED: &str = "SelectMinOptimalNoXTypePred";
+pub const P_SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED: &str = "PSelectMinOptimalNoXTypePred";
+pub const SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED: &str = "SelectMinOptimalNoRXTypePred";
+pub const P_SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED: &str = "PSelectMinOptimalNoRXTypePred";
 pub const SELECT_NON_RR_OPTIMAL_LIT: &str = "SelectNonRROptimalLit";
 pub const P_SELECT_NON_RR_OPTIMAL_LIT: &str = "PSelectNonRROptimalLit";
 pub const SELECT_NON_STRONG_RR_OPTIMAL_LIT: &str = "SelectNonStrongRROptimalLit";
@@ -310,10 +316,54 @@ impl OptimalLiteralSelector {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MinOptimalTypeSelector {
+    RejectType,
+    PositiveRejectType,
+    RejectX,
+    PositiveRejectX,
+    RejectRealX,
+    PositiveRejectRealX,
+}
+
+impl MinOptimalTypeSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_MIN_OPTIMAL_NO_TYPE_PRED => Some(Self::RejectType),
+            P_SELECT_MIN_OPTIMAL_NO_TYPE_PRED => Some(Self::PositiveRejectType),
+            SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED => Some(Self::RejectX),
+            P_SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED => Some(Self::PositiveRejectX),
+            SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED => Some(Self::RejectRealX),
+            P_SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED => Some(Self::PositiveRejectRealX),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: Option<&mut OrderControlBlock>, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::RejectType => select_min_optimal_no_type_pred(ocb, bank, clause),
+            Self::PositiveRejectType => p_select_min_optimal_no_type_pred(ocb, bank, clause),
+            Self::RejectX => select_min_optimal_no_x_type_pred(ocb, bank, clause),
+            Self::PositiveRejectX => p_select_min_optimal_no_x_type_pred(ocb, bank, clause),
+            Self::RejectRealX => select_min_optimal_no_rx_type_pred(ocb, bank, clause),
+            Self::PositiveRejectRealX => {
+                p_select_min_optimal_no_rx_type_pred(ocb, bank, clause);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Depth2Scope {
     All,
     Positive,
     Negative,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MinOptimalTypeFilter {
+    Predicate,
+    Extended,
+    RealExtended,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -999,6 +1049,13 @@ impl std::fmt::Display for UnsupportedLiteralSelection {
     }
 }
 
+fn require_selector_bank<'bank>(
+    name: &str,
+    bank: Option<&'bank TermBank>,
+) -> Result<&'bank TermBank, UnsupportedLiteralSelection> {
+    bank.ok_or_else(|| UnsupportedLiteralSelection::new(name))
+}
+
 /// C `SelectNoLiterals`: assert that no literal is selected and otherwise do
 /// nothing.
 ///
@@ -1260,6 +1317,54 @@ pub fn p_select_min_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause:
     } else {
         p_select_smallest_negative_literal(ocb, clause);
     }
+}
+
+pub fn select_min_optimal_no_type_pred(
+    _ocb: Option<&mut OrderControlBlock>,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_min_optimal_filtered_impl(bank, clause, MinOptimalTypeFilter::Predicate, false);
+}
+
+pub fn p_select_min_optimal_no_type_pred(
+    _ocb: Option<&mut OrderControlBlock>,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_min_optimal_filtered_impl(bank, clause, MinOptimalTypeFilter::Predicate, true);
+}
+
+pub fn select_min_optimal_no_x_type_pred(
+    _ocb: Option<&mut OrderControlBlock>,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_min_optimal_filtered_impl(bank, clause, MinOptimalTypeFilter::Extended, false);
+}
+
+pub fn p_select_min_optimal_no_x_type_pred(
+    _ocb: Option<&mut OrderControlBlock>,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_min_optimal_filtered_impl(bank, clause, MinOptimalTypeFilter::Extended, true);
+}
+
+pub fn select_min_optimal_no_rx_type_pred(
+    _ocb: Option<&mut OrderControlBlock>,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_min_optimal_filtered_impl(bank, clause, MinOptimalTypeFilter::RealExtended, false);
+}
+
+pub fn p_select_min_optimal_no_rx_type_pred(
+    _ocb: Option<&mut OrderControlBlock>,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_min_optimal_filtered_impl(bank, clause, MinOptimalTypeFilter::RealExtended, true);
 }
 
 pub fn select_non_rr_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
@@ -2297,6 +2402,10 @@ pub fn apply_ported_literal_selector_with_bank(
         Ok(())
     } else if let Some(selector) = OptimalLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
+        Ok(())
+    } else if let Some(selector) = MinOptimalTypeSelector::from_name(name) {
+        let bank = require_selector_bank(name, bank)?;
+        selector.apply(ocb, bank, clause);
         Ok(())
     } else if let Some(selector) = ComplexLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
@@ -3666,6 +3775,24 @@ fn literal_selection_diff_weight(literal: &crate::clauses::eqn::Eqn) -> i64 {
     100 * literal.standard_diff() + literal.standard_weight()
 }
 
+fn select_min_optimal_filtered_impl(
+    bank: &TermBank,
+    clause: &mut Clause,
+    filter: MinOptimalTypeFilter,
+    select_positive: bool,
+) {
+    let selected = find_min_weight_negative_literal(clause, true)
+        .or_else(|| find_min_weight_negative_literal_filtered(clause, bank, filter));
+
+    if let Some(index) = selected {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        if select_positive {
+            select_positive_literals(clause);
+        }
+        clause.del_prop(CP_IS_ORIENTED);
+    }
+}
+
 fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Option<usize> {
     let mut selected = None;
     let mut select_weight = i64::MAX;
@@ -3681,6 +3808,39 @@ fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Optio
     }
 
     selected
+}
+
+fn find_min_weight_negative_literal_filtered(
+    clause: &Clause,
+    bank: &TermBank,
+    filter: MinOptimalTypeFilter,
+) -> Option<usize> {
+    let mut selected = None;
+    let mut select_weight = i64::MAX;
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative() && !min_optimal_filter_rejects(literal, bank, filter) {
+            let weight = literal.standard_weight();
+            if weight < select_weight {
+                select_weight = weight;
+                selected = Some(index);
+            }
+        }
+    }
+
+    selected
+}
+
+fn min_optimal_filter_rejects(
+    literal: &Eqn,
+    bank: &TermBank,
+    filter: MinOptimalTypeFilter,
+) -> bool {
+    match filter {
+        MinOptimalTypeFilter::Predicate => literal.is_type_pred(bank),
+        MinOptimalTypeFilter::Extended => literal.is_x_type_pred(bank),
+        MinOptimalTypeFilter::RealExtended => literal.is_real_x_type_pred(bank),
+    }
 }
 
 #[cfg(test)]
@@ -3746,7 +3906,7 @@ mod tests {
     use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, Term, TP_IS_GROUND};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -3857,6 +4017,37 @@ mod tests {
         atom.set_type(Some(predicate_type));
         atom.set_weight(weight);
         atom
+    }
+
+    fn shared_weighted_predicate_unary_atom(
+        bank: &mut TermBank,
+        name: &str,
+        arg: &Term,
+        weight: i64,
+    ) -> Term {
+        let atom = weighted_predicate_unary_atom(bank, name, arg, weight);
+        let shared = bank.insert(&atom, DerefType::Never).unwrap();
+        shared.set_weight(weight);
+        if !arg.query_prop(TP_IS_GROUND) {
+            shared.del_prop(TP_IS_GROUND);
+        }
+        shared
+    }
+
+    fn shared_weighted_predicate_binary_atom(
+        bank: &mut TermBank,
+        name: &str,
+        left: &Term,
+        right: &Term,
+        weight: i64,
+    ) -> Term {
+        let atom = weighted_predicate_binary_atom(bank, name, left, right, weight);
+        let shared = bank.insert(&atom, DerefType::Never).unwrap();
+        shared.set_weight(weight);
+        if !left.query_prop(TP_IS_GROUND) || !right.query_prop(TP_IS_GROUND) {
+            shared.del_prop(TP_IS_GROUND);
+        }
+        shared
     }
 
     fn predicate_literal(bank: &mut TermBank, atom: &Term, positive: bool) -> Eqn {
@@ -3990,6 +4181,71 @@ mod tests {
             literals.push(literal(&mut bank, &f_a, &c, false));
         }
         Clause::alloc(EqnList::from_vec(literals))
+    }
+
+    fn min_optimal_ground_type_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "min_opt_filter_ground_pos");
+        let type_pred = weighted_predicate_const_atom(bank, "min_opt_filter_ground_type", 3);
+        let ordinary = weighted_predicate_const_atom(bank, "min_opt_filter_ground_ordinary", 7);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &type_pred, false),
+            predicate_literal(bank, &ordinary, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn min_optimal_x_filter_fallback_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "min_opt_x_filter_pos");
+        let x = typed_var(bank, -411);
+        let repeated_x =
+            shared_weighted_predicate_binary_atom(bank, "min_opt_x_filter_repeated", &x, &x, 4);
+        let g_x = shared_unary(bank, "min_opt_x_filter_arg", &x);
+        let ordinary =
+            shared_weighted_predicate_unary_atom(bank, "min_opt_x_filter_ordinary", &g_x, 8);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &repeated_x, false),
+            predicate_literal(bank, &ordinary, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn min_optimal_real_x_filter_fallback_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "min_opt_rx_filter_pos");
+        let x = typed_var(bank, -412);
+        let y = typed_var(bank, -413);
+        let real_x =
+            shared_weighted_predicate_binary_atom(bank, "min_opt_rx_filter_real", &x, &y, 4);
+        let g_x = shared_unary(bank, "min_opt_rx_filter_arg", &x);
+        let ordinary =
+            shared_weighted_predicate_unary_atom(bank, "min_opt_rx_filter_ordinary", &g_x, 8);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &real_x, false),
+            predicate_literal(bank, &ordinary, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn min_optimal_all_real_x_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "min_opt_all_rx_pos");
+        let x = typed_var(bank, -414);
+        let y = typed_var(bank, -415);
+        let real_x = shared_weighted_predicate_binary_atom(bank, "min_opt_all_rx_real", &x, &y, 4);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &real_x, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
     }
 
     fn range_restricted_clause() -> Clause {
@@ -4720,6 +4976,51 @@ mod tests {
         clear_selection(&mut no_ground);
         p_select_min_optimal_literal(None, &mut no_ground);
         assert_eq!(select_mask(&no_ground), vec![true, true]);
+    }
+
+    #[test]
+    fn min_optimal_type_filtered_selectors_preserve_unfiltered_ground_branch() {
+        let mut bank = test_bank();
+        let mut ordinary = min_optimal_ground_type_clause(&mut bank);
+
+        super::select_min_optimal_no_type_pred(None, &bank, &mut ordinary);
+        assert_eq!(selected_indices(&ordinary), vec![1]);
+        assert!(!ordinary.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = min_optimal_ground_type_clause(&mut bank);
+        super::p_select_min_optimal_no_type_pred(None, &bank, &mut positive_variant);
+        assert_eq!(selected_indices(&positive_variant), vec![0, 1]);
+        assert!(!positive_variant.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn min_optimal_type_filtered_fallbacks_apply_requested_filter() {
+        let mut no_x_bank = test_bank();
+        let mut no_x_type = min_optimal_x_filter_fallback_clause(&mut no_x_bank);
+        super::select_min_optimal_no_x_type_pred(None, &no_x_bank, &mut no_x_type);
+        assert_eq!(selected_indices(&no_x_type), vec![2]);
+        assert!(!no_x_type.query_prop(CP_IS_ORIENTED));
+
+        let mut no_real_x_bank = test_bank();
+        let mut no_real_x_type = min_optimal_x_filter_fallback_clause(&mut no_real_x_bank);
+        super::select_min_optimal_no_rx_type_pred(None, &no_real_x_bank, &mut no_real_x_type);
+        assert_eq!(selected_indices(&no_real_x_type), vec![1]);
+
+        let mut real_x_bank = test_bank();
+        let mut real_x = min_optimal_real_x_filter_fallback_clause(&mut real_x_bank);
+        super::p_select_min_optimal_no_rx_type_pred(None, &real_x_bank, &mut real_x);
+        assert_eq!(selected_indices(&real_x), vec![0, 2]);
+        assert!(!real_x.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn min_optimal_type_filtered_no_selection_preserves_direct_call_state() {
+        let mut bank = test_bank();
+        let mut clause = min_optimal_all_real_x_clause(&mut bank);
+
+        super::p_select_min_optimal_no_rx_type_pred(None, &bank, &mut clause);
+        assert_eq!(selected_indices(&clause), Vec::<usize>::new());
+        assert!(clause.query_prop(CP_IS_ORIENTED));
     }
 
     #[test]
@@ -5910,6 +6211,46 @@ mod tests {
                 panic!("{err}");
             });
         }
+    }
+
+    #[test]
+    fn bank_aware_min_optimal_type_filtered_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_MIN_OPTIMAL_NO_TYPE_PRED,
+            super::P_SELECT_MIN_OPTIMAL_NO_TYPE_PRED,
+            super::SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED,
+            super::P_SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED,
+            super::SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED,
+            super::P_SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = match name {
+                super::SELECT_MIN_OPTIMAL_NO_TYPE_PRED
+                | super::P_SELECT_MIN_OPTIMAL_NO_TYPE_PRED => {
+                    min_optimal_ground_type_clause(&mut bank)
+                }
+                super::SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED
+                | super::P_SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED => {
+                    min_optimal_x_filter_fallback_clause(&mut bank)
+                }
+                _ => min_optimal_real_x_filter_fallback_clause(&mut bank),
+            };
+
+            apply_ported_literal_selector_with_bank(name, None, Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
+        }
+
+        let mut clause = Clause::empty();
+        let error = apply_ported_literal_selector(
+            super::SELECT_MIN_OPTIMAL_NO_TYPE_PRED,
+            None,
+            &mut clause,
+        )
+        .unwrap_err();
+        assert_eq!(error.strategy(), super::SELECT_MIN_OPTIMAL_NO_TYPE_PRED);
     }
 
     #[test]
