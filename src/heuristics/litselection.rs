@@ -112,6 +112,8 @@ pub const H_SELECT_MIN_INFPOS: &str = "HSelectMinInfpos";
 pub const G_SELECT_MIN_INFPOS: &str = "GSelectMinInfpos";
 pub const SELECT_MIN_INFPOS_NO_TYPE_PRED: &str = "SelectMinInfposNoTypePred";
 pub const P_SELECT_MIN_INFPOS_NO_TYPE_PRED: &str = "PSelectMinInfposNoTypePred";
+pub const SELECT_MIN2_INFPOS: &str = "SelectMin2Infpos";
+pub const P_SELECT_MIN2_INFPOS: &str = "PSelectMin2Infpos";
 pub const SELECT_NEW_COMPLEX_AHP: &str = "SelectNewComplexAHP";
 pub const P_SELECT_NEW_COMPLEX_AHP: &str = "PSelectNewComplexAHP";
 pub const SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN: &str = "SelectNewComplexAHPExceptRRHorn";
@@ -583,6 +585,8 @@ enum MinInfposSelector {
     PositiveIfGround,
     NoTypePred,
     PositiveNoTypePred,
+    Min2,
+    PMin2,
 }
 
 impl MinInfposSelector {
@@ -594,6 +598,8 @@ impl MinInfposSelector {
             G_SELECT_MIN_INFPOS => Some(Self::PositiveIfGround),
             SELECT_MIN_INFPOS_NO_TYPE_PRED => Some(Self::NoTypePred),
             P_SELECT_MIN_INFPOS_NO_TYPE_PRED => Some(Self::PositiveNoTypePred),
+            SELECT_MIN2_INFPOS => Some(Self::Min2),
+            P_SELECT_MIN2_INFPOS => Some(Self::PMin2),
             _ => None,
         }
     }
@@ -606,6 +612,8 @@ impl MinInfposSelector {
             Self::PositiveIfGround => g_select_min_infpos(ocb, bank, clause),
             Self::NoTypePred => select_min_infpos_no_type_pred(ocb, bank, clause),
             Self::PositiveNoTypePred => p_select_min_infpos_no_type_pred(ocb, bank, clause),
+            Self::Min2 => select_min2_infpos(ocb, bank, clause),
+            Self::PMin2 => p_select_min2_infpos(ocb, bank, clause),
         }
     }
 }
@@ -2197,6 +2205,30 @@ pub fn p_select_min_infpos_no_type_pred(
     );
 }
 
+pub fn select_min2_infpos(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_min_infpos_weighted_impl(
+        ocb,
+        bank,
+        clause,
+        MinInfposPositivePolicy::Never,
+        false,
+        2,
+        1,
+    );
+}
+
+pub fn p_select_min2_infpos(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_min_infpos_weighted_impl(
+        ocb,
+        bank,
+        clause,
+        MinInfposPositivePolicy::BeforeSelection,
+        false,
+        2,
+        1,
+    );
+}
+
 pub fn select_l_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
     select_complex_impl(ocb, clause, false, ComplexGroundChoice::LargestDiff);
 }
@@ -3541,13 +3573,25 @@ fn select_min_infpos_impl(
     positive_policy: MinInfposPositivePolicy,
     no_type_pred: bool,
 ) {
+    select_min_infpos_weighted_impl(ocb, bank, clause, positive_policy, no_type_pred, 1, 1);
+}
+
+fn select_min_infpos_weighted_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_policy: MinInfposPositivePolicy,
+    no_type_pred: bool,
+    vweight: i64,
+    fweight: i64,
+) {
     clause.cond_mark_maximal_terms(ocb, bank);
 
     if matches!(positive_policy, MinInfposPositivePolicy::BeforeSelection) {
         select_positive_literals(clause);
     }
 
-    let selected = find_min_infpos_negative_literal(clause, bank, no_type_pred);
+    let selected = find_min_infpos_negative_literal(clause, bank, no_type_pred, vweight, fweight);
     debug_assert!(
         no_type_pred || selected.is_some(),
         "literal-selection wrapper guarantees a negative literal"
@@ -3574,13 +3618,15 @@ fn find_min_infpos_negative_literal(
     clause: &Clause,
     bank: &TermBank,
     no_type_pred: bool,
+    vweight: i64,
+    fweight: i64,
 ) -> Option<usize> {
     let mut selected = None;
     let mut select_weight = i64::MAX;
 
     for (index, literal) in clause.literals().as_slice().iter().enumerate() {
         if literal.is_negative() && (!no_type_pred || !literal.is_type_pred(bank)) {
-            let weight = min_infpos_weight(literal);
+            let weight = min_infpos_weight(literal, vweight, fweight);
             if weight < select_weight {
                 select_weight = weight;
                 selected = Some(index);
@@ -3591,10 +3637,10 @@ fn find_min_infpos_negative_literal(
     selected
 }
 
-fn min_infpos_weight(literal: &Eqn) -> i64 {
-    let mut weight = term_standard_weight(literal.left());
+fn min_infpos_weight(literal: &Eqn, vweight: i64, fweight: i64) -> i64 {
+    let mut weight = term_weight_compute(literal.left(), vweight, fweight);
     if !literal.is_oriented() {
-        weight += term_standard_weight(literal.right());
+        weight += term_weight_compute(literal.right(), vweight, fweight);
     }
     weight
 }
@@ -3647,7 +3693,7 @@ mod tests {
         p_select_cond_optimal_literal, p_select_depth2_optimal_literal,
         p_select_diff_negative_literal, p_select_first_variable_literal,
         p_select_ground_negative_literal, p_select_l_complex, p_select_largest_negative_literal,
-        p_select_largest_orientable_literal, p_select_min_optimal_literal,
+        p_select_largest_orientable_literal, p_select_min2_infpos, p_select_min_optimal_literal,
         p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
         p_select_smallest_orientable_literal, p_select_strong_rr_non_rr_optimal_literal,
         p_select_unless_uniq_max_optimal_literal, p_select_unless_uniq_max_smallest_orientable,
@@ -3657,7 +3703,7 @@ mod tests {
         select_depth2_optimal_literal, select_diff_negative_literal,
         select_diversification_literals, select_diversification_prefer_into_literals,
         select_first_variable_literal, select_ground_negative_literal, select_l_complex,
-        select_largest_negative_literal, select_largest_orientable_literal,
+        select_largest_negative_literal, select_largest_orientable_literal, select_min2_infpos,
         select_min_optimal_literal, select_n_depth2_optimal_literal, select_negative_literals,
         select_non_anti_rr_optimal_literal, select_non_rr_optimal_literal,
         select_non_strong_rr_optimal_literal, select_optimal_literal,
@@ -4244,6 +4290,23 @@ mod tests {
             predicate_literal(bank, &pos, true),
             literal(bank, &x, &a, false),
             literal(bank, &g_f_a, &a, false),
+        ]));
+        clause.set_prop(CP_IS_ORIENTED);
+        clause
+    }
+
+    fn min2_infpos_variable_weight_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "min2_infpos_pos");
+        let x = typed_var(bank, -365);
+        let y = typed_var(bank, -366);
+        let a = shared_const(bank, "min2_infpos_a");
+        let b = shared_const(bank, "min2_infpos_b");
+        let f_a = shared_unary(bank, "min2_infpos_f", &a);
+
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &x, &y, false),
+            literal(bank, &f_a, &b, false),
         ]));
         clause.set_prop(CP_IS_ORIENTED);
         clause
@@ -5400,6 +5463,25 @@ mod tests {
     }
 
     #[test]
+    fn min2_infpos_uses_variable_weight_two() {
+        let mut bank = test_bank();
+        let mut standard = min2_infpos_variable_weight_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_min_infpos(&mut ocb, &bank, &mut standard);
+        assert_eq!(selected_indices(&standard), vec![1]);
+
+        let mut weighted = min2_infpos_variable_weight_clause(&mut bank);
+        select_min2_infpos(&mut ocb, &bank, &mut weighted);
+        assert_eq!(selected_indices(&weighted), vec![2]);
+        assert!(!weighted.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = min2_infpos_variable_weight_clause(&mut bank);
+        p_select_min2_infpos(&mut ocb, &bank, &mut positive_variant);
+        assert_eq!(selected_indices(&positive_variant), vec![0, 2]);
+    }
+
+    #[test]
     fn min_infpos_h_and_g_variants_gate_positive_selection_on_groundness() {
         let mut bank = test_bank();
         let mut nonground_h = min_infpos_nonground_clause(&mut bank);
@@ -5643,6 +5725,8 @@ mod tests {
             super::G_SELECT_MIN_INFPOS,
             super::SELECT_MIN_INFPOS_NO_TYPE_PRED,
             super::P_SELECT_MIN_INFPOS_NO_TYPE_PRED,
+            super::SELECT_MIN2_INFPOS,
+            super::P_SELECT_MIN2_INFPOS,
         ] {
             let mut bank = test_bank();
             let mut clause = min_infpos_ground_clause(&mut bank);
