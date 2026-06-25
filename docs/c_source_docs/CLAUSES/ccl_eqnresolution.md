@@ -85,6 +85,17 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- Rust now ports the first-order single-clause `ComputeEqRes` path used by destructive equality resolution, including MGU construction, C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, false-literal removal, duplicate removal, and negative-literal iteration with the default maximal-literal filter.
+- Higher-order CSU enumeration through the `res_cls` stack, `subst_is_ho` propagation, lambda normalization of copied resolvents, and proof-documentation/derivation pushes remain pending.
+
+### Change-Later Observations
+
+- `build_resolvent` uses the caller-provided `freshvars` bank to normalize unbound variables before copying the resolvent. Rust currently creates a scratch fresh-variable bank and advances it beyond the clause's current variable codes so fresh variables do not alias original term-bank variables; replace this with proof-state-owned `freshvars` when that C owner is represented.
+- `EqResOnMaximalLiteralsOnly` is a mutable C global controlling the public literal iterators. Rust exposes the default-filter behavior as an explicit boolean argument for now; revisit the API once option/global-state ownership is centralized.
+- C `ComputeEqRes` returns either one clause or fills a result stack depending on whether `res_cls` is NULL. Rust currently implements the single-clause path only because generated-clause destructive ER uses that mode; keep the overloaded return/stack behavior in mind when general equality-resolvent generation is ported.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

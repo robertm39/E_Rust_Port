@@ -80,6 +80,16 @@ Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- Rust now ports `ClauseERNormalizeVar` for the first-order destructive equality-resolution path used by generated-clause insertion: it scans negative pure-variable literals, optionally accepts one-variable-side literals for the strong mode, repeatedly computes one equality resolvent, replaces the original clause's literals, increments proof depth/size, and returns the inference count so the caller can requeue the mutated clause.
+- `ComputeAllEqnResolvents`, higher-order CSU enumeration, TPTP type propagation for generated resolvents, and proof-documentation/derivation pushes remain pending.
+
+### Change-Later Observations
+
+- C `ClauseERNormalizeVar` mutates the original clause and inserts that same pointer into the supplied store only if at least one inference fired. Rust returns the owned mutated clause plus count so the proof-control caller can reinsert it into `tmp_store`; revisit the API once proof-state clause ownership has stable in-set handles.
+- The C routine increments proof depth and proof size on the mutated clause for every destructive equality-resolution step but accounts generated/resolution statistics in callers such as `insert_new_clauses`. Rust keeps that split between the clause helper and proof-control statistics.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -11,6 +11,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::condensation::condense;
 use crate::clauses::context_sr::clause_contextual_simplify_reflect;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+use crate::clauses::eqnresolution::clause_er_normalize_var;
 use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvPackedClause;
@@ -1355,9 +1356,10 @@ pub fn proof_state_queue_generated_clause_for_eval(
 /// This covers generated counters, modifying forward contraction, watchlist
 /// checks, empty-clause return, aggressive forward subsumption, eval-store
 /// admission, HCB evaluation, and the final move to `unprocessed`. Destructive
-/// equality resolution and controlled clause splitting are still separate
-/// C-owned gates; when those options are enabled for pending generated clauses,
-/// this helper reports an explicit diagnostic instead of silently skipping them.
+/// equality resolution is available for the first-order destructive
+/// variable-literal path. Controlled clause splitting is still a separate
+/// C-owned gate; when that option is enabled for pending generated clauses, this
+/// helper reports an explicit diagnostic instead of silently skipping it.
 ///
 /// # Errors
 ///
@@ -1427,6 +1429,24 @@ pub fn proof_state_insert_new_clauses(
             state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
         }
 
+        if control.heuristic_parms().er_aggressive
+            && control.heuristic_parms().er_varlit_destructive
+        {
+            let strong = control.heuristic_parms().er_strong_destructive;
+            let (normalized, clause_count) =
+                clause_er_normalize_var(state.terms_mut(), clause, strong)?;
+            clause = normalized;
+            if clause_count != 0 {
+                let count = i64_to_u64_saturating(clause_count);
+                let statistics = state.statistics_mut();
+                statistics.other_redundant_count += count;
+                statistics.resolv_count += count;
+                statistics.generated_count += count;
+                state.tmp_store_mut().insert(clause);
+                continue;
+            }
+        }
+
         proof_state_queue_generated_clause_for_eval(state, control, clause)?;
     }
 
@@ -1437,12 +1457,6 @@ pub fn proof_state_insert_new_clauses(
 
 fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
     let params = control.heuristic_parms();
-    if params.er_aggressive && params.er_varlit_destructive {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "insert_new_clauses destructive equality-resolution gate is not ported yet",
-        ));
-    }
     if params.split_aggressive {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -3073,13 +3087,56 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_insert_new_clauses_rejects_unported_generated_clause_gates() {
+    fn proof_state_insert_new_clauses_requeues_destructive_er_result() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_unsupported", 4_081);
+        let (clause, rhs) = {
+            let terms = state.terms_mut();
+            let x = typed_var(terms, -30);
+            let y = typed_var(terms, -32);
+            let rhs = typed_const(terms, "pc_insert_new_er_rhs");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &x, &rhs, true),
+                literal(terms, &x, &y, false),
+            ]));
+            clause.set_ident(4_081);
+            (clause, rhs)
+        };
         state.tmp_store_mut().insert(clause);
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewDestructiveErTest");
         control.heuristic_parms_mut().er_aggressive = true;
         control.heuristic_parms_mut().er_varlit_destructive = true;
+
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 1);
+        assert_eq!(state.statistics().generated_count, 2);
+        assert_eq!(state.statistics().generated_lit_count, 2);
+        assert_eq!(state.statistics().other_redundant_count, 1);
+        assert_eq!(state.statistics().resolv_count, 1);
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
+        let queued = state.unprocessed().find_by_id(4_081).unwrap();
+        assert_eq!(queued.proof_depth(), 1);
+        assert_eq!(queued.proof_size(), 1);
+        assert_eq!(queued.literal_number(), 1);
+        let literal = &queued.literals().as_slice()[0];
+        assert!(literal.is_positive());
+        assert!(literal.left().is_free_var());
+        assert_eq!(literal.right(), &rhs);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_rejects_unported_splitting_gate() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_unsupported", 4_082);
+        state.tmp_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().split_aggressive = true;
 
         let error = proof_state_insert_new_clauses(&mut state, &mut control).unwrap_err();
 
