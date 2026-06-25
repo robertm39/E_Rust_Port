@@ -139,6 +139,7 @@ pub const SELECT_CQ_AR: &str = "SelectCQAr";
 pub const SELECT_CQI_AR: &str = "SelectCQIAr";
 pub const SELECT_CQ_AR_NP_EQ_FIRST: &str = "SelectCQArNpEqFirst";
 pub const SELECT_CQI_AR_NP_EQ_FIRST: &str = "SelectCQIArNpEqFirst";
+pub const SELECT_GR_CQ_AR_EQ_FIRST: &str = "SelectGrCQArEqFirst";
 pub const SELECT_CQ_GR_AR_EQ_FIRST: &str = "SelectCQGrArEqFirst";
 pub const SELECT_CQ_AR_NT_EQ_FIRST: &str = "SelectCQArNTEqFirst";
 pub const SELECT_CQI_AR_NT_EQ_FIRST: &str = "SelectCQIArNTEqFirst";
@@ -744,6 +745,7 @@ enum CqLiteralSelector {
     IAr,
     ArNpEqFirst,
     IArNpEqFirst,
+    GrCqArEqFirst,
     GrArEqFirst,
     ArNtEqFirst,
     IArNtEqFirst,
@@ -777,6 +779,7 @@ impl CqLiteralSelector {
             SELECT_CQI_AR => Some(Self::IAr),
             SELECT_CQ_AR_NP_EQ_FIRST => Some(Self::ArNpEqFirst),
             SELECT_CQI_AR_NP_EQ_FIRST => Some(Self::IArNpEqFirst),
+            SELECT_GR_CQ_AR_EQ_FIRST => Some(Self::GrCqArEqFirst),
             SELECT_CQ_GR_AR_EQ_FIRST => Some(Self::GrArEqFirst),
             SELECT_CQ_AR_NT_EQ_FIRST => Some(Self::ArNtEqFirst),
             SELECT_CQI_AR_NT_EQ_FIRST => Some(Self::IArNtEqFirst),
@@ -811,6 +814,7 @@ impl CqLiteralSelector {
             Self::IAr => select_cqi_ar(ocb, bank, clause),
             Self::ArNpEqFirst => select_cq_ar_np_eq_first(ocb, bank, clause),
             Self::IArNpEqFirst => select_cqi_ar_np_eq_first(ocb, bank, clause),
+            Self::GrCqArEqFirst => select_gr_cq_ar_eq_first(ocb, bank, clause),
             Self::GrArEqFirst => select_cq_gr_ar_eq_first(ocb, bank, clause),
             Self::ArNtEqFirst => select_cq_ar_nt_eq_first(ocb, bank, clause),
             Self::IArNtEqFirst => select_cqi_ar_nt_eq_first(ocb, bank, clause),
@@ -900,6 +904,7 @@ enum CqFilter {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CqGroundBias {
     None,
+    PreferGroundBeforeSymbol,
     PreferGroundWithinSymbol,
 }
 
@@ -2049,6 +2054,21 @@ pub fn select_cq_gr_ar_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, cl
             eq_w1: Some(-1_000_000),
             filter: CqFilter::None,
             ground_bias: CqGroundBias::PreferGroundWithinSymbol,
+            forbidden_w1: CQ_FORBIDDEN_WEIGHT,
+        },
+    );
+}
+
+pub fn select_gr_cq_ar_eq_first(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_cq_with_spec(
+        ocb,
+        bank,
+        clause,
+        CqWeightSpec {
+            arity: CqArityPreference::High,
+            eq_w1: Some(-1_000_000),
+            filter: CqFilter::None,
+            ground_bias: CqGroundBias::PreferGroundBeforeSymbol,
             forbidden_w1: CQ_FORBIDDEN_WEIGHT,
         },
     );
@@ -3529,8 +3549,16 @@ fn cq_weight(eval: &mut LitEval, literal: &Eqn, bank: &TermBank, spec: CqWeightS
     }
 
     eval.w3 = literal_selection_diff_weight(literal);
-    if spec.ground_bias == CqGroundBias::PreferGroundWithinSymbol && literal.is_ground() {
-        eval.w2 -= CQ_GROUND_BIAS;
+    if literal.is_ground() {
+        match spec.ground_bias {
+            CqGroundBias::None => {}
+            CqGroundBias::PreferGroundBeforeSymbol => {
+                eval.w1 -= CQ_GROUND_BIAS;
+            }
+            CqGroundBias::PreferGroundWithinSymbol => {
+                eval.w2 -= CQ_GROUND_BIAS;
+            }
+        }
     }
 }
 
@@ -4731,6 +4759,22 @@ mod tests {
         ]))
     }
 
+    fn cq_ground_first_bias_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "cq_gr_pos");
+        let a = shared_const(bank, "cq_gr_a");
+        let x = typed_var(bank, -394);
+        let y = typed_var(bank, -396);
+        let nonground_binary =
+            shared_weighted_predicate_binary_atom(bank, "cq_gr_binary", &x, &y, 5);
+        let ground_unary = shared_weighted_predicate_unary_atom(bank, "cq_gr_unary", &a, 4);
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &nonground_binary, false),
+            predicate_literal(bank, &ground_unary, false),
+        ]))
+    }
+
     fn cq_filter_clause(bank: &mut TermBank) -> Clause {
         let pos = predicate_const_atom(bank, "cq_filter_pos");
         let prop = predicate_const_atom(bank, "cq_filter_prop");
@@ -5644,6 +5688,23 @@ mod tests {
     }
 
     #[test]
+    fn gr_cq_ground_bias_dominates_arity_before_symbol_ordering() {
+        let mut cq_bank = test_bank();
+        let mut cq_clause = cq_ground_first_bias_clause(&mut cq_bank);
+        let mut cq_ocb = kbo_ocb(&cq_bank);
+
+        super::select_cq_gr_ar_eq_first(&mut cq_ocb, &cq_bank, &mut cq_clause);
+        assert_eq!(selected_indices(&cq_clause), vec![1]);
+
+        let mut gr_cq_bank = test_bank();
+        let mut gr_cq_clause = cq_ground_first_bias_clause(&mut gr_cq_bank);
+        let mut gr_cq_ocb = kbo_ocb(&gr_cq_bank);
+
+        super::select_gr_cq_ar_eq_first(&mut gr_cq_ocb, &gr_cq_bank, &mut gr_cq_clause);
+        assert_eq!(selected_indices(&gr_cq_clause), vec![2]);
+    }
+
+    #[test]
     fn cq_filters_mark_rejected_best_candidate_as_forbidden() {
         let mut bank = test_bank();
         let mut no_prop = cq_filter_clause(&mut bank);
@@ -6121,6 +6182,7 @@ mod tests {
             super::SELECT_CQI_AR,
             super::SELECT_CQ_AR_NP_EQ_FIRST,
             super::SELECT_CQI_AR_NP_EQ_FIRST,
+            super::SELECT_GR_CQ_AR_EQ_FIRST,
             super::SELECT_CQ_GR_AR_EQ_FIRST,
             super::SELECT_CQ_AR_NT_EQ_FIRST,
             super::SELECT_CQI_AR_NT_EQ_FIRST,
