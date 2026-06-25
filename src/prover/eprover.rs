@@ -35,6 +35,8 @@ const DEFAULT_HEURISTIC_NAME: &str = "Default";
 const DEFAULT_LAMBDA_WEIGHT: i64 = 20;
 const DEFAULT_DB_WEIGHT: i64 = 10;
 const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
+const LPO_RECURSION_WARNING_LIMIT: i64 = 20_000;
+const LPO_RECURSION_LIMIT_WARNING: &str = "Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.";
 const DEFAULT_MAX_UNIFIERS: i64 = 4;
 const DEFAULT_MAX_UNIF_STEPS: i64 = 256;
 const DEFAULT_MINISCOPE_LIMIT: i64 = 1_048_576;
@@ -1030,6 +1032,7 @@ pub struct SearchControlConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EProverConfig {
+    pub warnings: Vec<Diagnostic>,
     pub files: Vec<String>,
     pub output_file: Option<String>,
     pub output_level: i64,
@@ -1115,6 +1118,7 @@ impl EProverFlags {
 impl Default for EProverConfig {
     fn default() -> Self {
         Self {
+            warnings: Vec::new(),
             files: Vec::new(),
             output_file: None,
             output_level: 1,
@@ -1307,7 +1311,7 @@ fn auto_memory_limit_from_system_mb(system_memory_mb: i64) -> Result<(u64, i64),
 pub fn run<I, S>(
     argv: I,
     stdout: &mut impl Write,
-    _stderr: &mut impl Write,
+    stderr: &mut impl Write,
 ) -> Result<u8, EProverError>
 where
     I: IntoIterator<Item = S>,
@@ -1322,8 +1326,21 @@ where
             stdout.write_all(version::version_line().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
-        EProverAction::Run(config) => run_config(stdout, &config),
+        EProverAction::Run(config) => {
+            write_config_warnings(stderr, &config)?;
+            run_config(stdout, &config)
+        }
     }
+}
+
+fn write_config_warnings(
+    stderr: &mut impl Write,
+    config: &EProverConfig,
+) -> Result<(), EProverError> {
+    for warning in &config.warnings {
+        stderr.write_all(warning.render_warning(PROGRAM_NAME).as_bytes())?;
+    }
+    Ok(())
 }
 
 pub fn process_options<I, S>(argv: I) -> Result<EProverAction, Diagnostic>
@@ -2066,6 +2083,12 @@ fn apply_term_ordering_option(
                 ));
             }
             config.search.ordering.lpo_recursion_limit = recursion_limit;
+            if recursion_limit > LPO_RECURSION_WARNING_LIMIT {
+                config.warnings.push(Diagnostic::new(
+                    ErrorCode::NO_ERROR,
+                    LPO_RECURSION_LIMIT_WARNING,
+                ));
+            }
             config.search.ordering.literal_comparison = LiteralComparison::None;
         }
         EProverOption::RestrictLiteralComparisons => {
@@ -3206,7 +3229,7 @@ mod tests {
         EProverAction, EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
         FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
         PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
-        MEGA,
+        LPO_RECURSION_LIMIT_WARNING, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -4566,6 +4589,7 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.search.ordering.lpo_recursion_limit, 100);
+        assert!(config.warnings.is_empty());
         assert_eq!(
             config.search.ordering.literal_comparison,
             LiteralComparison::None
@@ -4585,6 +4609,18 @@ mod tests {
             config.search.ordering.literal_comparison,
             LiteralComparison::TfoEqMin
         );
+
+        let action = process_options(["eprover", "--lpo-recursion-limit=20001"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.search.ordering.lpo_recursion_limit, 20001);
+        assert_eq!(
+            config.search.ordering.literal_comparison,
+            LiteralComparison::None
+        );
+        assert_eq!(config.warnings.len(), 1);
+        assert_eq!(config.warnings[0].message(), LPO_RECURSION_LIMIT_WARNING);
 
         let action = process_options(["eprover", "--restrict-literal-comparisons"]).unwrap();
         let EProverAction::Run(config) = action else {
@@ -4867,6 +4903,36 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_emits_lpo_recursion_limit_warning_like_c() {
+        let path = temp_path("syntax-lpo-warning");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--syntax-only",
+                "--lop-in",
+                "--lpo-recursion-limit=20001",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "eprover: Warning: Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.\n"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
