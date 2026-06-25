@@ -19,6 +19,12 @@ pub const SELECT_LARGEST_NEG_LIT: &str = "SelectLargestNegLit";
 pub const P_SELECT_LARGEST_NEG_LIT: &str = "PSelectLargestNegLit";
 pub const SELECT_SMALLEST_NEG_LIT: &str = "SelectSmallestNegLit";
 pub const P_SELECT_SMALLEST_NEG_LIT: &str = "PSelectSmallestNegLit";
+pub const SELECT_LARGEST_ORIENTABLE: &str = "SelectLargestOrientable";
+pub const P_SELECT_LARGEST_ORIENTABLE: &str = "PSelectLargestOrientable";
+pub const M_SELECT_LARGEST_ORIENTABLE: &str = "MSelectLargestOrientable";
+pub const SELECT_SMALLEST_ORIENTABLE: &str = "SelectSmallestOrientable";
+pub const P_SELECT_SMALLEST_ORIENTABLE: &str = "PSelectSmallestOrientable";
+pub const M_SELECT_SMALLEST_ORIENTABLE: &str = "MSelectSmallestOrientable";
 pub const SELECT_DIFF_NEG_LIT: &str = "SelectDiffNegLit";
 pub const P_SELECT_DIFF_NEG_LIT: &str = "PSelectDiffNegLit";
 pub const SELECT_GROUND_NEG_LIT: &str = "SelectGroundNegLit";
@@ -227,6 +233,41 @@ enum Depth2Scope {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OrientableLiteralSelector {
+    Largest,
+    PLargest,
+    MLargest,
+    Smallest,
+    PSmallest,
+    MSmallest,
+}
+
+impl OrientableLiteralSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_LARGEST_ORIENTABLE => Some(Self::Largest),
+            P_SELECT_LARGEST_ORIENTABLE => Some(Self::PLargest),
+            M_SELECT_LARGEST_ORIENTABLE => Some(Self::MLargest),
+            SELECT_SMALLEST_ORIENTABLE => Some(Self::Smallest),
+            P_SELECT_SMALLEST_ORIENTABLE => Some(Self::PSmallest),
+            M_SELECT_SMALLEST_ORIENTABLE => Some(Self::MSmallest),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::Largest => select_largest_orientable_literal(ocb, bank, clause),
+            Self::PLargest => p_select_largest_orientable_literal(ocb, bank, clause),
+            Self::MLargest => m_select_largest_orientable_literal(ocb, bank, clause),
+            Self::Smallest => select_smallest_orientable_literal(ocb, bank, clause),
+            Self::PSmallest => p_select_smallest_orientable_literal(ocb, bank, clause),
+            Self::MSmallest => m_select_smallest_orientable_literal(ocb, bank, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MaximalGateSelector {
     UnlessUniqMax,
     PUnlessUniqMax,
@@ -281,6 +322,12 @@ enum MaximalGate {
     NoPositive,
     NotUniquePositive,
     NotUniquePositiveOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OrientableWeightChoice {
+    Largest,
+    Smallest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -547,6 +594,62 @@ pub fn p_select_smallest_negative_literal(
     );
     if let Some(index) = selected {
         clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+    }
+}
+
+pub fn select_largest_orientable_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_orientable_literal_impl(ocb, bank, clause, false, OrientableWeightChoice::Largest);
+}
+
+pub fn p_select_largest_orientable_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_orientable_literal_impl(ocb, bank, clause, true, OrientableWeightChoice::Largest);
+}
+
+pub fn m_select_largest_orientable_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if clause.is_horn() {
+        p_select_largest_orientable_literal(ocb, bank, clause);
+    } else {
+        select_largest_orientable_literal(ocb, bank, clause);
+    }
+}
+
+pub fn select_smallest_orientable_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_orientable_literal_impl(ocb, bank, clause, false, OrientableWeightChoice::Smallest);
+}
+
+pub fn p_select_smallest_orientable_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_orientable_literal_impl(ocb, bank, clause, true, OrientableWeightChoice::Smallest);
+}
+
+pub fn m_select_smallest_orientable_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    if clause.is_horn() {
+        p_select_smallest_orientable_literal(ocb, bank, clause);
+    } else {
+        select_smallest_orientable_literal(ocb, bank, clause);
     }
 }
 
@@ -929,6 +1032,15 @@ pub fn apply_ported_literal_selector_with_bank(
     } else if let Some(selector) = DiversificationLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
         Ok(())
+    } else if let Some(selector) = OrientableLiteralSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
+        Ok(())
     } else if let Some(selector) = MaximalGateSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(UnsupportedLiteralSelection::new(name));
@@ -950,6 +1062,60 @@ fn select_positive_literals(clause: &mut Clause) {
             literal.set_prop(EP_IS_SELECTED);
         }
     }
+}
+
+fn select_orientable_literal_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    weight_choice: OrientableWeightChoice,
+) {
+    clause.cond_mark_maximal_terms(ocb, bank);
+
+    let selected = find_orientable_negative_literal(clause, weight_choice);
+    debug_assert!(
+        selected.is_some(),
+        "literal-selection wrapper guarantees a negative literal"
+    );
+    if positive_variant {
+        select_positive_literals(clause);
+    }
+    if let Some(index) = selected {
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+        clause.del_prop(CP_IS_ORIENTED);
+    }
+}
+
+fn find_orientable_negative_literal(
+    clause: &Clause,
+    weight_choice: OrientableWeightChoice,
+) -> Option<usize> {
+    let mut selected = None;
+    let mut selected_oriented = false;
+    let mut selected_weight = match weight_choice {
+        OrientableWeightChoice::Largest => 0,
+        OrientableWeightChoice::Smallest => i64::MAX,
+    };
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if !literal.is_negative() {
+            continue;
+        }
+        let literal_oriented = literal.is_oriented();
+        let same_orientation_class = selected_oriented == literal_oriented;
+        let better_weight = match weight_choice {
+            OrientableWeightChoice::Largest => literal.standard_weight() > selected_weight,
+            OrientableWeightChoice::Smallest => literal.standard_weight() < selected_weight,
+        };
+        if (!selected_oriented && literal_oriented) || (same_orientation_class && better_weight) {
+            selected = Some(index);
+            selected_oriented = literal_oriented;
+            selected_weight = literal.standard_weight();
+        }
+    }
+
+    selected
 }
 
 fn select_unless_maximal_gate_optimal_literal(
@@ -1313,12 +1479,14 @@ fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Optio
 mod tests {
     use super::{
         apply_ported_literal_selector, apply_ported_literal_selector_with_bank,
+        m_select_largest_orientable_literal, m_select_smallest_orientable_literal,
         p_select_all_cond_optimal_literal, p_select_complex, p_select_complex_except_rr_horn,
         p_select_complex_prefer_eq, p_select_complex_prefer_neq, p_select_cond_optimal_literal,
         p_select_depth2_optimal_literal, p_select_diff_negative_literal,
         p_select_first_variable_literal, p_select_ground_negative_literal, p_select_l_complex,
-        p_select_largest_negative_literal, p_select_min_optimal_literal,
-        p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
+        p_select_largest_negative_literal, p_select_largest_orientable_literal,
+        p_select_min_optimal_literal, p_select_negative_literals, p_select_optimal_literal,
+        p_select_smallest_negative_literal, p_select_smallest_orientable_literal,
         p_select_strong_rr_non_rr_optimal_literal, p_select_unless_uniq_max_optimal_literal,
         reset_literal_weight_counter_for_tests, select_all_cond_optimal_literal,
         select_anti_rr_optimal_literal, select_complex, select_complex_except_rr_horn,
@@ -1326,33 +1494,36 @@ mod tests {
         select_depth2_optimal_literal, select_diff_negative_literal,
         select_diversification_literals, select_diversification_prefer_into_literals,
         select_first_variable_literal, select_ground_negative_literal, select_l_complex,
-        select_largest_negative_literal, select_min_optimal_literal,
-        select_n_depth2_optimal_literal, select_negative_literals,
+        select_largest_negative_literal, select_largest_orientable_literal,
+        select_min_optimal_literal, select_n_depth2_optimal_literal, select_negative_literals,
         select_non_anti_rr_optimal_literal, select_non_rr_optimal_literal,
         select_non_strong_rr_optimal_literal, select_optimal_literal,
         select_p_depth2_optimal_literal, select_smallest_negative_literal,
-        select_strong_rr_non_rr_optimal_literal, select_unless_pos_max_optimal_literal,
-        select_unless_uniq_max_optimal_literal, select_unless_uniq_max_pos_optimal_literal,
-        select_unless_uniq_pos_max_optimal_literal, NO_GENERATION, NO_SELECTION,
+        select_smallest_orientable_literal, select_strong_rr_non_rr_optimal_literal,
+        select_unless_pos_max_optimal_literal, select_unless_uniq_max_optimal_literal,
+        select_unless_uniq_max_pos_optimal_literal, select_unless_uniq_pos_max_optimal_literal,
+        M_SELECT_LARGEST_ORIENTABLE, M_SELECT_SMALLEST_ORIENTABLE, NO_GENERATION, NO_SELECTION,
         P_SELECT_ALL_COND_OPTIMAL_LIT, P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COMPLEX,
         P_SELECT_COMPLEX_EXCEPT_RR_HORN, P_SELECT_COMPLEX_PREFER_EQ, P_SELECT_COMPLEX_PREFER_NEQ,
         P_SELECT_COND_OPTIMAL_LIT, P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT,
-        P_SELECT_LARGEST_NEG_LIT, P_SELECT_L_COMPLEX, P_SELECT_MIN_OPTIMAL_LIT,
-        P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT, P_SELECT_NON_RR_OPTIMAL_LIT,
-        P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT, P_SELECT_OPTIMAL_RESTR_DEPTH2,
-        P_SELECT_OPTIMAL_RESTR_N_DEPTH2, P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
-        P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
-        P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, P_SELECT_UNLESS_POS_MAX, P_SELECT_UNLESS_UNIQ_MAX,
-        P_SELECT_UNLESS_UNIQ_MAX_POS, P_SELECT_UNLESS_UNIQ_POS_MAX, SELECT_ALL_COND_OPTIMAL_LIT,
-        SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_COMPLEX, SELECT_COMPLEX_EXCEPT_RR_HORN,
-        SELECT_COMPLEX_PREFER_EQ, SELECT_COMPLEX_PREFER_NEQ, SELECT_COND_OPTIMAL_LIT,
-        SELECT_DIFF_NEG_LIT, SELECT_DIV_LITS, SELECT_DIV_PREFER_INTO_LITS, SELECT_GROUND_NEG_LIT,
-        SELECT_LARGEST_NEG_LIT, SELECT_L_COMPLEX, SELECT_MIN_OPTIMAL_LIT, SELECT_NEGATIVE_LITERALS,
-        SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
+        P_SELECT_LARGEST_NEG_LIT, P_SELECT_LARGEST_ORIENTABLE, P_SELECT_L_COMPLEX,
+        P_SELECT_MIN_OPTIMAL_LIT, P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT,
+        P_SELECT_NON_RR_OPTIMAL_LIT, P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT,
+        P_SELECT_OPTIMAL_RESTR_DEPTH2, P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
+        P_SELECT_OPTIMAL_RESTR_P_DEPTH2, P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
+        P_SELECT_SMALLEST_ORIENTABLE, P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+        P_SELECT_UNLESS_POS_MAX, P_SELECT_UNLESS_UNIQ_MAX, P_SELECT_UNLESS_UNIQ_MAX_POS,
+        P_SELECT_UNLESS_UNIQ_POS_MAX, SELECT_ALL_COND_OPTIMAL_LIT, SELECT_ANTI_RR_OPTIMAL_LIT,
+        SELECT_COMPLEX, SELECT_COMPLEX_EXCEPT_RR_HORN, SELECT_COMPLEX_PREFER_EQ,
+        SELECT_COMPLEX_PREFER_NEQ, SELECT_COND_OPTIMAL_LIT, SELECT_DIFF_NEG_LIT, SELECT_DIV_LITS,
+        SELECT_DIV_PREFER_INTO_LITS, SELECT_GROUND_NEG_LIT, SELECT_LARGEST_NEG_LIT,
+        SELECT_LARGEST_ORIENTABLE, SELECT_L_COMPLEX, SELECT_MIN_OPTIMAL_LIT,
+        SELECT_NEGATIVE_LITERALS, SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
         SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT, SELECT_OPTIMAL_RESTR_DEPTH2,
         SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2, SELECT_PURE_VAR_NEG_LITERALS,
-        SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, SELECT_UNLESS_POS_MAX,
-        SELECT_UNLESS_UNIQ_MAX, SELECT_UNLESS_UNIQ_MAX_POS, SELECT_UNLESS_UNIQ_POS_MAX,
+        SELECT_SMALLEST_NEG_LIT, SELECT_SMALLEST_ORIENTABLE, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+        SELECT_UNLESS_POS_MAX, SELECT_UNLESS_UNIQ_MAX, SELECT_UNLESS_UNIQ_MAX_POS,
+        SELECT_UNLESS_UNIQ_POS_MAX,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -1690,6 +1861,29 @@ mod tests {
         ]))
     }
 
+    fn orientable_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "orient_pos");
+        let a = shared_const(bank, "orient_a");
+        let f_of_a = shared_unary(bank, "orient_f", &a);
+        let f_of_f_of_a = shared_unary(bank, "orient_f", &f_of_a);
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &f_of_a, &a, false),
+            literal(bank, &f_of_f_of_a, &f_of_f_of_a, false),
+        ]))
+    }
+
+    fn unorientable_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "unorient_pos");
+        let a = shared_const(bank, "unorient_a");
+        let f_a = shared_unary(bank, "unorient_f", &a);
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &a, &a, false),
+            literal(bank, &f_a, &f_a, false),
+        ]))
+    }
+
     fn maximal_gate_clause(bank: &mut TermBank) -> Clause {
         let pos = predicate_const_atom(bank, "max_gate_pos");
         let a = shared_const(bank, "max_gate_a");
@@ -1758,6 +1952,66 @@ mod tests {
         clear_selection(&mut clause);
         p_select_smallest_negative_literal(None, &mut clause);
         assert_eq!(select_mask(&clause), vec![true, true, false]);
+    }
+
+    #[test]
+    fn orientable_selectors_prefer_oriented_negative_literals() {
+        let mut bank = test_bank();
+        let mut clause = orientable_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        select_largest_orientable_literal(&mut ocb, &bank, &mut clause);
+        assert_eq!(select_mask(&clause), vec![false, true, false]);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+
+        let mut clause = orientable_clause(&mut bank);
+        select_smallest_orientable_literal(&mut ocb, &bank, &mut clause);
+        assert_eq!(select_mask(&clause), vec![false, true, false]);
+
+        let mut clause = orientable_clause(&mut bank);
+        p_select_largest_orientable_literal(&mut ocb, &bank, &mut clause);
+        assert_eq!(select_mask(&clause), vec![true, true, false]);
+
+        let mut clause = orientable_clause(&mut bank);
+        p_select_smallest_orientable_literal(&mut ocb, &bank, &mut clause);
+        assert_eq!(select_mask(&clause), vec![true, true, false]);
+    }
+
+    #[test]
+    fn orientable_selectors_fall_back_to_weight_when_none_orient() {
+        let mut bank = test_bank();
+        let mut largest = unorientable_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        select_largest_orientable_literal(&mut ocb, &bank, &mut largest);
+        assert_eq!(select_mask(&largest), vec![false, false, true]);
+
+        let mut smallest = unorientable_clause(&mut bank);
+        select_smallest_orientable_literal(&mut ocb, &bank, &mut smallest);
+        assert_eq!(select_mask(&smallest), vec![false, true, false]);
+    }
+
+    #[test]
+    fn mixed_orientable_selectors_use_positive_variant_only_for_horn() {
+        let mut bank = test_bank();
+        let mut horn = orientable_clause(&mut bank);
+        let mut ocb = kbo_ocb(&bank);
+
+        m_select_largest_orientable_literal(&mut ocb, &bank, &mut horn);
+        assert_eq!(select_mask(&horn), vec![true, true, false]);
+
+        let second_pos = predicate_const_atom(&mut bank, "orient_second_pos");
+        let a = shared_const(&mut bank, "orient_nonhorn_a");
+        let f_a = shared_unary(&mut bank, "orient_nonhorn_f", &a);
+        let mut non_horn = Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(&mut bank, &second_pos, true),
+            predicate_literal(&mut bank, &second_pos, true),
+            literal(&mut bank, &f_a, &a, false),
+        ]));
+        let mut ocb = kbo_ocb(&bank);
+
+        m_select_smallest_orientable_literal(&mut ocb, &bank, &mut non_horn);
+        assert_eq!(select_mask(&non_horn), vec![false, false, true]);
     }
 
     #[test]
@@ -2173,6 +2427,28 @@ mod tests {
                     panic!("{err}");
                 });
             assert_eq!(selected_indices(&clause), vec![1]);
+        }
+    }
+
+    #[test]
+    fn bank_aware_orientable_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            SELECT_LARGEST_ORIENTABLE,
+            P_SELECT_LARGEST_ORIENTABLE,
+            M_SELECT_LARGEST_ORIENTABLE,
+            SELECT_SMALLEST_ORIENTABLE,
+            P_SELECT_SMALLEST_ORIENTABLE,
+            M_SELECT_SMALLEST_ORIENTABLE,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = orientable_clause(&mut bank);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
         }
     }
 
