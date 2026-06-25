@@ -23,6 +23,7 @@ pub mod global_indices;
 pub mod groundconstr;
 pub mod grounding;
 pub mod neweval;
+pub mod overlap_index;
 pub mod proofstate;
 pub mod propclauses;
 pub mod relevance;
