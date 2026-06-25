@@ -626,6 +626,22 @@ mod tests {
     }
 
     #[test]
+    fn ax_filter_parser_preserves_unimplemented_generality_measure_diagnostic() {
+        let mut scanner =
+            Scanner::from_internal_string("GSinE(CountLiterals, ,false, 1.0,,,,)", true).unwrap();
+
+        let error = AxFilter::parse(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::SYNTAX_ERROR);
+        assert!(
+            error
+                .message()
+                .contains("Generality measure not yet implemented"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn default_ax_filter_set_parses_c_builtin_definitions() {
         let set = AxFilterSet::default_set().unwrap();
 

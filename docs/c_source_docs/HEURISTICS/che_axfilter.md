@@ -134,6 +134,12 @@ Source files reviewed: `HEURISTICS/che_axfilter.h`, `HEURISTICS/che_axfilter.c`.
 - `AxFilterDefParse` uses a file-static unsigned counter for anonymous `axfilter_auto%4lu` names, including the width-padding spaces for small counters, and does not check generated names against user-supplied names. Rust preserves the process-global counter and generated-name shape; a cleaned collision-free name policy should wait for parser/reference tests.
 - `AxFilterDefaultSet` is one large C string assembled with line-splice syntax and mostly separated by whitespace, not explicit delimiters. Rust keeps an internal default-set string that parses to the same 21 named filters; preserve this scanner-driven construction until control-layer callers can exercise the default strategy set end to end.
 
+### Change-Later Observations
+
+- `GSinEParse` recognizes the full `GeneralityMeasureNames` table but immediately rejects every measure except `GMTerms` and `GMFormulas` with "Generality measure not yet implemented"; the later D-relation code also asserts on the same unsupported measures. Rust preserves the parser rejection, but a cleaned implementation should either implement the remaining measures end to end or remove the apparent parser surface.
+- `AxFilterAlloc` leaves `threshold` uninitialized, `AxFilterPrintBuf` falls through after the `AFLambdaDefines` case, and anonymous filter names can collide with user-supplied names. Rust makes these deterministic while keeping compatibility notes; revisit them only if exact allocation or assertion behavior becomes observable in reference tests.
+- The public spelling table contains `CoutPosFormulas` and `CoutNegFormulas`; add corrected aliases only as compatibility mappings after strategy-file tests cover existing misspelled names.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
