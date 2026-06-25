@@ -411,10 +411,10 @@ pub fn proof_state_init_indexing(
 /// `ProofStateInit`.
 ///
 /// This covers the processed-set precondition, FV-index/watchlist prefix,
-/// `Uniq` ordering of axioms, copying axioms into `unprocessed`, active-HCB
-/// evaluation, `prefer_initial_clauses` priority adjustment, SOS marking, and
-/// AC scanning. Watchlist hit checks, proof-documentation/derivation pushes,
-/// and state-owned global-index storage remain pending.
+/// `Uniq` ordering of axioms, copying axioms into `unprocessed`, initial-clause
+/// watchlist checks, active-HCB evaluation, `prefer_initial_clauses` priority
+/// adjustment, SOS marking, and AC scanning. Proof-documentation/derivation
+/// pushes and state-owned global-index storage remain pending.
 ///
 /// # Errors
 ///
@@ -622,6 +622,149 @@ fn remove_watchlist_subsumed(
 
     debug_assert_eq!(removed, expected_removed);
     removed
+}
+
+/// Moves all processed clauses back to `unprocessed`, matching C
+/// `ProofStateResetProcessed`.
+///
+/// Each source clause is archived unchanged, while an evaluated flat copy is
+/// queued in `unprocessed`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the active HCB is missing, copying into the
+/// proof-state term bank fails, or active-HCB evaluation does not attach
+/// evaluations before `prefer_initial_clauses` rewrites priorities.
+pub fn proof_state_reset_processed(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<i64, Diagnostic> {
+    let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProofStateResetProcessed requires initialized proof-control heuristic",
+        )
+    })?;
+    let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
+    let mut reset = 0;
+
+    {
+        let ProofControl { hcbs, wfcbs, .. } = control;
+        let active_hcb = hcbs
+            .hcb(active_hcb_handle)
+            .ok_or_else(|| unknown_heuristic_handle("active"))?;
+        let mut evaluate = |bank: &TermBank, clause: &mut Clause| {
+            hcb_clause_evaluate(active_hcb, wfcbs, bank, clause);
+        };
+
+        reset += proof_state_reset_processed_set_by(
+            state,
+            prefer_initial,
+            |state| state.processed_pos_rules_mut().extract_first(),
+            &mut evaluate,
+        )?;
+        reset += proof_state_reset_processed_set_by(
+            state,
+            prefer_initial,
+            |state| state.processed_pos_eqns_mut().extract_first(),
+            &mut evaluate,
+        )?;
+        reset += proof_state_reset_processed_set_by(
+            state,
+            prefer_initial,
+            |state| state.processed_neg_units_mut().extract_first(),
+            &mut evaluate,
+        )?;
+        reset += proof_state_reset_processed_set_by(
+            state,
+            prefer_initial,
+            |state| state.processed_non_units_mut().extract_first(),
+            &mut evaluate,
+        )?;
+    }
+
+    Ok(reset)
+}
+
+fn proof_state_reset_processed_set_by<E>(
+    state: &mut ProofState,
+    prefer_initial: bool,
+    mut extract_first: impl FnMut(&mut ProofState) -> Option<Clause>,
+    evaluate: &mut E,
+) -> Result<i64, Diagnostic>
+where
+    E: FnMut(&TermBank, &mut Clause),
+{
+    let mut reset = 0;
+    while let Some(handle) = extract_first(state) {
+        proof_state_reset_processed_clause(state, handle, prefer_initial, evaluate)?;
+        reset += 1;
+    }
+    Ok(reset)
+}
+
+fn proof_state_reset_processed_clause<E>(
+    state: &mut ProofState,
+    handle: Clause,
+    prefer_initial: bool,
+    evaluate: &mut E,
+) -> Result<(), Diagnostic>
+where
+    E: FnMut(&TermBank, &mut Clause),
+{
+    let mut requeued = handle.flat_copy(state.terms_mut())?;
+    state.archive_mut().insert(handle);
+    evaluate(state.terms(), &mut requeued);
+    requeued.del_prop(CP_IS_ORIENTED);
+
+    if prefer_initial {
+        let Some(evaluations) = requeued.evaluations_mut() else {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "ProofStateResetProcessed HCB evaluation did not attach evaluations",
+            ));
+        };
+        evaluations.change_priority(-PRIO_LARGEST_REASONABLE);
+    }
+
+    state.unprocessed_mut().insert(requeued);
+    Ok(())
+}
+
+/// Moves all processed clauses into `tmp_store`, matching C
+/// `ProofStateMoveToTmpStore`.
+///
+/// This is the lightweight reset path: clauses are moved directly, not copied
+/// or reevaluated.
+#[must_use]
+pub fn proof_state_move_to_tmp_store(state: &mut ProofState, _control: &ProofControl) -> i64 {
+    let mut moved = 0;
+    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
+        state.processed_pos_rules_mut().extract_first()
+    });
+    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
+        state.processed_pos_eqns_mut().extract_first()
+    });
+    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
+        state.processed_neg_units_mut().extract_first()
+    });
+    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
+        state.processed_non_units_mut().extract_first()
+    });
+    moved
+}
+
+fn proof_state_move_processed_set_to_tmp_by(
+    state: &mut ProofState,
+    mut extract_first: impl FnMut(&mut ProofState) -> Option<Clause>,
+) -> i64 {
+    let mut moved = 0;
+    while let Some(mut handle) = extract_first(state) {
+        handle.del_prop(CP_IS_ORIENTED);
+        state.tmp_store_mut().insert(handle);
+        moved += 1;
+    }
+    moved
 }
 
 /// Runs the AC-axiom scan portion of C `ProofStateInit`.
@@ -866,7 +1009,8 @@ mod tests {
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_init, proof_state_init_ac_handling,
         proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_global_indices, select_inherited_literal, LiteralSelectionOutcome,
+        proof_state_init_with_global_indices, proof_state_move_to_tmp_store,
+        proof_state_reset_processed, select_inherited_literal, LiteralSelectionOutcome,
         DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
@@ -874,7 +1018,8 @@ mod tests {
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_SOS, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
+        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_SUBSUMES_WATCH,
+        CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
@@ -883,7 +1028,7 @@ mod tests {
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::global_indices_null;
-    use crate::clauses::neweval::{PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
+    use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::hcb::{
         AcHandling, HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC,
@@ -1007,6 +1152,15 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![literal(
             bank, &first, &second, false,
         )]))
+    }
+
+    fn processed_unit_clause(bank: &mut TermBank, stem: &str, ident: i64) -> Clause {
+        let left = typed_const(bank, &format!("{stem}_left"));
+        let right = typed_const(bank, &format!("{stem}_right"));
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(bank, &left, &right, true)]));
+        clause.set_ident(ident);
+        clause.set_prop(CP_IS_PROCESSED | CP_IS_ORIENTED);
+        clause
     }
 
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
@@ -1323,6 +1477,122 @@ mod tests {
         assert!(archived.query_prop(CP_IS_DEAD));
         let copied = state.unprocessed().find_by_id(axiom_id).unwrap();
         assert!(copied.query_prop(CP_INITIAL | CP_SUBSUMES_WATCH));
+    }
+
+    #[test]
+    fn proof_state_reset_processed_archives_originals_and_requeues_evaluated_copies() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (rule, equation, negative, non_unit) = {
+            let terms = state.terms_mut();
+            (
+                processed_unit_clause(terms, "pc_reset_rule", 4_040),
+                processed_unit_clause(terms, "pc_reset_equation", 4_041),
+                processed_unit_clause(terms, "pc_reset_negative", 4_042),
+                processed_unit_clause(terms, "pc_reset_non_unit", 4_043),
+            )
+        };
+        let ids = [
+            rule.ident(),
+            equation.ident(),
+            negative.ident(),
+            non_unit.ident(),
+        ];
+        state.processed_pos_rules_mut().insert(rule);
+        state.processed_pos_eqns_mut().insert(equation);
+        state.processed_neg_units_mut().insert(negative);
+        state.processed_non_units_mut().insert(non_unit);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "ResetProcessedTest".to_owned(),
+            prefer_initial_clauses: true,
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["ResetProcessedTest=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let reset = proof_state_reset_processed(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(reset, 4);
+        assert!(state.processed_pos_rules().is_empty());
+        assert!(state.processed_pos_eqns().is_empty());
+        assert!(state.processed_neg_units().is_empty());
+        assert!(state.processed_non_units().is_empty());
+        assert_eq!(state.archive().members(), 4);
+        assert_eq!(state.unprocessed().members(), 4);
+        for ident in ids {
+            let archived = state.archive().find_by_id(ident).unwrap();
+            assert!(archived.query_prop(CP_IS_PROCESSED | CP_IS_ORIENTED));
+            assert!(archived.evaluations().is_none());
+
+            let requeued = state.unprocessed().find_by_id(ident).unwrap();
+            assert!(requeued.query_prop(CP_IS_PROCESSED));
+            assert!(!requeued.query_prop(CP_IS_ORIENTED));
+            let evaluations = requeued.evaluations().expect("requeued copy is evaluated");
+            assert_eq!(evaluations.eval_no(), 1);
+            assert_eq!(
+                evaluations.eval(0).priority(),
+                PRIO_NORMAL - PRIO_LARGEST_REASONABLE
+            );
+        }
+    }
+
+    #[test]
+    fn proof_state_move_to_tmp_store_moves_originals_without_reevaluation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (rule, equation, negative, non_unit) = {
+            let terms = state.terms_mut();
+            (
+                processed_unit_clause(terms, "pc_move_rule", 4_050),
+                processed_unit_clause(terms, "pc_move_equation", 4_051),
+                processed_unit_clause(terms, "pc_move_negative", 4_052),
+                processed_unit_clause(terms, "pc_move_non_unit", 4_053),
+            )
+        };
+        let ids = [
+            rule.ident(),
+            equation.ident(),
+            negative.ident(),
+            non_unit.ident(),
+        ];
+        let mut eval = evals_alloc(1);
+        eval.eval_mut(0).set_priority(123);
+        let mut rule = rule;
+        rule.add_eval_cell(eval);
+        state.processed_pos_rules_mut().insert(rule);
+        state.processed_pos_eqns_mut().insert(equation);
+        state.processed_neg_units_mut().insert(negative);
+        state.processed_non_units_mut().insert(non_unit);
+
+        let control = proof_control_alloc();
+        let moved = proof_state_move_to_tmp_store(&mut state, &control);
+
+        assert_eq!(moved, 4);
+        assert!(state.processed_pos_rules().is_empty());
+        assert!(state.processed_pos_eqns().is_empty());
+        assert!(state.processed_neg_units().is_empty());
+        assert!(state.processed_non_units().is_empty());
+        assert_eq!(state.archive().members(), 0);
+        assert_eq!(state.unprocessed().members(), 0);
+        assert_eq!(state.tmp_store().members(), 4);
+        for ident in ids {
+            let moved = state.tmp_store().find_by_id(ident).unwrap();
+            assert!(moved.query_prop(CP_IS_PROCESSED));
+            assert!(!moved.query_prop(CP_IS_ORIENTED));
+        }
+        let moved_rule = state.tmp_store().find_by_id(4_050).unwrap();
+        assert_eq!(moved_rule.evaluations().unwrap().eval(0).priority(), 123);
     }
 
     #[test]
