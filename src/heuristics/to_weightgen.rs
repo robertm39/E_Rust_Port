@@ -1,6 +1,7 @@
 //! Term-ordering weight generation from `che_to_weightgen`.
 
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::partial_orderings::{ordering_to_part, CompareResult};
 use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::fcode_featurearrays::{FCodeFeatureArray, FCodeFeatureSortCell};
 use crate::heuristics::to_params::{OrderParmsCell, TOWeightGenMethod, W_CONST_NO_SPECIAL_WEIGHT};
@@ -19,6 +20,7 @@ const C_INT_MAX: i64 = 2_147_483_647;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WeightGenerationContext<'a> {
     pub precedence_order: Option<&'a [FunCode]>,
+    pub precedence_ocb: Option<&'a OrderControlBlock>,
     pub pre_weights: Option<&'a str>,
     pub higher_order_problem: bool,
 }
@@ -45,15 +47,16 @@ impl GeneratedWeights {
 ///
 /// The result is indexed by f-code; index zero is unused. Methods that depend
 /// on `OCBFunCompare` use `context.precedence_order` as a low-to-high total
-/// precedence. User `pre_weights` parsing remains deferred until the ordering
-/// control block and `TOWeightsParse` are ported.
+/// precedence, or `context.precedence_ocb` for matrix-backed partial
+/// precedence. User `pre_weights` parsing is available through
+/// [`generate_weights_into_ocb`] because it mutates OCB-owned weights.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic when a selected method needs a precedence order but
-/// none was supplied, when the supplied precedence is not a total order for the
-/// current signature, when user weight parsing would be required, or when the
-/// method is the invalid C sentinel.
+/// none was supplied, when the supplied total precedence is invalid for the
+/// current signature, when user weight parsing would be required in this pure
+/// helper, or when the method is the invalid C sentinel.
 ///
 /// # Panics
 ///
@@ -125,8 +128,10 @@ pub fn generate_weights_into_ocb(
     );
 
     let pre_weights = context.pre_weights;
+    let precedence_ocb = context.precedence_order.is_none().then_some(&*ocb);
     let generation_context = WeightGenerationContext {
         pre_weights: None,
+        precedence_ocb,
         ..context
     };
     let generated = generate_weights(signature, axioms, oparms, generation_context)?;
@@ -363,11 +368,11 @@ fn generate_precedence_weights(
     context: WeightGenerationContext<'_>,
     weights: &mut [i64],
 ) -> Result<(), Diagnostic> {
-    let precedence = PrecedenceMap::new(signature, context.precedence_order)?;
+    let precedence = PrecedenceSource::new(signature, context)?;
     for left in symbols_after_true(signature) {
         let mut weight = 1;
         for right in symbols_after_true(signature) {
-            if precedence.compare(left, right) == Ordering::Greater {
+            if precedence.compare(signature, left, right) == CompareResult::Greater {
                 weight += 1;
             }
         }
@@ -381,11 +386,11 @@ fn generate_invprecedence_weights(
     context: WeightGenerationContext<'_>,
     weights: &mut [i64],
 ) -> Result<(), Diagnostic> {
-    let precedence = PrecedenceMap::new(signature, context.precedence_order)?;
+    let precedence = PrecedenceSource::new(signature, context)?;
     for left in symbols_after_true(signature) {
         let mut weight = 1;
         for right in symbols_after_true(signature) {
-            if precedence.compare(left, right) == Ordering::Less {
+            if precedence.compare(signature, left, right) == CompareResult::Lesser {
                 weight += 1;
             }
         }
@@ -395,14 +400,15 @@ fn generate_invprecedence_weights(
 }
 
 fn generate_precrank_weights(
-    signature: &Signature,
+    signature: &mut Signature,
     context: WeightGenerationContext<'_>,
     ranks: f32,
     weights: &mut [i64],
 ) -> Result<(), Diagnostic> {
-    let precedence = PrecedenceMap::new(signature, context.precedence_order)?;
-    let symb_no = precedence.sorted_symbols.len();
-    for (index, symbol) in precedence.sorted_symbols.iter().copied().enumerate() {
+    let precedence = PrecedenceSource::new(signature, context)?;
+    let sorted_symbols = precedence.sorted_symbols(signature);
+    let symb_no = sorted_symbols.len();
+    for (index, symbol) in sorted_symbols.into_iter().enumerate() {
         set_symbol_weight(weights, symbol, precrank_weight(index, symb_no, ranks));
     }
     Ok(())
@@ -730,8 +736,8 @@ fn set_maximal_0(
     if context.higher_order_problem {
         return Ok(());
     }
-    let precedence = PrecedenceMap::new(signature, context.precedence_order)?;
-    if let Some(symbol) = precedence.maximal_symbol() {
+    let precedence = PrecedenceSource::new(signature, context)?;
+    if let Some(symbol) = precedence.first_maximal_symbol(signature) {
         set_symbol_weight(weights, symbol, 0);
     }
     Ok(())
@@ -742,8 +748,8 @@ fn set_maximal_unary_0(
     context: WeightGenerationContext<'_>,
     weights: &mut [i64],
 ) -> Result<(), Diagnostic> {
-    let precedence = PrecedenceMap::new(signature, context.precedence_order)?;
-    if let Some(symbol) = precedence.maximal_symbol() {
+    let precedence = PrecedenceSource::new(signature, context)?;
+    if let Some(symbol) = precedence.first_maximal_symbol(signature) {
         if symbol_arity(signature, symbol) == 1 {
             set_symbol_weight(weights, symbol, 0);
         }
@@ -864,14 +870,7 @@ struct PrecedenceMap {
 }
 
 impl PrecedenceMap {
-    fn new(signature: &Signature, order: Option<&[FunCode]>) -> Result<Self, Diagnostic> {
-        let Some(order) = order else {
-            return Err(Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "Weight generation method requires precedence order",
-            ));
-        };
-
+    fn new(signature: &Signature, order: &[FunCode]) -> Result<Self, Diagnostic> {
         let expected_len = usize::try_from(signature.f_count().saturating_sub(SIG_TRUE_CODE))
             .unwrap_or_else(|_| panic!("signature f-code count must fit usize"));
         if order.len() != expected_len {
@@ -917,9 +916,87 @@ impl PrecedenceMap {
     fn compare(&self, left: FunCode, right: FunCode) -> Ordering {
         self.rank_by_symbol[fcode_index(left)].cmp(&self.rank_by_symbol[fcode_index(right)])
     }
+}
 
-    fn maximal_symbol(&self) -> Option<FunCode> {
-        self.sorted_symbols.last().copied()
+enum PrecedenceSource<'a> {
+    Total(PrecedenceMap),
+    Ocb(&'a OrderControlBlock),
+}
+
+impl<'a> PrecedenceSource<'a> {
+    fn new(
+        signature: &Signature,
+        context: WeightGenerationContext<'a>,
+    ) -> Result<Self, Diagnostic> {
+        if let Some(order) = context.precedence_order {
+            return PrecedenceMap::new(signature, order).map(Self::Total);
+        }
+        if let Some(ocb) = context.precedence_ocb {
+            return Ok(Self::Ocb(ocb));
+        }
+        Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "Weight generation method requires precedence order",
+        ))
+    }
+
+    fn compare(&self, signature: &Signature, left: FunCode, right: FunCode) -> CompareResult {
+        match self {
+            Self::Total(map) => ordering_to_part(map.compare(left, right)),
+            Self::Ocb(ocb) => ocb.fun_compare(signature, left, right),
+        }
+    }
+
+    fn first_maximal_symbol(&self, signature: &Signature) -> Option<FunCode> {
+        let mut maxima = Vec::new();
+        for symbol in symbols_after_true(signature) {
+            let mut maximal = true;
+            for index in (0..maxima.len()).rev() {
+                match self.compare(signature, symbol, maxima[index]) {
+                    CompareResult::Lesser => {
+                        maximal = false;
+                        break;
+                    }
+                    CompareResult::Greater => {
+                        maxima.remove(index);
+                    }
+                    _ => {}
+                }
+            }
+            if maximal {
+                maxima.push(symbol);
+            }
+        }
+        maxima.into_iter().min()
+    }
+
+    fn sorted_symbols(&self, signature: &mut Signature) -> Vec<FunCode> {
+        match self {
+            Self::Total(map) => map.sorted_symbols.clone(),
+            Self::Ocb(_) => self.sorted_symbols_from_ocb(signature),
+        }
+    }
+
+    fn sorted_symbols_from_ocb(&self, signature: &mut Signature) -> Vec<FunCode> {
+        let mut symbols: Vec<_> = symbols_after_true(signature).collect();
+        let mut alpha_ranks = vec![0; weights_size(signature.f_count())];
+        for symbol in symbols.iter().copied() {
+            alpha_ranks[fcode_index(symbol)] = signature.get_alpha_rank(symbol);
+        }
+        let signature = &*signature;
+        symbols.sort_by(|left, right| {
+            if left == right {
+                return Ordering::Equal;
+            }
+            if self.compare(signature, *left, *right) == CompareResult::Lesser {
+                return Ordering::Less;
+            }
+            if self.compare(signature, *right, *left) == CompareResult::Lesser {
+                return Ordering::Greater;
+            }
+            alpha_ranks[fcode_index(*left)].cmp(&alpha_ranks[fcode_index(*right)])
+        });
+        symbols
     }
 }
 
@@ -930,7 +1007,7 @@ mod tests {
         W_DEFAULT_WEIGHT, W_TO_BASEWEIGHT,
     };
     use crate::basics::error::ErrorCode;
-    use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_TYPE_CONJECTURE;
     use crate::clauses::clausesets::ClauseSet;
@@ -1294,6 +1371,48 @@ mod tests {
             i64::try_from(order.len() - order_position(&order, g))
                 .unwrap_or_else(|err| panic!("{err}"))
         );
+    }
+
+    #[test]
+    fn matrix_precedence_weights_count_only_comparable_symbols() {
+        let mut signature = signature();
+        let a = typed_symbol(&mut signature, "a", 0);
+        let f = typed_symbol(&mut signature, "f", 1);
+        let g = typed_symbol(&mut signature, "g", 2);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Kbo, false, &signature, HoOrderKind::LfhoOrder);
+        ocb.precedence_add_tuple(&signature, f, a, CompareResult::Greater);
+        let common = WeightGenerationContext {
+            precedence_ocb: Some(&ocb),
+            ..WeightGenerationContext::default()
+        };
+        let precedence_params = OrderParmsCell {
+            to_weight_gen: TOWeightGenMethod::Precedence,
+            to_const_weight: W_CONST_NO_SPECIAL_WEIGHT,
+            ..OrderParmsCell::default()
+        };
+        let inverse_params = OrderParmsCell {
+            to_weight_gen: TOWeightGenMethod::PrecedenceInv,
+            to_const_weight: W_CONST_NO_SPECIAL_WEIGHT,
+            ..OrderParmsCell::default()
+        };
+
+        let precedence = generate_weights(
+            &mut signature.clone(),
+            &ClauseSet::new(),
+            &precedence_params,
+            common,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let inverse = generate_weights(&mut signature, &ClauseSet::new(), &inverse_params, common)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(weight(&precedence, a), 1);
+        assert_eq!(weight(&precedence, f), 2);
+        assert_eq!(weight(&precedence, g), 1);
+        assert_eq!(weight(&inverse, a), 2);
+        assert_eq!(weight(&inverse, f), 1);
+        assert_eq!(weight(&inverse, g), 1);
     }
 
     #[test]

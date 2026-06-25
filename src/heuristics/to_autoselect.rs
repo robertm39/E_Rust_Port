@@ -372,6 +372,7 @@ pub fn to_create_ordering(
             params,
             WeightGenerationContext {
                 precedence_order: precedence_order.as_deref(),
+                precedence_ocb: None,
                 pre_weights,
                 higher_order_problem,
             },
@@ -844,18 +845,18 @@ mod tests {
     }
 
     #[test]
-    fn predefined_only_precedence_dependent_weights_stay_explicitly_unsupported() {
+    fn predefined_only_precedence_dependent_weights_use_parsed_matrix() {
         let mut signature = signature();
-        typed_symbol(&mut signature, "a", 0);
-        typed_symbol(&mut signature, "f", 1);
+        let constant = typed_symbol(&mut signature, "a", 0);
+        let unary = typed_symbol(&mut signature, "f", 1);
         let params = OrderParmsCell {
             ordertype: TermOrdering::Kbo,
-            to_weight_gen: TOWeightGenMethod::SelectMaximal,
+            to_weight_gen: TOWeightGenMethod::Precedence,
             to_prec_gen: TOPrecGenMethod::NoMethod,
             ..OrderParmsCell::default()
         };
 
-        let error = to_create_ordering(
+        let ocb = to_create_ordering(
             &mut signature,
             &ClauseSet::new(),
             &params,
@@ -863,10 +864,16 @@ mod tests {
             None,
             false,
         )
-        .unwrap_err();
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("requires precedence order"));
+        assert!(ocb.prec_weights.is_none());
+        assert!(ocb.precedence.is_some());
+        assert_eq!(
+            ocb.fun_compare(&signature, unary, constant),
+            CompareResult::Greater
+        );
+        assert_eq!(ocb.fun_weight(constant), 1);
+        assert_eq!(ocb.fun_weight(unary), 2);
     }
 
     #[test]
