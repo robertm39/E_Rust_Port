@@ -6,9 +6,10 @@ use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
+use crate::heuristics::axiomscan::clause_set_scan_ac;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
-    hcb_clause_evaluate, hcb_clause_set_reweight, HeuristicParmsCell, SplitClassType,
+    hcb_clause_evaluate, hcb_clause_set_reweight, AcHandling, HeuristicParmsCell, SplitClassType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -133,6 +134,7 @@ pub struct ProofStateInitOutcome {
     pub watchlist_indexed: i64,
     pub initial_clauses: i64,
     pub sos_marked: i64,
+    pub ac_handling_active: bool,
 }
 
 pub struct ProofControl {
@@ -395,8 +397,8 @@ pub fn proof_state_init_indexing(
 /// This covers the processed-set precondition, FV-index/watchlist prefix,
 /// `Uniq` ordering of axioms, copying axioms into `unprocessed`, active-HCB
 /// evaluation, `prefer_initial_clauses` priority adjustment, and SOS marking.
-/// Watchlist hit checks, proof-documentation/derivation pushes, AC scanning,
-/// and global-index reset/initialization remain pending.
+/// Watchlist hit checks, proof-documentation/derivation pushes, and
+/// global-index reset/initialization remain pending.
 ///
 /// # Errors
 ///
@@ -414,10 +416,12 @@ pub fn proof_state_init(
 
     let watchlist_indexed = proof_state_init_indexing(state, control)?;
     let axiom_outcome = proof_state_init_axioms(state, control)?;
+    let ac_handling_active = proof_state_init_ac_handling(state, control);
     Ok(ProofStateInitOutcome {
         watchlist_indexed,
         initial_clauses: axiom_outcome.initial_clauses,
         sos_marked: axiom_outcome.sos_marked,
+        ac_handling_active,
     })
 }
 
@@ -485,6 +489,22 @@ pub fn proof_state_init_axioms(
         initial_clauses,
         sos_marked,
     })
+}
+
+/// Runs the AC-axiom scan portion of C `ProofStateInit`.
+///
+/// The C code scans the initialized `unprocessed` set, not the source axiom
+/// set, and skips mutation entirely when AC handling is disabled.
+#[must_use]
+pub fn proof_state_init_ac_handling(state: &mut ProofState, control: &mut ProofControl) -> bool {
+    if control.heuristic_parms.ac_handling == AcHandling::None {
+        return control.ac_handling_active;
+    }
+
+    let (terms, unprocessed) = state.terms_and_unprocessed_mut();
+    let active = clause_set_scan_ac(terms.signature_mut(), unprocessed);
+    control.ac_handling_active = active;
+    active
 }
 
 fn unknown_heuristic_handle(name: &str) -> Diagnostic {
@@ -689,9 +709,9 @@ mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_init, proof_state_init_indexing,
-        select_inherited_literal, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_control_reset_sat_solver, proof_state_init, proof_state_init_ac_handling,
+        proof_state_init_indexing, select_inherited_literal, LiteralSelectionOutcome,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -705,13 +725,16 @@ mod tests {
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::neweval::{PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::proof_state_alloc;
-    use crate::heuristics::hcb::{HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC};
+    use crate::heuristics::hcb::{
+        AcHandling, HeuristicParmsCell, SplitClassType, HCB_DEFAULT_HEURISTIC,
+    };
     use crate::heuristics::litselection::SELECT_UNLESS_POS_MAX;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::signature::{Signature, FP_IGNORE_PROPS};
+    use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::Term;
+    use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -731,8 +754,47 @@ mod tests {
         bank.create_const_term(f_code).unwrap()
     }
 
+    fn typed_var(bank: &TermBank, f_code: i64) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![type_.clone(), type_.clone(), type_]),
+                )
+                .unwrap();
+        }
+        f_code
+    }
+
+    fn typed_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
+    }
+
+    fn commutativity_axiom(bank: &mut TermBank, name: &str, ident: i64) -> (Clause, i64) {
+        let f_code = typed_binary_code(bank, name);
+        let x = typed_var(bank, -2);
+        let y = typed_var(bank, -4);
+        let left = typed_binary_with_code(bank, f_code, &x, &y);
+        let right = typed_binary_with_code(bank, f_code, &y, &x);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(bank, &left, &right, true)]));
+        clause.set_ident(ident);
+        (clause, f_code)
     }
 
     fn mixed_clause() -> Clause {
@@ -965,6 +1027,7 @@ mod tests {
         assert_eq!(outcome.watchlist_indexed, 0);
         assert_eq!(outcome.initial_clauses, 2);
         assert_eq!(outcome.sos_marked, 1);
+        assert!(!outcome.ac_handling_active);
         assert_eq!(state.axioms().members(), 2);
         assert_eq!(state.unprocessed().members(), 2);
         assert!(state.fvi_initialized());
@@ -986,6 +1049,63 @@ mod tests {
                 PRIO_NORMAL - PRIO_LARGEST_REASONABLE
             );
         }
+    }
+
+    #[test]
+    fn proof_state_init_ac_handling_scans_initialized_unprocessed_set() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, f_code) = commutativity_axiom(state.terms_mut(), "pc_init_ac_f", 4_011);
+        state.unprocessed_mut().insert(axiom);
+        let mut control = proof_control_alloc();
+
+        assert!(proof_state_init_ac_handling(&mut state, &mut control));
+
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+    }
+
+    #[test]
+    fn proof_state_init_ac_handling_skips_scan_when_disabled() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, f_code) = commutativity_axiom(state.terms_mut(), "pc_init_no_ac_f", 4_012);
+        state.unprocessed_mut().insert(axiom);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().ac_handling = AcHandling::None;
+
+        assert!(!proof_state_init_ac_handling(&mut state, &mut control));
+
+        assert!(!control.ac_handling_active());
+        assert!(!state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+    }
+
+    #[test]
+    fn proof_state_init_reports_ac_activation_after_axiom_queueing() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, f_code) = commutativity_axiom(state.terms_mut(), "pc_init_wrapped_ac_f", 4_013);
+        state.axioms_mut().insert(axiom);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell::default();
+        let mut hcb_defs = vec!["InitAcTest=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let outcome = proof_state_init(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome.initial_clauses, 1);
+        assert!(outcome.ac_handling_active);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
     }
 
     #[test]
