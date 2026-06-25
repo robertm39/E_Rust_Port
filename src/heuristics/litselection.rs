@@ -76,6 +76,12 @@ pub const SELECT_COMPLEX_PREFER_NEQ: &str = "SelectComplexPreferNEQ";
 pub const P_SELECT_COMPLEX_PREFER_NEQ: &str = "PSelectComplexPreferNEQ";
 pub const SELECT_COMPLEX_PREFER_EQ: &str = "SelectComplexPreferEQ";
 pub const P_SELECT_COMPLEX_PREFER_EQ: &str = "PSelectComplexPreferEQ";
+pub const SELECT_MAX_L_COMPLEX: &str = "SelectMaxLComplex";
+pub const P_SELECT_MAX_L_COMPLEX: &str = "PSelectMaxLComplex";
+pub const SELECT_MAX_L_COMPLEX_NO_TYPE_PRED: &str = "SelectMaxLComplexNoTypePred";
+pub const P_SELECT_MAX_L_COMPLEX_NO_TYPE_PRED: &str = "PSelectMaxLComplexNoTypePred";
+pub const SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED: &str = "SelectMaxLComplexNoXTypePred";
+pub const P_SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED: &str = "PSelectMaxLComplexNoXTypePred";
 pub const SELECT_DIV_LITS: &str = "SelectDivLits";
 pub const SELECT_DIV_PREFER_INTO_LITS: &str = "SelectDivPreferIntoLits";
 
@@ -366,6 +372,41 @@ impl MaximalComplexSelector {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaxLComplexSelector {
+    Standard,
+    Positive,
+    NoTypePred,
+    PositiveNoTypePred,
+    NoXTypePred,
+    PositiveNoXTypePred,
+}
+
+impl MaxLComplexSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_MAX_L_COMPLEX => Some(Self::Standard),
+            P_SELECT_MAX_L_COMPLEX => Some(Self::Positive),
+            SELECT_MAX_L_COMPLEX_NO_TYPE_PRED => Some(Self::NoTypePred),
+            P_SELECT_MAX_L_COMPLEX_NO_TYPE_PRED => Some(Self::PositiveNoTypePred),
+            SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED => Some(Self::NoXTypePred),
+            P_SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED => Some(Self::PositiveNoXTypePred),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::Standard => select_max_l_complex(ocb, bank, clause),
+            Self::Positive => p_select_max_l_complex(ocb, bank, clause),
+            Self::NoTypePred => select_max_l_complex_no_type_pred(ocb, bank, clause),
+            Self::PositiveNoTypePred => p_select_max_l_complex_no_type_pred(ocb, bank, clause),
+            Self::NoXTypePred => select_max_l_complex_no_x_type_pred(ocb, bank, clause),
+            Self::PositiveNoXTypePred => p_select_max_l_complex_no_x_type_pred(ocb, bank, clause),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OrientableWeightChoice {
     Largest,
     Smallest,
@@ -375,6 +416,12 @@ enum OrientableWeightChoice {
 enum ComplexMaxGate {
     UniqueMaximal,
     UniquePositiveMaximal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaxLComplexTypeFilter {
+    TypePred,
+    XTypePred,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1060,6 +1107,70 @@ pub fn p_select_complex_except_uniq_max_pos_horn(
     );
 }
 
+pub fn select_max_l_complex(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_max_l_complex_impl(ocb, bank, clause, false, None);
+}
+
+pub fn p_select_max_l_complex(ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+    select_max_l_complex_impl(ocb, bank, clause, true, None);
+}
+
+pub fn select_max_l_complex_no_type_pred(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_max_l_complex_impl(
+        ocb,
+        bank,
+        clause,
+        false,
+        Some(MaxLComplexTypeFilter::TypePred),
+    );
+}
+
+pub fn p_select_max_l_complex_no_type_pred(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_max_l_complex_impl(
+        ocb,
+        bank,
+        clause,
+        true,
+        Some(MaxLComplexTypeFilter::TypePred),
+    );
+}
+
+pub fn select_max_l_complex_no_x_type_pred(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_max_l_complex_impl(
+        ocb,
+        bank,
+        clause,
+        false,
+        Some(MaxLComplexTypeFilter::XTypePred),
+    );
+}
+
+pub fn p_select_max_l_complex_no_x_type_pred(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_max_l_complex_impl(
+        ocb,
+        bank,
+        clause,
+        true,
+        Some(MaxLComplexTypeFilter::XTypePred),
+    );
+}
+
 pub fn select_l_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
     select_complex_impl(ocb, clause, false, ComplexGroundChoice::LargestDiff);
 }
@@ -1145,6 +1256,15 @@ pub fn apply_ported_literal_selector_with_bank(
         selector.apply(ocb, bank, clause);
         Ok(())
     } else if let Some(selector) = MaximalComplexSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
+        Ok(())
+    } else if let Some(selector) = MaxLComplexSelector::from_name(name) {
         let Some(ocb) = ocb else {
             return Err(UnsupportedLiteralSelection::new(name));
         };
@@ -1264,6 +1384,125 @@ fn complex_max_horn_gate_blocks(clause: &Clause, gate: ComplexMaxGate) -> bool {
                     == 1
         }
     }
+}
+
+fn select_max_l_complex_impl(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    type_filter: Option<MaxLComplexTypeFilter>,
+) {
+    clause.cond_mark_maximal_terms(ocb, bank);
+
+    let maximal_count = clause.literals().query_prop_number(EP_IS_MAXIMAL);
+    if maximal_count <= 1 {
+        return;
+    }
+
+    clause.del_prop(CP_IS_ORIENTED);
+    if type_filter.is_none()
+        && clause
+            .literals()
+            .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+            == maximal_count
+    {
+        if positive_variant {
+            p_select_l_complex(Some(ocb), clause);
+        } else {
+            select_l_complex(Some(ocb), clause);
+        }
+        return;
+    }
+
+    let has_negative_maximal = clause
+        .literals()
+        .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+        != maximal_count;
+    let mut selected = if has_negative_maximal {
+        find_max_lcomplex_literal(clause)
+    } else {
+        None
+    };
+
+    if selected
+        .is_some_and(|index| max_lcomplex_type_filter_rejects(clause, bank, index, type_filter))
+    {
+        selected = None;
+    }
+    if selected.is_none() && type_filter.is_some() {
+        selected = find_lcomplex_literal(clause);
+        if selected
+            .is_some_and(|index| max_lcomplex_type_filter_rejects(clause, bank, index, type_filter))
+        {
+            selected = None;
+        }
+    }
+
+    if let Some(index) = selected {
+        if positive_variant && type_filter.is_some() {
+            select_positive_literals(clause);
+        }
+        clause.literals_mut().as_mut_slice()[index].set_prop(EP_IS_SELECTED);
+    }
+}
+
+fn max_lcomplex_type_filter_rejects(
+    clause: &Clause,
+    bank: &TermBank,
+    index: usize,
+    type_filter: Option<MaxLComplexTypeFilter>,
+) -> bool {
+    let literal = &clause.literals().as_slice()[index];
+    match type_filter {
+        None => false,
+        Some(MaxLComplexTypeFilter::TypePred) => literal.is_type_pred(bank),
+        Some(MaxLComplexTypeFilter::XTypePred) => literal.is_x_type_pred(bank),
+    }
+}
+
+fn find_max_lcomplex_literal(clause: &Clause) -> Option<usize> {
+    find_lcomplex_literal_by_maximality(clause, true)
+}
+
+fn find_lcomplex_literal(clause: &Clause) -> Option<usize> {
+    find_lcomplex_literal_by_maximality(clause, false)
+}
+
+fn find_lcomplex_literal_by_maximality(clause: &Clause, maximal: bool) -> Option<usize> {
+    clause
+        .literals()
+        .as_slice()
+        .iter()
+        .position(|literal| {
+            literal.is_negative() && literal.is_maximal() == maximal && literal.is_pure_var()
+        })
+        .or_else(|| find_largest_diff_lcomplex_literal(clause, maximal, true))
+        .or_else(|| find_largest_diff_lcomplex_literal(clause, maximal, false))
+}
+
+fn find_largest_diff_lcomplex_literal(
+    clause: &Clause,
+    maximal: bool,
+    ground_only: bool,
+) -> Option<usize> {
+    let mut selected = None;
+    let mut select_weight = -1;
+
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_negative()
+            && literal.is_maximal() == maximal
+            && (!ground_only || literal.is_ground())
+        {
+            let weight = literal_selection_diff_weight(literal);
+            if weight > select_weight {
+                select_weight = weight;
+                selected = Some(index);
+            }
+        }
+    }
+
+    selected
 }
 
 fn select_unless_maximal_gate_optimal_literal(
@@ -1682,6 +1921,7 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -1740,6 +1980,31 @@ mod tests {
         let atom = Term::const_cell_alloc(f_code);
         atom.set_type(Some(bool_type));
         bank.insert(&atom, DerefType::Never).unwrap()
+    }
+
+    fn weighted_predicate_const_atom(bank: &mut TermBank, name: &str, weight: i64) -> Term {
+        let atom = predicate_const_atom(bank, name);
+        atom.set_weight(weight);
+        atom
+    }
+
+    fn weighted_predicate_unary_atom(
+        bank: &mut TermBank,
+        name: &str,
+        arg: &Term,
+        weight: i64,
+    ) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let default_type = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        let predicate_type = alloc_arrow_type(vec![default_type, bool_type]);
+        bank.signature_mut()
+            .declare_type(f_code, predicate_type.clone())
+            .unwrap();
+        let atom = unary(f_code, arg);
+        atom.set_type(Some(predicate_type));
+        atom.set_weight(weight);
+        atom
     }
 
     fn predicate_literal(bank: &mut TermBank, atom: &Term, positive: bool) -> Eqn {
@@ -2029,6 +2294,66 @@ mod tests {
             predicate_literal(bank, &pos, true),
             literal(bank, &a, &a, false),
             literal(bank, &f_a, &f_a, false),
+        ]))
+    }
+
+    fn max_lcomplex_priority_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "max_lcomplex_pos");
+        let a = shared_const(bank, "max_lcomplex_a");
+        let f_a = shared_unary(bank, "max_lcomplex_f", &a);
+        let x = var_term(-300);
+        let y = var_term(-302);
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &f_a, &a, false),
+            literal(bank, &x, &y, false),
+        ]))
+    }
+
+    fn max_lcomplex_positive_max_fallback_clause(bank: &mut TermBank) -> Clause {
+        let pos_a = predicate_const_atom(bank, "max_lcomplex_pos_a");
+        let pos_b = predicate_const_atom(bank, "max_lcomplex_pos_b");
+        let x = var_term(-310);
+        let f_x = unary(310, &x);
+        let a = const_term(311);
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos_a, true),
+            predicate_literal(bank, &pos_b, true),
+            literal(bank, &f_x, &a, false),
+        ]))
+    }
+
+    fn max_lcomplex_no_type_rejected_fallback_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "max_lcomplex_type_pos");
+        let maximal_type = weighted_predicate_const_atom(bank, "max_lcomplex_type_max", 3);
+        let fallback_type = weighted_predicate_const_atom(bank, "max_lcomplex_type_fallback", 3);
+        let fallback_plain = predicate_const_atom(bank, "max_lcomplex_plain_fallback");
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &maximal_type, false),
+            predicate_literal(bank, &fallback_type, false),
+            predicate_literal(bank, &fallback_plain, false),
+        ]))
+    }
+
+    fn max_lcomplex_no_x_type_fallback_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "max_lcomplex_x_pos");
+        let x = var_term(-320);
+        let default_type = bank.signature().type_bank().default_type();
+        x.set_type(Some(default_type.clone()));
+        let maximal_x_type = weighted_predicate_unary_atom(bank, "max_lcomplex_x_max", &x, 3);
+        let f_x = unary(320, &x);
+        f_x.set_type(Some(default_type.clone()));
+        let a = const_term(321);
+        a.set_type(Some(default_type));
+
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            predicate_literal(bank, &maximal_x_type, false),
+            literal(bank, &f_x, &a, false),
         ]))
     }
 
@@ -2599,6 +2924,61 @@ mod tests {
     }
 
     #[test]
+    fn max_lcomplex_selects_maximal_pure_variable_before_ground() {
+        let mut bank = test_bank();
+        let mut clause = max_lcomplex_priority_clause(&mut bank);
+        mark_maximal_literals(&mut clause, &[0, 1, 2]);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_max_l_complex(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![2]);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn max_lcomplex_falls_back_to_lcomplex_when_all_maximal_are_positive() {
+        let mut bank = test_bank();
+        let mut ordinary = max_lcomplex_positive_max_fallback_clause(&mut bank);
+        mark_maximal_literals(&mut ordinary, &[0, 1]);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_max_l_complex(&mut ocb, &bank, &mut ordinary);
+        assert_eq!(selected_indices(&ordinary), vec![2]);
+
+        let mut positive_variant = max_lcomplex_positive_max_fallback_clause(&mut bank);
+        mark_maximal_literals(&mut positive_variant, &[0, 1]);
+
+        super::p_select_max_l_complex(&mut ocb, &bank, &mut positive_variant);
+        assert_eq!(selected_indices(&positive_variant), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn max_lcomplex_no_type_variants_filter_only_the_c_selected_candidate() {
+        let mut bank = test_bank();
+        let mut clause = max_lcomplex_no_type_rejected_fallback_clause(&mut bank);
+        mark_maximal_literals(&mut clause, &[0, 1]);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::select_max_l_complex_no_type_pred(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), Vec::<usize>::new());
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
+    fn max_lcomplex_no_x_type_positive_variant_uses_nonmaximal_fallback() {
+        let mut bank = test_bank();
+        let mut clause = max_lcomplex_no_x_type_fallback_clause(&mut bank);
+        mark_maximal_literals(&mut clause, &[0, 1]);
+        let mut ocb = kbo_ocb(&bank);
+
+        super::p_select_max_l_complex_no_x_type_pred(&mut ocb, &bank, &mut clause);
+
+        assert_eq!(selected_indices(&clause), vec![0, 2]);
+    }
+
+    #[test]
     fn bank_aware_unless_max_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_UNLESS_UNIQ_MAX,
@@ -2620,6 +3000,29 @@ mod tests {
                     panic!("{err}");
                 });
             assert_eq!(selected_indices(&clause), vec![1]);
+        }
+    }
+
+    #[test]
+    fn bank_aware_max_lcomplex_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            super::SELECT_MAX_L_COMPLEX,
+            super::P_SELECT_MAX_L_COMPLEX,
+            super::SELECT_MAX_L_COMPLEX_NO_TYPE_PRED,
+            super::P_SELECT_MAX_L_COMPLEX_NO_TYPE_PRED,
+            super::SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED,
+            super::P_SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED,
+        ] {
+            let mut bank = test_bank();
+            let mut clause = max_lcomplex_priority_clause(&mut bank);
+            mark_maximal_literals(&mut clause, &[0, 1, 2]);
+            let mut ocb = kbo_ocb(&bank);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert!(clause.prop_lit_number(EP_IS_SELECTED) >= 1);
         }
     }
 
@@ -2728,9 +3131,9 @@ mod tests {
     fn unported_selector_reports_name() {
         let mut clause = Clause::empty();
         let error =
-            apply_ported_literal_selector("SelectMaxLComplex", None, &mut clause).unwrap_err();
+            apply_ported_literal_selector("SelectNewComplex", None, &mut clause).unwrap_err();
 
-        assert_eq!(error.strategy(), "SelectMaxLComplex");
+        assert_eq!(error.strategy(), "SelectNewComplex");
         assert!(error.to_string().contains("not ported yet"));
     }
 }
