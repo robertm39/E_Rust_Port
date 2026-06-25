@@ -302,6 +302,38 @@ impl ClauseSet {
         moved
     }
 
+    pub fn indexed_insert_clause(
+        &mut self,
+        clause: Clause,
+        fv_anchor: Option<&mut FvIndexAnchor>,
+        bank: &TermBank,
+    ) {
+        debug_assert_eq!(clause.weight(), clause.standard_weight());
+        let mut clause = clause;
+        if let Some(anchor) = fv_anchor {
+            let mut packed = fv_index_pack_clause(clause, Some(&*anchor));
+            anchor.insert(&mut packed, bank);
+            clause = packed.into_clause();
+            clause.set_prop(CP_IS_S_INDEXED);
+        }
+        self.insert(clause);
+    }
+
+    pub fn indexed_insert_clause_set(
+        &mut self,
+        source: &mut Self,
+        mut fv_anchor: Option<&mut FvIndexAnchor>,
+        bank: &TermBank,
+    ) -> i64 {
+        let mut moved = 0;
+        while let Some(mut clause) = source.extract_first() {
+            clause.set_weight(clause.standard_weight());
+            self.indexed_insert_clause(clause, fv_anchor.as_deref_mut(), bank);
+            moved += 1;
+        }
+        moved
+    }
+
     pub fn extract_first(&mut self) -> Option<Clause> {
         self.extract_at_position(0)
     }
@@ -777,12 +809,7 @@ impl ClauseSet {
         }
 
         while let Some(clause) = stack.pop() {
-            debug_assert_eq!(clause.weight(), clause.standard_weight());
-            let mut packed = fv_index_pack_clause(clause, Some(anchor));
-            anchor.insert(&mut packed, bank);
-            let mut clause = packed.into_clause();
-            clause.set_prop(CP_IS_S_INDEXED);
-            self.insert(clause);
+            self.indexed_insert_clause(clause, Some(&mut *anchor), bank);
         }
         self.members()
     }
@@ -1427,6 +1454,41 @@ mod tests {
             vec![first_id, second_id]
         );
         assert_eq!(target.literals(), 3);
+    }
+
+    #[test]
+    fn indexed_insert_clause_set_reweighs_source_and_preserves_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "idx_a");
+        let b = typed_const(&mut bank, "idx_b");
+        let c = typed_const(&mut bank, "idx_c");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        let mut second = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        first.set_weight(0);
+        second.set_weight(0);
+        let mut source = ClauseSet::from_clauses([first, second]);
+        let mut target = ClauseSet::new();
+        let max_symbols = usize::try_from(bank.signature().f_count() + 1).unwrap();
+        let mut anchor = ac_anchor(max_symbols);
+
+        assert_eq!(
+            target.indexed_insert_clause_set(&mut source, Some(&mut anchor), &bank),
+            2
+        );
+        assert!(source.is_empty());
+        assert_eq!(
+            target.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![first_id, second_id]
+        );
+        assert!(target
+            .iter()
+            .all(|clause| clause.weight() == clause.standard_weight()));
+        assert!(target
+            .iter()
+            .all(|clause| clause.query_prop(CP_IS_S_INDEXED)));
+        assert_eq!(anchor.count_nodes(true, false), 2);
     }
 
     #[test]
