@@ -1,4 +1,10 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::f_generality::GeneralityMeasure;
+use crate::inout::basicparser::parse_float;
+use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+static AX_FILTER_AUTO_ID: AtomicU64 = AtomicU64::new(0);
 
 pub const GENERALITY_MEASURE_NAMES: [&str; 10] = [
     "None",
@@ -12,6 +18,30 @@ pub const GENERALITY_MEASURE_NAMES: [&str; 10] = [
     "CountNegLiterals",
     "CountNegTerms",
 ];
+
+pub const AX_FILTER_DEFAULT_SET: &str = "\
+   threshold010000=Threshold(10000)
+   LambdaDef=LambdaDef
+   gf500_gu_R04_F100_L20000=GSinE(CountFormulas, ,false,   5.0,, 4,20000,1.0)
+   gf120_gu_RUU_F100_L00500=GSinE(CountFormulas, ,false,   1.2,,,  500,1.0)
+   gf120_gu_R02_F100_L20000=GSinE(CountFormulas, ,false,   1.2,, 2,20000,1.0)
+   gf150_gu_RUU_F100_L20000=GSinE(CountFormulas, ,false,   1.5,,,20000,1.0)
+   gf120_gu_RUU_F100_L00100=GSinE(CountFormulas, ,false,   1.2,,,  100,1.0)
+   gf200_gu_R03_F100_L20000=GSinE(CountFormulas, ,false,   2.0,, 3,20000,1.0)
+   gf600_gu_R05_F100_L20000=GSinE(CountFormulas, ,false,   6.0,, 5,20000,1.0, false)
+   gf200_gu_RUU_F100_L20000=GSinE(CountFormulas, ,false,   2.0,,  ,20000,1.0)
+   gf120_gu_RUU_F100_L01000=GSinE(CountFormulas, ,false,   1.2,,  , 1000,1.0, false)
+   gf500_h_gu_R04_F100_L20000=GSinE(CountFormulas, hypos,false,   5.0,, 4,20000,1.0, false)
+   gf120_h_gu_RUU_F100_L00500=GSinE(CountFormulas, hypos,false,   1.2,,,  500,1.0)
+   gf120_h_gu_R02_F100_L20000=GSinE(CountFormulas, hypos,false,   1.2,, 2,20000,1.0)
+   gf150_h_gu_RUU_F100_L20000=GSinE(CountFormulas, hypos,false,   1.5,,,20000,1.0)
+   gf120_h_gu_RUU_F100_L00100=GSinE(CountFormulas, hypos,false,   1.2,,,  100,1.0)
+   gf200_h_gu_R03_F100_L20000=GSinE(CountFormulas, hypos,false,   2.0,, 3,20000,1.0)
+   gf600_h_gu_R05_F100_L20000=GSinE(CountFormulas, hypos,false,   6.0,, 5,20000,1.0,false)
+   gf200_h_gu_RUU_F100_L20000=GSinE(CountFormulas, hypos,false,   2.0,,  ,20000,1.0)
+   gf120_h_gu_RUU_F100_L01000=GSinE(CountFormulas, hypos,false,   1.2,,  , 1000,1.0)
+   gf600_gu_R05_F100_L20000add=GSinE(CountFormulas, ,false,   6.0,, 5,20000,1.0,addnosymb)
+";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -95,6 +125,53 @@ impl AxFilter {
         }
     }
 
+    /// Parses a single unnamed axiom filter definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the scanner is not positioned at a recognized
+    /// filter or if any filter argument violates the C grammar.
+    pub fn parse(scanner: &mut Scanner) -> Result<Self, Diagnostic> {
+        scanner.check_id("GSinE|Threshold|LambdaDef")?;
+        if scanner.test_id("GSinE") {
+            return parse_g_sine(scanner);
+        }
+        if scanner.test_id("Threshold") {
+            return parse_threshold(scanner);
+        }
+        if scanner.test_id("LambdaDef") {
+            return parse_lambda_def(scanner);
+        }
+        Err(current_error(scanner, "Unknown axiom filter"))
+    }
+
+    /// Parses `[name=]<filter>` and assigns a C-shaped anonymous name when the
+    /// name part is omitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the optional name or the following filter
+    /// definition is malformed.
+    pub fn parse_definition(scanner: &mut Scanner) -> Result<Self, Diagnostic> {
+        let name = if scanner
+            .look_token(1)
+            .kind()
+            .intersects(TokenType::EQUAL_SIGN)
+        {
+            scanner.check_tok(TokenType::IDENTIFIER)?;
+            let name = scanner.current_token().literal();
+            scanner.next_token()?;
+            scanner.accept_tok(TokenType::EQUAL_SIGN)?;
+            name
+        } else {
+            let id = AX_FILTER_AUTO_ID.fetch_add(1, AtomicOrdering::Relaxed);
+            format!("axfilter_auto{id:4}")
+        };
+        let mut result = Self::parse(scanner)?;
+        result.name = Some(name);
+        Ok(result)
+    }
+
     #[must_use]
     /// # Panics
     ///
@@ -138,6 +215,12 @@ impl AxFilter {
     }
 
     #[must_use]
+    pub fn print_buf_string(&self, buflen: usize) -> Option<String> {
+        let result = self.print_string();
+        (result.len() < buflen).then_some(result)
+    }
+
+    #[must_use]
     /// # Panics
     ///
     /// Panics under the same conditions as [`Self::print_string`].
@@ -168,6 +251,43 @@ impl AxFilterSet {
 
     pub fn add_filter(&mut self, filter: AxFilter) {
         self.filters.push(filter);
+    }
+
+    /// Parses filter definitions until the current token is no longer an
+    /// identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any contained filter definition is malformed.
+    pub fn parse(&mut self, scanner: &mut Scanner) -> Result<i64, Diagnostic> {
+        let mut parsed = 0;
+        while scanner.test_tok(TokenType::IDENTIFIER) {
+            self.add_filter(AxFilter::parse_definition(scanner)?);
+            parsed += 1;
+        }
+        Ok(parsed)
+    }
+
+    /// Creates a filter set from an internal string, matching
+    /// `AxFilterSetCreateInternal`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if scanner creation or filter parsing fails.
+    pub fn create_internal(source: &str) -> Result<Self, Diagnostic> {
+        let mut scanner = Scanner::from_internal_string(source, true)?;
+        let mut result = Self::new();
+        result.parse(&mut scanner)?;
+        Ok(result)
+    }
+
+    /// Creates the built-in C `AxFilterDefaultSet`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the embedded default-set string fails to parse.
+    pub fn default_set() -> Result<Self, Diagnostic> {
+        Self::create_internal(AX_FILTER_DEFAULT_SET)
     }
 
     #[must_use]
@@ -232,13 +352,122 @@ fn generality_measure_from_index(index: usize) -> Option<GeneralityMeasure> {
     }
 }
 
+fn parse_g_sine(scanner: &mut Scanner) -> Result<AxFilter, Diagnostic> {
+    let mut result = AxFilter::new();
+    scanner.accept_id("GSinE")?;
+    result.type_ = AxFilterType::GSinE;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+
+    result.gen_measure = get_gen_measure(&scanner.current_token().literal());
+    if result.gen_measure == GeneralityMeasure::NoMeasure {
+        return Err(current_error(scanner, "Unknown generality measure"));
+    }
+    if !matches!(
+        result.gen_measure,
+        GeneralityMeasure::Terms | GeneralityMeasure::Formulas
+    ) {
+        return Err(current_error(
+            scanner,
+            "Generality measure not yet implemented",
+        ));
+    }
+    scanner.next_token()?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    if !scanner.test_tok(TokenType::COMMA) {
+        scanner.check_id("hypos|nohypos")?;
+        result.use_hypotheses = scanner.test_id("hypos");
+        scanner.next_token()?;
+    }
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    if !scanner.test_tok(TokenType::COMMA) && scanner.test_id("true|false") {
+        result.defined_symbols_in_drel = scanner.test_id("true");
+        scanner.accept_id("true|false")?;
+        scanner.accept_tok(TokenType::COMMA)?;
+    }
+    if !scanner.test_tok(TokenType::COMMA) {
+        result.benevolence = parse_float(scanner)?;
+    }
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    if !scanner.test_tok(TokenType::COMMA) {
+        result.generosity = parse_positive_i64(scanner)?;
+    }
+    scanner.accept_tok(TokenType::COMMA)?;
+    if !scanner.test_tok(TokenType::COMMA) {
+        result.max_recursion_depth = parse_positive_i64(scanner)?;
+    }
+    scanner.accept_tok(TokenType::COMMA)?;
+    if !scanner.test_tok(TokenType::COMMA) {
+        result.max_set_size = parse_positive_i64(scanner)?;
+    }
+    scanner.accept_tok(TokenType::COMMA)?;
+    if !scanner.test_tok(TokenType::CLOSE_BRACKET | TokenType::COMMA) {
+        result.max_set_fraction = parse_float(scanner)?;
+    }
+    if scanner.test_tok(TokenType::COMMA) && test_look_id(scanner, 1, "addnosymb|ignorenosymb") {
+        scanner.accept_tok(TokenType::COMMA)?;
+        result.add_no_symbol_axioms = scanner.test_id("addnosymb");
+        scanner.accept_id("addnosymb|ignorenosymb")?;
+    }
+    if scanner.test_tok(TokenType::COMMA) && test_look_id(scanner, 1, "true|false") {
+        scanner.accept_tok(TokenType::COMMA)?;
+        result.trim_implications = scanner.test_id("true");
+        scanner.accept_id("true|false")?;
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(result)
+}
+
+fn parse_threshold(scanner: &mut Scanner) -> Result<AxFilter, Diagnostic> {
+    let mut result = AxFilter::new();
+    scanner.accept_id("Threshold")?;
+    result.type_ = AxFilterType::Threshold;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    result.threshold = parse_positive_i64(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok(result)
+}
+
+fn parse_lambda_def(scanner: &mut Scanner) -> Result<AxFilter, Diagnostic> {
+    scanner.accept_id("LambdaDef")?;
+    Ok(AxFilter::lambda_defines())
+}
+
+fn parse_positive_i64(scanner: &mut Scanner) -> Result<i64, Diagnostic> {
+    scanner.check_tok(TokenType::POS_INT)?;
+    let value = scanner.current_token().numval();
+    let Ok(value) = i64::try_from(value) else {
+        return Err(current_error(scanner, "Long integer overflow"));
+    };
+    scanner.next_token()?;
+    Ok(value)
+}
+
+fn test_look_id(scanner: &Scanner, look: usize, ids: &str) -> bool {
+    crate::inout::scanner::test_id(scanner.look_token(look), ids)
+}
+
+fn current_error(scanner: &Scanner, message: &str) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!(
+            "{}(just read '{}'): {message}",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal()
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         generality_measure_name, get_gen_measure, AxFilter, AxFilterSet, AxFilterType,
-        GENERALITY_MEASURE_NAMES,
+        AX_FILTER_DEFAULT_SET, GENERALITY_MEASURE_NAMES,
     };
     use crate::clauses::f_generality::GeneralityMeasure;
+    use crate::inout::scanner::Scanner;
 
     #[test]
     fn ax_filter_type_discriminants_match_c_enum() {
@@ -339,5 +568,90 @@ mod tests {
             set.print_string(),
             "small = Threshold(10)\ndefs = LambdaDef\n"
         );
+    }
+
+    #[test]
+    fn ax_filter_parser_reads_threshold_lambda_and_sparse_gsine_definitions() {
+        let mut scanner = Scanner::from_internal_string(
+            "small=Threshold(10) LambdaDef GSinE(CountFormulas, ,false, 5.0,, 4,20000,1.0)",
+            true,
+        )
+        .unwrap();
+        let mut set = AxFilterSet::new();
+
+        assert_eq!(set.parse(&mut scanner).unwrap(), 3);
+
+        assert_eq!(set.get_filter(0).unwrap().name.as_deref(), Some("small"));
+        assert_eq!(set.get_filter(0).unwrap().threshold, 10);
+        let anonymous = set.get_filter(1).unwrap().name.as_deref().unwrap();
+        assert!(anonymous.starts_with("axfilter_auto"));
+        assert_eq!(
+            set.get_filter(1).unwrap().type_,
+            AxFilterType::LambdaDefines
+        );
+        let sine = set.get_filter(2).unwrap();
+        assert_eq!(sine.type_, AxFilterType::GSinE);
+        assert_eq!(sine.gen_measure, GeneralityMeasure::Formulas);
+        assert!(!sine.use_hypotheses);
+        assert!(!sine.defined_symbols_in_drel);
+        assert!((sine.benevolence - 5.0).abs() < f64::EPSILON);
+        assert_eq!(sine.generosity, i64::MAX);
+        assert_eq!(sine.max_recursion_depth, 4);
+        assert_eq!(sine.max_set_size, 20_000);
+        assert!((sine.max_set_fraction - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ax_filter_parser_reads_full_gsine_optional_tail() {
+        let mut scanner = Scanner::from_internal_string(
+            "named=GSinE(CountTerms, hypos,true, 1.25,7,8,9,0.5,addnosymb,false)",
+            true,
+        )
+        .unwrap();
+
+        let parsed = AxFilter::parse_definition(&mut scanner).unwrap();
+
+        assert_eq!(parsed.name.as_deref(), Some("named"));
+        assert_eq!(parsed.type_, AxFilterType::GSinE);
+        assert_eq!(parsed.gen_measure, GeneralityMeasure::Terms);
+        assert!(parsed.use_hypotheses);
+        assert!(parsed.defined_symbols_in_drel);
+        assert!((parsed.benevolence - 1.25).abs() < f64::EPSILON);
+        assert_eq!(parsed.generosity, 7);
+        assert_eq!(parsed.max_recursion_depth, 8);
+        assert_eq!(parsed.max_set_size, 9);
+        assert!((parsed.max_set_fraction - 0.5).abs() < f64::EPSILON);
+        assert!(parsed.add_no_symbol_axioms);
+        assert!(!parsed.trim_implications);
+    }
+
+    #[test]
+    fn default_ax_filter_set_parses_c_builtin_definitions() {
+        let set = AxFilterSet::default_set().unwrap();
+
+        assert_eq!(set.elements(), 21);
+        assert_eq!(
+            set.find_filter("threshold010000").unwrap().type_,
+            AxFilterType::Threshold
+        );
+        assert_eq!(
+            set.find_filter("LambdaDef").unwrap().type_,
+            AxFilterType::LambdaDefines
+        );
+        assert!(
+            set.find_filter("gf600_gu_R05_F100_L20000add")
+                .unwrap()
+                .add_no_symbol_axioms
+        );
+        assert!(AX_FILTER_DEFAULT_SET.contains("gf500_h_gu_R04_F100_L20000"));
+    }
+
+    #[test]
+    fn print_buf_string_uses_c_strict_fit_result() {
+        let filter = AxFilter::threshold(10);
+        let rendered = filter.print_string();
+
+        assert_eq!(filter.print_buf_string(rendered.len()), None);
+        assert_eq!(filter.print_buf_string(rendered.len() + 1), Some(rendered));
     }
 }

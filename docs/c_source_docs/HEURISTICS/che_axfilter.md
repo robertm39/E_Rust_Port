@@ -131,7 +131,8 @@ Source files reviewed: `HEURISTICS/che_axfilter.h`, `HEURISTICS/che_axfilter.c`.
 - `AxFilterAlloc` initializes all ordinary GSinE fields but leaves `threshold` unset; the C threshold parser assigns it before use. Rust initializes `threshold` to `0` so the safe allocation-shaped value is deterministic before parsing.
 - `GeneralityMeasureNames` contains the spellings `CoutPosFormulas` and `CoutNegFormulas`, and lookup returns `GMNoMeasure` for any unknown spelling. Rust preserves those spellings for lookup/printing; cleaned aliases should be added only as compatibility mappings.
 - `AxFilterPrintBuf` formats GSinE with `%f`-style six-decimal floats and prints `Threshold(<n>)`. Its `AFLambdaDefines` branch formats `LambdaDef` but then falls through to the default assertion because there is no `break`; Rust returns `LambdaDef` to keep filter-set printing usable until reference tests show the assertion itself is observable.
-- `AxFilterDefParse` uses a file-static unsigned counter for anonymous `axfilter_auto%4lu` names and does not check generated names against user-supplied names. Rust parser integration remains deferred; preserve the counter shape when anonymous definition parsing is added.
+- `AxFilterDefParse` uses a file-static unsigned counter for anonymous `axfilter_auto%4lu` names, including the width-padding spaces for small counters, and does not check generated names against user-supplied names. Rust preserves the process-global counter and generated-name shape; a cleaned collision-free name policy should wait for parser/reference tests.
+- `AxFilterDefaultSet` is one large C string assembled with line-splice syntax and mostly separated by whitespace, not explicit delimiters. Rust keeps an internal default-set string that parses to the same 21 named filters; preserve this scanner-driven construction until control-layer callers can exercise the default strategy set end to end.
 
 ### Porting Focus
 
