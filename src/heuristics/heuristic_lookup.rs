@@ -1,10 +1,33 @@
 //! High-level heuristic lookup and inline-definition parsing from `che_heuristics`.
 
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::heuristics::hcb::{HcbCell, HCB_DEFAULT_HEURISTIC};
+use crate::heuristics::clausesetfeatures::{spec_no_eq, SpecFeatureCell};
+use crate::heuristics::hcb::{
+    AcHandling, HcbCell, HeuristicParmsCell, DEFAULT_DELETE_BAD_LIMIT, HCB_DEFAULT_HEURISTIC,
+};
 use crate::heuristics::hcbadmin::{heuristic_def_parse_with_context, HcbAdmin};
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
 use crate::inout::scanner::{Scanner, TokenType};
+
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "C casts rlim_t through single-precision float before assigning to long long"
+)]
+pub fn finalize_auto_parms(
+    parms: &HeuristicParmsCell,
+    spec: &SpecFeatureCell,
+) -> HeuristicParmsCell {
+    let mut result = parms.clone();
+    if parms.mem_limit > 2 && parms.delete_bad_limit == DEFAULT_DELETE_BAD_LIMIT {
+        result.delete_bad_limit = ((parms.mem_limit - 2) as f32 * 0.7) as i64;
+    }
+    if spec_no_eq(spec) {
+        result.ac_handling = AcHandling::None;
+    }
+    result
+}
 
 pub fn get_heuristic<'a>(
     source: &str,
@@ -42,9 +65,12 @@ pub fn get_heuristic_with_context<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::get_heuristic;
+    use super::{finalize_auto_parms, get_heuristic};
     use crate::basics::error::ErrorCode;
-    use crate::heuristics::hcb::{hcb_add_wfcb, hcb_alloc};
+    use crate::heuristics::clausesetfeatures::{SpecFeatureCell, SpecFeatureClass};
+    use crate::heuristics::hcb::{
+        hcb_add_wfcb, hcb_alloc, AcHandling, HeuristicParmsCell, DEFAULT_DELETE_BAD_LIMIT,
+    };
     use crate::heuristics::hcbadmin::HcbAdmin;
     use crate::heuristics::wfcbadmin::{weight_fun_parse, WfcbAdmin};
     use crate::inout::scanner::Scanner;
@@ -59,6 +85,64 @@ mod tests {
             name,
             weight_fun_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}")),
         )
+    }
+
+    #[test]
+    fn finalize_auto_parms_derives_delete_bad_limit_like_c() {
+        let parms = HeuristicParmsCell {
+            mem_limit: 1_000,
+            delete_bad_limit: DEFAULT_DELETE_BAD_LIMIT,
+            ac_handling: AcHandling::KeepUnits,
+            ..HeuristicParmsCell::default()
+        };
+        let spec = SpecFeatureCell {
+            eq_clauses: 1,
+            eq_content: SpecFeatureClass::SomeEq,
+            ..SpecFeatureCell::default()
+        };
+
+        let finalized = finalize_auto_parms(&parms, &spec);
+
+        assert_eq!(finalized.delete_bad_limit, 698);
+        assert_eq!(finalized.ac_handling, AcHandling::KeepUnits);
+        assert_eq!(parms.delete_bad_limit, DEFAULT_DELETE_BAD_LIMIT);
+    }
+
+    #[test]
+    fn finalize_auto_parms_preserves_explicit_delete_bad_limit() {
+        let parms = HeuristicParmsCell {
+            mem_limit: 1_000,
+            delete_bad_limit: 77,
+            ..HeuristicParmsCell::default()
+        };
+        let spec = SpecFeatureCell {
+            eq_clauses: 2,
+            ..SpecFeatureCell::default()
+        };
+
+        let finalized = finalize_auto_parms(&parms, &spec);
+
+        assert_eq!(finalized.delete_bad_limit, 77);
+    }
+
+    #[test]
+    fn finalize_auto_parms_disables_ac_when_spec_has_no_equational_clauses() {
+        let parms = HeuristicParmsCell {
+            mem_limit: 2,
+            delete_bad_limit: DEFAULT_DELETE_BAD_LIMIT,
+            ac_handling: AcHandling::KeepOrientable,
+            ..HeuristicParmsCell::default()
+        };
+        let spec = SpecFeatureCell {
+            eq_clauses: 0,
+            eq_content: SpecFeatureClass::SomeEq,
+            ..SpecFeatureCell::default()
+        };
+
+        let finalized = finalize_auto_parms(&parms, &spec);
+
+        assert_eq!(finalized.delete_bad_limit, DEFAULT_DELETE_BAD_LIMIT);
+        assert_eq!(finalized.ac_handling, AcHandling::None);
     }
 
     #[test]

@@ -322,6 +322,11 @@ pub struct SpecFeatureCell {
 }
 
 #[must_use]
+pub const fn spec_no_eq(features: &SpecFeatureCell) -> bool {
+    features.eq_clauses == 0
+}
+
+#[must_use]
 pub fn clause_set_count_goals(set: &ClauseSet) -> i64 {
     count_clauses(set, Clause::is_goal)
 }
