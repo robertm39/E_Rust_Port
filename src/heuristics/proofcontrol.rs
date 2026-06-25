@@ -5,9 +5,12 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::HeuristicParmsCell;
 use crate::heuristics::hcbadmin::HcbAdmin;
-use crate::heuristics::litselection::{apply_ported_literal_selector, UnsupportedLiteralSelection};
+use crate::heuristics::litselection::{
+    apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection,
+};
 use crate::heuristics::wfcbadmin::WfcbAdmin;
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -300,6 +303,30 @@ pub fn do_literal_selection(
     control: &mut ProofControl,
     clause: &mut Clause,
 ) -> Result<LiteralSelectionOutcome, UnsupportedLiteralSelection> {
+    do_literal_selection_impl(control, None, clause)
+}
+
+/// Runs the C `DoLiteralSelection` wrapper using ported selector bodies,
+/// including selector bodies whose Rust implementation needs the term bank for
+/// maximality marking.
+///
+/// # Errors
+///
+/// Returns `UnsupportedLiteralSelection` if the configured selector body has
+/// not been ported yet and the wrapper reaches the selector call.
+pub fn do_literal_selection_with_bank(
+    control: &mut ProofControl,
+    bank: &TermBank,
+    clause: &mut Clause,
+) -> Result<LiteralSelectionOutcome, UnsupportedLiteralSelection> {
+    do_literal_selection_impl(control, Some(bank), clause)
+}
+
+fn do_literal_selection_impl(
+    control: &mut ProofControl,
+    bank: Option<&TermBank>,
+    clause: &mut Clause,
+) -> Result<LiteralSelectionOutcome, UnsupportedLiteralSelection> {
     clear_literal_selection_state(clause);
     let parms = control.heuristic_parms();
     if should_try_inherited_selection(parms, clause) && select_inherited_literal(clause) {
@@ -307,9 +334,10 @@ pub fn do_literal_selection(
     }
     if literal_selection_conditions_hold(parms, clause) {
         debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
-        apply_ported_literal_selector(
+        apply_ported_literal_selector_with_bank(
             control.heuristic_parms.selection_strategy.as_str(),
             control.ocb.as_mut(),
+            bank,
             clause,
         )?;
         Ok(LiteralSelectionOutcome::SelectorApplied)
@@ -360,10 +388,11 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        do_literal_selection, do_literal_selection_with_selector, proof_control_alloc,
-        proof_control_reset_sat_solver, select_inherited_literal, LiteralSelectionOutcome,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
+        proof_control_alloc, proof_control_reset_sat_solver, select_inherited_literal,
+        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_CONJECTURE};
     use crate::clauses::eqn::Eqn;
@@ -371,6 +400,9 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::heuristics::hcb::{HeuristicParmsCell, HCB_DEFAULT_HEURISTIC};
+    use crate::heuristics::litselection::SELECT_UNLESS_POS_MAX;
+    use crate::heuristics::to_params::TermOrdering;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
@@ -414,6 +446,23 @@ mod tests {
         Clause::alloc(EqnList::from_vec(vec![literal(
             &mut bank, &first, &second, true,
         )]))
+    }
+
+    fn negative_clause(bank: &mut TermBank) -> Clause {
+        let first = typed_const(bank, "pc_neg_a");
+        let second = typed_const(bank, "pc_neg_b");
+        Clause::alloc(EqnList::from_vec(vec![literal(
+            bank, &first, &second, false,
+        )]))
+    }
+
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     #[test]
@@ -603,5 +652,22 @@ mod tests {
         let mut mixed = mixed_clause();
         let error = do_literal_selection(&mut control, &mut mixed).unwrap_err();
         assert_eq!(error.strategy(), "SelectUnlessUniqMax");
+    }
+
+    #[test]
+    fn do_literal_selection_with_bank_applies_ordering_dependent_selector() {
+        let mut bank = test_bank();
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().selection_strategy = SELECT_UNLESS_POS_MAX.to_owned();
+        let mut clause = negative_clause(&mut bank);
+        control.set_ocb(kbo_ocb(&bank));
+
+        let outcome = do_literal_selection_with_bank(&mut control, &bank, &mut clause)
+            .unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert_eq!(outcome, LiteralSelectionOutcome::SelectorApplied);
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 1);
     }
 }
