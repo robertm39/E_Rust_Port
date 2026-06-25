@@ -1,10 +1,14 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_GLOBAL_INDEXED;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::overlap_index::{
+    overlap_index_delete_into_clause2, overlap_index_insert_into_clause2, OverlapIndex,
+};
 use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::terms::idx_fp::get_fp_index_function;
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 
 pub struct GlobalIndices<'sig> {
@@ -14,6 +18,9 @@ pub struct GlobalIndices<'sig> {
     pm_into_index_type: String,
     pm_negp_index_type: String,
     bw_rw_index: Option<SubtermIndex<'sig>>,
+    pm_from_index: Option<OverlapIndex<'sig>>,
+    pm_into_index: Option<OverlapIndex<'sig>>,
+    pm_negp_index: Option<OverlapIndex<'sig>>,
     ext_rules_max_depth: i32,
 }
 
@@ -33,6 +40,9 @@ impl<'sig> GlobalIndices<'sig> {
             pm_into_index_type: String::new(),
             pm_negp_index_type: String::new(),
             bw_rw_index: None,
+            pm_from_index: None,
+            pm_into_index: None,
+            pm_negp_index: None,
             ext_rules_max_depth: 0,
         }
     }
@@ -74,10 +84,19 @@ impl<'sig> GlobalIndices<'sig> {
 
         self.bw_rw_index = get_fp_index_function(rw_bw_index_type)
             .map(|fp_fun| SubtermIndex::new(fp_fun, signature));
+        self.pm_from_index = get_fp_index_function(pm_from_index_type)
+            .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
+        self.pm_into_index = get_fp_index_function(pm_into_index_type)
+            .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
+        self.pm_negp_index = get_fp_index_function(pm_into_index_type)
+            .map(|fp_fun| OverlapIndex::new(fp_fun, signature));
     }
 
     pub fn free_indices(&mut self) {
         self.bw_rw_index = None;
+        self.pm_from_index = None;
+        self.pm_into_index = None;
+        self.pm_negp_index = None;
     }
 
     pub fn reset(&mut self) {
@@ -129,8 +148,44 @@ impl<'sig> GlobalIndices<'sig> {
     }
 
     #[must_use]
+    pub const fn has_pm_from_index(&self) -> bool {
+        self.pm_from_index.is_some()
+    }
+
+    #[must_use]
+    pub const fn has_pm_into_index(&self) -> bool {
+        self.pm_into_index.is_some()
+    }
+
+    #[must_use]
+    pub const fn has_pm_negp_index(&self) -> bool {
+        self.pm_negp_index.is_some()
+    }
+
+    #[must_use]
     pub fn find_bw_rw_occurrence(&self, term: &Term) -> Option<&SubtermOcc> {
         self.bw_rw_index
+            .as_ref()
+            .and_then(|index| index.find_occurrence(term))
+    }
+
+    #[must_use]
+    pub fn find_pm_from_occurrence(&self, term: &Term) -> Option<&SubtermOcc> {
+        self.pm_from_index
+            .as_ref()
+            .and_then(|index| index.find_occurrence(term))
+    }
+
+    #[must_use]
+    pub fn find_pm_into_occurrence(&self, term: &Term) -> Option<&SubtermOcc> {
+        self.pm_into_index
+            .as_ref()
+            .and_then(|index| index.find_occurrence(term))
+    }
+
+    #[must_use]
+    pub fn find_pm_negp_occurrence(&self, term: &Term) -> Option<&SubtermOcc> {
+        self.pm_negp_index
             .as_ref()
             .and_then(|index| index.find_occurrence(term))
     }
@@ -138,7 +193,7 @@ impl<'sig> GlobalIndices<'sig> {
     /// # Panics
     ///
     /// Panics if `clause` is already marked as globally indexed.
-    pub fn insert_clause(&mut self, clause: &mut Clause, lambda_demod: bool) {
+    pub fn insert_clause(&mut self, clause: &mut Clause, bank: &TermBank, lambda_demod: bool) {
         assert!(
             !clause.query_prop(CP_IS_GLOBAL_INDEXED),
             "global index insert expects an unindexed clause"
@@ -147,12 +202,22 @@ impl<'sig> GlobalIndices<'sig> {
         if let Some(index) = self.bw_rw_index.as_mut() {
             index.insert_clause(clause, lambda_demod);
         }
+        if let Some(pm_into_index) = self.pm_into_index.as_mut() {
+            let pm_negp_index = self
+                .pm_negp_index
+                .as_mut()
+                .expect("PM-into index requires matching negative-predicate index");
+            overlap_index_insert_into_clause2(pm_into_index, pm_negp_index, clause, bank);
+        }
+        if let Some(index) = self.pm_from_index.as_mut() {
+            index.insert_from_clause(clause);
+        }
     }
 
     /// # Panics
     ///
     /// Panics if `clause` is not marked as globally indexed.
-    pub fn delete_clause(&mut self, clause: &mut Clause, lambda_demod: bool) {
+    pub fn delete_clause(&mut self, clause: &mut Clause, bank: &TermBank, lambda_demod: bool) {
         assert!(
             clause.query_prop(CP_IS_GLOBAL_INDEXED),
             "global index delete expects an indexed clause"
@@ -161,15 +226,30 @@ impl<'sig> GlobalIndices<'sig> {
         if let Some(index) = self.bw_rw_index.as_mut() {
             index.delete_clause(clause, lambda_demod);
         }
+        if let Some(pm_into_index) = self.pm_into_index.as_mut() {
+            let pm_negp_index = self
+                .pm_negp_index
+                .as_mut()
+                .expect("PM-into index requires matching negative-predicate index");
+            overlap_index_delete_into_clause2(pm_into_index, pm_negp_index, clause, bank);
+        }
+        if let Some(index) = self.pm_from_index.as_mut() {
+            index.delete_from_clause(clause);
+        }
     }
 
-    pub fn insert_clause_set(&mut self, set: &mut ClauseSet, lambda_demod: bool) -> i64 {
+    pub fn insert_clause_set(
+        &mut self,
+        set: &mut ClauseSet,
+        bank: &TermBank,
+        lambda_demod: bool,
+    ) -> i64 {
         if self.bw_rw_index.is_none() {
             return 0;
         }
         let mut inserted = 0;
         for clause in set.iter_mut() {
-            self.insert_clause(clause, lambda_demod);
+            self.insert_clause(clause, bank, lambda_demod);
             inserted += 1;
         }
         inserted
@@ -188,8 +268,10 @@ mod tests {
     use crate::clauses::clause_props::CP_IS_GLOBAL_INDEXED;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -228,6 +310,25 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn typed_predicate(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let individual = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let p_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![individual, bool_type]));
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, p_type)
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bank.signature().type_bank().bool_type()));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     fn unit_clause(bank: &mut TermBank, name: &str, ident: i64) -> (Clause, Term) {
         let left = typed_const(bank, name);
         let right_arg = typed_const(bank, &format!("{name}_arg"));
@@ -238,11 +339,40 @@ mod tests {
         (clause, left)
     }
 
+    fn maximal_unit_clause(bank: &mut TermBank, name: &str, ident: i64) -> (Clause, Term, Term) {
+        let left = typed_const(bank, name);
+        let right_arg = typed_const(bank, &format!("{name}_arg"));
+        let right = typed_unary(bank, &format!("{name}_f"), &right_arg);
+        let mut literal = Eqn::alloc(left.clone(), right.clone(), bank, true).unwrap();
+        literal.set_prop(EP_IS_MAXIMAL);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(ident);
+        (clause, left, right)
+    }
+
+    fn maximal_negative_atom_clause(
+        bank: &mut TermBank,
+        name: &str,
+        ident: i64,
+    ) -> (Clause, Term, Term) {
+        let arg = typed_const(bank, &format!("{name}_arg"));
+        let body = typed_unary(bank, &format!("{name}_f"), &arg);
+        let atom = typed_predicate(bank, &format!("{name}_p"), &body);
+        let mut literal = Eqn::alloc(atom.clone(), bank.true_term().clone(), bank, false).unwrap();
+        literal.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(ident);
+        (clause, atom, body)
+    }
+
     #[test]
     fn null_indices_start_without_configured_indexes() {
         let indices = global_indices_null();
 
         assert!(!indices.has_bw_rw_index());
+        assert!(!indices.has_pm_from_index());
+        assert!(!indices.has_pm_into_index());
+        assert!(!indices.has_pm_negp_index());
         assert_eq!(indices.rw_bw_index_type(), "");
         assert_eq!(indices.ext_rules_max_depth(), 0);
     }
@@ -253,6 +383,9 @@ mod tests {
         let indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "FP7", -1);
 
         assert!(indices.has_bw_rw_index());
+        assert!(!indices.has_pm_from_index());
+        assert!(indices.has_pm_into_index());
+        assert!(indices.has_pm_negp_index());
         assert_eq!(indices.rw_bw_index_type(), "FP1");
         assert_eq!(indices.pm_from_index_type(), "NoIndex");
         assert_eq!(indices.pm_into_index_type(), "FP7");
@@ -266,15 +399,55 @@ mod tests {
         let (mut clause, left) = unit_clause(&mut bank, "gidx_clause", 10);
         let mut indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "NoIndex", 0);
 
-        indices.insert_clause(&mut clause, false);
+        indices.insert_clause(&mut clause, &bank, false);
 
         assert!(clause.query_prop(CP_IS_GLOBAL_INDEXED));
         assert!(indices.find_bw_rw_occurrence(&left).is_some());
 
-        indices.delete_clause(&mut clause, false);
+        indices.delete_clause(&mut clause, &bank, false);
 
         assert!(!clause.query_prop(CP_IS_GLOBAL_INDEXED));
         assert!(indices.find_bw_rw_occurrence(&left).is_none());
+    }
+
+    #[test]
+    fn insert_clause_populates_paramodulation_overlap_indexes() {
+        let mut bank = test_bank();
+        let (mut clause, left, right) = maximal_unit_clause(&mut bank, "gidx_pm_clause", 11);
+        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "FP1", "FP1", 0);
+
+        indices.insert_clause(&mut clause, &bank, false);
+
+        assert!(clause.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices.find_pm_into_occurrence(&left).is_some());
+        assert!(indices.find_pm_into_occurrence(&right).is_some());
+        assert!(indices.find_pm_from_occurrence(&left).is_some());
+        assert!(indices.find_pm_from_occurrence(&right).is_some());
+        assert!(indices.find_pm_negp_occurrence(&left).is_none());
+
+        indices.delete_clause(&mut clause, &bank, false);
+
+        assert!(!clause.query_prop(CP_IS_GLOBAL_INDEXED));
+        assert!(indices.find_pm_into_occurrence(&left).is_none());
+        assert!(indices.find_pm_from_occurrence(&left).is_none());
+    }
+
+    #[test]
+    fn insert_clause_routes_negative_atom_heads_to_negp_index() {
+        let mut bank = test_bank();
+        let (mut clause, atom, body) = maximal_negative_atom_clause(&mut bank, "gidx_negp", 12);
+        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "NoIndex", "FP1", 0);
+
+        indices.insert_clause(&mut clause, &bank, false);
+
+        assert!(indices.find_pm_negp_occurrence(&atom).is_some());
+        assert!(indices.find_pm_into_occurrence(&atom).is_none());
+        assert!(indices.find_pm_into_occurrence(&body).is_some());
+
+        indices.delete_clause(&mut clause, &bank, false);
+
+        assert!(indices.find_pm_negp_occurrence(&atom).is_none());
+        assert!(indices.find_pm_into_occurrence(&body).is_none());
     }
 
     #[test]
@@ -283,9 +456,9 @@ mod tests {
         let (clause, _) = unit_clause(&mut bank, "gidx_noindex", 20);
         let mut set = ClauseSet::new();
         set.insert(clause);
-        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "NoIndex", "NoIndex", 0);
+        let mut indices = GlobalIndices::new(bank.signature(), "NoIndex", "FP1", "FP1", 0);
 
-        assert_eq!(indices.insert_clause_set(&mut set, false), 0);
+        assert_eq!(indices.insert_clause_set(&mut set, &bank, false), 0);
         assert!(set
             .iter()
             .all(|clause| !clause.query_prop(CP_IS_GLOBAL_INDEXED)));
@@ -301,7 +474,7 @@ mod tests {
         set.insert(second);
         let mut indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "NoIndex", 0);
 
-        assert_eq!(indices.insert_clause_set(&mut set, false), 2);
+        assert_eq!(indices.insert_clause_set(&mut set, &bank, false), 2);
 
         assert!(set
             .iter()
@@ -313,14 +486,18 @@ mod tests {
     fn reset_rebuilds_configured_backward_index_empty() {
         let mut bank = test_bank();
         let (mut clause, left) = unit_clause(&mut bank, "gidx_reset", 40);
-        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "NoIndex", "NoIndex", 2);
-        indices.insert_clause(&mut clause, false);
+        let mut indices = GlobalIndices::new(bank.signature(), "FP1", "FP1", "FP1", 2);
+        indices.insert_clause(&mut clause, &bank, false);
 
         indices.reset();
 
         assert!(indices.has_bw_rw_index());
+        assert!(indices.has_pm_from_index());
+        assert!(indices.has_pm_into_index());
+        assert!(indices.has_pm_negp_index());
         assert_eq!(indices.rw_bw_index_type(), "FP1");
         assert_eq!(indices.ext_rules_max_depth(), 2);
         assert!(indices.find_bw_rw_occurrence(&left).is_none());
+        assert!(indices.find_pm_from_occurrence(&left).is_none());
     }
 }
