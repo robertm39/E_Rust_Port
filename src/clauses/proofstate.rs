@@ -7,6 +7,7 @@ use crate::clauses::fcvindexing::{
 };
 use crate::clauses::freqvectors::FvCollect;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::{FunctionProperties, Signature};
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
@@ -420,6 +421,33 @@ impl ProofState {
         output
     }
 
+    /// Initializes the preloaded watchlist clauses like the local clause-set
+    /// portion of C `ProofStateInitWatchlist`.
+    ///
+    /// This orients and marks maximal terms, drains the watchlist through a
+    /// temporary set, and reinserts it through the owned FV index when one is
+    /// installed. The C helper also inserts the result into `state->wlindices`;
+    /// that global-index side effect remains pending until global indices are
+    /// represented in Rust.
+    pub fn init_watchlist(&mut self, ocb: &mut OrderControlBlock) -> i64 {
+        let Self {
+            terms, watchlist, ..
+        } = self;
+        let Some(watchlist) = watchlist.as_mut() else {
+            return 0;
+        };
+
+        watchlist.mark_maximal_terms(ocb, terms);
+        let mut temp = ClauseSet::new();
+        while let Some(clause) = watchlist.extract_first() {
+            temp.insert(clause);
+        }
+
+        let inserted = watchlist.indexed_insert_clause_set_owned(&mut temp, terms);
+        debug_assert!(temp.is_empty());
+        inserted
+    }
+
     /// Initializes and installs the FV-index anchors attached by C
     /// `fvi_param_init`.
     ///
@@ -471,14 +499,20 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 mod tests {
     use super::{proof_state_alloc, ProofState, ProofStateStatistics, WatchlistSource};
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
-    use crate::clauses::clause_props::{CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
+    use crate::clauses::clause_props::{
+        CP_IS_ORIENTED, CP_IS_S_INDEXED, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
+    };
     use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{WATCHLIST_INLINE_QSTRING, WATCHLIST_INLINE_STRING};
+    use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::IoFormat;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{FP_DISTINCT_PROP, FP_IGNORE_PROPS};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -554,6 +588,15 @@ mod tests {
             assert_eq!(clause.weight(), clause.standard_weight());
             assert!(clause.is_subsume_ordered(state.terms()));
         }
+    }
+
+    fn test_ocb(state: &ProofState) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            state.terms().signature(),
+            HoOrderKind::LfhoOrder,
+        )
     }
 
     #[test]
@@ -797,5 +840,42 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+    }
+
+    #[test]
+    fn proof_state_init_watchlist_marks_and_reindexes_watchlist_clauses() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let first = nontrivial_clause(&mut state, "init_watch_first", 90);
+        let second = nontrivial_clause(&mut state, "init_watch_second", 91);
+        let params = FvIndexParams::new(FvIndexType::AcFold, false, true, 9, 1);
+
+        state.watchlist_mut().unwrap().insert(first);
+        state.watchlist_mut().unwrap().insert(second);
+        state.init_fvi_anchors(&params).unwrap();
+        let mut ocb = test_ocb(&state);
+
+        assert_eq!(state.init_watchlist(&mut ocb), 2);
+
+        let watchlist = state.watchlist().unwrap();
+        assert_eq!(watchlist.members(), 2);
+        assert_eq!(
+            watchlist.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![90, 91]
+        );
+        assert!(watchlist.iter().all(|clause| {
+            clause.query_prop(CP_IS_ORIENTED)
+                && clause.query_prop(CP_IS_S_INDEXED)
+                && clause.literals().query_prop_number(EP_IS_MAXIMAL) == 1
+        }));
+    }
+
+    #[test]
+    fn proof_state_init_watchlist_without_watchlist_is_noop() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.discard_watchlist();
+        let mut ocb = test_ocb(&state);
+
+        assert_eq!(state.init_watchlist(&mut ocb), 0);
+        assert!(state.watchlist().is_none());
     }
 }
