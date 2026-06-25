@@ -408,6 +408,11 @@ impl Term {
         }
     }
 
+    pub fn set_nf_date(&self, level: RewriteLevel, date: SysDate) {
+        let index = rewrite_index(level);
+        self.0.nf_date[index].set(date);
+    }
+
     #[must_use]
     pub fn rw_replace_field(&self) -> Option<Term> {
         self.0.rw_replace.borrow().clone()
