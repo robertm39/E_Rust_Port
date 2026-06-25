@@ -767,6 +767,55 @@ fn proof_state_move_processed_set_to_tmp_by(
     moved
 }
 
+/// Evaluates all clauses currently waiting in `eval_store`, matching C
+/// `eval_clause_set`.
+///
+/// C mutates clauses in place after they have already been inserted into the
+/// eval store. The Rust clause set owns evaluation indices, so this helper
+/// extracts and reinserts each clause once after evaluation to keep those
+/// indices synchronized while preserving set order.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the eval store is non-empty and the active HCB is
+/// missing.
+pub fn proof_state_eval_clause_set(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<i64, Diagnostic> {
+    let pending = state.eval_store().members();
+    if pending == 0 {
+        return Ok(0);
+    }
+
+    let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "eval_clause_set requires initialized proof-control heuristic",
+        )
+    })?;
+
+    {
+        let ProofControl { hcbs, wfcbs, .. } = control;
+        let active_hcb = hcbs
+            .hcb(active_hcb_handle)
+            .ok_or_else(|| unknown_heuristic_handle("active"))?;
+
+        for _ in 0..pending {
+            let Some(mut clause) = state.eval_store_mut().extract_first() else {
+                return Err(Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "eval_clause_set eval_store changed while evaluating clauses",
+                ));
+            };
+            hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut clause);
+            state.eval_store_mut().insert(clause);
+        }
+    }
+
+    Ok(pending)
+}
+
 /// Runs the AC-axiom scan portion of C `ProofStateInit`.
 ///
 /// The C code scans the initialized `unprocessed` set, not the source axiom
@@ -1007,8 +1056,8 @@ mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_init, proof_state_init_ac_handling,
-        proof_state_init_global_indices, proof_state_init_indexing,
+        proof_control_reset_sat_solver, proof_state_eval_clause_set, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_move_to_tmp_store,
         proof_state_reset_processed, select_inherited_literal, LiteralSelectionOutcome,
         DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
@@ -1154,11 +1203,16 @@ mod tests {
         )]))
     }
 
-    fn processed_unit_clause(bank: &mut TermBank, stem: &str, ident: i64) -> Clause {
+    fn unit_clause_with_id(bank: &mut TermBank, stem: &str, ident: i64) -> Clause {
         let left = typed_const(bank, &format!("{stem}_left"));
         let right = typed_const(bank, &format!("{stem}_right"));
         let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(bank, &left, &right, true)]));
         clause.set_ident(ident);
+        clause
+    }
+
+    fn processed_unit_clause(bank: &mut TermBank, stem: &str, ident: i64) -> Clause {
+        let mut clause = unit_clause_with_id(bank, stem, ident);
         clause.set_prop(CP_IS_PROCESSED | CP_IS_ORIENTED);
         clause
     }
@@ -1593,6 +1647,82 @@ mod tests {
         }
         let moved_rule = state.tmp_store().find_by_id(4_050).unwrap();
         assert_eq!(moved_rule.evaluations().unwrap().eval(0).priority(), 123);
+    }
+
+    #[test]
+    fn proof_state_eval_clause_set_evaluates_eval_store_and_preserves_order() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (first, second) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_eval_store_first", 4_060),
+                unit_clause_with_id(terms, "pc_eval_store_second", 4_061),
+            )
+        };
+        state.eval_store_mut().insert(first);
+        state.eval_store_mut().insert(second);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "EvalStoreTest".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["EvalStoreTest=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let evaluated =
+            proof_state_eval_clause_set(&mut state, &mut control).unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert_eq!(evaluated, 2);
+        assert_eq!(state.eval_store().members(), 2);
+        assert_eq!(state.unprocessed().members(), 0);
+        assert_eq!(state.tmp_store().members(), 0);
+        assert_eq!(
+            state
+                .eval_store()
+                .iter()
+                .map(Clause::ident)
+                .collect::<Vec<_>>(),
+            vec![4_060, 4_061]
+        );
+        for clause in state.eval_store().iter() {
+            let evaluations = clause
+                .evaluations()
+                .expect("eval-store clause is evaluated");
+            assert_eq!(evaluations.eval_no(), 1);
+            assert_eq!(evaluations.eval(0).priority(), PRIO_NORMAL);
+            assert!(evaluations.object().is_some());
+        }
+        assert_eq!(
+            state.eval_store().find_best(0).map(Clause::ident),
+            Some(4_060)
+        );
+        assert_eq!(state.eval_store().eval_order_cloned(0).len(), 2);
+    }
+
+    #[test]
+    fn proof_state_eval_clause_set_requires_active_hcb_for_nonempty_store() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_eval_missing_hcb", 4_062);
+        state.eval_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+
+        let error = proof_state_eval_clause_set(&mut state, &mut control).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        let clause = state.eval_store().find_by_id(4_062).unwrap();
+        assert!(clause.evaluations().is_none());
     }
 
     #[test]
