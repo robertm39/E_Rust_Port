@@ -228,6 +228,17 @@ impl Scanner {
         Self::from_file_with_default_dir(path, ignore_comments, None)
     }
 
+    pub fn from_file_content(
+        source_name: &str,
+        data: Vec<u8>,
+        ignore_comments: bool,
+    ) -> Result<Self, Diagnostic> {
+        Self::from_stream(
+            InputStream::from_file_content(source_name, data),
+            ignore_comments,
+        )
+    }
+
     pub fn from_file_following_includes(
         path: &Path,
         ignore_comments: bool,
@@ -1145,6 +1156,19 @@ mod tests {
         let error = Scanner::from_file(&missing, false).unwrap_err();
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert!(error.message().contains("Cannot open file"));
+    }
+
+    #[test]
+    fn scanner_can_read_file_named_in_memory_content() {
+        let scanner = Scanner::from_file_content("-", b"  abc".to_vec(), false).unwrap();
+
+        assert_eq!(scanner.current_token().literal(), "abc");
+        assert_eq!(
+            scanner.current_token().stream_type(),
+            super::StreamType::File
+        );
+        assert_eq!(scanner.current_token().source_bytes(), b"-");
+        assert_eq!(token_pos_rep(scanner.current_token()), "-:1:(Column 3):");
     }
 
     #[test]

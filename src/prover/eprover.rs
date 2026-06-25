@@ -3203,14 +3203,14 @@ fn parse_clause_file(
     clauses: &mut ClauseSet,
 ) -> Result<(), Diagnostic> {
     let mut scanner = if file == "-" {
-        let mut input = String::new();
-        io::stdin().read_to_string(&mut input).map_err(|error| {
+        let mut input = Vec::new();
+        io::stdin().read_to_end(&mut input).map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,
                 format!("Cannot read standard input: {error}"),
             )
         })?;
-        Scanner::from_user_string(&input, false)?
+        Scanner::from_file_content("-", input, false)?
     } else {
         Scanner::from_file_following_includes(Path::new(file), false, "include")?
     };

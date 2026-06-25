@@ -57,9 +57,22 @@ impl InputStream {
 
     #[must_use]
     pub fn from_string(stream_type: StreamType, source: &str) -> Self {
+        Self::from_data(
+            stream_type,
+            source.as_bytes().to_vec(),
+            source.as_bytes().to_vec(),
+        )
+    }
+
+    #[must_use]
+    pub fn from_file_content(source_name: &str, data: Vec<u8>) -> Self {
+        Self::from_data(StreamType::File, source_name.as_bytes().to_vec(), data)
+    }
+
+    fn from_data(stream_type: StreamType, source: Vec<u8>, data: Vec<u8>) -> Self {
         let mut stream = Self {
-            source: source.as_bytes().to_vec(),
-            data: source.as_bytes().to_vec(),
+            source,
+            data,
             stream_type,
             string_pos: 0,
             eof_seen: false,
@@ -81,21 +94,7 @@ impl InputStream {
                 format!("Cannot open file {} for reading: {error}", path.display()),
             )
         })?;
-        let mut stream = Self {
-            source: path.to_string_lossy().as_bytes().to_vec(),
-            data,
-            stream_type: StreamType::File,
-            string_pos: 0,
-            eof_seen: false,
-            line: 1,
-            column: 1,
-            buffer: [None; MAX_LOOKAHEAD],
-            current: 0,
-        };
-        for index in 0..MAX_LOOKAHEAD {
-            stream.buffer[index] = stream.read_char();
-        }
-        Ok(stream)
+        Ok(Self::from_file_content(&path.to_string_lossy(), data))
     }
 
     #[must_use]
@@ -240,5 +239,21 @@ mod tests {
         assert_eq!(stream.current_char(), Some(b'c'));
 
         remove_if_present(&path);
+    }
+
+    #[test]
+    fn file_content_stream_keeps_file_identity_without_opening_path() {
+        let mut stream = InputStream::from_file_content("-", b"ab\nc".to_vec());
+
+        assert_eq!(stream.source_bytes(), b"-");
+        assert_eq!(stream.stream_type(), super::StreamType::File);
+        assert_eq!(stream.current_char(), Some(b'a'));
+        assert_eq!(stream.look_char(1), Some(b'b'));
+        assert_eq!(stream.look_char(2), Some(b'\n'));
+        stream.next_char();
+        stream.next_char();
+        stream.next_char();
+        assert_eq!((stream.line(), stream.column()), (2, 1));
+        assert_eq!(stream.current_char(), Some(b'c'));
     }
 }

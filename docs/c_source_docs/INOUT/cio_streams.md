@@ -102,6 +102,10 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change-Later Observations
+
+- `CreateStream(StreamTypeFile, "-", ...)` treats `-` as stdin while retaining file-stream position formatting with source name `-`. Rust preserves this source identity for in-memory stdin data, but still loads the bytes eagerly; revisit lazy streaming if large-problem parsing or include-stack behavior makes the C `FILE*` window observable.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
