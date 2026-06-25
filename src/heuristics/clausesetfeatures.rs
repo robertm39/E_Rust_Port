@@ -1066,6 +1066,100 @@ pub fn clause_set_compute_ho_features_without_choice(
     clause_set_compute_ho_features(set, signature, |_| false)
 }
 
+/// Computes the clause-set portion of C `SpecFeaturesCompute`.
+///
+/// Formula-set order scanning and formula-definition statistics are not owned
+/// by `ClauseSet`, so this helper deliberately stops at the clause/bank
+/// boundary. Like C, it computes the higher-order clause aggregate, then resets
+/// `order` and `goal_order` to `1` so later formula scans can raise them.
+///
+/// # Panics
+///
+/// Panics if symbol/type data required by the underlying feature helpers is
+/// missing, or if the constant-function count cannot fit C's `int` field.
+pub fn spec_features_compute_clause_set<F>(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    bank: &TermBank,
+    recognize_choice: F,
+) where
+    F: FnMut(&Clause) -> bool,
+{
+    features.clauses = set.members();
+    features.goals = clause_set_count_goals(set);
+    features.axioms = features.clauses - features.goals;
+    features.literals = set.literals();
+    features.term_cells = clause_set_term_cells(bank, set);
+
+    let mut depth_sum = 0;
+    let mut count = 0;
+    features.clause_max_depth = 0;
+    clause_set_tptp_depth_info_add(
+        bank,
+        set,
+        &mut features.clause_max_depth,
+        &mut depth_sum,
+        &mut count,
+    );
+    features.clause_avg_depth = if count == 0 { 0 } else { depth_sum / count };
+
+    features.unit = clause_set_count_unit(set);
+    features.unitgoals = clause_set_count_unit_goals(set);
+    features.unitaxioms = features.unit - features.unitgoals;
+
+    features.horn = clause_set_count_horn(set);
+    features.horngoals = clause_set_count_horn_goals(set);
+    features.hornaxioms = features.horn - features.horngoals;
+
+    features.eq_clauses = clause_set_count_equational(bank, set);
+    features.peq_clauses = clause_set_count_pure_equational(bank, set);
+    features.groundunitaxioms = clause_set_count_ground_unit_axioms(set);
+    features.groundgoals = clause_set_count_ground_goals(set);
+    features.positiveaxioms = clause_set_count_positive_axioms(set);
+    features.groundpositiveaxioms = clause_set_count_ground_positive_axioms(set);
+
+    let arity = clause_set_collect_arity_information(set, bank.signature());
+    features.max_fun_arity = arity.max_fun_arity;
+    features.avg_fun_arity = arity.avg_fun_arity;
+    features.sum_fun_arity = arity.sum_fun_arity;
+    features.max_pred_arity = arity.max_pred_arity;
+    features.avg_pred_arity = arity.avg_pred_arity;
+    features.sum_pred_arity = arity.sum_pred_arity;
+    features.fun_nonconst_count = arity.non_const_funs;
+    features.pred_nonconst_count = arity.non_const_preds;
+    features.fun_const_count = i32::try_from(arity.fun_const_count)
+        .unwrap_or_else(|_| panic!("function constant count must fit C int"));
+
+    spec_features_add_basic_eval(features);
+
+    features.num_of_definitions = -1;
+    let ho_features = clause_set_compute_ho_features(set, bank.signature(), recognize_choice);
+    features.has_ho_features = ho_features.has_ho_features;
+    features.quantifies_booleans = ho_features.quantifies_booleans;
+    features.has_defined_choice = ho_features.has_defined_choice;
+    features.perc_of_appvar_lits = ho_features.perc_app_var_lits;
+    features.order = 1;
+    features.goal_order = 1;
+}
+
+/// Computes the clause-set portion of C `SpecFeaturesCompute` without the
+/// defined-choice recognizer.
+///
+/// This preserves the non-choice behavior until lambda-normalized
+/// `ClauseRecognizeChoice` is ported at the clause layer.
+///
+/// # Panics
+///
+/// Panics under the same conditions as
+/// [`spec_features_compute_clause_set`].
+pub fn spec_features_compute_clause_set_without_choice(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    bank: &TermBank,
+) {
+    spec_features_compute_clause_set(features, set, bank, |_| false);
+}
+
 #[must_use]
 pub fn clause_set_count_maximal_terms(set: &ClauseSet) -> i64 {
     set.iter().map(clause_count_maximal_terms).sum()
@@ -1380,10 +1474,10 @@ mod tests {
         clause_set_print_non_units_string, clause_set_print_pos_units_default_string,
         clause_set_print_pos_units_string, clause_set_term_cells, clause_set_tptp_depth_info_add,
         create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
-        spec_features_parse, spec_features_print_string, spec_limits_print_string,
-        spec_type_print_string, spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell,
-        SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR,
-        SPEC_STRING_MEM,
+        spec_features_compute_clause_set, spec_features_parse, spec_features_print_string,
+        spec_limits_print_string, spec_type_print_string, spec_type_string_for_problem,
+        ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK,
+        DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -2017,6 +2111,95 @@ mod tests {
             clause_set_compute_ho_features_without_choice(&ClauseSet::new(), bank.signature()),
             ClauseSetHoFeatures::default()
         );
+    }
+
+    #[test]
+    fn spec_features_compute_clause_set_fills_c_clause_fields_and_resets_order() {
+        let mut bank = term_bank();
+        let individual = individual(&bank);
+        let bool_type = bank.signature().type_bank().bool_type();
+        let pred_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![individual.clone(), bool_type]));
+        let a = typed_const(&mut bank, "spec_compute_a");
+        let x = bank.vars().var_assert_alloc(-2, &individual);
+        let p = bank.vars().var_assert_alloc(-4, &pred_type);
+        let app = bank.term_apply_arg(&p, &x);
+        let mut app_clause = clause_from(vec![predicate_literal(&mut bank, &app)]);
+        app_clause.set_ident(7001);
+
+        let fx = typed_unary(&mut bank, "spec_compute_f", &x);
+        fx.set_prop(TP_HAS_LAMBDA_SUBTERM);
+        let goal_clause = clause_from(vec![equation(&mut bank, &fx, &a, false)]);
+        let set = ClauseSet::from_clauses([app_clause, goal_clause]);
+
+        let mut expected_depthmax = 0;
+        let mut expected_depthsum = 0;
+        let mut expected_depthcount = 0;
+        clause_set_tptp_depth_info_add(
+            &bank,
+            &set,
+            &mut expected_depthmax,
+            &mut expected_depthsum,
+            &mut expected_depthcount,
+        );
+
+        let mut features = SpecFeatureCell {
+            perc_of_form_defs: 0.875,
+            ..SpecFeatureCell::default()
+        };
+        spec_features_compute_clause_set(&mut features, &set, &bank, |clause| {
+            clause.ident() == 7001
+        });
+
+        assert_eq!(features.clauses, 2);
+        assert_eq!(features.goals, 1);
+        assert_eq!(features.axioms, 1);
+        assert_eq!(features.literals, 2);
+        assert_eq!(features.term_cells, clause_set_term_cells(&bank, &set));
+        assert_eq!(features.clause_max_depth, expected_depthmax);
+        assert_eq!(
+            features.clause_avg_depth,
+            expected_depthsum / expected_depthcount
+        );
+        assert_eq!(features.unit, 2);
+        assert_eq!(features.unitgoals, 1);
+        assert_eq!(features.unitaxioms, 1);
+        assert_eq!(features.horn, 2);
+        assert_eq!(features.horngoals, 1);
+        assert_eq!(features.hornaxioms, 1);
+        assert_eq!(features.eq_clauses, 1);
+        assert_eq!(features.peq_clauses, 1);
+        assert_eq!(features.groundunitaxioms, 0);
+        assert_eq!(features.groundgoals, 0);
+        assert_eq!(features.positiveaxioms, 1);
+        assert_eq!(features.groundpositiveaxioms, 0);
+        assert_eq!(features.max_fun_arity, 1);
+        assert_eq!(features.avg_fun_arity, 1);
+        assert_eq!(features.sum_fun_arity, 1);
+        assert_eq!(features.max_pred_arity, 0);
+        assert_eq!(features.avg_pred_arity, 0);
+        assert_eq!(features.sum_pred_arity, 0);
+        assert_eq!(features.fun_const_count, 1);
+        assert_eq!(features.fun_nonconst_count, 1);
+        assert_eq!(features.pred_nonconst_count, 0);
+        assert!(!features.goals_are_ground);
+        assert_eq!(features.axiomtypes, SpecFeatureClass::Unit);
+        assert_eq!(features.goaltypes, SpecFeatureClass::Unit);
+        assert_eq!(features.eq_content, SpecFeatureClass::SomeEq);
+        assert_eq!(features.max_fun_ar_class, SpecFeatureClass::Arity1);
+        assert_eq!(features.avg_fun_ar_class, SpecFeatureClass::Arity1);
+        assert!((features.ng_unit_axioms_part - 1.0).abs() < f64::EPSILON);
+        assert!(features.ground_positive_axioms_part.abs() < f64::EPSILON);
+        assert!(features.has_ho_features);
+        assert!(features.quantifies_booleans);
+        assert!(features.has_defined_choice);
+        assert_eq!(features.order, 1);
+        assert_eq!(features.goal_order, 1);
+        assert_eq!(features.num_of_definitions, -1);
+        assert!((features.perc_of_appvar_lits - 0.5).abs() < f64::EPSILON);
+        assert!((features.perc_of_form_defs - 0.875).abs() < f64::EPSILON);
     }
 
     #[test]
