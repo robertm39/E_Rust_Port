@@ -1,7 +1,11 @@
+use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::CP_IS_ORIENTED;
+use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::HeuristicParmsCell;
 use crate::heuristics::hcbadmin::HcbAdmin;
+use crate::heuristics::litselection::{apply_ported_literal_selector, UnsupportedLiteralSelection};
 use crate::heuristics::wfcbadmin::WfcbAdmin;
 use crate::orderings::ocb::OrderControlBlock;
 
@@ -96,6 +100,13 @@ impl Default for SatSolverState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LiteralSelectionOutcome {
+    Inherited,
+    SelectorApplied,
+    SelectionSkipped,
 }
 
 pub struct ProofControl {
@@ -232,14 +243,178 @@ pub fn proof_control_reset_sat_solver(control: &mut ProofControl) {
     control.reset_sat_solver();
 }
 
+#[must_use]
+pub fn select_inherited_literal(clause: &mut Clause) -> bool {
+    if clause.negative_literal_count() == 0 {
+        return false;
+    }
+    let found = clause
+        .literals()
+        .as_slice()
+        .iter()
+        .any(|literal| literal.is_negative() && literal.query_prop(EP_IS_PM_INTO_LIT));
+    if !found {
+        return false;
+    }
+    for literal in clause.literals_mut().as_mut_slice() {
+        if literal.query_prop(EP_IS_PM_INTO_LIT) {
+            literal.set_prop(EP_IS_SELECTED);
+        }
+    }
+    true
+}
+
+/// Runs the C `DoLiteralSelection` wrapper using a caller-supplied selector
+/// body.
+pub fn do_literal_selection_with_selector<S>(
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    mut selector: S,
+) -> LiteralSelectionOutcome
+where
+    S: FnMut(Option<&mut OrderControlBlock>, &mut Clause),
+{
+    clear_literal_selection_state(clause);
+    let parms = control.heuristic_parms();
+    if should_try_inherited_selection(parms, clause) && select_inherited_literal(clause) {
+        return LiteralSelectionOutcome::Inherited;
+    }
+    if literal_selection_conditions_hold(parms, clause) {
+        debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+        selector(control.ocb.as_mut(), clause);
+        LiteralSelectionOutcome::SelectorApplied
+    } else {
+        crate::heuristics::litselection::select_no_literals(control.ocb.as_mut(), clause);
+        LiteralSelectionOutcome::SelectionSkipped
+    }
+}
+
+/// Runs the C `DoLiteralSelection` wrapper using the literal-selection bodies
+/// that have already been ported.
+///
+/// # Errors
+///
+/// Returns `UnsupportedLiteralSelection` if the configured selector body has
+/// not been ported yet and the wrapper reaches the selector call.
+pub fn do_literal_selection(
+    control: &mut ProofControl,
+    clause: &mut Clause,
+) -> Result<LiteralSelectionOutcome, UnsupportedLiteralSelection> {
+    clear_literal_selection_state(clause);
+    let parms = control.heuristic_parms();
+    if should_try_inherited_selection(parms, clause) && select_inherited_literal(clause) {
+        return Ok(LiteralSelectionOutcome::Inherited);
+    }
+    if literal_selection_conditions_hold(parms, clause) {
+        debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+        apply_ported_literal_selector(
+            control.heuristic_parms.selection_strategy.as_str(),
+            control.ocb.as_mut(),
+            clause,
+        )?;
+        Ok(LiteralSelectionOutcome::SelectorApplied)
+    } else {
+        crate::heuristics::litselection::select_no_literals(control.ocb.as_mut(), clause);
+        Ok(LiteralSelectionOutcome::SelectionSkipped)
+    }
+}
+
+fn clear_literal_selection_state(clause: &mut Clause) {
+    clause.literals_mut().del_prop(EP_IS_SELECTED);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+    clause.del_prop(CP_IS_ORIENTED);
+    debug_assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+}
+
+fn should_try_inherited_selection(parms: &HeuristicParmsCell, clause: &Clause) -> bool {
+    parms.inherit_paramod_lit
+        || (parms.inherit_goal_pm_lit && clause.is_goal())
+        || (parms.inherit_conj_pm_lit && clause.is_conjecture())
+}
+
+fn literal_selection_conditions_hold(parms: &HeuristicParmsCell, clause: &Clause) -> bool {
+    clause.negative_literal_count() != 0
+        && count_in_range(
+            clause.positive_literal_count(),
+            parms.pos_lit_sel_min,
+            parms.pos_lit_sel_max,
+        )
+        && count_in_range(
+            clause.negative_literal_count(),
+            parms.neg_lit_sel_min,
+            parms.neg_lit_sel_max,
+        )
+        && count_in_range(
+            clause.literal_number(),
+            parms.all_lit_sel_min,
+            parms.all_lit_sel_max,
+        )
+        && (parms.weight_sel_min == 0 || parms.weight_sel_min <= clause.standard_weight())
+}
+
+fn count_in_range(count: usize, min: i64, max: i64) -> bool {
+    let count = i64::try_from(count).unwrap_or(i64::MAX);
+    count >= min && count <= max
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        proof_control_alloc, proof_control_reset_sat_solver, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        do_literal_selection, do_literal_selection_with_selector, proof_control_alloc,
+        proof_control_reset_sat_solver, select_inherited_literal, LiteralSelectionOutcome,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
+    use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_CONJECTURE};
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+    use crate::clauses::eqnlist::EqnList;
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::heuristics::hcb::{HeuristicParmsCell, HCB_DEFAULT_HEURISTIC};
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::Term;
+    use crate::terms::typebanks::TypeBank;
+
+    fn test_bank() -> TermBank {
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        TermBank::new(signature).unwrap()
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
+        Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
+    }
+
+    fn mixed_clause() -> Clause {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "pc_a");
+        let second = typed_const(&mut bank, "pc_b");
+        Clause::alloc(EqnList::from_vec(vec![
+            literal(&mut bank, &first, &second, true),
+            literal(&mut bank, &second, &first, false),
+        ]))
+    }
+
+    fn positive_clause() -> Clause {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "pc_pos_a");
+        let second = typed_const(&mut bank, "pc_pos_b");
+        Clause::alloc(EqnList::from_vec(vec![literal(
+            &mut bank, &first, &second, true,
+        )]))
+    }
 
     #[test]
     fn proof_control_alloc_initializes_c_shape() {
@@ -284,5 +459,149 @@ mod tests {
         assert!(DEFAULT_HEURISTICS.contains("Default    = (3*rweight21_a, 1*rweight21_g)"));
         assert!(DEFAULT_HEURISTICS.contains("UseWatchlist = \n"));
         assert!(DEFAULT_HEURISTICS.ends_with(" 1*FIFOWeight(PreferWatchlist))."));
+    }
+
+    #[test]
+    fn inherited_literal_selection_requires_negative_pm_into_literal() {
+        let mut clause = mixed_clause();
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_PM_INTO_LIT);
+        assert!(!select_inherited_literal(&mut clause));
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+        clause.literals_mut().as_mut_slice()[1].set_prop(EP_IS_PM_INTO_LIT);
+        assert!(select_inherited_literal(&mut clause));
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 2);
+    }
+
+    #[test]
+    fn do_literal_selection_clears_state_and_applies_selector_when_enabled() {
+        let mut control = proof_control_alloc();
+        let mut clause = mixed_clause();
+        clause.set_prop(CP_IS_ORIENTED);
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_SELECTED);
+        let mut selector_calls = 0;
+
+        let outcome =
+            do_literal_selection_with_selector(&mut control, &mut clause, |_ocb, clause| {
+                selector_calls += 1;
+                assert!(!clause.query_prop(CP_IS_ORIENTED));
+                assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+                clause.literals_mut().as_mut_slice()[1].set_prop(EP_IS_SELECTED);
+            });
+
+        assert_eq!(outcome, LiteralSelectionOutcome::SelectorApplied);
+        assert_eq!(selector_calls, 1);
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 1);
+    }
+
+    #[test]
+    fn do_literal_selection_inherited_path_bypasses_selector() {
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().inherit_paramod_lit = true;
+        let mut clause = mixed_clause();
+        clause.set_prop(CP_IS_ORIENTED);
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_PM_INTO_LIT);
+        clause.literals_mut().as_mut_slice()[1].set_prop(EP_IS_PM_INTO_LIT);
+
+        let outcome =
+            do_literal_selection_with_selector(&mut control, &mut clause, |_ocb, _clause| {
+                panic!("selector must not run after inherited selection");
+            });
+
+        assert_eq!(outcome, LiteralSelectionOutcome::Inherited);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 2);
+    }
+
+    #[test]
+    fn do_literal_selection_goal_and_conjecture_inheritance_follow_c_gate() {
+        let mut goal_control = proof_control_alloc();
+        goal_control.heuristic_parms_mut().inherit_goal_pm_lit = true;
+        let mut goal = mixed_clause();
+        goal.literals_mut().as_mut_slice()[1].set_prop(EP_IS_PM_INTO_LIT);
+        assert_ne!(goal.negative_literal_count(), 0);
+        goal.replace_literals(EqnList::from_vec(
+            goal.literals()
+                .as_slice()
+                .iter()
+                .filter(|literal| literal.is_negative())
+                .cloned()
+                .collect(),
+        ));
+
+        let outcome =
+            do_literal_selection_with_selector(&mut goal_control, &mut goal, |_ocb, _clause| {
+                panic!("goal inherited selection should bypass selector");
+            });
+        assert_eq!(outcome, LiteralSelectionOutcome::Inherited);
+
+        let mut conjecture_control = proof_control_alloc();
+        conjecture_control.heuristic_parms_mut().inherit_conj_pm_lit = true;
+        let mut conjecture = mixed_clause();
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        conjecture.literals_mut().as_mut_slice()[1].set_prop(EP_IS_PM_INTO_LIT);
+
+        let outcome = do_literal_selection_with_selector(
+            &mut conjecture_control,
+            &mut conjecture,
+            |_ocb, _clause| {
+                panic!("conjecture inherited selection should bypass selector");
+            },
+        );
+        assert_eq!(outcome, LiteralSelectionOutcome::Inherited);
+    }
+
+    #[test]
+    fn do_literal_selection_skips_selector_when_c_limits_fail() {
+        let mut control = proof_control_alloc();
+        let mut clause = positive_clause();
+        clause.set_prop(CP_IS_ORIENTED);
+        clause.literals_mut().as_mut_slice()[0].set_prop(EP_IS_SELECTED);
+
+        let outcome =
+            do_literal_selection_with_selector(&mut control, &mut clause, |_ocb, _clause| {
+                panic!("selector must not run for clauses without negative literals");
+            });
+
+        assert_eq!(outcome, LiteralSelectionOutcome::SelectionSkipped);
+        assert!(!clause.query_prop(CP_IS_ORIENTED));
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+    }
+
+    #[test]
+    fn do_literal_selection_named_noop_selectors_are_available() {
+        let mut control = proof_control_alloc();
+        let mut clause = mixed_clause();
+
+        let outcome = do_literal_selection(&mut control, &mut clause).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome, LiteralSelectionOutcome::SelectorApplied);
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+
+        control.heuristic_parms_mut().selection_strategy = "NoGeneration".to_owned();
+        let outcome = do_literal_selection(&mut control, &mut clause).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome, LiteralSelectionOutcome::SelectorApplied);
+        assert_eq!(clause.prop_lit_number(EP_IS_SELECTED), 0);
+    }
+
+    #[test]
+    fn do_literal_selection_reports_unported_strategy_only_if_reached() {
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().selection_strategy = "SelectNegativeLiterals".to_owned();
+
+        let mut positive = positive_clause();
+        let outcome = do_literal_selection(&mut control, &mut positive).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+        assert_eq!(outcome, LiteralSelectionOutcome::SelectionSkipped);
+
+        let mut mixed = mixed_clause();
+        let error = do_literal_selection(&mut control, &mut mixed).unwrap_err();
+        assert_eq!(error.strategy(), "SelectNegativeLiterals");
     }
 }

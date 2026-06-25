@@ -15,6 +15,7 @@ pub mod heuristic_lookup;
 pub mod learning;
 pub mod levweight;
 pub mod lifo;
+pub mod litselection;
 pub mod normsubst;
 pub mod orientweight;
 pub mod prefixweight;

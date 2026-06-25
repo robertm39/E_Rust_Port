@@ -376,6 +376,17 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SelectNoLiterals` and `SelectNoGeneration` assert that no literals are selected and otherwise do nothing. Their bodies rely on `DoLiteralSelection` in `che_proofcontrol.c` to clear `EPIsSelected` before any selector function is called.
+- `NoSelection` and `NoGeneration` are distinct selector names and distinct function pointers in C, even though both selector bodies are no-ops. `NoGeneration` is also checked elsewhere in the proof process to suppress generating inferences, so Rust should not collapse the two strategy names.
+- `GetLitSelFun` and `GetLitSelName` are table-driven. Reverse lookup scans function pointers and returns the first matching name, so table order is part of the printable strategy surface.
+
+### Change-Later Observations
+
+- The literal-selection unit mixes several families of selectors with repeated "P" positive-literal variants and many near-duplicate weight helpers. Keep the initial Rust port close to the table and wrappers, but consider factoring shared scoring code only after reference tests cover representative selectors from each family.
+- Many selector functions call `ClauseDelProp(clause, CPIsOriented)` after selecting a literal even though `DoLiteralSelection` already cleared the clause-oriented property before dispatch. Preserve the redundant invalidation while porting selector bodies; it may still document orientation-cache assumptions for selectors that orient or inspect maximality internally.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

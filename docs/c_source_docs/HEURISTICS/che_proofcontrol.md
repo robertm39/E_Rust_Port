@@ -106,7 +106,7 @@ Source files reviewed: `HEURISTICS/che_proofcontrol.h`, `HEURISTICS/che_proofcon
 - `ProofControlAlloc` initializes `ocb` and `hcb` to `NULL`, allocates the WFCB and HCB admins, sets `ac_handling_active=false`, initializes `heuristic_parms`, and eagerly creates a PicoSAT solver with trace generation enabled. It does not initialize `fvi_parms` or `problem_specs`; those are filled by `ProofControlInit` in `CONTROL/cco_proofproc.c`.
 - `ProofControlFree` owns and frees `ocb`, `wfcbs`, and `hcbs`, but intentionally does not free `hcb` separately because the selected HCB is owned by the HCB admin. Rust should keep the selected HCB as a borrowed/admin handle unless later proof-control ownership changes are proven compatible.
 - `ProofControlResetSATSolver` resets the existing PicoSAT instance and immediately initializes a replacement. Rust currently models this as solver lifecycle state until PicoSAT integration is ported.
-- `DoLiteralSelection` first clears all selected-literal bits and the clause-oriented property, then tries inherited paramodulation literal selection before applying the configured selector. Preserve that mutation order when literal selection is ported because later orientation and selection checks depend on the cleared state.
+- `DoLiteralSelection` first clears all selected-literal bits and the clause-oriented property, then tries inherited paramodulation literal selection before applying the configured selector. Rust now ports that wrapper behavior, including the literal-count/weight gates and no-op selector dispatch, while the nontrivial `che_litselection` selector bodies remain pending.
 
 ### Change-Later Observations
 
