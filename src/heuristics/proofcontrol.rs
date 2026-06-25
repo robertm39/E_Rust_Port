@@ -1,13 +1,17 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
-use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED};
+use crate::clauses::clause_props::{CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_SUBSUMES_WATCH};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
+use crate::clauses::subsumption::{
+    clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
+};
 use crate::heuristics::axiomscan::clause_set_scan_ac;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
@@ -129,6 +133,8 @@ pub enum LiteralSelectionOutcome {
 pub struct ProofStateInitAxiomOutcome {
     pub initial_clauses: i64,
     pub sos_marked: i64,
+    pub watchlist_matches: i64,
+    pub watchlist_removed: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,7 +142,15 @@ pub struct ProofStateInitOutcome {
     pub watchlist_indexed: i64,
     pub initial_clauses: i64,
     pub sos_marked: i64,
+    pub watchlist_matches: i64,
+    pub watchlist_removed: i64,
     pub ac_handling_active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProofStateWatchlistOutcome {
+    pub subsumes_watch: bool,
+    pub removed: i64,
 }
 
 pub struct ProofControl {
@@ -423,6 +437,8 @@ pub fn proof_state_init(
         watchlist_indexed,
         initial_clauses: axiom_outcome.initial_clauses,
         sos_marked: axiom_outcome.sos_marked,
+        watchlist_matches: axiom_outcome.watchlist_matches,
+        watchlist_removed: axiom_outcome.watchlist_removed,
         ac_handling_active,
     })
 }
@@ -479,20 +495,30 @@ pub fn proof_state_init_axioms(
 
     let ordered_axioms = state.axioms().eval_order_cloned(0);
     let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
+    let static_watchlist = control.heuristic_parms.watchlist_is_static;
+    let lambda_demod = control.heuristic_parms.lambda_demod;
     let use_tptp_sos = control.heuristic_parms.use_tptp_sos;
     let mut initial_clauses = 0;
+    let mut watchlist_matches = 0;
+    let mut watchlist_removed = 0;
 
     {
         let ProofControl { hcbs, wfcbs, .. } = control;
         let active_hcb = hcbs
             .hcb(active_hcb_handle)
             .ok_or_else(|| unknown_heuristic_handle("active"))?;
-        let (terms, unprocessed) = state.terms_and_unprocessed_mut();
 
         for source in ordered_axioms {
-            let mut new = source.copy_to_bank(terms)?;
+            let mut new = source.copy_to_bank(state.terms_mut())?;
             new.set_prop(CP_INITIAL);
-            hcb_clause_evaluate(active_hcb, wfcbs, terms, &mut new);
+            let watchlist_outcome =
+                proof_state_check_watchlist(state, &mut new, static_watchlist, lambda_demod);
+            if watchlist_outcome.subsumes_watch {
+                watchlist_matches += 1;
+            }
+            watchlist_removed += watchlist_outcome.removed;
+
+            hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut new);
             if prefer_initial {
                 let Some(evaluations) = new.evaluations_mut() else {
                     return Err(Diagnostic::new(
@@ -502,7 +528,7 @@ pub fn proof_state_init_axioms(
                 };
                 evaluations.change_priority(-PRIO_LARGEST_REASONABLE);
             }
-            unprocessed.insert(new);
+            state.unprocessed_mut().insert(new);
             initial_clauses += 1;
         }
     }
@@ -511,7 +537,91 @@ pub fn proof_state_init_axioms(
     Ok(ProofStateInitAxiomOutcome {
         initial_clauses,
         sos_marked,
+        watchlist_matches,
+        watchlist_removed,
     })
+}
+
+/// Runs C `check_watchlist` against the proof-state watchlist.
+///
+/// The current Rust path updates the local watchlist FV index and archive.
+/// Long-lived `wlindices` deletion and proof-documentation output are wired
+/// with the later state-owned global-index/proof-output integration.
+#[must_use]
+pub fn proof_state_check_watchlist(
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    _lambda_demod: bool,
+) -> ProofStateWatchlistOutcome {
+    let (terms, watchlist, archive) = state.terms_watchlist_archive_mut();
+    let Some(watchlist) = watchlist else {
+        return ProofStateWatchlistOutcome::default();
+    };
+
+    clause.subsume_order_sort_literals(terms);
+    clause.set_weight(clause.standard_weight());
+
+    if static_watchlist {
+        let subsumed = clause_set_find_first_subsumed_clause_with_index(
+            watchlist,
+            watchlist.fv_anchor(),
+            clause,
+            terms,
+        );
+        if subsumed.is_some() {
+            clause.set_prop(CP_SUBSUMES_WATCH);
+            return ProofStateWatchlistOutcome {
+                subsumes_watch: true,
+                removed: 0,
+            };
+        }
+        return ProofStateWatchlistOutcome::default();
+    }
+
+    let removed = remove_watchlist_subsumed(watchlist, archive, clause, terms);
+    if removed != 0 {
+        clause.set_prop(CP_SUBSUMES_WATCH);
+        return ProofStateWatchlistOutcome {
+            subsumes_watch: true,
+            removed,
+        };
+    }
+    ProofStateWatchlistOutcome::default()
+}
+
+fn remove_watchlist_subsumed(
+    watchlist: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    subsumer: &Clause,
+    terms: &TermBank,
+) -> i64 {
+    let mut stack = PStack::new();
+    let expected_removed = clause_set_find_subsumed_clauses_with_index(
+        watchlist,
+        watchlist.fv_anchor(),
+        subsumer,
+        &mut stack,
+        terms,
+    );
+    let ids = stack
+        .as_slice()
+        .iter()
+        .map(|clause| clause.ident())
+        .collect::<Vec<_>>();
+
+    let mut removed = 0;
+    for ident in ids {
+        let Some(mut clause) = watchlist.extract_by_id(ident) else {
+            continue;
+        };
+        clause.set_prop(CP_IS_DEAD);
+        archive.insert(clause);
+        removed += 1;
+    }
+
+    debug_assert_eq!(removed, expected_removed);
+    removed
 }
 
 /// Runs the AC-axiom scan portion of C `ProofStateInit`.
@@ -763,7 +873,9 @@ mod tests {
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_CONJECTURE};
+    use crate::clauses::clause_props::{
+        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_SOS, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
+    };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
@@ -843,6 +955,31 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(bank, &left, &right, true)]));
         clause.set_ident(ident);
         (clause, f_code)
+    }
+
+    fn watchlist_subsumption_pair(
+        bank: &mut TermBank,
+        stem: &str,
+        general_id: i64,
+        watched_id: i64,
+    ) -> (Clause, Clause) {
+        let variable = typed_var(bank, -10);
+        let witness = typed_const(bank, &format!("{stem}_witness"));
+        let first = typed_const(bank, &format!("{stem}_first"));
+        let second = typed_const(bank, &format!("{stem}_second"));
+        let mut general = Clause::alloc(EqnList::from_vec(vec![
+            literal(bank, &variable, &first, true),
+            literal(bank, &variable, &second, true),
+        ]));
+        let mut watched = Clause::alloc(EqnList::from_vec(vec![
+            literal(bank, &witness, &first, true),
+            literal(bank, &witness, &second, true),
+        ]));
+        general.set_ident(general_id);
+        general.set_weight(general.standard_weight());
+        watched.set_ident(watched_id);
+        watched.set_weight(watched.standard_weight());
+        (general, watched)
     }
 
     fn mixed_clause() -> Clause {
@@ -1075,6 +1212,8 @@ mod tests {
         assert_eq!(outcome.watchlist_indexed, 0);
         assert_eq!(outcome.initial_clauses, 2);
         assert_eq!(outcome.sos_marked, 1);
+        assert_eq!(outcome.watchlist_matches, 0);
+        assert_eq!(outcome.watchlist_removed, 0);
         assert!(!outcome.ac_handling_active);
         assert_eq!(state.axioms().members(), 2);
         assert_eq!(state.unprocessed().members(), 2);
@@ -1097,6 +1236,93 @@ mod tests {
                 PRIO_NORMAL - PRIO_LARGEST_REASONABLE
             );
         }
+    }
+
+    #[test]
+    fn proof_state_init_static_watchlist_marks_matching_initial_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, watch) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_static_watch", 4_020, 4_021);
+        let axiom_id = axiom.ident();
+        let watch_id = watch.ident();
+        state.axioms_mut().insert(axiom);
+        state.watchlist_mut().unwrap().insert(watch);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "InitStaticWatch".to_owned(),
+            watchlist_is_static: true,
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["InitStaticWatch=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let outcome = proof_state_init(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome.watchlist_indexed, 1);
+        assert_eq!(outcome.initial_clauses, 1);
+        assert_eq!(outcome.watchlist_matches, 1);
+        assert_eq!(outcome.watchlist_removed, 0);
+        assert_eq!(state.watchlist().unwrap().members(), 1);
+        assert!(state.watchlist().unwrap().find_by_id(watch_id).is_some());
+        assert_eq!(state.archive().members(), 0);
+        let copied = state.unprocessed().find_by_id(axiom_id).unwrap();
+        assert!(copied.query_prop(CP_INITIAL | CP_SUBSUMES_WATCH));
+        assert!(copied.is_subsume_ordered(state.terms()));
+        assert_eq!(copied.weight(), copied.standard_weight());
+    }
+
+    #[test]
+    fn proof_state_init_dynamic_watchlist_removes_matching_initial_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, watch) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_dynamic_watch", 4_030, 4_031);
+        let axiom_id = axiom.ident();
+        let watch_id = watch.ident();
+        state.axioms_mut().insert(axiom);
+        state.watchlist_mut().unwrap().insert(watch);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "InitDynamicWatch".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["InitDynamicWatch=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let outcome = proof_state_init(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome.watchlist_indexed, 1);
+        assert_eq!(outcome.initial_clauses, 1);
+        assert_eq!(outcome.watchlist_matches, 1);
+        assert_eq!(outcome.watchlist_removed, 1);
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        let archived = state.archive().find_by_id(watch_id).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD));
+        let copied = state.unprocessed().find_by_id(axiom_id).unwrap();
+        assert!(copied.query_prop(CP_INITIAL | CP_SUBSUMES_WATCH));
     }
 
     #[test]

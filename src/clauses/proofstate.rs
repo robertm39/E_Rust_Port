@@ -245,6 +245,18 @@ impl ProofState {
         &mut self.archive
     }
 
+    pub fn terms_watchlist_archive_mut(
+        &mut self,
+    ) -> (&TermBank, Option<&mut ClauseSet>, &mut ClauseSet) {
+        let Self {
+            terms,
+            watchlist,
+            archive,
+            ..
+        } = self;
+        (terms, watchlist.as_mut(), archive)
+    }
+
     #[must_use]
     pub const fn watchlist(&self) -> Option<&ClauseSet> {
         self.watchlist.as_ref()
