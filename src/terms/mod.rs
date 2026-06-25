@@ -3,6 +3,7 @@ pub mod dbvars;
 pub mod fp_index;
 pub mod functypes;
 pub mod garbage_coll;
+pub mod ho_csu;
 pub mod idx_fp;
 pub mod match_mgu;
 pub mod replace;

@@ -123,4 +123,12 @@ Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- `InitUnifLimits` stores a file-static `HeuristicParms_p`; the CSU iterator later reads `max_unif_steps`, `fixpoint_oracle`, `pattern_oracle`, `max_unifiers`, and `unif_mode`, while binding generation uses the projection/imitation/identification/elimination limits from the same parameter cell. Rust currently exposes a safe snapshot of those fields and updates it from proof-control initialization.
+
+### Change-Later Observations
+
+- The C global stores a pointer, so later mutation of the same `HeuristicParmsCell` would be observable by CSU enumeration. Rust intentionally stores a snapshot until the full CSU iterator exists; revisit this if mutable post-init heuristic parameters become part of the Rust proof-search lifecycle.
 <!-- END MANUAL REVIEW: c_source_docs -->

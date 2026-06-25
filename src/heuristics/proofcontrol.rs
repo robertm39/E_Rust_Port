@@ -15,6 +15,7 @@ use crate::heuristics::to_autoselect::to_select_ordering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
@@ -332,6 +333,7 @@ pub fn proof_control_init_heuristics(
         control.fvi_parms.set_symbol_slack(0);
     }
     *params = control.heuristic_parms.clone();
+    init_unif_limits(&control.heuristic_parms);
 
     Ok(())
 }
