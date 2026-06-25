@@ -63,6 +63,34 @@ pub fn term_follow_rw_chain(term: &Term) -> Term {
     current
 }
 
+/// Follows only top-level rewrite links and reports whether any traversed link
+/// came from an `SoS` clause.
+///
+/// This mirrors C `term_follow_top_RW_chain`: traversal requires a demodulator
+/// pointer on the rewrite link, and `restricted_rw` follows only restricted
+/// rewrite links.
+///
+/// # Panics
+///
+/// Panics if a traversed top rewrite link is missing its replacement, matching
+/// the C assertion while traversing `TermRWReplaceField`.
+#[must_use]
+pub fn term_follow_top_rw_chain(term: &Term, restricted_rw: bool) -> (Term, bool) {
+    let mut current = term.clone();
+    let mut sos_rewritten = false;
+
+    while current.is_top_rewritten() && (!restricted_rw || current.is_rrewritten()) {
+        if current.query_prop(TP_IS_SOS_REWRITTEN) {
+            sos_rewritten = true;
+        }
+        current = current
+            .rw_replace_field()
+            .expect("top-rewritten term must have a replacement");
+    }
+
+    (current, sos_rewritten)
+}
+
 /// Replaces the subterm denoted by `pos` with `repl` and shares the result in
 /// `bank`.
 ///
@@ -121,7 +149,8 @@ pub fn tb_term_pos_replace(
 mod tests {
     use super::{
         tb_term_pos_replace, term_add_rw_link, term_delete_rw_link, term_follow_rw_chain,
-        RewriteDemodulator, RwResultType, TP_IS_REWRITTEN, TP_IS_RREWRITTEN, TP_IS_SOS_REWRITTEN,
+        term_follow_top_rw_chain, RewriteDemodulator, RwResultType, TP_IS_REWRITTEN,
+        TP_IS_RREWRITTEN, TP_IS_SOS_REWRITTEN,
     };
     use crate::inout::scanner::Scanner;
     use crate::terms::signature::Signature;
@@ -215,6 +244,46 @@ mod tests {
         );
 
         assert_eq!(term_follow_rw_chain(&first), third);
+    }
+
+    #[test]
+    fn follow_top_rw_chain_stops_at_non_demodulator_links_and_reports_sos() {
+        let first = Term::const_cell_alloc(1);
+        let second = Term::const_cell_alloc(2);
+        let third = Term::const_cell_alloc(3);
+        let demod = RewriteDemodulator::new(11);
+
+        term_add_rw_link(
+            &first,
+            &second,
+            Some(demod),
+            true,
+            RwResultType::AlwaysRewritable,
+        );
+        term_add_rw_link(&second, &third, None, false, RwResultType::AlwaysRewritable);
+
+        let (followed, sos_rewritten) = term_follow_top_rw_chain(&first, false);
+
+        assert_eq!(followed, second);
+        assert!(sos_rewritten);
+    }
+
+    #[test]
+    fn follow_top_rw_chain_honors_restricted_rewrite_links() {
+        let term = Term::const_cell_alloc(1);
+        let replacement = Term::const_cell_alloc(2);
+        let demod = RewriteDemodulator::new(13);
+
+        term_add_rw_link(
+            &term,
+            &replacement,
+            Some(demod),
+            false,
+            RwResultType::LimitedRewritable,
+        );
+
+        assert_eq!(term_follow_top_rw_chain(&term, false), (replacement, false));
+        assert_eq!(term_follow_top_rw_chain(&term, true), (term, false));
     }
 
     #[test]

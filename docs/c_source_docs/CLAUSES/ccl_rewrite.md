@@ -152,10 +152,12 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - The temporary local rewrite system is keyed by shared-term identity, matching C's pointer-keyed `PObjMap`; duplicate rule keys overwrite earlier values like `PObjMapStore`.
 - C treats any negative oriented literal as a local rule source, not just equational literals. This means an oriented negative predicate literal can be skipped as a source instead of rewritten by a positive-atom rule. Rust preserves that classification.
 - `replace_term` recursively follows rule replacements and rebuilds changed top cells through the term bank. This matches `TermMap` restart behavior when the mapper returns a different shared term.
+- `term_follow_top_RW_chain` is represented by `term_follow_top_rw_chain` in `src/terms/replace.rs`. It follows only rewrite links carrying a demodulator handle, honors the restricted-rewrite bit before stepping, and reports whether any traversed link was SoS-derived.
 
 ### Change Later Candidates
 
 - C records `DCLocalRewrite` with `ClausePushDerivation` after a successful local rewrite. Rust currently omits that side effect until clause derivation ownership is ported.
 - C does not directly refresh the cached clause weight after `ClauseLocalRW` unless `ClauseRemoveSuperfluousLiterals` removes something. Rust refreshes after any local rewrite to preserve the current Rust cached-weight invariant; revisit this when forward-contraction reference tests cover stale-weight observability.
 - Positive-atom local rewriting uses `$false` as an intermediate replacement and relies on `EqnMap` to normalize `$false`/`$true` and flip polarity. A later typed API could expose this as a Boolean-literal transformation, but compatibility code should keep the C normalization path visible.
+- The top-chain helper checks whether a link is followable before reading its SoS flag, so a skipped limited link under restricted rewriting does not contribute to SoS status. Preserve this for compatibility unless proof accounting tests show the C order is accidental.
 <!-- END MANUAL REVIEW: c_source_docs -->
