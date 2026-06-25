@@ -1,8 +1,11 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_ORIENTED;
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+use crate::clauses::eqn_props::{
+    EP_IS_EQU_LITERAL, EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED,
+};
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
 
@@ -44,6 +47,14 @@ pub const SELECT_OPTIMAL_RESTR_P_DEPTH2: &str = "SelectOptimalRestrPDepth2";
 pub const P_SELECT_OPTIMAL_RESTR_P_DEPTH2: &str = "PSelectOptimalRestrPDepth2";
 pub const SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "SelectOptimalRestrNDepth2";
 pub const P_SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "PSelectOptimalRestrNDepth2";
+pub const SELECT_UNLESS_UNIQ_MAX: &str = "SelectUnlessUniqMax";
+pub const P_SELECT_UNLESS_UNIQ_MAX: &str = "PSelectUnlessUniqMax";
+pub const SELECT_UNLESS_POS_MAX: &str = "SelectUnlessPosMax";
+pub const P_SELECT_UNLESS_POS_MAX: &str = "PSelectUnlessPosMax";
+pub const SELECT_UNLESS_UNIQ_POS_MAX: &str = "SelectUnlessUniqPosMax";
+pub const P_SELECT_UNLESS_UNIQ_POS_MAX: &str = "PSelectUnlessUniqPosMax";
+pub const SELECT_UNLESS_UNIQ_MAX_POS: &str = "SelectUnlessUniqMaxPos";
+pub const P_SELECT_UNLESS_UNIQ_MAX_POS: &str = "PSelectUnlessUniqMaxPos";
 pub const SELECT_COMPLEX: &str = "SelectComplex";
 pub const P_SELECT_COMPLEX: &str = "PSelectComplex";
 pub const SELECT_COMPLEX_EXCEPT_RR_HORN: &str = "SelectComplexExceptRRHorn";
@@ -213,6 +224,63 @@ enum Depth2Scope {
     All,
     Positive,
     Negative,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaximalGateSelector {
+    UnlessUniqMax,
+    PUnlessUniqMax,
+    UnlessPosMax,
+    PUnlessPosMax,
+    UnlessUniqPosMax,
+    PUnlessUniqPosMax,
+    UnlessUniqMaxPos,
+    PUnlessUniqMaxPos,
+}
+
+impl MaximalGateSelector {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            SELECT_UNLESS_UNIQ_MAX => Some(Self::UnlessUniqMax),
+            P_SELECT_UNLESS_UNIQ_MAX => Some(Self::PUnlessUniqMax),
+            SELECT_UNLESS_POS_MAX => Some(Self::UnlessPosMax),
+            P_SELECT_UNLESS_POS_MAX => Some(Self::PUnlessPosMax),
+            SELECT_UNLESS_UNIQ_POS_MAX => Some(Self::UnlessUniqPosMax),
+            P_SELECT_UNLESS_UNIQ_POS_MAX => Some(Self::PUnlessUniqPosMax),
+            SELECT_UNLESS_UNIQ_MAX_POS => Some(Self::UnlessUniqMaxPos),
+            P_SELECT_UNLESS_UNIQ_MAX_POS => Some(Self::PUnlessUniqMaxPos),
+            _ => None,
+        }
+    }
+
+    fn apply(self, ocb: &mut OrderControlBlock, bank: &TermBank, clause: &mut Clause) {
+        match self {
+            Self::UnlessUniqMax => select_unless_uniq_max_optimal_literal(ocb, bank, clause),
+            Self::PUnlessUniqMax => p_select_unless_uniq_max_optimal_literal(ocb, bank, clause),
+            Self::UnlessPosMax => select_unless_pos_max_optimal_literal(ocb, bank, clause),
+            Self::PUnlessPosMax => p_select_unless_pos_max_optimal_literal(ocb, bank, clause),
+            Self::UnlessUniqPosMax => {
+                select_unless_uniq_pos_max_optimal_literal(ocb, bank, clause);
+            }
+            Self::PUnlessUniqPosMax => {
+                p_select_unless_uniq_pos_max_optimal_literal(ocb, bank, clause);
+            }
+            Self::UnlessUniqMaxPos => {
+                select_unless_uniq_max_pos_optimal_literal(ocb, bank, clause);
+            }
+            Self::PUnlessUniqMaxPos => {
+                p_select_unless_uniq_max_pos_optimal_literal(ocb, bank, clause);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MaximalGate {
+    MoreThanOne,
+    NoPositive,
+    NotUniquePositive,
+    NotUniquePositiveOnly,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -678,6 +746,94 @@ pub fn p_select_n_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, cl
     select_depth2_optimal_literal_impl(ocb, clause, true, Depth2Scope::Negative);
 }
 
+pub fn select_unless_uniq_max_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(ocb, bank, clause, false, MaximalGate::MoreThanOne);
+}
+
+pub fn p_select_unless_uniq_max_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(ocb, bank, clause, true, MaximalGate::MoreThanOne);
+}
+
+pub fn select_unless_pos_max_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(ocb, bank, clause, false, MaximalGate::NoPositive);
+}
+
+pub fn p_select_unless_pos_max_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(ocb, bank, clause, true, MaximalGate::NoPositive);
+}
+
+pub fn select_unless_uniq_pos_max_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(
+        ocb,
+        bank,
+        clause,
+        false,
+        MaximalGate::NotUniquePositive,
+    );
+}
+
+pub fn p_select_unless_uniq_pos_max_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(
+        ocb,
+        bank,
+        clause,
+        true,
+        MaximalGate::NotUniquePositive,
+    );
+}
+
+pub fn select_unless_uniq_max_pos_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(
+        ocb,
+        bank,
+        clause,
+        false,
+        MaximalGate::NotUniquePositiveOnly,
+    );
+}
+
+pub fn p_select_unless_uniq_max_pos_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+) {
+    select_unless_maximal_gate_optimal_literal(
+        ocb,
+        bank,
+        clause,
+        true,
+        MaximalGate::NotUniquePositiveOnly,
+    );
+}
+
 pub fn select_complex(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
     select_complex_impl(ocb, clause, false, ComplexGroundChoice::SmallestStandard);
 }
@@ -744,6 +900,23 @@ pub fn apply_ported_literal_selector(
     ocb: Option<&mut OrderControlBlock>,
     clause: &mut Clause,
 ) -> Result<(), UnsupportedLiteralSelection> {
+    apply_ported_literal_selector_with_bank(name, ocb, None, clause)
+}
+
+/// Applies the subset of literal-selection functions that has been ported,
+/// including selector bodies that need the term bank for C maximality marking.
+///
+/// # Errors
+///
+/// Returns `UnsupportedLiteralSelection` for valid C selector names whose
+/// selector bodies have not been ported yet, and for bank-aware selectors when
+/// the required `OCB` or term bank is not supplied.
+pub fn apply_ported_literal_selector_with_bank(
+    name: &str,
+    ocb: Option<&mut OrderControlBlock>,
+    bank: Option<&TermBank>,
+    clause: &mut Clause,
+) -> Result<(), UnsupportedLiteralSelection> {
     if let Some(selector) = BasicLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
         Ok(())
@@ -755,6 +928,15 @@ pub fn apply_ported_literal_selector(
         Ok(())
     } else if let Some(selector) = DiversificationLiteralSelector::from_name(name) {
         selector.apply(ocb, clause);
+        Ok(())
+    } else if let Some(selector) = MaximalGateSelector::from_name(name) {
+        let Some(ocb) = ocb else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        let Some(bank) = bank else {
+            return Err(UnsupportedLiteralSelection::new(name));
+        };
+        selector.apply(ocb, bank, clause);
         Ok(())
     } else {
         Err(UnsupportedLiteralSelection::new(name))
@@ -768,6 +950,53 @@ fn select_positive_literals(clause: &mut Clause) {
             literal.set_prop(EP_IS_SELECTED);
         }
     }
+}
+
+fn select_unless_maximal_gate_optimal_literal(
+    ocb: &mut OrderControlBlock,
+    bank: &TermBank,
+    clause: &mut Clause,
+    positive_variant: bool,
+    gate: MaximalGate,
+) {
+    clause.cond_mark_maximal_terms(ocb, bank);
+
+    if maximal_gate_allows_selection(clause, gate) {
+        apply_optimal_variant(Some(ocb), clause, positive_variant);
+        clause.del_prop(CP_IS_ORIENTED);
+    }
+}
+
+fn maximal_gate_allows_selection(clause: &Clause, gate: MaximalGate) -> bool {
+    match gate {
+        MaximalGate::MoreThanOne => clause.literals().query_prop_number(EP_IS_MAXIMAL) > 1,
+        MaximalGate::NoPositive => {
+            clause
+                .literals()
+                .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+                == 0
+        }
+        MaximalGate::NotUniquePositive => {
+            clause
+                .literals()
+                .query_prop_number(EP_IS_MAXIMAL | EP_IS_POSITIVE)
+                != 1
+        }
+        MaximalGate::NotUniquePositiveOnly => !has_unique_positive_only_maximal_literal(clause),
+    }
+}
+
+fn has_unique_positive_only_maximal_literal(clause: &Clause) -> bool {
+    let mut found_positive_maximal = false;
+    for literal in clause.literals().as_slice() {
+        if literal.is_maximal() {
+            if literal.is_negative() || found_positive_maximal {
+                return false;
+            }
+            found_positive_maximal = true;
+        }
+    }
+    found_positive_maximal
 }
 
 fn generic_uniq_selection_no_ordering(
@@ -1083,13 +1312,14 @@ fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_ported_literal_selector, p_select_all_cond_optimal_literal, p_select_complex,
-        p_select_complex_except_rr_horn, p_select_complex_prefer_eq, p_select_complex_prefer_neq,
-        p_select_cond_optimal_literal, p_select_depth2_optimal_literal,
-        p_select_diff_negative_literal, p_select_first_variable_literal,
-        p_select_ground_negative_literal, p_select_l_complex, p_select_largest_negative_literal,
-        p_select_min_optimal_literal, p_select_negative_literals, p_select_optimal_literal,
-        p_select_smallest_negative_literal, p_select_strong_rr_non_rr_optimal_literal,
+        apply_ported_literal_selector, apply_ported_literal_selector_with_bank,
+        p_select_all_cond_optimal_literal, p_select_complex, p_select_complex_except_rr_horn,
+        p_select_complex_prefer_eq, p_select_complex_prefer_neq, p_select_cond_optimal_literal,
+        p_select_depth2_optimal_literal, p_select_diff_negative_literal,
+        p_select_first_variable_literal, p_select_ground_negative_literal, p_select_l_complex,
+        p_select_largest_negative_literal, p_select_min_optimal_literal,
+        p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
+        p_select_strong_rr_non_rr_optimal_literal, p_select_unless_uniq_max_optimal_literal,
         reset_literal_weight_counter_for_tests, select_all_cond_optimal_literal,
         select_anti_rr_optimal_literal, select_complex, select_complex_except_rr_horn,
         select_complex_prefer_eq, select_complex_prefer_neq, select_cond_optimal_literal,
@@ -1101,7 +1331,9 @@ mod tests {
         select_non_anti_rr_optimal_literal, select_non_rr_optimal_literal,
         select_non_strong_rr_optimal_literal, select_optimal_literal,
         select_p_depth2_optimal_literal, select_smallest_negative_literal,
-        select_strong_rr_non_rr_optimal_literal, NO_GENERATION, NO_SELECTION,
+        select_strong_rr_non_rr_optimal_literal, select_unless_pos_max_optimal_literal,
+        select_unless_uniq_max_optimal_literal, select_unless_uniq_max_pos_optimal_literal,
+        select_unless_uniq_pos_max_optimal_literal, NO_GENERATION, NO_SELECTION,
         P_SELECT_ALL_COND_OPTIMAL_LIT, P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COMPLEX,
         P_SELECT_COMPLEX_EXCEPT_RR_HORN, P_SELECT_COMPLEX_PREFER_EQ, P_SELECT_COMPLEX_PREFER_NEQ,
         P_SELECT_COND_OPTIMAL_LIT, P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT,
@@ -1110,7 +1342,8 @@ mod tests {
         P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT, P_SELECT_OPTIMAL_RESTR_DEPTH2,
         P_SELECT_OPTIMAL_RESTR_N_DEPTH2, P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
         P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
-        P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, SELECT_ALL_COND_OPTIMAL_LIT,
+        P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, P_SELECT_UNLESS_POS_MAX, P_SELECT_UNLESS_UNIQ_MAX,
+        P_SELECT_UNLESS_UNIQ_MAX_POS, P_SELECT_UNLESS_UNIQ_POS_MAX, SELECT_ALL_COND_OPTIMAL_LIT,
         SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_COMPLEX, SELECT_COMPLEX_EXCEPT_RR_HORN,
         SELECT_COMPLEX_PREFER_EQ, SELECT_COMPLEX_PREFER_NEQ, SELECT_COND_OPTIMAL_LIT,
         SELECT_DIFF_NEG_LIT, SELECT_DIV_LITS, SELECT_DIV_PREFER_INTO_LITS, SELECT_GROUND_NEG_LIT,
@@ -1118,13 +1351,17 @@ mod tests {
         SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
         SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT, SELECT_OPTIMAL_RESTR_DEPTH2,
         SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2, SELECT_PURE_VAR_NEG_LITERALS,
-        SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+        SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, SELECT_UNLESS_POS_MAX,
+        SELECT_UNLESS_UNIQ_MAX, SELECT_UNLESS_UNIQ_MAX_POS, SELECT_UNLESS_UNIQ_POS_MAX,
     };
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_IS_ORIENTED;
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+    use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::heuristics::to_params::TermOrdering;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -1191,6 +1428,15 @@ mod tests {
         literal(bank, atom, &true_term, positive)
     }
 
+    fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     fn select_mask(clause: &Clause) -> Vec<bool> {
         clause
             .literals()
@@ -1242,6 +1488,14 @@ mod tests {
 
     fn clear_selection(clause: &mut Clause) {
         clause.literals_mut().del_prop(EP_IS_SELECTED);
+    }
+
+    fn mark_maximal_literals(clause: &mut Clause, indices: &[usize]) {
+        clause.literals_mut().del_prop(EP_IS_MAXIMAL);
+        for index in indices {
+            clause.literals_mut().as_mut_slice()[*index].set_prop(EP_IS_MAXIMAL);
+        }
+        clause.set_prop(CP_IS_ORIENTED);
     }
 
     fn simple_mixed_clause() -> Clause {
@@ -1433,6 +1687,18 @@ mod tests {
             literal(&mut bank, &a, &b, false),
             literal(&mut bank, &b, &c, false),
             literal(&mut bank, &c, &d, false),
+        ]))
+    }
+
+    fn maximal_gate_clause(bank: &mut TermBank) -> Clause {
+        let pos = predicate_const_atom(bank, "max_gate_pos");
+        let a = shared_const(bank, "max_gate_a");
+        let b = shared_const(bank, "max_gate_b");
+        let c = shared_const(bank, "max_gate_c");
+        Clause::alloc(EqnList::from_vec(vec![
+            predicate_literal(bank, &pos, true),
+            literal(bank, &a, &b, false),
+            literal(bank, &b, &c, false),
         ]))
     }
 
@@ -1814,6 +2080,103 @@ mod tests {
     }
 
     #[test]
+    fn unless_uniq_max_selectors_gate_on_total_maximal_count() {
+        let mut bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut blocked = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut blocked, &[0]);
+
+        select_unless_uniq_max_optimal_literal(&mut ocb, &bank, &mut blocked);
+
+        assert_eq!(selected_indices(&blocked), Vec::<usize>::new());
+        assert!(blocked.query_prop(CP_IS_ORIENTED));
+
+        let mut allowed = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut allowed, &[0, 1]);
+
+        select_unless_uniq_max_optimal_literal(&mut ocb, &bank, &mut allowed);
+
+        assert_eq!(selected_indices(&allowed), vec![1]);
+        assert!(!allowed.query_prop(CP_IS_ORIENTED));
+
+        let mut positive_variant = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut positive_variant, &[0, 1]);
+
+        p_select_unless_uniq_max_optimal_literal(&mut ocb, &bank, &mut positive_variant);
+
+        assert_eq!(selected_indices(&positive_variant), vec![1]);
+    }
+
+    #[test]
+    fn unless_positive_max_and_unique_positive_max_gates_match_c() {
+        let mut bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let mut positive_max = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut positive_max, &[0]);
+
+        select_unless_pos_max_optimal_literal(&mut ocb, &bank, &mut positive_max);
+
+        assert_eq!(selected_indices(&positive_max), Vec::<usize>::new());
+
+        let mut no_positive_max = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut no_positive_max, &[1]);
+
+        select_unless_pos_max_optimal_literal(&mut ocb, &bank, &mut no_positive_max);
+
+        assert_eq!(selected_indices(&no_positive_max), vec![1]);
+
+        let mut one_positive_plus_negative = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut one_positive_plus_negative, &[0, 1]);
+
+        select_unless_uniq_pos_max_optimal_literal(
+            &mut ocb,
+            &bank,
+            &mut one_positive_plus_negative,
+        );
+
+        assert_eq!(
+            selected_indices(&one_positive_plus_negative),
+            Vec::<usize>::new()
+        );
+
+        let mut one_positive_not_only_maximal = maximal_gate_clause(&mut bank);
+        mark_maximal_literals(&mut one_positive_not_only_maximal, &[0, 1]);
+
+        select_unless_uniq_max_pos_optimal_literal(
+            &mut ocb,
+            &bank,
+            &mut one_positive_not_only_maximal,
+        );
+
+        assert_eq!(selected_indices(&one_positive_not_only_maximal), vec![1]);
+    }
+
+    #[test]
+    fn bank_aware_unless_max_selectors_are_available_by_c_strategy_name() {
+        for name in [
+            SELECT_UNLESS_UNIQ_MAX,
+            P_SELECT_UNLESS_UNIQ_MAX,
+            SELECT_UNLESS_POS_MAX,
+            P_SELECT_UNLESS_POS_MAX,
+            SELECT_UNLESS_UNIQ_POS_MAX,
+            P_SELECT_UNLESS_UNIQ_POS_MAX,
+            SELECT_UNLESS_UNIQ_MAX_POS,
+            P_SELECT_UNLESS_UNIQ_MAX_POS,
+        ] {
+            let mut bank = test_bank();
+            let mut ocb = kbo_ocb(&bank);
+            let mut clause = maximal_gate_clause(&mut bank);
+            mark_maximal_literals(&mut clause, &[1, 2]);
+
+            apply_ported_literal_selector_with_bank(name, Some(&mut ocb), Some(&bank), &mut clause)
+                .unwrap_or_else(|err| {
+                    panic!("{err}");
+                });
+            assert_eq!(selected_indices(&clause), vec![1]);
+        }
+    }
+
+    #[test]
     fn simple_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_NEGATIVE_LITERALS,
@@ -1874,9 +2237,9 @@ mod tests {
     fn unported_selector_reports_name() {
         let mut clause = Clause::empty();
         let error =
-            apply_ported_literal_selector("SelectUnlessUniqMax", None, &mut clause).unwrap_err();
+            apply_ported_literal_selector("SelectMaxLComplex", None, &mut clause).unwrap_err();
 
-        assert_eq!(error.strategy(), "SelectUnlessUniqMax");
+        assert_eq!(error.strategy(), "SelectMaxLComplex");
         assert!(error.to_string().contains("not ported yet"));
     }
 }
