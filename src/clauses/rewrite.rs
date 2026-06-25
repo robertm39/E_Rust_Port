@@ -9,6 +9,8 @@ use crate::clauses::eqn_props::{
     EqnSide, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE, MAX_SIDE,
     MIN_SIDE,
 };
+use crate::clauses::subterm_index::SubtermIndex;
+use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_match_complete;
@@ -20,7 +22,7 @@ use crate::terms::termtypes::{
     term_identity_id, DerefType, RewriteDemodulator, RewriteLevel, Term, TP_IS_REWRITABLE,
     TP_IS_REWRITTEN, TP_IS_RREWRITABLE, TP_IS_RREWRITTEN,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
@@ -126,6 +128,169 @@ pub fn find_rewritable_clauses<'a>(
         }
     }
     Ok(found)
+}
+
+/// Find clauses rewritable by the new demodulator using a subterm index.
+///
+/// This ports C `FindRewritableClausesIndexed`: fingerprint-matchable
+/// occurrences are checked with a complete match, affected terms receive the
+/// same rewrite flags/links as the plain scan, and rewritable clauses are
+/// appended once per call.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a replacement or designated minimum term cannot be
+/// inserted in the term bank.
+///
+/// # Panics
+///
+/// Panics if `new_demod` is not a positive unit demodulator, matching the C
+/// assertion.
+pub fn find_rewritable_clauses_indexed<'idx>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    index: &'idx SubtermIndex<'_>,
+    results: &mut Vec<&'idx Clause>,
+    new_demod: &Clause,
+    nf_date: SysDate,
+) -> Result<i64, Diagnostic> {
+    assert!(
+        new_demod.is_demodulator(),
+        "new demodulator must be a positive unit clause"
+    );
+
+    let eqn = new_demod
+        .literals()
+        .as_slice()
+        .first()
+        .expect("positive unit demodulator has one literal");
+    let mut seen = BTreeSet::new();
+    let mut count = find_rewritable_clauses_indexed_direction(
+        bank,
+        ocb,
+        index,
+        results,
+        &mut seen,
+        new_demod,
+        eqn.left(),
+        eqn.right(),
+        eqn.is_oriented(),
+        nf_date,
+    )?;
+
+    if !eqn.is_oriented() {
+        count += find_rewritable_clauses_indexed_direction(
+            bank,
+            ocb,
+            index,
+            results,
+            &mut seen,
+            new_demod,
+            eqn.right(),
+            eqn.left(),
+            false,
+            nf_date,
+        )?;
+    }
+
+    Ok(count)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C find_rewritable_clauses_indexed direction parameters"
+)]
+fn find_rewritable_clauses_indexed_direction<'idx>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    index: &'idx SubtermIndex<'_>,
+    results: &mut Vec<&'idx Clause>,
+    seen: &mut BTreeSet<usize>,
+    new_demod: &Clause,
+    left: &Term,
+    right: &Term,
+    oriented: bool,
+    _nf_date: SysDate,
+) -> Result<i64, Diagnostic> {
+    let mut occurrences = Vec::new();
+    index.collect_matchable_occurrences(left, &mut occurrences);
+    let mut count = 0;
+    for occurrence in occurrences {
+        count += term_find_rw_clauses_indexed(
+            bank, ocb, occurrence, results, seen, new_demod, left, right, oriented,
+        )?;
+    }
+    Ok(count)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keeps the indexed term check aligned with C term_find_rw_clauses"
+)]
+fn term_find_rw_clauses_indexed<'idx>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    occurrence: &'idx SubtermOcc,
+    results: &mut Vec<&'idx Clause>,
+    seen: &mut BTreeSet<usize>,
+    new_demod: &Clause,
+    left: &Term,
+    right: &Term,
+    oriented: bool,
+) -> Result<i64, Diagnostic> {
+    assert!(
+        !occurrence.term().is_free_var(),
+        "free variables are not indexed for backward rewriting"
+    );
+
+    let mut subst = Substitution::new();
+    let mut count = 0;
+
+    BWRW_MATCH_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    if subst_match_complete(left, occurrence.term(), &mut subst) {
+        BWRW_MATCH_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+        if oriented || instance_is_rule(ocb, bank, left, right, &mut subst)? {
+            let result = if !oriented || !subst.is_renaming() {
+                occurrence
+                    .term()
+                    .set_prop(TP_IS_REWRITABLE | TP_IS_RREWRITABLE);
+                count += push_indexed_clause_map(results, seen, occurrence.full_clauses());
+                count += push_indexed_clause_map(results, seen, occurrence.restricted_clauses());
+                RwResultType::AlwaysRewritable
+            } else {
+                occurrence.term().set_prop(TP_IS_REWRITABLE);
+                count += push_indexed_clause_map(results, seen, occurrence.full_clauses());
+                RwResultType::LimitedRewritable
+            };
+
+            let _ = add_top_rewrite_link_if_needed(
+                bank,
+                occurrence.term(),
+                right,
+                new_demod.is_sos(),
+                rewrite_demodulator_handle(new_demod),
+                result,
+            )?;
+        }
+        subst.backtrack();
+    }
+
+    Ok(count)
+}
+
+fn push_indexed_clause_map<'idx>(
+    results: &mut Vec<&'idx Clause>,
+    seen: &mut BTreeSet<usize>,
+    clauses: &'idx BTreeMap<usize, Clause>,
+) -> i64 {
+    let mut count = 0;
+    for (key, clause) in clauses {
+        if seen.insert(*key) {
+            results.push(clause);
+            count += 1;
+        }
+    }
+    count
 }
 
 fn clause_is_rewritable(
@@ -248,14 +413,16 @@ fn term_is_top_rewritable(
                 term.set_prop(TP_IS_REWRITABLE);
                 RwResultType::LimitedRewritable
             };
-            add_top_rewrite_link_if_needed(
+            if !add_top_rewrite_link_if_needed(
                 bank,
                 term,
                 eqn.right(),
                 new_demod.is_sos(),
                 demodulator,
                 result,
-            )?;
+            )? {
+                result = RwResultType::NotRewritable;
+            }
         }
         subst.backtrack();
     }
@@ -270,14 +437,16 @@ fn term_is_top_rewritable(
             if instance_is_rule(ocb, bank, eqn.right(), eqn.left(), &mut subst)? {
                 term.set_prop(TP_IS_REWRITABLE | TP_IS_RREWRITABLE);
                 result = RwResultType::AlwaysRewritable;
-                add_top_rewrite_link_if_needed(
+                if !add_top_rewrite_link_if_needed(
                     bank,
                     term,
                     eqn.left(),
                     new_demod.is_sos(),
                     demodulator,
                     result,
-                )?;
+                )? {
+                    result = RwResultType::NotRewritable;
+                }
             }
             subst.backtrack();
         }
@@ -293,19 +462,20 @@ fn add_top_rewrite_link_if_needed(
     sos: bool,
     demodulator: RewriteDemodulator,
     result: RwResultType,
-) -> Result<(), Diagnostic> {
+) -> Result<bool, Diagnostic> {
     if term.is_rewritten() && result != RwResultType::AlwaysRewritable {
-        return Ok(());
+        return Ok(true);
     }
 
     let replacement = bank.insert_instantiated(replacement_pattern)?;
     if replacement == *term {
         term.del_prop(TP_IS_REWRITABLE | TP_IS_RREWRITABLE);
+        Ok(false)
     } else {
         term_add_rw_link(term, &replacement, Some(demodulator), sos, result);
         REWRITE_UNCACHED.fetch_add(1, Ordering::Relaxed);
+        Ok(true)
     }
-    Ok(())
 }
 
 fn instance_is_rule(
@@ -451,8 +621,8 @@ fn map_literal_terms(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_local_rw, eqn_has_rw_side, find_rewritable_clauses, BWRW_MATCH_ATTEMPTS,
-        BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
+        clause_local_rw, eqn_has_rw_side, find_rewritable_clauses, find_rewritable_clauses_indexed,
+        BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::sysdate::SysDate;
@@ -462,8 +632,10 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::subterm_index::SubtermIndex;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::idx_fp::index_fp1_create;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
@@ -671,6 +843,118 @@ mod tests {
         assert!(g_f_b.query_prop(TP_IS_REWRITABLE));
         assert!(BWRW_MATCH_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(BWRW_MATCH_SUCCESSES.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn plain_backward_rewrite_ignores_self_replacements() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "bwrw_self_a");
+        let c = typed_const(&mut bank, "bwrw_self_c");
+        let f_x = typed_unary(&mut bank, "bwrw_self_f", &x);
+        let f_a = typed_unary(&mut bank, "bwrw_self_f", &a);
+        let mut demod_lit = eqn(&mut bank, &f_x, &f_x, true);
+        oriented_demod(&mut demod_lit);
+        let demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        let target = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_a, &c, true)]));
+        let set = ClauseSet::from_clauses([target]);
+        let mut ocb = kbo_ocb(&bank);
+        let mut results = Vec::new();
+
+        assert!(!find_rewritable_clauses(
+            &mut bank,
+            &mut ocb,
+            &set,
+            &mut results,
+            &demod,
+            SysDate::from_raw(12),
+        )
+        .unwrap());
+
+        assert!(results.is_empty());
+        assert!(!f_a.query_prop(TP_IS_REWRITABLE));
+        assert!(!f_a.is_top_rewritten());
+    }
+
+    #[test]
+    fn indexed_backward_rewrite_deduplicates_full_and_restricted_hits() {
+        reset_backward_rewrite_counters();
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "bwrw_idx_a");
+        let b = typed_const(&mut bank, "bwrw_idx_b");
+        let f_x = typed_unary(&mut bank, "bwrw_idx_f", &x);
+        let f_b = typed_unary(&mut bank, "bwrw_idx_f", &b);
+        let g_f_b = typed_unary(&mut bank, "bwrw_idx_g", &f_b);
+        let mut demod_lit = eqn(&mut bank, &f_x, &a, true);
+        oriented_demod(&mut demod_lit);
+        let demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        let mut target_lit = eqn(&mut bank, &f_b, &g_f_b, true);
+        target_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL);
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_lit]));
+        target.set_ident(31);
+        let index_sig = bank.signature().clone();
+        let mut index = SubtermIndex::new(index_fp1_create, &index_sig);
+        index.insert_clause(&target, false);
+        let mut ocb = kbo_ocb(&bank);
+        let mut results = Vec::new();
+
+        let count = find_rewritable_clauses_indexed(
+            &mut bank,
+            &mut ocb,
+            &index,
+            &mut results,
+            &demod,
+            SysDate::from_raw(13),
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(
+            results
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![31]
+        );
+        assert!(f_b.is_top_rewritten());
+        assert_eq!(f_b.rw_replace_field(), Some(a));
+        assert!(BWRW_MATCH_ATTEMPTS.load(Ordering::Relaxed) >= 1);
+        assert!(BWRW_MATCH_SUCCESSES.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn indexed_backward_rewrite_checks_reverse_unoriented_direction() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "bwrw_idx_rev_a");
+        let b = typed_const(&mut bank, "bwrw_idx_rev_b");
+        let c = typed_const(&mut bank, "bwrw_idx_rev_c");
+        let f_x = typed_unary(&mut bank, "bwrw_idx_rev_f", &x);
+        let f_b = typed_unary(&mut bank, "bwrw_idx_rev_f", &b);
+        let demod = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &f_x, true)]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_b, &c, true)]));
+        target.set_ident(32);
+        let index_sig = bank.signature().clone();
+        let mut index = SubtermIndex::new(index_fp1_create, &index_sig);
+        index.insert_clause(&target, false);
+        let mut ocb = kbo_ocb(&bank);
+        let mut results = Vec::new();
+
+        let count = find_rewritable_clauses_indexed(
+            &mut bank,
+            &mut ocb,
+            &index,
+            &mut results,
+            &demod,
+            SysDate::from_raw(14),
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(results[0].ident(), 32);
+        assert!(f_b.is_top_rewritten());
+        assert_eq!(f_b.rw_replace_field(), Some(a));
     }
 
     #[test]

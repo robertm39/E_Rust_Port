@@ -48,6 +48,20 @@ impl<'sig> SubtermIndex<'sig> {
         self.index.collect_leaves(result)
     }
 
+    pub fn collect_matchable_occurrences<'idx>(
+        &'idx self,
+        term: &Term,
+        result: &mut Vec<&'idx SubtermOcc>,
+    ) -> usize {
+        let start = result.len();
+        let mut payloads = Vec::new();
+        self.index.find_matchable(term, &mut payloads);
+        for payload in payloads.into_iter().flatten() {
+            result.extend(payload.iter());
+        }
+        result.len() - start
+    }
+
     pub fn insert_occurrence(&mut self, clause: &Clause, term: &Term, restricted: bool) -> bool {
         let leaf = self.index.insert(term);
         let payload = leaf.ensure_payload();
@@ -209,9 +223,11 @@ mod tests {
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         let f_code = bank.signature_mut().insert_id(name, 0, false);
-        bank.signature_mut()
-            .declare_final_type(f_code, type_.clone())
-            .unwrap();
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
         let term = Term::const_cell_alloc(f_code);
         term.set_type(Some(type_));
         bank.insert(&term, DerefType::Never).unwrap()
@@ -220,9 +236,11 @@ mod tests {
     fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         let f_code = bank.signature_mut().insert_id(name, 1, false);
-        bank.signature_mut()
-            .declare_final_type(f_code, alloc_arrow_type(vec![type_.clone(), type_.clone()]))
-            .unwrap();
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, alloc_arrow_type(vec![type_.clone(), type_.clone()]))
+                .unwrap();
+        }
         let term = Term::top_alloc(f_code, 1);
         term.set_type(Some(type_));
         term.set_argument(0, arg.clone());
@@ -356,5 +374,36 @@ mod tests {
         index.delete_clause(&clause, false);
         assert!(index.find_occurrence(&left).is_none());
         assert!(index.find_occurrence(&right).is_none());
+    }
+
+    #[test]
+    fn matchable_occurrence_query_flattens_fingerprint_payloads() {
+        let mut bank = test_bank();
+        let x = Term::const_cell_alloc(-2);
+        x.set_type(Some(bank.signature().type_bank().default_type()));
+        let a = typed_const(&mut bank, "matchable_a");
+        let b = typed_const(&mut bank, "matchable_b");
+        let f_x = typed_unary(&mut bank, "matchable_f", &x);
+        let f_a = typed_unary(&mut bank, "matchable_f", &a);
+        let f_b = typed_unary(&mut bank, "matchable_f", &b);
+        let first = singleton_clause(eqn(&mut bank, &f_a, &a, true), 21);
+        let second = singleton_clause(eqn(&mut bank, &f_b, &b, true), 22);
+        let mut index = SubtermIndex::new(index_fp1_create, bank.signature());
+        index.insert_occurrence(&first, &f_a, false);
+        index.insert_occurrence(&second, &f_b, false);
+        let mut occurrences = Vec::new();
+
+        assert_eq!(
+            index.collect_matchable_occurrences(&f_x, &mut occurrences),
+            2
+        );
+        assert_eq!(
+            occurrences
+                .iter()
+                .flat_map(|occurrence| occurrence.full_clauses().values())
+                .map(Clause::ident)
+                .collect::<Vec<_>>(),
+            vec![21, 22]
+        );
     }
 }
