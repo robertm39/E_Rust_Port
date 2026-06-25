@@ -10,7 +10,7 @@ use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::signature::{FunctionProperties, Signature};
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
-use std::path::Path;
+use std::{fmt, path::Path};
 
 pub const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 pub const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
@@ -392,6 +392,34 @@ impl ProofState {
         Ok(parsed)
     }
 
+    /// Prints the main proof-state clause sets like C `ProofStatePrint`.
+    ///
+    /// The C output intentionally prints processed positive rewrite rules and
+    /// processed positive equations under the same heading. Rust preserves that
+    /// shape for compatibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns any formatting error from `output`.
+    pub fn write_print(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        output.write_str("\n# Processed positive unit clauses:\n")?;
+        output.write_str(&self.processed_pos_rules.print_lop_string(&self.terms, true))?;
+        output.write_str(&self.processed_pos_eqns.print_lop_string(&self.terms, true))?;
+        output.write_str("\n# Processed negative unit clauses:\n")?;
+        output.write_str(&self.processed_neg_units.print_lop_string(&self.terms, true))?;
+        output.write_str("\n# Processed non-unit clauses:\n")?;
+        output.write_str(&self.processed_non_units.print_lop_string(&self.terms, true))?;
+        output.write_str("\n# Unprocessed clauses:\n")?;
+        output.write_str(&self.unprocessed.print_lop_string(&self.terms, true))
+    }
+
+    #[must_use]
+    pub fn print_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_print(&mut output);
+        output
+    }
+
     /// Initializes and installs the FV-index anchors attached by C
     /// `fvi_param_init`.
     ///
@@ -443,7 +471,7 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 mod tests {
     use super::{proof_state_alloc, ProofState, ProofStateStatistics, WatchlistSource};
     use crate::basics::error::ErrorCode;
-    use crate::clauses::clause::Clause;
+    use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -592,6 +620,38 @@ mod tests {
         assert_eq!(state.unprocessed_cardinality(), 1);
         assert_eq!(state.cardinality(), 5);
         assert_eq!(state.axiom_count(), 1);
+    }
+
+    #[test]
+    fn proof_state_print_preserves_c_section_order() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let rule = simple_clause(&mut state, "print_rule", 20);
+        let equation = simple_clause(&mut state, "print_eqn", 21);
+        let negative = simple_clause(&mut state, "print_neg", 22);
+        let non_unit = simple_clause(&mut state, "print_nonunit", 23);
+        let unprocessed = simple_clause(&mut state, "print_unproc", 24);
+
+        let rule_print = clause_print_lop_format_string(state.terms(), &rule, true);
+        let equation_print = clause_print_lop_format_string(state.terms(), &equation, true);
+        let negative_print = clause_print_lop_format_string(state.terms(), &negative, true);
+        let non_unit_print = clause_print_lop_format_string(state.terms(), &non_unit, true);
+        let unprocessed_print = clause_print_lop_format_string(state.terms(), &unprocessed, true);
+
+        state.processed_pos_rules_mut().insert(rule);
+        state.processed_pos_eqns_mut().insert(equation);
+        state.processed_neg_units_mut().insert(negative);
+        state.processed_non_units_mut().insert(non_unit);
+        state.unprocessed_mut().insert(unprocessed);
+
+        assert_eq!(
+            state.print_string(),
+            format!(
+                "\n# Processed positive unit clauses:\n{rule_print}\n{equation_print}\n\n\
+                 # Processed negative unit clauses:\n{negative_print}\n\n\
+                 # Processed non-unit clauses:\n{non_unit_print}\n\n\
+                 # Unprocessed clauses:\n{unprocessed_print}\n"
+            )
+        );
     }
 
     #[test]
