@@ -678,6 +678,26 @@ impl Clause {
         Ok(self.copy_with_literals(self.literals.copy_disjoint(bank)?))
     }
 
+    /// Return a skolemized copy, matching C `ClauseSkolemize`.
+    ///
+    /// The source clause is left unchanged after the temporary variable
+    /// bindings are backtracked.
+    pub fn skolemize(&self, bank: &mut TermBank) -> Result<Self, Diagnostic> {
+        let mut subst = Substitution::new();
+        for literal in self.literals.as_slice() {
+            if let Err(err) = skolemize_term_in_bank(literal.left(), &mut subst, bank)
+                .and_then(|()| skolemize_term_in_bank(literal.right(), &mut subst, bank))
+            {
+                subst.backtrack_skolem();
+                return Err(err);
+            }
+        }
+
+        let result = self.copy_to_bank(bank);
+        subst.backtrack_skolem();
+        result
+    }
+
     /// Destructively normalizes variables and rewrites the literal list through
     /// the provided term bank when normalization created bindings.
     ///
@@ -1870,6 +1890,25 @@ fn is_key_subset(left: &BTreeMap<usize, Term>, right: &BTreeMap<usize, Term>) ->
     left.keys().all(|key| right.contains_key(key))
 }
 
+fn skolemize_term_in_bank(
+    term: &Term,
+    subst: &mut Substitution,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    if term.is_free_var() {
+        if term.binding().is_none() {
+            let type_ = term.type_();
+            let skolem = bank.alloc_new_skolem(&[], type_.as_ref())?;
+            subst.add_binding(term, &skolem);
+        }
+    } else {
+        for arg in term.argument_clones().into_iter().flatten() {
+            skolemize_term_in_bank(&arg, subst, bank)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1899,7 +1938,7 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
+    use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_SKOLEM_SYMBOL};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
@@ -2514,6 +2553,28 @@ mod tests {
         let disjoint = clause.copy_disjoint(&mut bank).unwrap();
         assert_ne!(disjoint.literals().as_slice()[1].left(), &x);
         assert!(disjoint.evaluations().is_none());
+    }
+
+    #[test]
+    fn skolemize_copy_uses_temporary_bindings_and_backtracks_like_c() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -10);
+        let f_x = typed_unary(&mut bank, "f", &x);
+        let source = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &f_x, &x, true)]));
+
+        let skolemized = source.skolemize(&mut bank).unwrap();
+
+        assert!(x.binding().is_none());
+        assert_eq!(source.literals().as_slice()[0].right(), &x);
+
+        let literal = &skolemized.literals().as_slice()[0];
+        let skolem = literal.right();
+        assert!(!skolem.is_any_var());
+        assert!(bank
+            .signature()
+            .query_prop(skolem.f_code(), FP_SKOLEM_SYMBOL));
+        assert_eq!(skolem.type_(), x.type_());
+        assert_eq!(literal.left().argument(0).as_ref(), Some(skolem));
     }
 
     #[test]
