@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn do_literal_selection_reports_unported_strategy_only_if_reached() {
         let mut control = proof_control_alloc();
-        control.heuristic_parms_mut().selection_strategy = "SelectCondOptimalLit".to_owned();
+        control.heuristic_parms_mut().selection_strategy = "SelectUnlessUniqMax".to_owned();
 
         let mut positive = positive_clause();
         let outcome = do_literal_selection(&mut control, &mut positive).unwrap_or_else(|err| {
@@ -602,6 +602,6 @@ mod tests {
 
         let mut mixed = mixed_clause();
         let error = do_literal_selection(&mut control, &mut mixed).unwrap_err();
-        assert_eq!(error.strategy(), "SelectCondOptimalLit");
+        assert_eq!(error.strategy(), "SelectUnlessUniqMax");
     }
 }

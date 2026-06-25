@@ -1,6 +1,8 @@
 use crate::clauses::clause::Clause;
-use crate::clauses::eqn_props::EP_IS_SELECTED;
+use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_SELECTED};
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::termfunc::{term_standard_weight, term_weight_compute};
 
 pub const NO_SELECTION: &str = "NoSelection";
 pub const NO_GENERATION: &str = "NoGeneration";
@@ -30,6 +32,18 @@ pub const SELECT_NON_ANTI_RR_OPTIMAL_LIT: &str = "SelectNonAntiRROptimalLit";
 pub const P_SELECT_NON_ANTI_RR_OPTIMAL_LIT: &str = "PSelectNonAntiRROptimalLit";
 pub const SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT: &str = "SelectStrongRRNonRROptimalLit";
 pub const P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT: &str = "PSelectStrongRRNonRROptimalLit";
+pub const SELECT_COND_OPTIMAL_LIT: &str = "SelectCondOptimalLit";
+pub const P_SELECT_COND_OPTIMAL_LIT: &str = "PSelectCondOptimalLit";
+pub const SELECT_ALL_COND_OPTIMAL_LIT: &str = "SelectAllCondOptimalLit";
+pub const P_SELECT_ALL_COND_OPTIMAL_LIT: &str = "PSelectAllCondOptimalLit";
+pub const SELECT_OPTIMAL_RESTR_DEPTH2: &str = "SelectOptimalRestrDepth2";
+pub const P_SELECT_OPTIMAL_RESTR_DEPTH2: &str = "PSelectOptimalRestrDepth2";
+pub const SELECT_OPTIMAL_RESTR_P_DEPTH2: &str = "SelectOptimalRestrPDepth2";
+pub const P_SELECT_OPTIMAL_RESTR_P_DEPTH2: &str = "PSelectOptimalRestrPDepth2";
+pub const SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "SelectOptimalRestrNDepth2";
+pub const P_SELECT_OPTIMAL_RESTR_N_DEPTH2: &str = "PSelectOptimalRestrNDepth2";
+
+const VAR_FACTOR: i64 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BasicLiteralSelector {
@@ -106,6 +120,16 @@ enum OptimalLiteralSelector {
     PNonAntiRROptimal,
     StrongRRNonRROptimal,
     PStrongRRNonRROptimal,
+    CondOptimal,
+    PCondOptimal,
+    AllCondOptimal,
+    PAllCondOptimal,
+    RestrDepth2,
+    PRestrDepth2,
+    RestrPDepth2,
+    PRestrPDepth2,
+    RestrNDepth2,
+    PRestrNDepth2,
 }
 
 impl OptimalLiteralSelector {
@@ -125,6 +149,16 @@ impl OptimalLiteralSelector {
             P_SELECT_NON_ANTI_RR_OPTIMAL_LIT => Some(Self::PNonAntiRROptimal),
             SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT => Some(Self::StrongRRNonRROptimal),
             P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT => Some(Self::PStrongRRNonRROptimal),
+            SELECT_COND_OPTIMAL_LIT => Some(Self::CondOptimal),
+            P_SELECT_COND_OPTIMAL_LIT => Some(Self::PCondOptimal),
+            SELECT_ALL_COND_OPTIMAL_LIT => Some(Self::AllCondOptimal),
+            P_SELECT_ALL_COND_OPTIMAL_LIT => Some(Self::PAllCondOptimal),
+            SELECT_OPTIMAL_RESTR_DEPTH2 => Some(Self::RestrDepth2),
+            P_SELECT_OPTIMAL_RESTR_DEPTH2 => Some(Self::PRestrDepth2),
+            SELECT_OPTIMAL_RESTR_P_DEPTH2 => Some(Self::RestrPDepth2),
+            P_SELECT_OPTIMAL_RESTR_P_DEPTH2 => Some(Self::PRestrPDepth2),
+            SELECT_OPTIMAL_RESTR_N_DEPTH2 => Some(Self::RestrNDepth2),
+            P_SELECT_OPTIMAL_RESTR_N_DEPTH2 => Some(Self::PRestrNDepth2),
             _ => None,
         }
     }
@@ -145,8 +179,25 @@ impl OptimalLiteralSelector {
             Self::PNonAntiRROptimal => p_select_non_anti_rr_optimal_literal(ocb, clause),
             Self::StrongRRNonRROptimal => select_strong_rr_non_rr_optimal_literal(ocb, clause),
             Self::PStrongRRNonRROptimal => p_select_strong_rr_non_rr_optimal_literal(ocb, clause),
+            Self::CondOptimal => select_cond_optimal_literal(ocb, clause),
+            Self::PCondOptimal => p_select_cond_optimal_literal(ocb, clause),
+            Self::AllCondOptimal => select_all_cond_optimal_literal(ocb, clause),
+            Self::PAllCondOptimal => p_select_all_cond_optimal_literal(ocb, clause),
+            Self::RestrDepth2 => select_depth2_optimal_literal(ocb, clause),
+            Self::PRestrDepth2 => p_select_depth2_optimal_literal(ocb, clause),
+            Self::RestrPDepth2 => select_p_depth2_optimal_literal(ocb, clause),
+            Self::PRestrPDepth2 => p_select_p_depth2_optimal_literal(ocb, clause),
+            Self::RestrNDepth2 => select_n_depth2_optimal_literal(ocb, clause),
+            Self::PRestrNDepth2 => p_select_n_depth2_optimal_literal(ocb, clause),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Depth2Scope {
+    All,
+    Positive,
+    Negative,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -469,6 +520,46 @@ pub fn p_select_strong_rr_non_rr_optimal_literal(
     }
 }
 
+pub fn select_cond_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_cond_optimal_literal_impl(ocb, clause, false, false);
+}
+
+pub fn p_select_cond_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_cond_optimal_literal_impl(ocb, clause, true, false);
+}
+
+pub fn select_all_cond_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_cond_optimal_literal_impl(ocb, clause, false, true);
+}
+
+pub fn p_select_all_cond_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_cond_optimal_literal_impl(ocb, clause, true, true);
+}
+
+pub fn select_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_depth2_optimal_literal_impl(ocb, clause, false, Depth2Scope::All);
+}
+
+pub fn p_select_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_depth2_optimal_literal_impl(ocb, clause, true, Depth2Scope::All);
+}
+
+pub fn select_p_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_depth2_optimal_literal_impl(ocb, clause, false, Depth2Scope::Positive);
+}
+
+pub fn p_select_p_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_depth2_optimal_literal_impl(ocb, clause, true, Depth2Scope::Positive);
+}
+
+pub fn select_n_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_depth2_optimal_literal_impl(ocb, clause, false, Depth2Scope::Negative);
+}
+
+pub fn p_select_n_depth2_optimal_literal(ocb: Option<&mut OrderControlBlock>, clause: &mut Clause) {
+    select_depth2_optimal_literal_impl(ocb, clause, true, Depth2Scope::Negative);
+}
+
 /// Applies the subset of literal-selection functions that has been ported.
 ///
 /// # Errors
@@ -497,6 +588,81 @@ fn select_positive_literals(clause: &mut Clause) {
         if literal.is_positive() {
             literal.set_prop(EP_IS_SELECTED);
         }
+    }
+}
+
+fn select_cond_optimal_literal_impl(
+    ocb: Option<&mut OrderControlBlock>,
+    clause: &mut Clause,
+    positive_variant: bool,
+    all_positive: bool,
+) {
+    if conditional_gate_blocks_selection(clause, all_positive) {
+        clause.literals_mut().del_prop(EP_IS_SELECTED);
+    } else {
+        apply_optimal_variant(ocb, clause, positive_variant);
+    }
+}
+
+fn conditional_gate_blocks_selection(clause: &Clause, all_positive: bool) -> bool {
+    if all_positive {
+        !clause
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| literal.is_positive() && !positive_conditional_literal_blocks(literal))
+    } else {
+        clause
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| literal.is_positive() && positive_conditional_literal_blocks(literal))
+    }
+}
+
+fn positive_conditional_literal_blocks(literal: &Eqn) -> bool {
+    let mut weight = term_weight_compute(literal.left(), 0, VAR_FACTOR);
+    let mut standard_weight = term_standard_weight(literal.left());
+    if literal.query_prop(EP_IS_EQU_LITERAL) {
+        weight += term_weight_compute(literal.right(), 0, VAR_FACTOR);
+        standard_weight += term_standard_weight(literal.right());
+    }
+    standard_weight <= weight
+}
+
+fn select_depth2_optimal_literal_impl(
+    ocb: Option<&mut OrderControlBlock>,
+    clause: &mut Clause,
+    positive_variant: bool,
+    scope: Depth2Scope,
+) {
+    if has_depth_at_most(clause, scope, 2) {
+        clause.literals_mut().del_prop(EP_IS_SELECTED);
+    } else {
+        apply_optimal_variant(ocb, clause, positive_variant);
+    }
+}
+
+fn has_depth_at_most(clause: &Clause, scope: Depth2Scope, max_depth: i64) -> bool {
+    clause.literals().as_slice().iter().any(|literal| {
+        let scope_matches = match scope {
+            Depth2Scope::All => true,
+            Depth2Scope::Positive => literal.is_positive(),
+            Depth2Scope::Negative => literal.is_negative(),
+        };
+        scope_matches && literal.depth() <= max_depth
+    })
+}
+
+fn apply_optimal_variant(
+    ocb: Option<&mut OrderControlBlock>,
+    clause: &mut Clause,
+    positive_variant: bool,
+) {
+    if positive_variant {
+        p_select_optimal_literal(ocb, clause);
+    } else {
+        select_optimal_literal(ocb, clause);
     }
 }
 
@@ -541,26 +707,33 @@ fn find_min_weight_negative_literal(clause: &Clause, ground_only: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_ported_literal_selector, p_select_diff_negative_literal,
-        p_select_first_variable_literal, p_select_ground_negative_literal,
-        p_select_largest_negative_literal, p_select_min_optimal_literal,
-        p_select_negative_literals, p_select_optimal_literal, p_select_smallest_negative_literal,
-        p_select_strong_rr_non_rr_optimal_literal, select_anti_rr_optimal_literal,
-        select_diff_negative_literal, select_first_variable_literal,
-        select_ground_negative_literal, select_largest_negative_literal,
-        select_min_optimal_literal, select_negative_literals, select_non_anti_rr_optimal_literal,
-        select_non_rr_optimal_literal, select_non_strong_rr_optimal_literal,
-        select_optimal_literal, select_smallest_negative_literal,
+        apply_ported_literal_selector, p_select_all_cond_optimal_literal,
+        p_select_cond_optimal_literal, p_select_depth2_optimal_literal,
+        p_select_diff_negative_literal, p_select_first_variable_literal,
+        p_select_ground_negative_literal, p_select_largest_negative_literal,
+        p_select_min_optimal_literal, p_select_negative_literals, p_select_optimal_literal,
+        p_select_smallest_negative_literal, p_select_strong_rr_non_rr_optimal_literal,
+        select_all_cond_optimal_literal, select_anti_rr_optimal_literal,
+        select_cond_optimal_literal, select_depth2_optimal_literal, select_diff_negative_literal,
+        select_first_variable_literal, select_ground_negative_literal,
+        select_largest_negative_literal, select_min_optimal_literal,
+        select_n_depth2_optimal_literal, select_negative_literals,
+        select_non_anti_rr_optimal_literal, select_non_rr_optimal_literal,
+        select_non_strong_rr_optimal_literal, select_optimal_literal,
+        select_p_depth2_optimal_literal, select_smallest_negative_literal,
         select_strong_rr_non_rr_optimal_literal, NO_GENERATION, NO_SELECTION,
-        P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT,
-        P_SELECT_LARGEST_NEG_LIT, P_SELECT_MIN_OPTIMAL_LIT, P_SELECT_NEGATIVE_LITERALS,
-        P_SELECT_NON_ANTI_RR_OPTIMAL_LIT, P_SELECT_NON_RR_OPTIMAL_LIT,
-        P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT, P_SELECT_PURE_VAR_NEG_LITERALS,
-        P_SELECT_SMALLEST_NEG_LIT, P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
-        SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_DIFF_NEG_LIT, SELECT_GROUND_NEG_LIT,
-        SELECT_LARGEST_NEG_LIT, SELECT_MIN_OPTIMAL_LIT, SELECT_NEGATIVE_LITERALS,
-        SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
-        SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT, SELECT_PURE_VAR_NEG_LITERALS,
+        P_SELECT_ALL_COND_OPTIMAL_LIT, P_SELECT_ANTI_RR_OPTIMAL_LIT, P_SELECT_COND_OPTIMAL_LIT,
+        P_SELECT_DIFF_NEG_LIT, P_SELECT_GROUND_NEG_LIT, P_SELECT_LARGEST_NEG_LIT,
+        P_SELECT_MIN_OPTIMAL_LIT, P_SELECT_NEGATIVE_LITERALS, P_SELECT_NON_ANTI_RR_OPTIMAL_LIT,
+        P_SELECT_NON_RR_OPTIMAL_LIT, P_SELECT_NON_STRONG_RR_OPTIMAL_LIT, P_SELECT_OPTIMAL_LIT,
+        P_SELECT_OPTIMAL_RESTR_DEPTH2, P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
+        P_SELECT_OPTIMAL_RESTR_P_DEPTH2, P_SELECT_PURE_VAR_NEG_LITERALS, P_SELECT_SMALLEST_NEG_LIT,
+        P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT, SELECT_ALL_COND_OPTIMAL_LIT,
+        SELECT_ANTI_RR_OPTIMAL_LIT, SELECT_COND_OPTIMAL_LIT, SELECT_DIFF_NEG_LIT,
+        SELECT_GROUND_NEG_LIT, SELECT_LARGEST_NEG_LIT, SELECT_MIN_OPTIMAL_LIT,
+        SELECT_NEGATIVE_LITERALS, SELECT_NON_ANTI_RR_OPTIMAL_LIT, SELECT_NON_RR_OPTIMAL_LIT,
+        SELECT_NON_STRONG_RR_OPTIMAL_LIT, SELECT_OPTIMAL_LIT, SELECT_OPTIMAL_RESTR_DEPTH2,
+        SELECT_OPTIMAL_RESTR_N_DEPTH2, SELECT_OPTIMAL_RESTR_P_DEPTH2, SELECT_PURE_VAR_NEG_LITERALS,
         SELECT_SMALLEST_NEG_LIT, SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
     };
     use crate::clauses::clause::Clause;
@@ -593,6 +766,13 @@ mod tests {
     fn unary(code: i64, arg: &Term) -> Term {
         let term = Term::top_alloc(code, 1);
         term.set_argument(0, arg.clone());
+        term
+    }
+
+    fn binary(code: i64, left: &Term, right: &Term) -> Term {
+        let term = Term::top_alloc(code, 2);
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
         term
     }
 
@@ -720,6 +900,49 @@ mod tests {
         let a = shared_const(&mut bank, "ls_weak_rr_a");
         Clause::alloc(EqnList::from_vec(vec![
             literal(&mut bank, &x, &y, true),
+            literal(&mut bank, &x, &a, false),
+        ]))
+    }
+
+    fn conditional_clause(blocking_positive: bool) -> Clause {
+        let mut bank = test_bank();
+        let x = var_term(-50);
+        let y = var_term(-52);
+        let z = var_term(-54);
+        let a = const_term(120);
+        let positive_left = if blocking_positive {
+            unary(90, &x)
+        } else {
+            binary(91, &x, &y)
+        };
+        let positive_right = if blocking_positive { a.clone() } else { z };
+        let neg_left = unary(92, &x);
+        Clause::alloc(EqnList::from_vec(vec![
+            literal(&mut bank, &positive_left, &positive_right, true),
+            literal(&mut bank, &neg_left, &a, false),
+        ]))
+    }
+
+    fn deep_nonground_clause() -> Clause {
+        let mut bank = test_bank();
+        let x = var_term(-60);
+        let y = var_term(-62);
+        let left = unary(100, &unary(101, &x));
+        let right = unary(102, &unary(103, &y));
+        Clause::alloc(EqnList::from_vec(vec![
+            literal(&mut bank, &right, &left, true),
+            literal(&mut bank, &left, &x, false),
+        ]))
+    }
+
+    fn positive_deep_negative_shallow_clause() -> Clause {
+        let mut bank = test_bank();
+        let x = var_term(-70);
+        let y = var_term(-72);
+        let a = const_term(130);
+        let deep = unary(110, &unary(111, &x));
+        Clause::alloc(EqnList::from_vec(vec![
+            literal(&mut bank, &deep, &y, true),
             literal(&mut bank, &x, &a, false),
         ]))
     }
@@ -902,6 +1125,75 @@ mod tests {
     }
 
     #[test]
+    fn conditional_optimal_selectors_clear_or_fall_back_to_optimal() {
+        let mut blocked = conditional_clause(true);
+        blocked.literals_mut().set_prop(EP_IS_SELECTED);
+        select_cond_optimal_literal(None, &mut blocked);
+        assert_eq!(select_mask(&blocked), vec![false, false]);
+
+        let mut allowed = conditional_clause(false);
+        select_cond_optimal_literal(None, &mut allowed);
+        assert_eq!(select_mask(&allowed), vec![false, true]);
+
+        clear_selection(&mut allowed);
+        p_select_cond_optimal_literal(None, &mut allowed);
+        assert_eq!(select_mask(&allowed), vec![true, true]);
+    }
+
+    #[test]
+    fn all_conditional_optimal_selectors_require_a_nonblocking_positive_to_select() {
+        let mut all_blocked = conditional_clause(true);
+        all_blocked.literals_mut().set_prop(EP_IS_SELECTED);
+        select_all_cond_optimal_literal(None, &mut all_blocked);
+        assert_eq!(select_mask(&all_blocked), vec![false, false]);
+
+        let mut no_positive = Clause::alloc(EqnList::from_vec(vec![all_blocked
+            .literals()
+            .as_slice()[1]
+            .clone()]));
+        no_positive.literals_mut().set_prop(EP_IS_SELECTED);
+        select_all_cond_optimal_literal(None, &mut no_positive);
+        assert_eq!(select_mask(&no_positive), vec![false]);
+
+        let mut allowed = conditional_clause(false);
+        p_select_all_cond_optimal_literal(None, &mut allowed);
+        assert_eq!(select_mask(&allowed), vec![true, true]);
+    }
+
+    #[test]
+    fn depth2_optimal_selectors_gate_by_literal_scope() {
+        let mut deep = deep_nonground_clause();
+        select_depth2_optimal_literal(None, &mut deep);
+        assert_eq!(select_mask(&deep), vec![false, true]);
+
+        clear_selection(&mut deep);
+        p_select_depth2_optimal_literal(None, &mut deep);
+        assert_eq!(select_mask(&deep), vec![true, true]);
+
+        let mut shallow = ground_and_nonground_clause(false);
+        shallow.literals_mut().set_prop(EP_IS_SELECTED);
+        select_depth2_optimal_literal(None, &mut shallow);
+        assert_eq!(select_mask(&shallow), vec![false, false]);
+
+        let mut positive_deep_negative_shallow = positive_deep_negative_shallow_clause();
+        select_p_depth2_optimal_literal(None, &mut positive_deep_negative_shallow);
+        assert_eq!(
+            select_mask(&positive_deep_negative_shallow),
+            vec![false, true]
+        );
+
+        clear_selection(&mut positive_deep_negative_shallow);
+        positive_deep_negative_shallow
+            .literals_mut()
+            .set_prop(EP_IS_SELECTED);
+        select_n_depth2_optimal_literal(None, &mut positive_deep_negative_shallow);
+        assert_eq!(
+            select_mask(&positive_deep_negative_shallow),
+            vec![false, false]
+        );
+    }
+
+    #[test]
     fn simple_selectors_are_available_by_c_strategy_name() {
         for name in [
             SELECT_NEGATIVE_LITERALS,
@@ -930,6 +1222,16 @@ mod tests {
             P_SELECT_NON_ANTI_RR_OPTIMAL_LIT,
             SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
             P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+            SELECT_COND_OPTIMAL_LIT,
+            P_SELECT_COND_OPTIMAL_LIT,
+            SELECT_ALL_COND_OPTIMAL_LIT,
+            P_SELECT_ALL_COND_OPTIMAL_LIT,
+            SELECT_OPTIMAL_RESTR_DEPTH2,
+            P_SELECT_OPTIMAL_RESTR_DEPTH2,
+            SELECT_OPTIMAL_RESTR_P_DEPTH2,
+            P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
+            SELECT_OPTIMAL_RESTR_N_DEPTH2,
+            P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
         ] {
             let mut clause = ground_and_nonground_clause(true);
             apply_ported_literal_selector(name, None, &mut clause).unwrap_or_else(|err| {
@@ -942,9 +1244,9 @@ mod tests {
     fn unported_selector_reports_name() {
         let mut clause = Clause::empty();
         let error =
-            apply_ported_literal_selector("SelectCondOptimalLit", None, &mut clause).unwrap_err();
+            apply_ported_literal_selector("SelectUnlessUniqMax", None, &mut clause).unwrap_err();
 
-        assert_eq!(error.strategy(), "SelectCondOptimalLit");
+        assert_eq!(error.strategy(), "SelectUnlessUniqMax");
         assert!(error.to_string().contains("not ported yet"));
     }
 }
