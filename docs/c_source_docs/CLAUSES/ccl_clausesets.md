@@ -250,6 +250,7 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 - `ClauseSetPrint` and `ClauseSetPrintPrefix` append the newline at the set loop, not in `ClausePrint`; the prefix variant always calls `ClausePrint(..., true)` regardless of the non-prefix caller's `fullterms` argument. Rust preserves this shape in explicit LOP set and prefix string helpers.
 - `ClauseSetParseList` loops while `ClauseStartsMaybe` is true, so a bare identifier after the intended clause list is treated as another possible clause and produces a syntax error instead of acting as a clean terminator. Rust preserves that token-start behavior over the simple clause parser; callers that need sentinels should use a token that cannot start a clause or add an explicit higher-level boundary.
 - `ClauseSetMarkMaximalTerms` is a straight set-order loop over `ClauseMarkMaximalTerms`, so it inherits each clause's orientation/maximality cache contract and performs no set-level cache validation. Rust preserves that layering; indexed or shared clause-set owners should keep cache invalidation at the clause/literal boundary.
+- `ClauseSetTSTPPrint` is a set-order loop that calls `ClauseTSTPPrint(..., complete=true)` and then writes one newline for every clause. C inherits hidden global problem-type/output-format behavior from the clause printer; Rust preserves the text shape through an explicit term bank and problem type, returning a diagnostic if a clause reaches a still-deferred formula-aware branch.
 
 ### Porting Focus
 

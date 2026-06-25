@@ -1,10 +1,10 @@
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::{
-    clause_parse_with_options, clause_print_lop_format_string, clause_starts_maybe, Clause,
-    ClauseParseOptions,
+    clause_parse_with_options, clause_print_lop_format_string, clause_starts_maybe,
+    clause_write_tstp, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_TYPE_CONJECTURE,
@@ -26,6 +26,7 @@ use crate::terms::termfunc::term_compute_order;
 use crate::terms::termtypes::TermProperties;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 
 #[derive(Clone, Copy, Debug)]
 struct EvalIndexEntry {
@@ -199,6 +200,46 @@ impl ClauseSet {
             output.push('\n');
         }
         output
+    }
+
+    /// Writes the C `ClauseSetTSTPPrint` shape for the currently ported clause
+    /// TSTP branches.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any clause reaches an unported
+    /// `ClauseTSTPPrint` branch or if the formatter fails.
+    pub fn write_tstp(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+    ) -> Result<(), Diagnostic> {
+        for clause in &self.clauses {
+            clause_write_tstp(output, bank, clause, full_terms, true, problem_type)?;
+            output
+                .write_str("\n")
+                .map_err(clause_set_tstp_write_error)?;
+        }
+        Ok(())
+    }
+
+    /// Returns the C `ClauseSetTSTPPrint` shape for the currently ported clause
+    /// TSTP branches.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic under the same conditions as [`Self::write_tstp`].
+    pub fn tstp_print_string(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        self.write_tstp(&mut output, bank, full_terms, problem_type)?;
+        Ok(output)
     }
 
     /// Parses the C `ClauseSetParseList` loop over the currently ported simple
@@ -928,6 +969,10 @@ fn clause_weight_to_i64(weight: f64) -> i64 {
     weight as i64
 }
 
+fn clause_set_tstp_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause set")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1093,6 +1138,27 @@ mod tests {
         assert_eq!(
             set.print_lop_prefix_string(&bank, "# "),
             "# set_print_a=set_print_b <- .\n# set_print_b=set_print_c <- set_print_c=set_print_a.\n"
+        );
+    }
+
+    #[test]
+    fn tstp_print_helper_renders_complete_clauses_in_set_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_tstp_a");
+        let b = typed_const(&mut bank, "set_tstp_b");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        first.set_ident(101);
+        first.set_tptp_type(CP_TYPE_AXIOM);
+        let mut second = clause_from(vec![literal(&mut bank, &b, &a, false)]);
+        second.set_ident(102);
+        second.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let set = ClauseSet::from_clauses([first, second]);
+
+        assert_eq!(
+            set.tstp_print_string(&bank, true, ProblemType::FirstOrder)
+                .unwrap(),
+            "cnf(c_0_101, plain, (set_tstp_a=set_tstp_b)).\n\
+             cnf(c_0_102, negated_conjecture, (set_tstp_b!=set_tstp_a)).\n"
         );
     }
 
