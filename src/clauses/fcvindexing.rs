@@ -35,6 +35,25 @@ impl Default for FvIndexParams {
 
 impl FvIndexParams {
     #[must_use]
+    pub fn new(
+        feature_type: FvIndexType,
+        use_perm_vectors: bool,
+        eliminate_uninformative: bool,
+        max_symbols: usize,
+        symbol_slack: usize,
+    ) -> Self {
+        let mut cspec = FvCollect::new(FvCollectLayout::new(feature_type, false, 0, 0));
+        cspec.set_max_symbols(0);
+        Self {
+            cspec,
+            use_perm_vectors,
+            eliminate_uninformative,
+            max_symbols,
+            symbol_slack,
+        }
+    }
+
+    #[must_use]
     pub const fn cspec(&self) -> &FvCollect {
         &self.cspec
     }

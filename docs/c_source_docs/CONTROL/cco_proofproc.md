@@ -143,6 +143,16 @@ Source files reviewed: `CONTROL/cco_proofproc.h`, `CONTROL/cco_proofproc.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `ProofControlInit` assumes a freshly allocated proof-control cell with no OCB or selected HCB, selects the ordering, installs built-in and user weight-function/heuristic definitions, then copies the finalized `HeuristicParmsCell` and `FVIndexParmsCell` into the control. Rust's current config bridge only performs the parameter copy portion; default definition parsing, OCB selection, active-HCB lookup, and proof-state mutation remain part of the later proof-control initialization slice.
+- After copying `FVIndexParmsCell`, `ProofControlInit` forces `fvi_parms.symbol_slack=0` when splitting is disabled. Keep that normalization at proof-control initialization time rather than in raw option parsing because it depends on the finalized heuristic split setting.
+- `fvi_param_init` derives the actual collection spec from the proof state's original symbol count, `symbol_slack`, and `max_symbols`, then installs shared FV-index anchors on each processed set. The raw `FVIndexParmsCell` is not the final index spec by itself.
+
+### Change-Later Observations
+
+- `ProofControlInit` mutates the caller's heuristic parameter object after selecting the heuristic and initializing unification limits. Rust can keep a clearer owned return value, but compatibility tests should cover any later code that expects those post-init parameter updates to be visible outside the control object.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

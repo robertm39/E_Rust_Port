@@ -19,6 +19,7 @@ pub mod normsubst;
 pub mod orientweight;
 pub mod prefixweight;
 pub mod prio_funs;
+pub mod proofcontrol;
 pub mod random;
 pub mod rawspecfeatures;
 pub mod refinedweight;

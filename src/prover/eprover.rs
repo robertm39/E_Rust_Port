@@ -8,7 +8,10 @@ use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::freqvectors::FvIndexType;
 use crate::heuristics::hcb::{self, HeuristicParmsCell};
+use crate::heuristics::proofcontrol::ProofControl;
 use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
@@ -1356,6 +1359,38 @@ pub fn heuristic_parms_from_config(
     })
 }
 
+/// Builds the initial proof-control object from parsed executable options.
+///
+/// # Errors
+///
+/// Returns a diagnostic if manually constructed config values cannot be
+/// represented by the C-shaped proof-control parameter fields.
+pub fn proof_control_from_config(config: &EProverConfig) -> Result<ProofControl, Diagnostic> {
+    let mut control = ProofControl::new();
+    control.set_heuristic_parms(heuristic_parms_from_config(config)?);
+    control.set_fvi_parms(fv_index_params_from_config(&config.search.fv_index)?);
+    Ok(control)
+}
+
+/// Builds C-shaped feature-vector index parameters from parsed executable
+/// options.
+///
+/// # Errors
+///
+/// Returns a diagnostic if manually constructed config values are negative or
+/// do not fit Rust's index size.
+pub fn fv_index_params_from_config(
+    config: &FeatureVectorIndexConfig,
+) -> Result<FvIndexParams, Diagnostic> {
+    Ok(FvIndexParams::new(
+        fv_index_type(config.feature_type),
+        config.use_perm_vectors,
+        config.eliminate_uninformative,
+        usize_from_i64_config("fv_index.max_symbols", config.max_symbols)?,
+        usize_from_i64_config("fv_index.symbol_slack", config.symbol_slack)?,
+    ))
+}
+
 fn translate_weight_generation(name: &str) -> Result<to_params::TOWeightGenMethod, Diagnostic> {
     if to_params::TO_WEIGHT_GEN_NAMES.contains(&name) {
         Ok(to_params::to_translate_weight_gen_method(name))
@@ -1474,10 +1509,32 @@ const fn hcb_unif_mode(value: UnificationMode) -> hcb::UnifMode {
     }
 }
 
+const fn fv_index_type(value: FvIndexFeatureType) -> FvIndexType {
+    match value {
+        FvIndexFeatureType::NoFeatures => FvIndexType::NoFeatures,
+        FvIndexFeatureType::AcFeatures => FvIndexType::AcFeatures,
+        FvIndexFeatureType::SsFeatures => FvIndexType::SsFeatures,
+        FvIndexFeatureType::AllFeatures => FvIndexType::AllFeatures,
+        FvIndexFeatureType::BillFeatures => FvIndexType::BillFeatures,
+        FvIndexFeatureType::BillPlusFeatures => FvIndexType::BillPlusFeatures,
+        FvIndexFeatureType::AcFold => FvIndexType::AcFold,
+        FvIndexFeatureType::AcStagger => FvIndexType::AcStagger,
+        FvIndexFeatureType::CollectFeatures => FvIndexType::CollectFeatures,
+    }
+}
+
 fn i32_from_i64_config(field_name: &str, value: i64) -> Result<i32, Diagnostic> {
     i32::try_from(value).map_err(|_| {
         config_conversion_error(format!(
             "Configuration field '{field_name}' value '{value}' does not fit C int"
+        ))
+    })
+}
+
+fn usize_from_i64_config(field_name: &str, value: i64) -> Result<usize, Diagnostic> {
+    usize::try_from(value).map_err(|_| {
+        config_conversion_error(format!(
+            "Configuration field '{field_name}' value '{value}' does not fit usize"
         ))
     })
 }
@@ -3556,16 +3613,17 @@ fn parse_clause_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, heuristic_parms_from_config, order_parms_from_config,
-        process_options, run, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
-        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
-        PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING,
-        MEGA,
+        auto_memory_limit_from_system_mb, fv_index_params_from_config, heuristic_parms_from_config,
+        order_parms_from_config, process_options, proof_control_from_config, run, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
+        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
+    use crate::clauses::freqvectors::FvIndexType;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
     use crate::inout::scanner::IoFormat;
@@ -4704,6 +4762,60 @@ mod tests {
         };
         assert!(!config.search.fv_index.use_perm_vectors);
         assert!(config.search.fv_index.eliminate_uninformative);
+    }
+
+    #[test]
+    fn fv_index_params_from_config_maps_cli_state() {
+        let config = run_config_from([
+            "eprover",
+            "--subsumption-indexing=PermOpt",
+            "--fvindex-featuretypes=BillPlus",
+            "--fvindex-maxfeatures=200",
+            "--fvindex-slack=3",
+        ]);
+
+        let params = fv_index_params_from_config(&config.search.fv_index).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(params.cspec().features(), FvIndexType::BillPlusFeatures);
+        assert!(params.use_perm_vectors());
+        assert!(params.eliminate_uninformative());
+        assert_eq!(params.max_symbols(), 200);
+        assert_eq!(params.symbol_slack(), 3);
+    }
+
+    #[test]
+    fn proof_control_from_config_installs_configured_parameters() {
+        let config = run_config_from([
+            "eprover",
+            "--expert-heuristic=Auto",
+            "--split-clauses=3",
+            "--delete-bad-limit=77",
+            "--subsumption-indexing=Perm",
+            "--fvindex-featuretypes=ACStagger",
+            "--fvindex-maxfeatures=19",
+            "--fvindex-slack=2",
+        ]);
+
+        let control = proof_control_from_config(&config).unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(control.ocb().is_none());
+        assert!(control.active_hcb().is_none());
+        assert!(control.wfcbs().is_empty());
+        assert!(control.hcbs().is_empty());
+        assert_eq!(control.solver().generation(), 1);
+        assert_eq!(control.heuristic_parms().heuristic_name, "Auto");
+        assert_eq!(control.heuristic_parms().delete_bad_limit, 77);
+        assert_eq!(control.heuristic_parms().split_clauses.c_value(), 3);
+        assert_eq!(
+            control.fvi_parms().cspec().features(),
+            FvIndexType::AcStagger
+        );
+        assert!(control.fvi_parms().use_perm_vectors());
+        assert!(!control.fvi_parms().eliminate_uninformative());
+        assert_eq!(control.fvi_parms().max_symbols(), 19);
+        assert_eq!(control.fvi_parms().symbol_slack(), 2);
     }
 
     #[test]
