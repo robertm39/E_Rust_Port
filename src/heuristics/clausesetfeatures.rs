@@ -1,7 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string_with_options, Clause};
 use crate::clauses::clausesets::{eq_axioms_print_string, ClauseSet};
+use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausefeatures::{
@@ -832,6 +833,7 @@ pub fn proof_state_print_selective_string(
     descriptor: &str,
     print_info: bool,
     output_format: IoFormat,
+    eqn_print_options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
     let mut output = String::new();
     for current in descriptor.bytes() {
@@ -844,60 +846,67 @@ pub fn proof_state_print_selective_string(
             }
             b'e' => {
                 output.push_str("# Processed positive unit clauses:\n");
-                output.push_str(&clause_set_print_pos_units_default_string(
+                output.push_str(&clause_set_print_pos_units_with_options(
                     state.terms(),
                     state.processed_pos_rules(),
                     print_info,
+                    eqn_print_options,
                 ));
-                output.push_str(&clause_set_print_pos_units_default_string(
+                output.push_str(&clause_set_print_pos_units_with_options(
                     state.terms(),
                     state.processed_pos_eqns(),
                     print_info,
+                    eqn_print_options,
                 ));
                 output.push('\n');
             }
             b'i' => {
                 output.push_str("# Processed negative unit clauses:\n");
-                output.push_str(&clause_set_print_neg_units_default_string(
+                output.push_str(&clause_set_print_neg_units_with_options(
                     state.terms(),
                     state.processed_neg_units(),
                     print_info,
+                    eqn_print_options,
                 ));
                 output.push('\n');
             }
             b'g' => {
                 output.push_str("# Processed non-unit clauses:\n");
-                output.push_str(&clause_set_print_non_units_default_string(
+                output.push_str(&clause_set_print_non_units_with_options(
                     state.terms(),
                     state.processed_non_units(),
                     print_info,
+                    eqn_print_options,
                 ));
                 output.push('\n');
             }
             b'E' => {
                 output.push_str("# Unprocessed positive unit clauses:\n");
-                output.push_str(&clause_set_print_pos_units_default_string(
+                output.push_str(&clause_set_print_pos_units_with_options(
                     state.terms(),
                     state.unprocessed(),
                     print_info,
+                    eqn_print_options,
                 ));
                 output.push('\n');
             }
             b'I' => {
                 output.push_str("# Unprocessed negative unit clauses:\n");
-                output.push_str(&clause_set_print_neg_units_default_string(
+                output.push_str(&clause_set_print_neg_units_with_options(
                     state.terms(),
                     state.unprocessed(),
                     print_info,
+                    eqn_print_options,
                 ));
                 output.push('\n');
             }
             b'G' => {
                 output.push_str("# Unprocessed non-unit clauses:\n");
-                output.push_str(&clause_set_print_non_units_default_string(
+                output.push_str(&clause_set_print_non_units_with_options(
                     state.terms(),
                     state.unprocessed(),
                     print_info,
+                    eqn_print_options,
                 ));
                 output.push('\n');
             }
@@ -925,6 +934,39 @@ pub fn proof_state_print_selective_string(
         }
     }
     Ok(output)
+}
+
+fn clause_set_print_pos_units_with_options(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    options: EqnPrintOptions,
+) -> String {
+    clause_set_print_pos_units_string(bank, set, print_info, |clause| {
+        clause_print_lop_format_string_with_options(bank, clause, true, options)
+    })
+}
+
+fn clause_set_print_neg_units_with_options(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    options: EqnPrintOptions,
+) -> String {
+    clause_set_print_neg_units_string(bank, set, print_info, |clause| {
+        clause_print_lop_format_string_with_options(bank, clause, true, options)
+    })
+}
+
+fn clause_set_print_non_units_with_options(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    options: EqnPrintOptions,
+) -> String {
+    clause_set_print_non_units_string(bank, set, print_info, |clause| {
+        clause_print_lop_format_string_with_options(bank, clause, true, options)
+    })
 }
 
 fn type_decls_tstp_string(state: &ProofState) -> Result<String, Diagnostic> {

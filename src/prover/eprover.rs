@@ -8,6 +8,7 @@ use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
@@ -321,6 +322,19 @@ impl Default for EquationPrintConfig {
             use_infix: true,
             full_equational_rep: false,
             print_oriented: false,
+        }
+    }
+}
+
+impl EquationPrintConfig {
+    #[must_use]
+    pub const fn into_eqn_print_options(self, output_format: IoFormat) -> EqnPrintOptions {
+        EqnPrintOptions {
+            output_format,
+            use_infix: self.use_infix,
+            full_equational_rep: self.full_equational_rep,
+            print_oriented: self.print_oriented,
+            higher_order_parentheses: false,
         }
     }
 }
@@ -3932,6 +3946,9 @@ fn write_saturated_output(
         &config.saturated_output_descriptor,
         config.flags.contains(EProverFlag::PrintSaturatedInfo),
         config.output_format,
+        config
+            .equation_print
+            .into_eqn_print_options(config.output_format),
     )?;
     output.write_all(rendered.as_bytes())?;
     output.write_all(b"\n")?;
@@ -6453,6 +6470,38 @@ mod tests {
         ));
         assert!(printed.contains("# Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_saturated_output_honors_equation_print_options() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-print-saturated-eqn-options");
+        std::fs::write(&path, "a=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--eqn-no-infix",
+                "--print-saturated=e",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("# Processed positive unit clauses:\n"));
+        assert!(printed.contains("equal(b, a) <- .\n"));
+        assert!(!printed.contains("b=a <- .\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

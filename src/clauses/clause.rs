@@ -1800,14 +1800,23 @@ pub fn clause_print_lop_format_string(
     clause: &Clause,
     full_terms: bool,
 ) -> String {
-    let mut output = String::new();
-    let _ = clause_write_lop_format(
-        &mut output,
+    clause_print_lop_format_string_with_options(
         bank,
         clause,
         full_terms,
         EqnPrintOptions::default(),
-    );
+    )
+}
+
+#[must_use]
+pub fn clause_print_lop_format_string_with_options(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> String {
+    let mut output = String::new();
+    let _ = clause_write_lop_format(&mut output, bank, clause, full_terms, options);
     output
 }
 
