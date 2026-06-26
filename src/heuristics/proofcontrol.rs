@@ -716,6 +716,105 @@ pub fn proof_state_check_watchlist(
     ProofStateWatchlistOutcome::default()
 }
 
+/// Runs the local owned-watchlist body of C `simplify_watchlist`.
+///
+/// This uses a plain scan of the owned watchlist, archives each rewritable
+/// watched original as dead, normalizes the quoted flat copy with the processed
+/// demodulator sets, minimizes/AC-cleans it, marks maximal terms, and reinserts
+/// it through the watchlist FV index. Long-lived `wlindices` deletion/insertion
+/// and proof-output quotes remain later integration work.
+///
+/// # Errors
+///
+/// Returns diagnostics from backward-rewrite matching, archive copies, or
+/// leftmost-innermost normalization.
+pub fn proof_state_simplify_watchlist(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> Result<i64, Diagnostic> {
+    if !clause.is_demodulator() || state.watchlist().is_none_or(ClauseSet::is_empty) {
+        return Ok(0);
+    }
+
+    let ids = {
+        let ocb = control.ocb.as_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "simplify_watchlist requires initialized proof-control ordering",
+            )
+        })?;
+        let (terms, watchlist, _) = state.terms_watchlist_archive_mut();
+        let Some(watchlist) = watchlist else {
+            return Ok(0);
+        };
+        let (_found, ids) = rewritable_ids_in_set(terms, ocb, watchlist, clause, clause.date())?;
+        ids
+    };
+
+    let mut tmp_set = ClauseSet::new();
+    for id in ids.into_iter().rev() {
+        let Some(watchlist) = state.watchlist_mut() else {
+            break;
+        };
+        let Some(watched) = watchlist.extract_by_id(id) else {
+            continue;
+        };
+        let requeued = proof_state_archive_simplified_clause(state, watched)?;
+        tmp_set.insert(requeued);
+    }
+
+    let mut simplified = 0;
+    while let Some(mut handle) = tmp_set.extract_first() {
+        let forward_demod = control.heuristic_parms().forward_demod;
+        let prefer_general = control.heuristic_parms().prefer_general;
+        let lambda_demod = control.heuristic_parms().lambda_demod;
+        let rw_delta = {
+            let ocb = control.ocb.as_mut().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "simplify_watchlist normalization requires initialized proof-control ordering",
+                )
+            })?;
+            let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+            let demodulators: [&ClauseSet; 2] =
+                [&*processed_sets.pos_rules, &*processed_sets.pos_eqns];
+            clause_compute_li_normalform_plain(
+                terms,
+                ocb,
+                &mut handle,
+                &demodulators,
+                forward_demod,
+                prefer_general,
+                lambda_demod,
+            )?
+        };
+        state.statistics_mut().rw_count += i64_to_u64_saturating(rw_delta);
+
+        let _removed_lits = clause_remove_superfluous_literals(&mut handle, state.terms());
+        if control.ac_handling_active() {
+            let _removed_ac = clause_remove_ac_resolved(&mut handle, state.terms());
+        }
+        handle.set_weight(handle.standard_weight());
+        {
+            let ocb = control.ocb.as_mut().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "simplify_watchlist maximal marking requires initialized proof-control ordering",
+                )
+            })?;
+            handle.mark_maximal_terms(ocb, state.terms());
+        }
+        let (terms, watchlist, _) = state.terms_watchlist_archive_mut();
+        if let Some(watchlist) = watchlist {
+            watchlist.indexed_insert_clause_owned(handle, terms);
+            simplified += 1;
+        }
+    }
+
+    Ok(simplified)
+}
+
 fn remove_watchlist_subsumed(
     watchlist: &mut ClauseSet,
     archive: &mut ClauseSet,
@@ -1992,7 +2091,7 @@ pub fn proof_state_process_clause(
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    ensure_process_clause_supported(state, control)?;
+    ensure_process_clause_supported(control)?;
 
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
@@ -2065,7 +2164,28 @@ pub fn proof_state_process_clause(
     if control.heuristic_parms().detsort_tmpset {
         proof_state_sort_tmp_store_by_struct_weight(state);
     }
+    let processed_ident = clause.ident();
     let class = proof_state_insert_processed_clause(state, clause, clause_date)?;
+    if control.heuristic_parms().watchlist_simplify {
+        let processed_clause = match class {
+            ProcessedClauseClass::PositiveRule => {
+                state.processed_pos_rules().find_by_id(processed_ident)
+            }
+            ProcessedClauseClass::PositiveEquation => {
+                state.processed_pos_eqns().find_by_id(processed_ident)
+            }
+            ProcessedClauseClass::NegativeUnit => {
+                state.processed_neg_units().find_by_id(processed_ident)
+            }
+            ProcessedClauseClass::NonUnit => {
+                state.processed_non_units().find_by_id(processed_ident)
+            }
+        }
+        .cloned();
+        if let Some(processed_clause) = processed_clause {
+            let _simplified = proof_state_simplify_watchlist(state, control, &processed_clause)?;
+        }
+    }
     let generated_empty = proof_state_insert_new_clauses(state, control)?;
 
     Ok(ProcessClauseOutcome::Processed {
@@ -2086,24 +2206,11 @@ enum ProcessedSetSlot {
     NonUnits,
 }
 
-fn ensure_process_clause_supported(
-    state: &ProofState,
-    control: &ProofControl,
-) -> Result<(), Diagnostic> {
+fn ensure_process_clause_supported(control: &ProofControl) -> Result<(), Diagnostic> {
     if control.heuristic_parms().selection_strategy != NO_GENERATION {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "ProcessClause generated inference production is not ported yet; use NoGeneration",
-        ));
-    }
-    if control.heuristic_parms().watchlist_simplify
-        && state
-            .watchlist()
-            .is_some_and(|watchlist| !watchlist.is_empty())
-    {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ProcessClause watchlist simplification is not ported yet",
         ));
     }
     Ok(())
@@ -2350,14 +2457,22 @@ fn move_simplified_ids_from_slot(
 
 fn proof_state_move_simplified_clause_to_tmp(
     state: &mut ProofState,
-    mut clause: Clause,
+    clause: Clause,
 ) -> Result<(), Diagnostic> {
+    let requeued = proof_state_archive_simplified_clause(state, clause)?;
+    state.tmp_store_mut().insert(requeued);
+    Ok(())
+}
+
+fn proof_state_archive_simplified_clause(
+    state: &mut ProofState,
+    mut clause: Clause,
+) -> Result<Clause, Diagnostic> {
     let mut requeued = clause.flat_copy(state.terms_mut())?;
     clause_push_derivation(&mut requeued, DC_CNF_QUOTE, Some(&clause), None);
     clause.set_prop(CP_IS_DEAD);
     state.archive_mut().insert(clause);
-    state.tmp_store_mut().insert(requeued);
-    Ok(())
+    Ok(requeued)
 }
 
 fn proof_state_archive_dead_clause(state: &mut ProofState, mut clause: Clause) {
@@ -2770,11 +2885,11 @@ mod tests {
         proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_process_clause,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_storage_estimate, select_inherited_literal,
-        BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
-        LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
-        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_reset_processed, proof_state_simplify_watchlist, proof_state_storage_estimate,
+        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
+        ForwardContractOptions, LiteralSelectionOutcome, ProcessClauseOutcome,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2857,6 +2972,20 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, alloc_arrow_type(vec![type_.clone(), type_]))
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bank.signature().type_bank().default_type()));
+        term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
@@ -4651,6 +4780,94 @@ mod tests {
         );
         let archived = state.archive().find_by_id(4_132).unwrap();
         assert!(archived.query_prop(CP_IS_DEAD));
+    }
+
+    #[test]
+    fn proof_state_simplify_watchlist_rewrites_and_reinserts_watched_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, watched, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_watch_simpl_target");
+            let other = typed_const(terms, "pc_watch_simpl_other");
+            let compound = typed_unary(terms, "pc_watch_simpl_f", &target);
+            let mut demod_lit = literal(terms, &compound, &target, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_133);
+            demodulator.set_date(SysDate::from_raw(7));
+            demodulator.set_weight(demodulator.standard_weight());
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &other, true,
+            )]));
+            watched.set_ident(4_134);
+            watched.set_weight(watched.standard_weight());
+            (demodulator, watched, target, other)
+        };
+        state.processed_pos_rules_mut().insert(demodulator.clone());
+        state.processed_pos_rules_mut().set_date(demodulator.date());
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let simplified = proof_state_simplify_watchlist(&mut state, &mut control, &demodulator)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(simplified, 1);
+        assert_eq!(state.watchlist().unwrap().members(), 1);
+        assert_eq!(state.archive().members(), 1);
+        assert!(state
+            .archive()
+            .find_by_id(4_134)
+            .unwrap()
+            .query_prop(CP_IS_DEAD));
+        let simplified = state.watchlist().unwrap().find_by_id(4_134).unwrap();
+        let literal = &simplified.literals().as_slice()[0];
+        assert_eq!(literal.left(), &target);
+        assert_eq!(literal.right(), &other);
+        assert!(simplified.query_prop(CP_IS_ORIENTED));
+        assert!(state.statistics().rw_count >= 1);
+    }
+
+    #[test]
+    fn proof_state_process_clause_simplifies_nonempty_watchlist() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, watched, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_process_watch_simpl_target");
+            let other = typed_const(terms, "pc_process_watch_simpl_other");
+            let compound = typed_unary(terms, "pc_process_watch_simpl_f", &target);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &target, true,
+            )]));
+            selected.set_ident(4_135);
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &other, true,
+            )]));
+            watched.set_ident(4_136);
+            watched.set_weight(watched.standard_weight());
+            (selected, watched, target, other)
+        };
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(matches!(outcome, ProcessClauseOutcome::Processed { .. }));
+        assert_eq!(state.watchlist().unwrap().members(), 1);
+        assert_eq!(state.archive().members(), 1);
+        assert!(state
+            .archive()
+            .find_by_id(4_136)
+            .unwrap()
+            .query_prop(CP_IS_DEAD));
+        let simplified = state.watchlist().unwrap().find_by_id(4_136).unwrap();
+        let literal = &simplified.literals().as_slice()[0];
+        assert_eq!(literal.left(), &target);
+        assert_eq!(literal.right(), &other);
+        assert!(state.statistics().rw_count >= 1);
     }
 
     #[test]

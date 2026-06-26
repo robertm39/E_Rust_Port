@@ -280,7 +280,7 @@ impl ProofState {
 
     pub fn terms_watchlist_archive_mut(
         &mut self,
-    ) -> (&TermBank, Option<&mut ClauseSet>, &mut ClauseSet) {
+    ) -> (&mut TermBank, Option<&mut ClauseSet>, &mut ClauseSet) {
         let Self {
             terms,
             watchlist,
