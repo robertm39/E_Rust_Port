@@ -10,8 +10,12 @@ use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
+use crate::clauses::proofstate::proof_state_alloc;
 use crate::heuristics::hcb::{self, HeuristicParmsCell};
-use crate::heuristics::proofcontrol::ProofControl;
+use crate::heuristics::proofcontrol::{
+    proof_control_init, proof_state_init, proof_state_saturate, ProofControl, SaturateOutcome,
+    SaturateStopReason,
+};
 use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
@@ -3524,11 +3528,9 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
 
-    Err(Diagnostic::new(
-        ErrorCode::OTHER_ERROR,
-        "Rust eprover proof search is not implemented yet",
-    )
-    .into())
+    let status = run_proof_search(config)?;
+    output.flush()?;
+    Ok(status)
 }
 
 fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
@@ -3572,6 +3574,89 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
     }
 
     Ok(())
+}
+
+fn run_proof_search(config: &EProverConfig) -> Result<u8, EProverError> {
+    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    parse_input_files_into_axioms(config, &mut state)?;
+
+    let mut control = proof_control_from_config(config)?;
+    let mut params = control.heuristic_parms().clone();
+    let fvi_params = control.fvi_parms().clone();
+    let wfcb_defs = &config.search.heuristic.weight_function_definitions;
+    let mut hcb_defs = config.search.heuristic.heuristic_definitions.clone();
+    {
+        let (bank, axioms) = state.terms_and_axioms_mut();
+        proof_control_init(
+            &mut control,
+            bank,
+            axioms,
+            &mut params,
+            &fvi_params,
+            wfcb_defs,
+            &mut hcb_defs,
+            false,
+        )?;
+    }
+    proof_state_init(&mut state, &mut control)?;
+    let outcome = proof_state_saturate(
+        &mut state,
+        &mut control,
+        config.step_limit,
+        config.processed_set_limit,
+        config.unprocessed_limit,
+        config.total_clause_set_limit,
+        config.generated_limit,
+        config.term_bank_insert_limit,
+        config.answer_limit,
+    )?;
+    Ok(saturate_outcome_exit_status(&outcome))
+}
+
+fn parse_input_files_into_axioms(
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<(), EProverError> {
+    for file in &config.files {
+        let before = state.axioms().len();
+        let mut parsed = ClauseSet::new();
+        parse_clause_file(file, config.parse_format, state.terms_mut(), &mut parsed)?;
+        let parsed_count = parsed.len();
+        state.axioms_mut().insert_set(&mut parsed);
+        if config.flags.contains(EProverFlag::RequireNonempty) && parsed_count == 0 {
+            return Err(Diagnostic::new(
+                ErrorCode::INPUT_SEMANTIC_ERROR,
+                format!("Input file {file} did not contain any clauses"),
+            )
+            .into());
+        }
+        debug_assert_eq!(state.axioms().len(), before + parsed_count);
+    }
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && state.axioms().is_empty() {
+        return Err(Diagnostic::new(
+            ErrorCode::INPUT_SEMANTIC_ERROR,
+            "Input did not contain any clauses",
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+const fn saturate_outcome_exit_status(outcome: &SaturateOutcome) -> u8 {
+    match outcome {
+        SaturateOutcome::Returned { .. } => ErrorCode::PROOF_FOUND.exit_status(),
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::Saturated,
+            ..
+        } => ErrorCode::SATISFIABLE.exit_status(),
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::TimeLimit,
+            ..
+        } => ErrorCode::CPU_LIMIT_ERROR.exit_status(),
+        SaturateOutcome::Stopped { .. } => ErrorCode::RESOURCE_OUT.exit_status(),
+    }
 }
 
 fn parse_clause_file(
@@ -5494,14 +5579,23 @@ mod tests {
     fn run_applies_verbose_option_to_global_gate() {
         let _guard = global_test_lock();
         set_verbose_level(0);
+        let path = temp_path("verbose");
+        std::fs::write(&path, "").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(["eprover", "--verbose=2"], &mut stdout, &mut stderr).unwrap_err();
+        let status = run(
+            ["eprover", "--verbose=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(verbose_level(), 2);
         set_verbose_level(0);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -5529,17 +5623,25 @@ mod tests {
         let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
         let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
         let _ = set_schedule_time_limit(0);
+        let path = temp_path("cpu-limits");
+        std::fs::write(&path, "").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
-            ["eprover", "--soft-cpu-limit=25", "--cpu-limit=100"],
+        let status = run(
+            [
+                "eprover",
+                "--soft-cpu-limit=25",
+                "--cpu-limit=100",
+                path_arg.as_str(),
+            ],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(hard_time_limit(), 100);
         assert_eq!(soft_time_limit(), 25);
         assert_eq!(schedule_time_limit(), 100);
@@ -5547,44 +5649,72 @@ mod tests {
         let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
         let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
         let _ = set_schedule_time_limit(0);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn run_applies_output_level_options_to_global_gate() {
         let _guard = global_test_lock();
         let _ = set_output_level(1);
+        let silent_path = temp_path("silent");
+        let output_path = temp_path("output-level");
+        std::fs::write(&silent_path, "").unwrap();
+        std::fs::write(&output_path, "").unwrap();
+        let silent_arg = silent_path.to_string_lossy().into_owned();
+        let output_arg = output_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(["eprover", "--silent"], &mut stdout, &mut stderr).unwrap_err();
+        let status = run(
+            ["eprover", "--silent", silent_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(output_level(), 0);
 
-        let error = run(["eprover", "--output-level=3"], &mut stdout, &mut stderr).unwrap_err();
+        let status = run(
+            ["eprover", "--output-level=3", output_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(output_level(), 3);
         let _ = set_output_level(1);
+        std::fs::remove_file(&silent_path).unwrap();
+        std::fs::remove_file(&output_path).unwrap();
     }
 
     #[test]
     fn run_print_info_uses_configured_output_target() {
         let _guard = global_test_lock();
         let path = temp_path("print-info");
+        let input_path = temp_path("print-info-input");
         let _ = std::fs::remove_file(&path);
+        std::fs::write(&input_path, "").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
+        let input_arg = input_path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
-            ["eprover", "--print-version", "-o", path_arg.as_str()],
+        let status = run(
+            [
+                "eprover",
+                "--print-version",
+                "-o",
+                path_arg.as_str(),
+                input_arg.as_str(),
+            ],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(stdout.is_empty());
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
@@ -5592,18 +5722,19 @@ mod tests {
         );
         std::fs::remove_file(&path).unwrap();
 
-        let error = run(
-            ["eprover", "--print-version", "-o", "-"],
+        let status = run(
+            ["eprover", "--print-version", "-o", "-", input_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!("# Version: {VERSION}\n")
         );
+        std::fs::remove_file(&input_path).unwrap();
     }
 
     #[test]
@@ -5622,6 +5753,78 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
+        let _guard = global_test_lock();
+        let path = temp_path("proof-found");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_saturated_clause_set_as_satisfiable() {
+        let _guard = global_test_lock();
+        let path = temp_path("proof-saturated");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--no-generation", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_resource_status_when_step_limit_fires() {
+        let _guard = global_test_lock();
+        let path = temp_path("proof-step-limit");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--processed-clauses-limit=0",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

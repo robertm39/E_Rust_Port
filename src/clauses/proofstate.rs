@@ -164,7 +164,7 @@ impl ProofState {
         &mut self.terms
     }
 
-    pub fn terms_and_axioms_mut(&mut self) -> (&TermBank, &mut ClauseSet) {
+    pub fn terms_and_axioms_mut(&mut self) -> (&mut TermBank, &mut ClauseSet) {
         let Self { terms, axioms, .. } = self;
         (terms, axioms)
     }
