@@ -3559,6 +3559,9 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 
     if config.flags.contains(EProverFlag::SyntaxOnly) {
         run_syntax_only(&mut output, config)?;
+        if !config.flags.contains(EProverFlag::PrintFormulas) {
+            write_syntax_only_success(&mut output)?;
+        }
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
 
@@ -3629,6 +3632,12 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
         }
     }
 
+    Ok(())
+}
+
+fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError> {
+    output.write_all(b"\n# Parsing successful!\n")?;
+    write_tstp_status(output, "Unknown")?;
     Ok(())
 }
 
@@ -6049,7 +6058,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Parsing successful!\n# SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -6348,7 +6360,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Parsing successful!\n# SZS status Unknown\n"
+        );
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
             "eprover: Warning: Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.\n"
