@@ -1,21 +1,23 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::basics::sysdate::SysDate;
+use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_LIMITED_RW,
     CP_NO_GENERATION, CP_SUBSUMES_WATCH,
 };
 use crate::clauses::clausefunc::{
-    clause_archive, clause_remove_ac_resolved, clause_remove_superfluous_literals,
-    clause_set_delete_orphans_with,
+    clause_archive, clause_archive_copy, clause_remove_ac_resolved,
+    clause_remove_superfluous_literals, clause_set_delete_orphans_with,
 };
-use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::condense;
-use crate::clauses::context_sr::clause_contextual_simplify_reflect;
+use crate::clauses::context_sr::{
+    clause_contextual_simplify_reflect, clause_set_find_context_sr_clauses,
+};
 use crate::clauses::derivation::{
-    clause_push_derivation, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+    clause_push_derivation, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS,
 };
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::clause_er_normalize_var;
@@ -25,6 +27,7 @@ use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::proofstate::ProofState;
+use crate::clauses::rewrite::find_rewritable_clauses;
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
 use crate::clauses::splitting::{
     clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
@@ -33,19 +36,20 @@ use crate::clauses::subsumption::{
     clause_negative_simplify_reflect, clause_positive_simplify_reflect,
     clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
     clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
-    unit_clause_set_subsumes_clause,
+    eqn_topsubsumes_termpair, unit_clause_set_subsumes_clause,
 };
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
-    hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight, AcHandling,
+    hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
+    hcb_single_weight_clause_select, hcb_standard_clause_select, AcHandling, HcbSelectFunction,
     HeuristicParmsCell, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
 use crate::heuristics::litselection::{
-    apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection,
+    apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection, NO_GENERATION,
 };
 use crate::heuristics::to_autoselect::to_select_ordering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
@@ -219,6 +223,44 @@ pub enum ProcessedClauseClass {
     PositiveEquation,
     NegativeUnit,
     NonUnit,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BackwardSimplificationOutcome {
+    pub rewritten: u64,
+    pub rewritten_literals: u64,
+    pub subsumed: u64,
+    pub unit_simplified: u64,
+    pub context_sr: u64,
+    pub tmp_store_marked: i64,
+    pub min_rw_detected: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessClauseReturnReason {
+    EmptyClause,
+    AnswerLimit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProcessClauseOutcome {
+    NoClause,
+    ContractedAway,
+    Returned {
+        clause: Clause,
+        reason: ProcessClauseReturnReason,
+    },
+    Replaced {
+        empty: Option<Clause>,
+    },
+    Processed {
+        class: ProcessedClauseClass,
+        answer_detected: bool,
+        ac_activated: bool,
+        watchlist: ProofStateWatchlistOutcome,
+        backward: BackwardSimplificationOutcome,
+        generated_empty: Option<Clause>,
+    },
 }
 
 pub struct ProofControl {
@@ -1851,6 +1893,514 @@ pub fn proof_state_insert_processed_clause(
     Ok(class)
 }
 
+/// Selects and extracts the next unprocessed clause with the active HCB.
+///
+/// This is the `control->hcb->hcb_select(control->hcb, state->unprocessed)`
+/// prefix of C `ProcessClause`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-control has no active heuristic control block.
+pub fn proof_state_select_unprocessed_clause(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<Clause>, Diagnostic> {
+    let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProcessClause selection requires initialized proof-control heuristic",
+        )
+    })?;
+    let hcb = control
+        .hcbs_mut()
+        .hcb_mut(active_hcb_handle)
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "active proof-control heuristic handle is invalid",
+            )
+        })?;
+
+    let selected = match hcb.hcb_select() {
+        HcbSelectFunction::StandardClauseSelect => {
+            hcb_standard_clause_select(hcb, state.unprocessed_mut())
+        }
+        HcbSelectFunction::SingleWeightClauseSelect => {
+            hcb_single_weight_clause_select(hcb, state.unprocessed_mut())
+        }
+    };
+    Ok(selected)
+}
+
+/// Runs the currently ported backward-simplification tail of C `ProcessClause`.
+///
+/// This covers plain backward rewriting, backward subsumption, unit
+/// back-simplification, backward contextual simplify-reflect, and the final
+/// `CPIsIRVictim` marking over `tmp_store`. Long-lived global-index
+/// insertion/deletion and proof-output quotes remain later integration work.
+///
+/// # Errors
+///
+/// Returns diagnostics from backward rewrite matching or clause archive copies.
+pub fn proof_state_backward_simplify(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    clause_date: &mut SysDate,
+) -> Result<BackwardSimplificationOutcome, Diagnostic> {
+    let mut outcome = BackwardSimplificationOutcome::default();
+
+    let old_lit_count = state.tmp_store().literals();
+    let old_clause_count = state.tmp_store().members();
+    outcome.min_rw_detected =
+        proof_state_eliminate_backward_rewritten_clauses(state, control, clause, clause_date)?;
+    let rewritten_lits = state.tmp_store().literals() - old_lit_count;
+    let rewritten = state.tmp_store().members() - old_clause_count;
+    outcome.rewritten_literals = i64_to_u64_saturating(rewritten_lits);
+    outcome.rewritten = i64_to_u64_saturating(rewritten);
+    {
+        let statistics = state.statistics_mut();
+        statistics.backward_rewritten_lit_count += outcome.rewritten_literals;
+        statistics.backward_rewritten_count += outcome.rewritten;
+    }
+
+    outcome.subsumed = proof_state_eliminate_backward_subsumed_clauses(state, clause);
+    state.statistics_mut().backward_subsumed_count += outcome.subsumed;
+    outcome.unit_simplified = proof_state_eliminate_unit_simplified_clauses(state, clause)?;
+    outcome.context_sr = proof_state_eliminate_context_sr_clauses(state, control, clause)?;
+
+    outcome.tmp_store_marked = state.tmp_store().members();
+    state.tmp_store_mut().set_prop(CP_IS_IR_VICTIM);
+    Ok(outcome)
+}
+
+/// Processes one selected clause through the currently ported C `ProcessClause`.
+///
+/// The wrapper is deliberately strict about the remaining unported generation
+/// path: it accepts only the C `NoGeneration` selection strategy until
+/// `generate_new_clauses` is available. Backward simplification can still put
+/// simplified processed clauses into `tmp_store`, and those are routed through
+/// the existing `insert_new_clauses` path.
+///
+/// # Errors
+///
+/// Returns diagnostics from selection, contraction, answer-literal evaluation,
+/// replacement inferences, backward simplification, processed insertion, or
+/// generated-clause reinsertion.
+pub fn proof_state_process_clause(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    ensure_process_clause_supported(state, control)?;
+
+    let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
+        return Ok(ProcessClauseOutcome::NoClause);
+    };
+
+    clause.remove_evaluations();
+    clause.set_prop(CP_IS_PROCESSED);
+    state.statistics_mut().processed_count += 1;
+    debug_assert!(!clause.query_prop(CP_IS_IR_VICTIM));
+
+    let archived_ref = if control.record_gc_selection() {
+        let (terms, archive) = state.terms_and_archive_mut();
+        Some(clause_archive_copy(archive, &mut clause, terms)?)
+    } else {
+        None
+    };
+
+    let options = ForwardContractOptions {
+        non_unit_subsumption: true,
+        context_sr: control.heuristic_parms().forward_context_sr,
+        condense_clause: control.heuristic_parms().condensing,
+        level: RewriteLevel::FullRewrite,
+    };
+    let Some(packed) = proof_state_forward_contract_clause(state, control, clause, options)? else {
+        if let Some(archived_ref) = archived_ref {
+            let _ = state.archive_mut().delete_by_id(archived_ref.ident());
+        }
+        return Ok(ProcessClauseOutcome::ContractedAway);
+    };
+
+    let answer_detected = if packed.clause().is_sem_false() {
+        state.statistics_mut().answer_count += 1;
+        true
+    } else {
+        false
+    };
+    if answer_detected
+        && (packed.clause().is_empty() || state.statistics().answer_count >= answer_limit)
+    {
+        let reason = if packed.clause().is_empty() {
+            ProcessClauseReturnReason::EmptyClause
+        } else {
+            ProcessClauseReturnReason::AnswerLimit
+        };
+        let mut clause = packed.into_clause();
+        if clause.evaluate_answer_literals(state.terms()) != 0 {
+            clause_push_derivation(&mut clause, DC_EVAL_ANSWERS, None, None);
+        }
+        return Ok(ProcessClauseOutcome::Returned { clause, reason });
+    }
+
+    debug_assert!(packed.clause().weight() == packed.clause().standard_weight());
+    let ac_activated = proof_state_check_ac_status(state, control, packed.clause());
+    state.statistics_mut().proc_non_trivial_count += 1;
+
+    let mut clause = match proof_state_replacing_inferences(state, control, packed)? {
+        ReplacingInferenceOutcome::Survivor(clause) => clause,
+        ReplacingInferenceOutcome::Replaced { empty } => {
+            return Ok(ProcessClauseOutcome::Replaced { empty });
+        }
+    };
+
+    let static_watchlist = control.heuristic_parms().watchlist_is_static;
+    let lambda_demod = control.heuristic_parms().lambda_demod;
+    let watchlist = proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod);
+
+    let mut clause_date = proof_state_demodulator_date(state, RewriteLevel::FullRewrite);
+    let backward = proof_state_backward_simplify(state, control, &clause, &mut clause_date)?;
+
+    if control.heuristic_parms().detsort_tmpset {
+        proof_state_sort_tmp_store_by_struct_weight(state);
+    }
+    let class = proof_state_insert_processed_clause(state, clause, clause_date)?;
+    let generated_empty = proof_state_insert_new_clauses(state, control)?;
+
+    Ok(ProcessClauseOutcome::Processed {
+        class,
+        answer_detected,
+        ac_activated,
+        watchlist,
+        backward,
+        generated_empty,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessedSetSlot {
+    PosRules,
+    PosEqns,
+    NegUnits,
+    NonUnits,
+}
+
+fn ensure_process_clause_supported(
+    state: &ProofState,
+    control: &ProofControl,
+) -> Result<(), Diagnostic> {
+    if control.heuristic_parms().selection_strategy != NO_GENERATION {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProcessClause generated inference production is not ported yet; use NoGeneration",
+        ));
+    }
+    if control.heuristic_parms().watchlist_simplify
+        && state
+            .watchlist()
+            .is_some_and(|watchlist| !watchlist.is_empty())
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ProcessClause watchlist simplification is not ported yet",
+        ));
+    }
+    Ok(())
+}
+
+fn proof_state_demodulator_date(state: &ProofState, level: RewriteLevel) -> SysDate {
+    let demodulators = [state.processed_pos_rules(), state.processed_pos_eqns()];
+    clause_set_list_get_max_date(&demodulators, rewrite_level_set_count(level))
+}
+
+fn rewrite_level_set_count(level: RewriteLevel) -> usize {
+    match level {
+        RewriteLevel::NoRewrite => 0,
+        RewriteLevel::RuleRewrite => 1,
+        RewriteLevel::FullRewrite => 2,
+    }
+}
+
+fn proof_state_eliminate_backward_rewritten_clauses(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    clause_date: &mut SysDate,
+) -> Result<bool, Diagnostic> {
+    if !clause.is_demodulator() {
+        return Ok(false);
+    }
+    match clause_date.increment() {
+        SysDateIncrement::Advanced => {}
+        SysDateIncrement::CAssertionWouldFail => {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "backward rewrite date increment would violate C SysDate assertion",
+            ));
+        }
+        SysDateIncrement::Overflow => {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "backward rewrite date increment overflowed",
+            ));
+        }
+    }
+
+    let mut min_rw = false;
+    for slot in [
+        ProcessedSetSlot::PosRules,
+        ProcessedSetSlot::PosEqns,
+        ProcessedSetSlot::NegUnits,
+        ProcessedSetSlot::NonUnits,
+    ] {
+        let (found, ids) = {
+            let ocb = control.ocb.as_mut().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "backward rewriting requires initialized proof-control ordering",
+                )
+            })?;
+            let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+            let set = processed_set_from_bundle(&processed_sets, slot);
+            rewritable_ids_in_set(terms, ocb, set, clause, *clause_date)?
+        };
+        min_rw = min_rw || found;
+        move_simplified_ids_from_slot(state, slot, ids)?;
+    }
+
+    if control.heuristic_parms().detsort_bw_rw {
+        proof_state_sort_tmp_store_by_struct_weight(state);
+    }
+    Ok(min_rw)
+}
+
+fn rewritable_ids_in_set(
+    terms: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    set: &ClauseSet,
+    clause: &Clause,
+    clause_date: SysDate,
+) -> Result<(bool, Vec<i64>), Diagnostic> {
+    let mut rewritable = Vec::new();
+    let found = find_rewritable_clauses(terms, ocb, set, &mut rewritable, clause, clause_date)?;
+    let ids = rewritable.iter().map(|clause| clause.ident()).collect();
+    Ok((found, ids))
+}
+
+fn proof_state_eliminate_backward_subsumed_clauses(
+    state: &mut ProofState,
+    subsumer: &Clause,
+) -> u64 {
+    let mut removed = 0;
+    if subsumer.is_unit() {
+        if subsumer.positive_literal_count() != 0 {
+            if !subsumer.is_rw_rule() {
+                removed +=
+                    remove_subsumed_ids_from_slot(state, ProcessedSetSlot::PosRules, subsumer);
+                removed +=
+                    remove_subsumed_ids_from_slot(state, ProcessedSetSlot::PosEqns, subsumer);
+            }
+            removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NonUnits, subsumer);
+        } else {
+            removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NegUnits, subsumer);
+            removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NonUnits, subsumer);
+        }
+    } else {
+        removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NonUnits, subsumer);
+    }
+    removed
+}
+
+fn remove_subsumed_ids_from_slot(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    subsumer: &Clause,
+) -> u64 {
+    let ids = {
+        let set = processed_set_by_slot(state, slot);
+        subsumed_ids_in_set(set, subsumer, state.terms())
+    };
+    let mut removed = 0;
+    for id in ids.into_iter().rev() {
+        let Some(clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
+            continue;
+        };
+        proof_state_archive_dead_clause(state, clause);
+        removed += 1;
+    }
+    removed
+}
+
+fn subsumed_ids_in_set(set: &ClauseSet, subsumer: &Clause, terms: &TermBank) -> Vec<i64> {
+    let mut matched_clauses = PStack::new();
+    let _ = clause_set_find_subsumed_clauses_with_index(
+        set,
+        set.fv_anchor(),
+        subsumer,
+        &mut matched_clauses,
+        terms,
+    );
+    matched_clauses
+        .as_slice()
+        .iter()
+        .map(|clause| clause.ident())
+        .collect()
+}
+
+fn proof_state_eliminate_unit_simplified_clauses(
+    state: &mut ProofState,
+    simplifier: &Clause,
+) -> Result<u64, Diagnostic> {
+    if simplifier.is_rw_rule() || !simplifier.is_unit() {
+        return Ok(0);
+    }
+
+    let mut moved = move_unit_simplified_from_slot(state, ProcessedSetSlot::NonUnits, simplifier)?;
+    if simplifier.is_positive() {
+        moved += move_unit_simplified_from_slot(state, ProcessedSetSlot::NegUnits, simplifier)?;
+    } else {
+        moved += move_unit_simplified_from_slot(state, ProcessedSetSlot::PosRules, simplifier)?;
+        moved += move_unit_simplified_from_slot(state, ProcessedSetSlot::PosEqns, simplifier)?;
+    }
+    Ok(moved)
+}
+
+fn move_unit_simplified_from_slot(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    simplifier: &Clause,
+) -> Result<u64, Diagnostic> {
+    let ids = {
+        let set = processed_set_by_slot(state, slot);
+        set.iter()
+            .filter(|clause| clause_unit_simplify_test(clause, simplifier))
+            .map(Clause::ident)
+            .collect::<Vec<_>>()
+    };
+    move_simplified_ids_from_slot(state, slot, ids)
+}
+
+fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
+    debug_assert!(simplifier.is_unit());
+    let simplifier_literal = simplifier
+        .literals()
+        .as_slice()
+        .first()
+        .expect("unit simplifier must have one literal");
+    debug_assert!(simplifier_literal.is_negative() || !simplifier_literal.is_oriented());
+
+    let simplifier_positive = simplifier_literal.is_positive();
+    if simplifier_positive == clause.is_positive() {
+        return false;
+    }
+
+    clause.literals().as_slice().iter().any(|literal| {
+        simplifier_positive != literal.is_positive()
+            && eqn_topsubsumes_termpair(simplifier_literal, literal.left(), literal.right())
+    })
+}
+
+fn proof_state_eliminate_context_sr_clauses(
+    state: &mut ProofState,
+    control: &ProofControl,
+    simplifier: &Clause,
+) -> Result<u64, Diagnostic> {
+    if !control.heuristic_parms().backward_context_sr {
+        return Ok(0);
+    }
+
+    let ids = {
+        let mut clauses = PStack::new();
+        let count = clause_set_find_context_sr_clauses(
+            state.processed_non_units(),
+            &mut simplifier.clone(),
+            &mut clauses,
+            state.terms(),
+        );
+        if count == 0 {
+            Vec::new()
+        } else {
+            clauses
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect()
+        }
+    };
+
+    move_simplified_ids_from_slot(state, ProcessedSetSlot::NonUnits, ids)
+}
+
+fn move_simplified_ids_from_slot(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    ids: Vec<i64>,
+) -> Result<u64, Diagnostic> {
+    let mut moved = 0;
+    for id in ids.into_iter().rev() {
+        let Some(clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
+            continue;
+        };
+        proof_state_move_simplified_clause_to_tmp(state, clause)?;
+        moved += 1;
+    }
+    Ok(moved)
+}
+
+fn proof_state_move_simplified_clause_to_tmp(
+    state: &mut ProofState,
+    mut clause: Clause,
+) -> Result<(), Diagnostic> {
+    let mut requeued = clause.flat_copy(state.terms_mut())?;
+    clause_push_derivation(&mut requeued, DC_CNF_QUOTE, Some(&clause), None);
+    clause.set_prop(CP_IS_DEAD);
+    state.archive_mut().insert(clause);
+    state.tmp_store_mut().insert(requeued);
+    Ok(())
+}
+
+fn proof_state_archive_dead_clause(state: &mut ProofState, mut clause: Clause) {
+    clause.set_prop(CP_IS_DEAD);
+    state.archive_mut().insert(clause);
+}
+
+fn proof_state_sort_tmp_store_by_struct_weight(state: &mut ProofState) {
+    let mut tmp_store = std::mem::take(state.tmp_store_mut());
+    tmp_store.sort_by(|left, right| left.cmp_by_struct_weight(right, state.terms()).cmp(&0));
+    *state.tmp_store_mut() = tmp_store;
+}
+
+fn processed_set_from_bundle<'a>(
+    sets: &'a crate::clauses::proofstate::ProofStateProcessedSets<'a>,
+    slot: ProcessedSetSlot,
+) -> &'a ClauseSet {
+    match slot {
+        ProcessedSetSlot::PosRules => sets.pos_rules,
+        ProcessedSetSlot::PosEqns => sets.pos_eqns,
+        ProcessedSetSlot::NegUnits => sets.neg_units,
+        ProcessedSetSlot::NonUnits => sets.non_units,
+    }
+}
+
+fn processed_set_by_slot(state: &ProofState, slot: ProcessedSetSlot) -> &ClauseSet {
+    match slot {
+        ProcessedSetSlot::PosRules => state.processed_pos_rules(),
+        ProcessedSetSlot::PosEqns => state.processed_pos_eqns(),
+        ProcessedSetSlot::NegUnits => state.processed_neg_units(),
+        ProcessedSetSlot::NonUnits => state.processed_non_units(),
+    }
+}
+
+fn processed_set_mut_by_slot(state: &mut ProofState, slot: ProcessedSetSlot) -> &mut ClauseSet {
+    match slot {
+        ProcessedSetSlot::PosRules => state.processed_pos_rules_mut(),
+        ProcessedSetSlot::PosEqns => state.processed_pos_eqns_mut(),
+        ProcessedSetSlot::NegUnits => state.processed_neg_units_mut(),
+        ProcessedSetSlot::NonUnits => state.processed_non_units_mut(),
+    }
+}
+
 fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
     let params = control.heuristic_parms();
     if params.split_aggressive
@@ -2218,11 +2768,13 @@ mod tests {
         proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
-        proof_state_replacing_inferences, proof_state_reset_processed,
-        proof_state_storage_estimate, select_inherited_literal, ForwardContractCounts,
-        ForwardContractOptions, LiteralSelectionOutcome, ProcessedClauseClass,
-        ReplacingInferenceOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_move_to_tmp_store, proof_state_process_clause,
+        proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
+        proof_state_reset_processed, proof_state_storage_estimate, select_inherited_literal,
+        BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
+        LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
+        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2252,7 +2804,9 @@ mod tests {
     use crate::heuristics::hcb::{
         AcHandling, HeuristicParmsCell, SplitClassType, SplitType, HCB_DEFAULT_HEURISTIC,
     };
-    use crate::heuristics::litselection::{SELECT_NEGATIVE_LITERALS, SELECT_UNLESS_POS_MAX};
+    use crate::heuristics::litselection::{
+        NO_GENERATION, SELECT_NEGATIVE_LITERALS, SELECT_UNLESS_POS_MAX,
+    };
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
@@ -2402,6 +2956,24 @@ mod tests {
             &mut hcb_defs,
         )
         .unwrap_or_else(|err| panic!("{err}"));
+    }
+
+    fn init_process_clause_control(control: &mut super::ProofControl, state: &ProofState) {
+        init_fifo_hcb(control, state, "ProcessClauseTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().selection_strategy = NO_GENERATION.to_owned();
+    }
+
+    fn queue_unprocessed_for_process(
+        state: &mut ProofState,
+        control: &mut super::ProofControl,
+        clause: Clause,
+    ) {
+        state.unprocessed_mut().insert(clause);
+        let mut unprocessed = std::mem::take(state.unprocessed_mut());
+        proof_control_clause_set_reweight(control, state.terms(), &mut unprocessed)
+            .unwrap_or_else(|err| panic!("{err}"));
+        *state.unprocessed_mut() = unprocessed;
     }
 
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
@@ -3959,6 +4531,126 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(state.tmp_store().is_empty());
         assert_eq!(state.statistics().generated_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_returns_no_clause_for_empty_unprocessed() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, ProcessClauseOutcome::NoClause);
+        assert_eq!(state.statistics().processed_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_rejects_generation_enabled_strategy() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "ProcessClauseRejectGenerationTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let error = proof_state_process_clause(&mut state, &mut control, 1).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.to_string().contains("generated inference production"));
+    }
+
+    #[test]
+    fn proof_state_process_clause_selects_and_inserts_processed_survivor() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_process_survivor", 4_130);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            class,
+            answer_detected,
+            ac_activated,
+            watchlist,
+            backward,
+            generated_empty,
+        } = outcome
+        else {
+            panic!("selected survivor should be inserted into a processed set");
+        };
+        assert!(matches!(
+            class,
+            ProcessedClauseClass::PositiveRule | ProcessedClauseClass::PositiveEquation
+        ));
+        assert!(!answer_detected);
+        assert!(!ac_activated);
+        assert_eq!(watchlist, ProofStateWatchlistOutcome::default());
+        assert_eq!(backward, BackwardSimplificationOutcome::default());
+        assert!(generated_empty.is_none());
+        assert_eq!(state.statistics().processed_count, 1);
+        assert_eq!(state.statistics().proc_non_trivial_count, 1);
+        assert!(state.unprocessed().is_empty());
+        assert_eq!(
+            state.processed_pos_rules().members() + state.processed_pos_eqns().members(),
+            1
+        );
+    }
+
+    #[test]
+    fn proof_state_process_clause_backward_subsumes_processed_non_unit() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, subsumed) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_process_back_sub_target");
+            let witness = typed_const(terms, "pc_process_back_sub_witness");
+            let guard_left = typed_const(terms, "pc_process_back_sub_guard_left");
+            let guard_right = typed_const(terms, "pc_process_back_sub_guard_right");
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &witness, &target, true,
+            )]));
+            selected.set_ident(4_131);
+            let mut subsumed = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &witness, &target, true),
+                literal(terms, &guard_left, &guard_right, true),
+            ]));
+            subsumed.set_ident(4_132);
+            subsumed.set_weight(subsumed.standard_weight());
+            (selected, subsumed)
+        };
+        state.processed_non_units_mut().insert(subsumed);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            class,
+            backward,
+            generated_empty,
+            ..
+        } = outcome
+        else {
+            panic!("selected non-unit should survive processing");
+        };
+        assert!(matches!(
+            class,
+            ProcessedClauseClass::PositiveRule | ProcessedClauseClass::PositiveEquation
+        ));
+        assert_eq!(backward.subsumed, 1);
+        assert_eq!(state.statistics().backward_subsumed_count, 1);
+        assert!(generated_empty.is_none());
+        assert!(state.processed_non_units().find_by_id(4_132).is_none());
+        assert!(
+            state.processed_pos_rules().find_by_id(4_131).is_some()
+                || state.processed_pos_eqns().find_by_id(4_131).is_some()
+        );
+        let archived = state.archive().find_by_id(4_132).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD));
     }
 
     #[test]

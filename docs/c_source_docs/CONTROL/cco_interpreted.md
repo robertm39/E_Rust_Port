@@ -86,6 +86,14 @@ Source files reviewed: `CONTROL/cco_interpreted.h`, `CONTROL/cco_interpreted.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `ClauseEvaluateAnswerLits` only removes simple answer literals when the whole clause is semantically false, then recomputes positive/negative literal counts and records answer-evaluation proof metadata. Rust now exposes the local clause mutation/count recomputation and uses it from the staged `ProcessClause` answer-return path; global proof-output formatting remains deferred.
+
+### Change-Later Observations
+
+- `ClauseEvaluateAnswerLits` asserts the clause is not demodulation/subsumption indexed and, when the clause still belongs to a set, decrements the owning set's literal count. Rust currently calls the helper on owned/extracted clauses only, so no containing set accounting is needed; add indexed/set-owned integration if later call sites evaluate answer literals in place.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

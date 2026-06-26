@@ -488,6 +488,17 @@ impl Clause {
             .all(|literal| literal.is_simple_answer(bank))
     }
 
+    pub fn evaluate_answer_literals(&mut self, bank: &TermBank) -> usize {
+        if !self.is_sem_false() {
+            return 0;
+        }
+        let removed = self.literals.remove_simple_answers(bank);
+        if removed != 0 {
+            self.recompute_lit_counts();
+        }
+        removed
+    }
+
     #[must_use]
     pub fn is_equational(&self, bank: &TermBank) -> bool {
         self.literals.is_equational(bank)
@@ -2480,17 +2491,23 @@ mod tests {
         let a = typed_const(&mut bank, "a");
         let b = typed_const(&mut bank, "b");
         let answer = answer_term(&mut bank, &a);
-        let answer_lit = Eqn::alloc(answer, bank.true_term().clone(), &mut bank, true).unwrap();
+        let mut answer_lit = Eqn::alloc(answer, bank.true_term().clone(), &mut bank, true).unwrap();
         let mut pseudo = eqn(&mut bank, &a, &b, true);
         pseudo.set_prop(EP_PSEUDO_LIT);
         let true_lit = eqn(&mut bank, &a, &a, true);
         let pos = eqn(&mut bank, &a, &b, true);
         let neg = eqn(&mut bank, &b, &a, false);
 
-        assert!(Clause::alloc(EqnList::from_vec(vec![pseudo])).is_sem_false());
-        assert!(Clause::alloc(EqnList::from_vec(vec![answer_lit])).is_sem_empty(&bank));
+        assert!(Clause::alloc(EqnList::from_vec(vec![pseudo.clone()])).is_sem_false());
+        assert!(Clause::alloc(EqnList::from_vec(vec![answer_lit.clone()])).is_sem_empty(&bank));
         assert!(Clause::alloc(EqnList::from_vec(vec![true_lit])).is_trivial(&bank));
         assert!(Clause::alloc(EqnList::from_vec(vec![pos, neg])).is_trivial(&bank));
+
+        answer_lit.set_prop(EP_PSEUDO_LIT);
+        let mut answer_clause = Clause::alloc(EqnList::from_vec(vec![answer_lit, pseudo]));
+        assert_eq!(answer_clause.evaluate_answer_literals(&bank), 1);
+        assert_eq!(answer_clause.literal_number(), 1);
+        assert_eq!(answer_clause.positive_literal_count(), 1);
     }
 
     #[test]
