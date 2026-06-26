@@ -3460,7 +3460,7 @@ fn apply_input_mode_option(config: &mut EProverConfig, parsed: &ParsedOpt<'_, EP
         }
         EProverOption::CnfOnly => {
             "teigEIG".clone_into(&mut config.saturated_output_descriptor);
-            config.step_limit = 0;
+            config.processed_set_limit = 0;
             config.flags.set(EProverFlag::PrintSaturated);
             config.flags.set(EProverFlag::CnfOnly);
         }
@@ -3602,6 +3602,12 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
         )?;
     }
     proof_state_init(&mut state, &mut control)?;
+    if config.flags.contains(EProverFlag::CnfOnly) {
+        write_cnf_only_success(output)?;
+        write_saturated_output(output, config, &state)?;
+        write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
+        return Ok(ErrorCode::NO_ERROR.exit_status());
+    }
     let outcome = proof_state_saturate(
         &mut state,
         &mut control,
@@ -3663,6 +3669,11 @@ fn load_configured_watchlist(
         WatchlistSource::File(path) => ProofStateWatchlistSource::File(Path::new(path)),
     };
     state.load_watchlist(proof_state_source, config.parse_format)?;
+    Ok(())
+}
+
+fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
+    output.write_all(b"\n# CNFization successful!\n")?;
     Ok(())
 }
 
@@ -3940,7 +3951,8 @@ mod tests {
         assert!(config.flags.contains(EProverFlag::PrintSaturated));
         assert!(config.flags.contains(EProverFlag::RequireNonempty));
         assert_eq!(config.saturated_output_descriptor, "teigEIG");
-        assert_eq!(config.step_limit, 0);
+        assert_eq!(config.processed_set_limit, 0);
+        assert_eq!(config.step_limit, i64::MAX);
     }
 
     #[test]
@@ -5948,6 +5960,31 @@ mod tests {
         assert!(printed.contains("# Initial clauses in saturation        : 1\n"));
         assert!(printed.contains("# Processed clauses                    : 1\n"));
         assert!(printed.contains("# Termbank termtop insertions          : "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_prints_initialized_clause_state_without_saturation() {
+        let _guard = global_test_lock();
+        let path = temp_path("proof-cnf-only");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("# CNFization successful!\n"));
+        assert!(printed.contains("# Unprocessed non-unit clauses:\n"));
+        assert!(!printed.contains("# Processed clauses                    :"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
