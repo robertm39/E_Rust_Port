@@ -7396,6 +7396,31 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_predicate_horn_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-predicate-horn");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, ![X]:(human(X) => mortal(X))).\n\
+             fof(fact, axiom, human(socrates)).\n\
+             fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_prints_answer_tuple_before_final_banner() {
         let _guard = global_state_lock();
         let path = temp_path("proof-answer");

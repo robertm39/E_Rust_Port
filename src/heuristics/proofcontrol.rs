@@ -2004,7 +2004,7 @@ pub fn proof_state_insert_processed_clause(
     mut clause: Clause,
     clause_date: SysDate,
 ) -> Result<ProcessedClauseClass, Diagnostic> {
-    let fresh_vars = state.terms().vars().clone();
+    let fresh_vars = state.fresh_vars().clone();
     clause.normalize_vars(state.terms_mut(), &fresh_vars)?;
     clause.set_date(clause_date);
     clause.set_prop(CP_LIMITED_RW);
@@ -2460,7 +2460,6 @@ fn proof_state_process_clause_impl(
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
     };
-
     clause.remove_evaluations();
     clause.set_prop(CP_IS_PROCESSED);
     state.statistics_mut().processed_count += 1;
@@ -3594,6 +3593,26 @@ mod tests {
         }
         let term = Term::top_alloc(f_code, 1);
         term.set_type(Some(bank.signature().type_bank().default_type()));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn unary_predicate_code(bank: &mut TermBank, name: &str) -> i64 {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_type(f_code, alloc_arrow_type(vec![arg_type, bool_type]))
+                .unwrap();
+        }
+        f_code
+    }
+
+    fn unary_predicate(bank: &mut TermBank, f_code: i64, arg: &Term) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
     }
@@ -5421,6 +5440,51 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_generate_new_clauses_paramodulates_predicate_fact_into_rule() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected_fact, processed_rule, mortal_socrates, truth) = {
+            let terms = state.terms_mut();
+            let socrates = typed_const(terms, "pc_pm_socrates");
+            let x = typed_var(terms, -2);
+            let human_code = unary_predicate_code(terms, "pc_pm_human");
+            let mortal_code = unary_predicate_code(terms, "pc_pm_mortal");
+            let human_socrates = unary_predicate(terms, human_code, &socrates);
+            let human_x = unary_predicate(terms, human_code, &x);
+            let mortal_x = unary_predicate(terms, mortal_code, &x);
+            let mortal_socrates = unary_predicate(terms, mortal_code, &socrates);
+            let truth = terms.true_term().clone();
+
+            let mut fact_lit = literal(terms, &human_socrates, &truth, true);
+            fact_lit.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let selected_fact = Clause::alloc(EqnList::from_vec(vec![fact_lit]));
+
+            let mut rule_head = literal(terms, &mortal_x, &truth, true);
+            let mut rule_tail = literal(terms, &human_x, &truth, false);
+            rule_head.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            rule_tail.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let processed_rule = Clause::alloc(EqnList::from_vec(vec![rule_head, rule_tail]));
+
+            (selected_fact, processed_rule, mortal_socrates, truth)
+        };
+        state.processed_non_units_mut().insert(processed_rule);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &selected_fact)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 1);
+        let literal = &generated.literals().as_slice()[0];
+        assert!(literal.is_positive());
+        assert_eq!(literal.left(), &mortal_socrates);
+        assert_eq!(literal.right(), &truth);
+    }
+
+    #[test]
     fn proof_state_generate_new_clauses_with_global_indices_uses_indexed_paramodulation() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (selected, mut indexed_partner, replacement, rhs) = {
@@ -5652,6 +5716,66 @@ mod tests {
         assert_eq!(state.statistics().processed_count, 2);
         assert!(state.unprocessed().is_empty());
         assert_eq!(state.processed_cardinality(), 2);
+    }
+
+    #[test]
+    fn proof_state_saturate_closes_variable_predicate_horn_chain() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "SaturatePredicateHornTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        let (rule, fact, goal) = {
+            let terms = state.terms_mut();
+            let socrates = typed_const(terms, "sat_pm_socrates");
+            let x = typed_var(terms, -2);
+            let human_code = unary_predicate_code(terms, "sat_pm_human");
+            let mortal_code = unary_predicate_code(terms, "sat_pm_mortal");
+            let human_socrates = unary_predicate(terms, human_code, &socrates);
+            let human_x = unary_predicate(terms, human_code, &x);
+            let mortal_x = unary_predicate(terms, mortal_code, &x);
+            let mortal_socrates = unary_predicate(terms, mortal_code, &socrates);
+            let truth = terms.true_term().clone();
+
+            let mut rule_head = literal(terms, &mortal_x, &truth, true);
+            let mut rule_tail = literal(terms, &human_x, &truth, false);
+            rule_head.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            rule_tail.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut rule = Clause::alloc(EqnList::from_vec(vec![rule_head, rule_tail]));
+            rule.set_ident(4_152);
+
+            let mut fact_lit = literal(terms, &human_socrates, &truth, true);
+            fact_lit.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut fact = Clause::alloc(EqnList::from_vec(vec![fact_lit]));
+            fact.set_ident(4_153);
+
+            let mut goal_lit = literal(terms, &mortal_socrates, &truth, false);
+            goal_lit.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut goal = Clause::alloc(EqnList::from_vec(vec![goal_lit]));
+            goal.set_ident(4_154);
+
+            (rule, fact, goal)
+        };
+        queue_unprocessed_for_process(&mut state, &mut control, rule);
+        queue_unprocessed_for_process(&mut state, &mut control, fact);
+        queue_unprocessed_for_process(&mut state, &mut control, goal);
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            20,
+            20,
+            50,
+            100,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let SaturateOutcome::Returned { clause, .. } = outcome else {
+            panic!("predicate Horn chain should close");
+        };
+        assert!(clause.is_empty());
     }
 
     #[test]

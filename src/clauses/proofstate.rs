@@ -12,6 +12,7 @@ use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::{FunctionProperties, Signature};
 use crate::terms::termbanks::TermBank;
+use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
 use std::{fmt, path::Path};
 
@@ -87,6 +88,7 @@ pub struct ProofStateGenerationContext<'a> {
 #[derive(Clone, Debug)]
 pub struct ProofState {
     terms: TermBank,
+    fresh_vars: VarBank,
     original_symbols: usize,
     axioms: ClauseSet,
     ax_archive: ClauseSet,
@@ -132,9 +134,12 @@ impl ProofState {
         signature.insert_internal_codes()?;
         signature.remove_distinct_props(free_symbol_props);
         let terms = TermBank::new(signature)?;
+        let fresh_vars = VarBank::new(terms.signature().type_bank());
+        terms.vars().pair_shadow(&fresh_vars);
 
         Ok(Self {
             terms,
+            fresh_vars,
             original_symbols: 0,
             axioms: ClauseSet::new(),
             ax_archive: ClauseSet::new(),
@@ -166,6 +171,11 @@ impl ProofState {
 
     pub fn terms_mut(&mut self) -> &mut TermBank {
         &mut self.terms
+    }
+
+    #[must_use]
+    pub const fn fresh_vars(&self) -> &VarBank {
+        &self.fresh_vars
     }
 
     pub fn terms_and_axioms_mut(&mut self) -> (&mut TermBank, &mut ClauseSet) {

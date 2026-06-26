@@ -116,7 +116,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for the first Rust indexed simultaneous/super-simultaneous wrapper slice on 2026-06-26.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for Rust indexed simultaneous/super-simultaneous and non-equational predicate paramodulation slices on 2026-06-26.
 
 Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 
@@ -136,6 +136,8 @@ Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 - Generated literal flags have proof-search meaning: `EPIsPMIntoLit` survives on the new critical-pair literal, `EPFromClauseLit` marks literals copied from the source clause, and copied target-side literals have stale PM flags cleared.
 - The C candidate iterators are mutable cursor APIs over clause positions and term positions; replacing them with Rust iterators is reasonable later, but exact candidate order, `no_top`, and strategy-gate behavior should be tested first.
 - Rust now ports the plain, simultaneous, and super-simultaneous source/target/pair candidate order as vector-producing helpers over C-shaped `ClausePos` values, the unindexed and indexed wrappers add generated-clause insertion plus `DCParamod`/`DCSimParamod` metadata, ordinary simultaneous rewrites marked target occurrences, and super-simultaneous copies the instantiated target before replacing matching occurrences. Higher-order constraints remain pending.
+- `ParamodOverlapNonEqLiterals` makes positive predicate literals participate in the same source-side cursor as equations. For a non-oriented predicate literal such as `p(a) = $true`, C enumerates both the predicate side and the `$true` side; the `$true` candidate is normally discarded later by failed unification. Rust should preserve this while matching C candidate order, even though a later explicit predicate-resolution path could skip the dead side.
+- For non-equational predicate sources, `ClausePosFirst/NextParamodInto` narrows target enumeration to maximal negative left sides. The C helper signals end by returning `NULL`; Rust cursor wrappers must preserve that terminal state and must not restart from the first literal after advancing past the end.
 - Change later: `ParamodOverlapNonEqLiterals` and `ParamodOverlapIntoNegativeLiterals` are process-wide C strategy switches. The Rust port should keep behavior compatible initially, then move them into explicit strategy/config state when the proof-control layer is consolidated.
 - Change later: simultaneous/super-simultaneous paramodulation uses mutable term flags such as `TPPotentialParamod`. This is efficient but fragile; after parity, consider isolating the marking state from shared terms to reduce accidental cross-inference coupling.
 - Change later: fresh-variable normalization and per-inference `VarBankResetVCounts` are allocation-sensitive. Rust should preserve the semantics first, then benchmark whether a shared fresh-variable helper or reusable bank materially improves performance.

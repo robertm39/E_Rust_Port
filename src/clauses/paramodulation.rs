@@ -1324,7 +1324,7 @@ fn is_no_paramod_position(
 fn find_first_negative_maximal_left_side(position: &mut ClausePos) -> Option<Term> {
     let found = {
         let clause = position.clause()?;
-        let start = position.literal_index().unwrap_or(0);
+        let start = position.literal_index()?;
         (start..clause.literals().len()).find(|&index| {
             let literal = &clause.literals().as_slice()[index];
             literal.is_maximal() && literal.is_negative()
@@ -1599,6 +1599,26 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn unary_predicate_code(bank: &mut TermBank, name: &str) -> i64 {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_type(f_code, alloc_arrow_type(vec![arg_type, bool_type]))
+                .unwrap();
+        }
+        f_code
+    }
+
+    fn unary_predicate(bank: &mut TermBank, f_code: i64, arg: &Term) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
     fn lit(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
@@ -1776,6 +1796,68 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
             ]
         );
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_resolves_predicate_rule_with_ground_unit() {
+        let mut bank = test_bank();
+        let mut ocb = kbo_ocb(&bank);
+        let socrates = typed_const(&mut bank, "pm_socrates");
+        let x = typed_var(&bank, -1);
+        let human_code = unary_predicate_code(&mut bank, "pm_human");
+        let mortal_code = unary_predicate_code(&mut bank, "pm_mortal");
+        let human_socrates = unary_predicate(&mut bank, human_code, &socrates);
+        let human_x = unary_predicate(&mut bank, human_code, &x);
+        let mortal_x = unary_predicate(&mut bank, mortal_code, &x);
+        let mortal_socrates = unary_predicate(&mut bank, mortal_code, &socrates);
+        let truth = bank.true_term().clone();
+
+        let mut fact_lit = lit(&mut bank, &human_socrates, &truth, true);
+        maximal(&mut fact_lit);
+        let fact = Clause::alloc(EqnList::from_vec(vec![fact_lit]));
+
+        let mut rule_head = lit(&mut bank, &mortal_x, &truth, true);
+        let mut rule_tail = lit(&mut bank, &human_x, &truth, false);
+        maximal(&mut rule_head);
+        maximal(&mut rule_tail);
+        let rule = Clause::alloc(EqnList::from_vec(vec![rule_head, rule_tail]));
+        let mut store = ClauseSet::new();
+        let from_positions = paramod_from_side_positions(&bank, &fact);
+        assert_eq!(from_positions.len(), 2);
+        assert_eq!(from_positions[0].literal_index(), Some(0));
+        assert_eq!(from_positions[0].side(), EqnSide::LeftSide);
+        assert_eq!(from_positions[1].literal_index(), Some(0));
+        assert_eq!(from_positions[1].side(), EqnSide::RightSide);
+        let into_positions = paramod_into_positions(
+            &bank,
+            &rule,
+            &from_positions[0],
+            false,
+            ParamodulationType::Plain,
+        );
+        assert_eq!(into_positions.len(), 1);
+        assert_eq!(into_positions[0].literal_index(), Some(1));
+        assert_eq!(into_positions[0].side(), EqnSide::LeftSide);
+        assert!(into_positions[0].is_top());
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &fact,
+            &fact,
+            &rule,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let generated = store.iter().next().expect("one paramodulant");
+        assert_eq!(generated.literal_number(), 1);
+        let literal = &generated.literals().as_slice()[0];
+        assert!(literal.is_positive());
+        assert_eq!(literal.left(), &mortal_socrates);
+        assert_eq!(literal.right(), &truth);
     }
 
     #[test]
