@@ -10,7 +10,7 @@ use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
-use crate::clauses::proofstate::proof_state_alloc;
+use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
 use crate::heuristics::hcb::{self, HeuristicParmsCell};
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_init, proof_state_saturate, ProofControl, SaturateOutcome,
@@ -3579,6 +3579,7 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
 fn run_proof_search(config: &EProverConfig) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     parse_input_files_into_axioms(config, &mut state)?;
+    load_configured_watchlist(config, &mut state)?;
 
     let mut control = proof_control_from_config(config)?;
     let mut params = control.heuristic_parms().clone();
@@ -3641,6 +3642,21 @@ fn parse_input_files_into_axioms(
         .into());
     }
 
+    Ok(())
+}
+
+fn load_configured_watchlist(
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<(), EProverError> {
+    let Some(source) = &config.search.watchlist.source else {
+        return Ok(());
+    };
+    let proof_state_source = match source {
+        WatchlistSource::Inline => ProofStateWatchlistSource::Inline,
+        WatchlistSource::File(path) => ProofStateWatchlistSource::File(Path::new(path)),
+    };
+    state.load_watchlist(proof_state_source, config.parse_format)?;
     Ok(())
 }
 
@@ -5828,6 +5844,100 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_loads_dynamic_watchlist_file() {
+        let _guard = global_test_lock();
+        let input_path = temp_path("proof-dynamic-watch-input");
+        let watch_path = temp_path("proof-dynamic-watch-list");
+        std::fs::write(&input_path, "p(a).\n").unwrap();
+        std::fs::write(&watch_path, "p(a).\n").unwrap();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let watch_arg = format!("--watchlist={}", watch_path.to_string_lossy());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                watch_arg.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&input_path).unwrap();
+        std::fs::remove_file(&watch_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_static_watchlist_keeps_matched_file_clause() {
+        let _guard = global_test_lock();
+        let input_path = temp_path("proof-static-watch-input");
+        let watch_path = temp_path("proof-static-watch-list");
+        std::fs::write(&input_path, "p(a).\n").unwrap();
+        std::fs::write(&watch_path, "p(a).\n").unwrap();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let watch_arg = format!("--static-watchlist={}", watch_path.to_string_lossy());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                watch_arg.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&input_path).unwrap();
+        std::fs::remove_file(&watch_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_missing_watchlist_file() {
+        let _guard = global_test_lock();
+        let input_path = temp_path("proof-missing-watch-input");
+        let watch_path = temp_path("proof-missing-watch-list");
+        let _ = std::fs::remove_file(&watch_path);
+        std::fs::write(&input_path, "p(a).\n").unwrap();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let watch_arg = format!("--watchlist={}", watch_path.to_string_lossy());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--lop-in",
+                watch_arg.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&input_path).unwrap();
     }
 
     #[test]
