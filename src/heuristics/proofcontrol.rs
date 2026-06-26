@@ -36,7 +36,7 @@ use crate::clauses::subsumption::{
     unit_clause_set_subsumes_clause,
 };
 use crate::clauses::tautologies::clause_is_tautology;
-use crate::heuristics::axiomscan::clause_set_scan_ac;
+use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight, AcHandling,
@@ -1946,6 +1946,29 @@ pub fn proof_state_move_eval_store_to_unprocessed(state: &mut ProofState) -> i64
     moved
 }
 
+/// Runs C `check_ac_status` for one newly processed clause.
+///
+/// Returns true when this call newly activates AC handling. C also prints the
+/// updated signature status in that case; proof-output integration remains a
+/// later outer-layer concern.
+#[must_use]
+pub fn proof_state_check_ac_status(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> bool {
+    if control.heuristic_parms().ac_handling == AcHandling::None {
+        return false;
+    }
+
+    let detected_commutativity = clause_scan_ac(state.terms_mut().signature_mut(), clause);
+    if detected_commutativity && !control.ac_handling_active() {
+        control.set_ac_handling_active(true);
+        return true;
+    }
+    false
+}
+
 /// Runs the AC-axiom scan portion of C `ProofStateInit`.
 ///
 /// The C code scans the initialized `unprocessed` set, not the source axiom
@@ -2187,12 +2210,12 @@ mod tests {
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_clause_set_filter_reweigth,
         proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_cleanup_unprocessed_clauses_with,
-        proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_set,
-        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_subsumption, proof_state_init, proof_state_init_ac_handling,
-        proof_state_init_global_indices, proof_state_init_indexing,
+        proof_control_reset_sat_solver, proof_state_check_ac_status,
+        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_subsumption, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
@@ -4066,6 +4089,35 @@ mod tests {
             state.unprocessed().find_best(0).map(Clause::ident),
             Some(4_071)
         );
+    }
+
+    #[test]
+    fn proof_state_check_ac_status_enables_ac_dynamically() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, f_code) = commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_f", 4_092);
+        let mut control = proof_control_alloc();
+
+        let activated = proof_state_check_ac_status(&mut state, &mut control, &clause);
+        let already_active = proof_state_check_ac_status(&mut state, &mut control, &clause);
+
+        assert!(activated);
+        assert!(!already_active);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+    }
+
+    #[test]
+    fn proof_state_check_ac_status_skips_scan_when_disabled() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, f_code) = commutativity_axiom(state.terms_mut(), "pc_dynamic_no_ac_f", 4_093);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().ac_handling = AcHandling::None;
+
+        let activated = proof_state_check_ac_status(&mut state, &mut control, &clause);
+
+        assert!(!activated);
+        assert!(!control.ac_handling_active());
+        assert!(!state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
     }
 
     #[test]
