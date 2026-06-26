@@ -19,8 +19,12 @@ use crate::clauses::context_sr::{
 use crate::clauses::derivation::{
     clause_push_derivation, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS,
 };
+use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
-use crate::clauses::eqnresolution::clause_er_normalize_var;
+use crate::clauses::eqnresolution::{
+    clause_er_normalize_var, compute_all_eqn_resolvents, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+};
+use crate::clauses::factor::compute_all_equality_factors;
 use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvPackedClause;
@@ -237,6 +241,13 @@ pub struct BackwardSimplificationOutcome {
     pub min_rw_detected: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GenerateNewClausesOutcome {
+    pub equality_factors: u64,
+    pub equality_resolvents: u64,
+    pub disequality_decompositions: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessClauseReturnReason {
     EmptyClause,
@@ -260,6 +271,7 @@ pub enum ProcessClauseOutcome {
         ac_activated: bool,
         watchlist: ProofStateWatchlistOutcome,
         backward: BackwardSimplificationOutcome,
+        generation: GenerateNewClausesOutcome,
         generated_empty: Option<Clause>,
     },
 }
@@ -2123,13 +2135,98 @@ pub fn proof_state_backward_simplify(
     Ok(outcome)
 }
 
+/// Runs the currently ported generators from C `generate_new_clauses`.
+///
+/// The available slice covers first-order equality factoring, equality
+/// resolution, and disequality decomposition, in the same order as the C
+/// helper. Higher-order generation and paramodulation remain explicit staging
+/// diagnostics; the latter is checked before mutation because it is required
+/// for most generation-enabled clauses.
+///
+/// # Errors
+///
+/// Returns diagnostics from generator helpers, missing ordering state, or an
+/// unported generation branch that would be reached in C.
+pub fn proof_state_generate_new_clauses(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order selected-clause generation is not ported yet",
+        ));
+    }
+    if proof_state_generation_requires_paramodulation(control, clause) {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "selected-clause paramodulation generation is not ported yet",
+        ));
+    }
+
+    let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
+    let diseq_decomposition = control.heuristic_parms().diseq_decomposition;
+    let diseq_decomp_maxarity = control.heuristic_parms().diseq_decomp_maxarity;
+    let mut tmp_store = std::mem::take(state.tmp_store_mut());
+    let result = (|| {
+        let mut outcome = GenerateNewClausesOutcome::default();
+
+        if enable_eq_factoring {
+            let ocb = control.ocb.as_mut().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "equality factoring requires initialized proof-control ordering",
+                )
+            })?;
+            let count =
+                compute_all_equality_factors(state.terms_mut(), ocb, clause, &mut tmp_store)?;
+            outcome.equality_factors = i64_to_u64_saturating(count);
+        }
+
+        let count = compute_all_eqn_resolvents(
+            state.terms_mut(),
+            clause,
+            &mut tmp_store,
+            EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+        )?;
+        outcome.equality_resolvents = i64_to_u64_saturating(count);
+
+        let count = compute_dis_eq_decompositions(
+            state.terms_mut(),
+            clause,
+            &mut tmp_store,
+            diseq_decomposition,
+            diseq_decomp_maxarity,
+        )?;
+        outcome.disequality_decompositions = i64_to_u64_saturating(count);
+
+        Ok(outcome)
+    })();
+    *state.tmp_store_mut() = tmp_store;
+
+    let outcome = result?;
+    let statistics = state.statistics_mut();
+    statistics.factor_count += outcome.equality_factors;
+    statistics.resolv_count += outcome.equality_resolvents;
+    statistics.disequ_deco_count += outcome.disequality_decompositions;
+    Ok(outcome)
+}
+
+fn proof_state_generation_requires_paramodulation(control: &ProofControl, clause: &Clause) -> bool {
+    !clause.query_prop(CP_NO_GENERATION)
+        && (control.heuristic_parms().enable_neg_unit_paramod
+            || !clause.is_unit()
+            || !clause.is_negative())
+}
+
 /// Processes one selected clause through the currently ported C `ProcessClause`.
 ///
-/// The wrapper is deliberately strict about the remaining unported generation
-/// path: it accepts only the C `NoGeneration` selection strategy until
-/// `generate_new_clauses` is available. Backward simplification can still put
-/// simplified processed clauses into `tmp_store`, and those are routed through
-/// the existing `insert_new_clauses` path.
+/// The wrapper can run C `NoGeneration` without selected-clause generation, and
+/// otherwise delegates to the staged generator helper. Backward simplification
+/// can still put simplified processed clauses into `tmp_store`, and those are
+/// routed through the existing `insert_new_clauses` path together with any
+/// generated clauses.
 ///
 /// # Errors
 ///
@@ -2141,8 +2238,6 @@ pub fn proof_state_process_clause(
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    ensure_process_clause_supported(control)?;
-
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
     };
@@ -2211,30 +2306,32 @@ pub fn proof_state_process_clause(
     let mut clause_date = proof_state_demodulator_date(state, RewriteLevel::FullRewrite);
     let backward = proof_state_backward_simplify(state, control, &clause, &mut clause_date)?;
 
-    if control.heuristic_parms().detsort_tmpset {
-        proof_state_sort_tmp_store_by_struct_weight(state);
-    }
     let processed_ident = clause.ident();
     let class = proof_state_insert_processed_clause(state, clause, clause_date)?;
     if control.heuristic_parms().watchlist_simplify {
-        let processed_clause = match class {
-            ProcessedClauseClass::PositiveRule => {
-                state.processed_pos_rules().find_by_id(processed_ident)
-            }
-            ProcessedClauseClass::PositiveEquation => {
-                state.processed_pos_eqns().find_by_id(processed_ident)
-            }
-            ProcessedClauseClass::NegativeUnit => {
-                state.processed_neg_units().find_by_id(processed_ident)
-            }
-            ProcessedClauseClass::NonUnit => {
-                state.processed_non_units().find_by_id(processed_ident)
-            }
-        }
-        .cloned();
+        let processed_clause =
+            proof_state_processed_clause_by_class(state, class, processed_ident).cloned();
         if let Some(processed_clause) = processed_clause {
             let _simplified = proof_state_simplify_watchlist(state, control, &processed_clause)?;
         }
+    }
+
+    let generation = if control.heuristic_parms().selection_strategy == NO_GENERATION {
+        GenerateNewClausesOutcome::default()
+    } else {
+        let processed_clause = proof_state_processed_clause_by_class(state, class, processed_ident)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "processed clause disappeared before selected-clause generation",
+                )
+            })?;
+        proof_state_generate_new_clauses(state, control, &processed_clause)?
+    };
+
+    if control.heuristic_parms().detsort_tmpset {
+        proof_state_sort_tmp_store_by_struct_weight(state);
     }
     let generated_empty = proof_state_insert_new_clauses(state, control)?;
 
@@ -2244,8 +2341,22 @@ pub fn proof_state_process_clause(
         ac_activated,
         watchlist,
         backward,
+        generation,
         generated_empty,
     })
+}
+
+fn proof_state_processed_clause_by_class(
+    state: &ProofState,
+    class: ProcessedClauseClass,
+    ident: i64,
+) -> Option<&Clause> {
+    match class {
+        ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(ident),
+        ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(ident),
+        ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(ident),
+        ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(ident),
+    }
 }
 
 /// Runs the currently ported C `Saturate` loop.
@@ -2444,16 +2555,6 @@ enum ProcessedSetSlot {
     PosEqns,
     NegUnits,
     NonUnits,
-}
-
-fn ensure_process_clause_supported(control: &ProofControl) -> Result<(), Diagnostic> {
-    if control.heuristic_parms().selection_strategy != NO_GENERATION {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ProcessClause generated inference production is not ported yet; use NoGeneration",
-        ));
-    }
-    Ok(())
 }
 
 fn proof_state_demodulator_date(state: &ProofState, level: RewriteLevel) -> SysDate {
@@ -3119,18 +3220,19 @@ mod tests {
         proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
         proof_state_filter_unprocessed, proof_state_forward_contract_clause,
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_subsumption, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
+        proof_state_forward_modify_clause, proof_state_forward_subsumption,
+        proof_state_generate_new_clauses, proof_state_init, proof_state_init_ac_handling,
+        proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_process_clause,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_saturate, proof_state_simplify_watchlist,
         proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
-        ForwardContractCounts, ForwardContractOptions, LiteralSelectionOutcome,
-        ProcessClauseOutcome, ProcessedClauseClass, ProofStateWatchlistOutcome,
-        ReplacingInferenceOutcome, SaturateOutcome, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
+        LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
+        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SaturateOutcome, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -4919,16 +5021,89 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_process_clause_rejects_generation_enabled_strategy() {
+    fn proof_state_process_clause_rejects_unported_paramodulation_generation() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_fifo_hcb(&mut control, &state, "ProcessClauseRejectGenerationTest");
         control.set_ocb(kbo_ocb(state.terms()));
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_process_paramod_needed", 4_143);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
 
         let error = proof_state_process_clause(&mut state, &mut control, 1).unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.to_string().contains("generated inference production"));
+        assert!(error.to_string().contains("paramodulation generation"));
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_computes_negative_unit_equality_resolution() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -70);
+            let constant = typed_const(terms, "pc_generate_eq_res_const");
+            let mut literal = literal(terms, &variable, &constant, false);
+            literal.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+            clause.set_ident(4_144);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().enable_neg_unit_paramod = false;
+
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            GenerateNewClausesOutcome {
+                equality_factors: 0,
+                equality_resolvents: 1,
+                disequality_decompositions: 0,
+            }
+        );
+        assert_eq!(state.statistics().resolv_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        assert!(state.tmp_store().iter().next().unwrap().is_empty());
+    }
+
+    #[test]
+    fn proof_state_process_clause_allows_generation_when_paramodulation_is_skipped() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let selected = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_process_gen_skip_left");
+            let right = typed_const(terms, "pc_process_gen_skip_right");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &left, &right, false,
+            )]));
+            clause.set_ident(4_145);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "ProcessClauseGenerateEqResTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().enable_neg_unit_paramod = false;
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            class,
+            generation,
+            generated_empty,
+            ..
+        } = outcome
+        else {
+            panic!("negative unit should process with generation enabled");
+        };
+        assert_eq!(class, ProcessedClauseClass::NegativeUnit);
+        assert_eq!(generation, GenerateNewClausesOutcome::default());
+        assert!(generated_empty.is_none());
+        assert_eq!(state.statistics().resolv_count, 0);
+        assert_eq!(state.statistics().generated_count, 0);
     }
 
     #[test]
@@ -5080,6 +5255,7 @@ mod tests {
             ac_activated,
             watchlist,
             backward,
+            generation,
             generated_empty,
         } = outcome
         else {
@@ -5093,6 +5269,7 @@ mod tests {
         assert!(!ac_activated);
         assert_eq!(watchlist, ProofStateWatchlistOutcome::default());
         assert_eq!(backward, BackwardSimplificationOutcome::default());
+        assert_eq!(generation, GenerateNewClausesOutcome::default());
         assert!(generated_empty.is_none());
         assert_eq!(state.statistics().processed_count, 1);
         assert_eq!(state.statistics().proc_non_trivial_count, 1);
