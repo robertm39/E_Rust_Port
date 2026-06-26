@@ -2,7 +2,7 @@
 
 This document tracks Rust implementation slices and the original C source units they are intended to mirror.
 
-## Ordered Factoring
+## Factoring
 
 Rust files:
 
@@ -20,11 +20,12 @@ Implemented:
 - First-order ordered factor candidate enumeration matching `ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`.
 - First-order `ComputeOrderedFactor`, including second-literal side retry, directed unification, post-unifier maximality recheck, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - First-order `ComputeAllOrderedFactors`, including Horn and `CPNoGeneration` gates, clause-set insertion, and parent proof-depth/proof-size/TPTP/SOS metadata propagation.
+- First-order equality factor candidate enumeration matching `ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`.
+- First-order MGU subset of `ComputeEqualityFactor` and `ComputeAllEqualityFactors`, including the C free-variable/equational guard, `TOGreater` side check, post-unifier maximality recheck, generated negative condition, Horn and `CPNoGeneration` gates, clause-set insertion, and parent metadata propagation.
 
 Pending:
 
-- `ComputeEqualityFactor` and `ComputeAllEqualityFactors`.
-- Higher-order CSU enumeration, `TOGreater` checks, lambda normalization, and derivation/proof-output side effects for factoring.
+- Higher-order CSU enumeration, lambda normalization, multi-CSU equality-factor stack order, and derivation/proof-output side effects for factoring.
 - Reusable fresh-variable-bank behavior may need a performance pass once stable clause/literal ownership is ported.
 
 ## Initial Crate And CLI Foundation

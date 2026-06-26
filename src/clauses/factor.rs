@@ -1,14 +1,20 @@
 use crate::basics::partial_orderings::CompareResult;
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
+use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
-use crate::{basics::error::Diagnostic, terms::termtypes::Term};
+use crate::{
+    basics::error::{Diagnostic, ErrorCode},
+    terms::termtypes::{DerefType, Term},
+};
 use std::collections::BTreeMap;
 
 /// One C `ClausePosFirst/NextOrderedFactorLiterals` candidate.
@@ -36,6 +42,52 @@ impl OrderedFactorPosition {
     #[must_use]
     pub const fn first_literal_index(self) -> usize {
         self.first_literal_index
+    }
+
+    #[must_use]
+    pub const fn second_literal_index(self) -> usize {
+        self.second_literal_index
+    }
+
+    #[must_use]
+    pub const fn second_side(self) -> EqnSide {
+        self.second_side
+    }
+}
+
+/// One C `ClausePosFirst/NextEqualityFactorSides` candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EqualityFactorPosition {
+    first_literal_index: usize,
+    first_side: EqnSide,
+    second_literal_index: usize,
+    second_side: EqnSide,
+}
+
+impl EqualityFactorPosition {
+    #[must_use]
+    pub const fn new(
+        first_literal_index: usize,
+        first_side: EqnSide,
+        second_literal_index: usize,
+        second_side: EqnSide,
+    ) -> Self {
+        Self {
+            first_literal_index,
+            first_side,
+            second_literal_index,
+            second_side,
+        }
+    }
+
+    #[must_use]
+    pub const fn first_literal_index(self) -> usize {
+        self.first_literal_index
+    }
+
+    #[must_use]
+    pub const fn first_side(self) -> EqnSide {
+        self.first_side
     }
 
     #[must_use]
@@ -81,6 +133,61 @@ pub fn ordered_factor_positions(clause: &Clause) -> Vec<OrderedFactorPosition> {
     }
 
     positions
+}
+
+/// Returns all C equality-factor side candidates in cursor order.
+#[must_use]
+pub fn equality_factor_positions(clause: &Clause) -> Vec<EqualityFactorPosition> {
+    let literals = clause.literals().as_slice();
+    let mut positions = Vec::new();
+
+    for (first_index, first) in literals.iter().enumerate() {
+        if !is_ordered_factor_candidate(first) {
+            continue;
+        }
+
+        push_equality_factor_positions_for_side(
+            literals,
+            &mut positions,
+            first_index,
+            EqnSide::LeftSide,
+        );
+        if !first.is_oriented() {
+            push_equality_factor_positions_for_side(
+                literals,
+                &mut positions,
+                first_index,
+                EqnSide::RightSide,
+            );
+        }
+    }
+
+    positions
+}
+
+fn push_equality_factor_positions_for_side(
+    literals: &[Eqn],
+    positions: &mut Vec<EqualityFactorPosition>,
+    first_index: usize,
+    first_side: EqnSide,
+) {
+    for (second_index, second) in literals.iter().enumerate() {
+        if second_index == first_index || !second.is_positive() {
+            continue;
+        }
+        positions.push(EqualityFactorPosition::new(
+            first_index,
+            first_side,
+            second_index,
+            EqnSide::LeftSide,
+        ));
+        positions.push(EqualityFactorPosition::new(
+            first_index,
+            first_side,
+            second_index,
+            EqnSide::RightSide,
+        ));
+    }
 }
 
 /// Builds the first-order C `ComputeOrderedFactor` result for one candidate.
@@ -148,6 +255,98 @@ pub fn compute_ordered_factor(
     result
 }
 
+/// Builds the first-order C `ComputeEqualityFactor` result for one candidate.
+///
+/// The C implementation enumerates CSU elements and lambda-normalizes every
+/// generated literal list. This staged Rust path handles the first-order MGU
+/// case only and reports higher-order problem mode explicitly.
+///
+/// # Errors
+///
+/// Returns a diagnostic for higher-order problem mode or if term-bank insertion
+/// fails while copying the generated factor.
+///
+/// # Panics
+///
+/// Panics if the candidate indices are invalid, select the same literal, select
+/// a non-positive/non-maximal first literal, select a non-positive second
+/// literal, or put an oriented first literal on its right side. These preserve
+/// the internal-caller invariants encoded by the C clause-position API.
+pub fn compute_equality_factor(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+) -> Result<Option<Clause>, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order equality-factoring CSU enumeration is not ported yet",
+        ));
+    }
+
+    let literals = clause.literals().as_slice();
+    assert_ne!(
+        position.first_literal_index, position.second_literal_index,
+        "equality factoring expects two distinct literals"
+    );
+    assert!(
+        matches!(position.first_side, EqnSide::LeftSide | EqnSide::RightSide)
+            && matches!(position.second_side, EqnSide::LeftSide | EqnSide::RightSide),
+        "equality factoring sides must be left or right"
+    );
+
+    let first = literals
+        .get(position.first_literal_index)
+        .expect("equality-factor first literal index must be valid");
+    let second = literals
+        .get(position.second_literal_index)
+        .expect("equality-factor second literal index must be valid");
+    assert!(
+        first.is_positive() && first.is_maximal(),
+        "equality factoring expects a maximal positive first literal"
+    );
+    assert!(
+        second.is_positive(),
+        "equality factoring expects a positive second literal"
+    );
+    assert!(
+        !first.is_oriented() || position.first_side == EqnSide::LeftSide,
+        "oriented equality-factor first literal can only use its left side"
+    );
+
+    let max_term = literal_side(first, position.first_side).clone();
+    let with_term = literal_side(second, position.second_side).clone();
+    if (max_term.is_free_var() && !second.is_equ_lit(bank))
+        || (with_term.is_free_var() && !first.is_equ_lit(bank))
+    {
+        return Ok(None);
+    }
+
+    let mut subst = Substitution::new();
+    if !subst_mgu_complete(&max_term, &with_term, &mut subst) {
+        return Ok(None);
+    }
+
+    let min_term = literal_other_side(first, position.first_side).clone();
+    let result = if !to_greater(
+        ocb,
+        bank.signature(),
+        &min_term,
+        &max_term,
+        DerefType::Always,
+        DerefType::Always,
+    ) && eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index)
+    {
+        let second_other = literal_other_side(second, position.second_side).clone();
+        build_equality_factor(bank, clause, position, &min_term, &second_other, &mut subst)
+    } else {
+        Ok(None)
+    };
+    subst.backtrack();
+    result
+}
+
 /// Computes all first-order ordered factors and inserts them into `store`.
 ///
 /// This mirrors C `ComputeAllOrderedFactors` for the first-order ordered
@@ -182,8 +381,58 @@ pub fn compute_all_ordered_factors(
     Ok(factor_count)
 }
 
+/// Computes all first-order equality factors and inserts them into `store`.
+///
+/// This mirrors C `ComputeAllEqualityFactors` for the first-order MGU path.
+/// Higher-order CSU enumeration, lambda normalization, proof documentation, and
+/// derivation-stack side effects remain pending.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`compute_equality_factor`].
+pub fn compute_all_equality_factors(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    let mut factor_count = 0;
+    if clause.is_horn() || clause.query_prop(CP_NO_GENERATION) {
+        return Ok(factor_count);
+    }
+
+    for position in equality_factor_positions(clause) {
+        if let Some(mut factor) = compute_equality_factor(bank, ocb, clause, position)? {
+            factor_count += 1;
+            factor.set_proof_depth(clause.proof_depth().saturating_add(1));
+            factor.set_proof_size(clause.proof_size().saturating_add(1));
+            factor.set_tptp_type(clause.query_tptp_type());
+            factor.set_prop(clause.give_props(CP_IS_SOS));
+            store.insert(factor);
+        }
+    }
+
+    Ok(factor_count)
+}
+
 fn is_ordered_factor_candidate(literal: &Eqn) -> bool {
     literal.is_positive() && literal.is_maximal()
+}
+
+fn literal_side(literal: &Eqn, side: EqnSide) -> &Term {
+    if side == EqnSide::LeftSide {
+        literal.left()
+    } else {
+        literal.right()
+    }
+}
+
+fn literal_other_side(literal: &Eqn, side: EqnSide) -> &Term {
+    if side == EqnSide::LeftSide {
+        literal.right()
+    } else {
+        literal.left()
+    }
 }
 
 fn eqn_is_maximal_under_subst(
@@ -223,6 +472,32 @@ fn build_ordered_factor(
     Ok(Some(Clause::alloc(new_literals)))
 }
 
+fn build_equality_factor(
+    bank: &mut TermBank,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+    min_term: &Term,
+    second_other: &Term,
+    subst: &mut Substitution,
+) -> Result<Option<Clause>, Diagnostic> {
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    let backtrack =
+        clause
+            .literals()
+            .subst_norm_except(Some(position.second_literal_index), subst, &freshvars);
+    let condition_left = bank.insert_no_props_cached(min_term, DerefType::Always)?;
+    let condition_right = bank.insert_no_props_cached(second_other, DerefType::Always)?;
+    let new_condition = Eqn::alloc(condition_left, condition_right, bank, false)?;
+    let mut new_literals = clause
+        .literals()
+        .copy_opt_except_index(Some(position.first_literal_index), bank)?;
+    subst.backtrack_to_pos(backtrack);
+    new_literals.insert_first(new_condition);
+    new_literals.remove_resolved(bank);
+    new_literals.remove_duplicates(bank);
+    Ok(Some(Clause::alloc(new_literals)))
+}
+
 fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {
     let freshvars = VarBank::new(bank.signature().type_bank());
     let mut variables: BTreeMap<usize, Term> = BTreeMap::new();
@@ -243,8 +518,9 @@ fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_all_ordered_factors, compute_ordered_factor, ordered_factor_positions,
-        OrderedFactorPosition,
+        compute_all_equality_factors, compute_all_ordered_factors, compute_equality_factor,
+        compute_ordered_factor, equality_factor_positions, ordered_factor_positions,
+        EqualityFactorPosition, OrderedFactorPosition,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -359,6 +635,42 @@ mod tests {
     }
 
     #[test]
+    fn equality_factor_positions_follow_c_side_and_partner_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "ef_iter_a");
+        let b = typed_const(&mut bank, "ef_iter_b");
+        let c = typed_const(&mut bank, "ef_iter_c");
+        let d = typed_const(&mut bank, "ef_iter_d");
+        let mut first = lit(&mut bank, &a, &b, true);
+        let plain = lit(&mut bank, &b, &c, true);
+        let mut second = lit(&mut bank, &c, &d, true);
+        let mut negative_max = lit(&mut bank, &a, &d, false);
+
+        first.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED);
+        second.set_prop(EP_IS_MAXIMAL);
+        negative_max.set_prop(EP_IS_MAXIMAL);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, plain, second, negative_max]));
+
+        assert_eq!(
+            equality_factor_positions(&clause),
+            vec![
+                EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+                EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::RightSide),
+                EqualityFactorPosition::new(0, EqnSide::LeftSide, 2, EqnSide::LeftSide),
+                EqualityFactorPosition::new(0, EqnSide::LeftSide, 2, EqnSide::RightSide),
+                EqualityFactorPosition::new(2, EqnSide::LeftSide, 0, EqnSide::LeftSide),
+                EqualityFactorPosition::new(2, EqnSide::LeftSide, 0, EqnSide::RightSide),
+                EqualityFactorPosition::new(2, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+                EqualityFactorPosition::new(2, EqnSide::LeftSide, 1, EqnSide::RightSide),
+                EqualityFactorPosition::new(2, EqnSide::RightSide, 0, EqnSide::LeftSide),
+                EqualityFactorPosition::new(2, EqnSide::RightSide, 0, EqnSide::RightSide),
+                EqualityFactorPosition::new(2, EqnSide::RightSide, 1, EqnSide::LeftSide),
+                EqualityFactorPosition::new(2, EqnSide::RightSide, 1, EqnSide::RightSide),
+            ]
+        );
+    }
+
+    #[test]
     fn compute_ordered_factor_instantiates_and_removes_second_literal() {
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
@@ -388,6 +700,66 @@ mod tests {
         assert_eq!(factor.literals().as_slice()[0].right(), &c);
         assert_eq!(factor.literals().as_slice()[1].left(), &a);
         assert_eq!(factor.literals().as_slice()[1].right(), &b);
+    }
+
+    #[test]
+    fn compute_equality_factor_adds_condition_and_removes_first_literal() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "ef_build_a");
+        let b = typed_const(&mut bank, "ef_build_b");
+        let c = typed_const(&mut bank, "ef_build_c");
+        let f_code = typed_unary_code(&mut bank, "ef_build_f");
+        let f_of_x = typed_unary(&mut bank, f_code, &x);
+        let f_of_b = typed_unary(&mut bank, f_code, &b);
+        let mut first = lit(&mut bank, &f_of_x, &a, true);
+        let second = lit(&mut bank, &f_of_b, &c, true);
+        maximal(&mut first);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let factor = compute_equality_factor(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+        )
+        .unwrap()
+        .expect("matching positive equalities should equality-factor");
+
+        assert!(x.binding().is_none());
+        assert_eq!(factor.literal_number(), 2);
+        let literals = factor.literals().as_slice();
+        assert!(literals[0].is_positive());
+        assert_eq!(literals[0].left(), &f_of_b);
+        assert_eq!(literals[0].right(), &c);
+        assert!(literals[1].is_negative());
+        assert_eq!(literals[1].left(), &a);
+        assert_eq!(literals[1].right(), &c);
+    }
+
+    #[test]
+    fn compute_equality_factor_rejects_when_other_first_side_is_greater() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "ef_order_a");
+        let b = typed_const(&mut bank, "ef_order_b");
+        let c = typed_const(&mut bank, "ef_order_c");
+        let f_code = typed_unary_code(&mut bank, "ef_order_f");
+        let f_of_b = typed_unary(&mut bank, f_code, &b);
+        let mut first = lit(&mut bank, &a, &f_of_b, true);
+        let second = lit(&mut bank, &a, &c, true);
+        maximal(&mut first);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo_ocb(&bank);
+
+        assert!(compute_equality_factor(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -423,6 +795,56 @@ mod tests {
         assert_eq!(factor.literal_number(), 1);
         assert_eq!(factor.literals().as_slice()[0].left(), &b);
         assert_eq!(factor.literals().as_slice()[0].right(), &a);
+    }
+
+    #[test]
+    fn compute_all_equality_factors_inserts_metadata_and_honors_gates() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "ef_all_a");
+        let b = typed_const(&mut bank, "ef_all_b");
+        let c = typed_const(&mut bank, "ef_all_c");
+        let f_code = typed_unary_code(&mut bank, "ef_all_f");
+        let f_of_x = typed_unary(&mut bank, f_code, &x);
+        let f_of_b = typed_unary(&mut bank, f_code, &b);
+        let mut first = lit(&mut bank, &f_of_x, &a, true);
+        let second = lit(&mut bank, &f_of_b, &c, true);
+        first.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        clause.set_proof_depth(2);
+        clause.set_proof_size(7);
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        clause.set_prop(CP_IS_SOS);
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_equality_factors(&mut bank, &mut ocb, &clause, &mut store).unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(store.members(), 1);
+        let stored = store.iter().next().expect("one equality factor inserted");
+        assert_eq!(stored.proof_depth(), 3);
+        assert_eq!(stored.proof_size(), 8);
+        assert_eq!(stored.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert!(stored.query_prop(CP_IS_SOS));
+
+        let horn = Clause::alloc(EqnList::from_vec(vec![lit(&mut bank, &a, &b, true)]));
+        let mut horn_store = ClauseSet::new();
+        assert_eq!(
+            compute_all_equality_factors(&mut bank, &mut ocb, &horn, &mut horn_store).unwrap(),
+            0
+        );
+        assert!(horn_store.is_empty());
+
+        let mut blocked = clause.clone();
+        blocked.set_prop(CP_NO_GENERATION);
+        let mut blocked_store = ClauseSet::new();
+        assert_eq!(
+            compute_all_equality_factors(&mut bank, &mut ocb, &blocked, &mut blocked_store)
+                .unwrap(),
+            0
+        );
+        assert!(blocked_store.is_empty());
     }
 
     #[test]

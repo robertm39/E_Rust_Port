@@ -98,13 +98,16 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 
 - `src/clauses/factor.rs` ports first-order ordered factor candidate enumeration (`ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`) and single ordered-factor construction (`ComputeOrderedFactor`).
 - The port preserves C's pair ordering, second-literal side retry, post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
-- Equality factoring (`ComputeEqualityFactor` plus `ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) remains pending because it depends on higher-order CSU enumeration, `TOGreater`, lambda normalization, and derivation/proof-output ownership.
+- `src/clauses/factor.rs` also ports first-order equality factor candidate enumeration (`ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) and the first-order MGU subset of `ComputeEqualityFactor`.
+- The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, and resolved/duplicate cleanup.
+- Higher-order CSU enumeration, lambda normalization, and derivation/proof-output ownership remain pending.
 
 ### Change-Later Observations
 
 - `ComputeOrderedFactor` temporarily calls `EqnSwapSidesSimple` on the source `pos2->literal` and swaps it back after directed unification. Rust uses a local clone for the swapped view; a future C cleanup could avoid mutating the input clause during a failed or successful factor attempt.
-- Ordered factoring and equality factoring both receive a reusable `VarBank_p freshvars` and reset its counts per attempt. The Rust ordered-factor path initializes normalized variables past the clause's current variable-code range to avoid collisions in the term bank's pointer-identity variable model; revisit reusable-bank performance once clause/literal ownership is fully ported.
-- Equality factoring pushes generated clauses on a stack for CSU enumeration and the control wrapper later pops them, so multi-CSU insertion order is reversed. Preserve or deliberately revisit this when equality factoring is ported.
+- Ordered factoring and equality factoring both receive a reusable `VarBank_p freshvars` and reset its counts per attempt. Rust initializes normalized variables past the clause's current variable-code range to avoid collisions in the term bank's pointer-identity variable model; revisit reusable-bank performance once clause/literal ownership is fully ported.
+- Equality factoring pushes generated clauses on a stack for CSU enumeration and the control wrapper later pops them, so multi-CSU insertion order is reversed. Rust's first-order path has at most one result per candidate; preserve or deliberately revisit the stack reversal when higher-order CSU enumeration is ported.
+- `ComputeEqualityFactor` normalizes the copied literal list except for `pos2->literal`, then copies all literals except `pos1->literal` and inserts a new negative condition. This asymmetry is compatibility-relevant and should be kept visible when refactoring the Rust builder.
 
 ### Porting Focus
 
