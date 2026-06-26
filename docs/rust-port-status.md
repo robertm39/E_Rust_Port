@@ -2,6 +2,31 @@
 
 This document tracks Rust implementation slices and the original C source units they are intended to mirror.
 
+## Ordered Factoring
+
+Rust files:
+
+- `src/clauses/factor.rs`
+
+C source references:
+
+- `eprover/CLAUSES/ccl_factor.c`
+- `eprover/CLAUSES/ccl_factor.h`
+- `eprover/CONTROL/cco_factoring.c`
+- `eprover/CONTROL/cco_factoring.h`
+
+Implemented:
+
+- First-order ordered factor candidate enumeration matching `ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`.
+- First-order `ComputeOrderedFactor`, including second-literal side retry, directed unification, post-unifier maximality recheck, normalized copy excluding the second literal, and resolved/duplicate cleanup.
+- First-order `ComputeAllOrderedFactors`, including Horn and `CPNoGeneration` gates, clause-set insertion, and parent proof-depth/proof-size/TPTP/SOS metadata propagation.
+
+Pending:
+
+- `ComputeEqualityFactor` and `ComputeAllEqualityFactors`.
+- Higher-order CSU enumeration, `TOGreater` checks, lambda normalization, and derivation/proof-output side effects for factoring.
+- Reusable fresh-variable-bank behavior may need a performance pass once stable clause/literal ownership is ported.
+
 ## Initial Crate And CLI Foundation
 
 Rust files:

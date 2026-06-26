@@ -94,6 +94,18 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status
+
+- `src/clauses/factor.rs` ports first-order ordered factor candidate enumeration (`ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`) and single ordered-factor construction (`ComputeOrderedFactor`).
+- The port preserves C's pair ordering, second-literal side retry, post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
+- Equality factoring (`ComputeEqualityFactor` plus `ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) remains pending because it depends on higher-order CSU enumeration, `TOGreater`, lambda normalization, and derivation/proof-output ownership.
+
+### Change-Later Observations
+
+- `ComputeOrderedFactor` temporarily calls `EqnSwapSidesSimple` on the source `pos2->literal` and swaps it back after directed unification. Rust uses a local clone for the swapped view; a future C cleanup could avoid mutating the input clause during a failed or successful factor attempt.
+- Ordered factoring and equality factoring both receive a reusable `VarBank_p freshvars` and reset its counts per attempt. The Rust ordered-factor path initializes normalized variables past the clause's current variable-code range to avoid collisions in the term bank's pointer-identity variable model; revisit reusable-bank performance once clause/literal ownership is fully ported.
+- Equality factoring pushes generated clauses on a stack for CSU enumeration and the control wrapper later pops them, so multi-CSU insertion order is reversed. Preserve or deliberately revisit this when equality factoring is ported.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

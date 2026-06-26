@@ -82,6 +82,17 @@ Source files reviewed: `CONTROL/cco_factoring.h`, `CONTROL/cco_factoring.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status
+
+- `src/clauses/factor.rs` ports first-order `ComputeAllOrderedFactors`: it skips Horn clauses and `CPNoGeneration`, iterates ordered-factor candidates, inserts generated clauses into the caller-owned `ClauseSet`, and copies proof depth, proof size, TPTP type, and SOS status from the parent.
+- Proof documentation (`DocClauseCreationDefault`) and derivation pushes (`ClausePushDerivation`) remain pending until clause derivation/proof-output ownership is ported.
+- `ComputeAllEqualityFactors` remains pending with the underlying equality-factoring CSU path.
+
+### Change-Later Observations
+
+- `ComputeAllEqualityFactors` drains generated equality factors by popping a `PStack`, which reverses the order in which `ComputeEqualityFactor` pushed CSU-derived clauses. Preserve this in the Rust equality-factoring slice before deciding whether a direct iterator order is acceptable.
+- Both all-factor wrappers duplicate the same parent-metadata propagation sequence. Rust currently mirrors it locally; a future shared helper could reduce drift once derivation/proof-output metadata is represented.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

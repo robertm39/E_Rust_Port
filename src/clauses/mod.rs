@@ -16,6 +16,7 @@ pub mod eqnlist;
 pub mod eqnresolution;
 pub mod ext_index;
 pub mod f_generality;
+pub mod factor;
 pub mod fcvindexing;
 pub mod findex;
 pub mod freqvectors;
