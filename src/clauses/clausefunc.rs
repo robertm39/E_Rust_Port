@@ -5,6 +5,10 @@ use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
 };
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{
+    op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating, DerivationEntry, DerivationParentRef,
+    DC_CNF_ADD_ARG,
+};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::eqnlist::EqnList;
@@ -33,6 +37,70 @@ pub fn pstack_clause_print_lop_string(
         output.push('\n');
     }
     output
+}
+
+pub fn clause_is_orphaned_with(
+    clause: &Clause,
+    mut parent_is_dead: impl FnMut(DerivationParentRef) -> bool,
+) -> bool {
+    let Some(derivation) = clause.derivation() else {
+        return false;
+    };
+    let entries = derivation.as_slice();
+    let Some(DerivationEntry::Operation(op)) = entries.first() else {
+        return false;
+    };
+    if !op_is_generating(*op) {
+        return false;
+    }
+
+    let mut index = 1;
+    if op_has_cnf_arg1(*op) {
+        if derivation_parent_is_dead(entries, index, &mut parent_is_dead) {
+            return true;
+        }
+        index += 1;
+    }
+    if op_has_cnf_arg2(*op) {
+        if derivation_parent_is_dead(entries, index, &mut parent_is_dead) {
+            return true;
+        }
+        index += 1;
+    }
+
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            break;
+        };
+        if op != DC_CNF_ADD_ARG {
+            break;
+        }
+        index += 1;
+        if derivation_parent_is_dead(entries, index, &mut parent_is_dead) {
+            return true;
+        }
+        index += 1;
+    }
+
+    false
+}
+
+fn derivation_parent_is_dead(
+    entries: &[DerivationEntry],
+    index: usize,
+    parent_is_dead: &mut impl FnMut(DerivationParentRef) -> bool,
+) -> bool {
+    let entry = entries
+        .get(index)
+        .unwrap_or_else(|| panic!("orphan-check derivation parent is missing"));
+    let parent = match entry {
+        DerivationEntry::ClauseParent(parent) => DerivationParentRef::Clause(*parent),
+        DerivationEntry::Demodulator(demodulator) => DerivationParentRef::Demodulator(*demodulator),
+        DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {
+            panic!("orphan-check derivation parent has the wrong entry shape")
+        }
+    };
+    parent_is_dead(parent)
 }
 
 pub fn clause_remove_literal_index(clause: &mut Clause, index: usize) -> Option<Eqn> {
@@ -545,11 +613,11 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
-        clause_flip_literal_sign_index, clause_recognize_injectivity, clause_remove_ac_resolved,
-        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
-        clause_set_canonize, clause_set_remove_superfluous_literals,
-        clause_set_replace_injectivity_defs, clause_unit_simplify_test,
-        pstack_clause_print_lop_string,
+        clause_flip_literal_sign_index, clause_is_orphaned_with, clause_recognize_injectivity,
+        clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
+        clause_remove_superfluous_literals, clause_set_canonize,
+        clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
+        clause_unit_simplify_test, pstack_clause_print_lop_string,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -557,6 +625,10 @@ mod tests {
         CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW, CP_TYPE_AXIOM,
     };
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{
+        clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_ADD_ARG,
+        DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
@@ -642,6 +714,67 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    #[test]
+    fn clause_is_orphaned_ignores_missing_empty_and_non_generating_derivations() {
+        let parent = Clause::alloc(EqnList::new());
+        let mut no_derivation = Clause::alloc(EqnList::new());
+        assert!(!clause_is_orphaned_with(&no_derivation, |_| true));
+
+        no_derivation.ensure_derivation();
+        assert!(!clause_is_orphaned_with(&no_derivation, |_| true));
+
+        let mut rewritten = Clause::alloc(EqnList::new());
+        clause_push_derivation(&mut rewritten, DC_REWRITE, Some(&parent), None);
+        assert!(!clause_is_orphaned_with(&rewritten, |_| true));
+    }
+
+    #[test]
+    fn clause_is_orphaned_checks_direct_generating_parents() {
+        let mut left_parent = Clause::alloc(EqnList::new());
+        left_parent.set_ident(70);
+        let mut right_parent = Clause::alloc(EqnList::new());
+        right_parent.set_ident(71);
+        let mut child = Clause::alloc(EqnList::new());
+        clause_push_derivation(
+            &mut child,
+            DC_PARAMOD,
+            Some(&left_parent),
+            Some(&right_parent),
+        );
+
+        assert!(!clause_is_orphaned_with(&child, |_| false));
+        assert!(clause_is_orphaned_with(&child, |parent| {
+            parent == DerivationParentRef::Clause(ClauseDerivationRef::new(71, 0))
+        }));
+    }
+
+    #[test]
+    fn clause_is_orphaned_scans_following_cnf_add_arg_entries_only() {
+        let mut generating_parent = Clause::alloc(EqnList::new());
+        generating_parent.set_ident(80);
+        let mut added_parent = Clause::alloc(EqnList::new());
+        added_parent.set_ident(81);
+        let mut hidden_parent = Clause::alloc(EqnList::new());
+        hidden_parent.set_ident(82);
+        let mut child = Clause::alloc(EqnList::new());
+        clause_push_derivation(
+            &mut child,
+            DC_ORDERED_FACTOR,
+            Some(&generating_parent),
+            None,
+        );
+        clause_push_derivation(&mut child, DC_CNF_ADD_ARG, Some(&added_parent), None);
+        clause_push_derivation(&mut child, DC_REWRITE, Some(&hidden_parent), None);
+        clause_push_derivation(&mut child, DC_CNF_ADD_ARG, Some(&hidden_parent), None);
+
+        assert!(clause_is_orphaned_with(&child, |parent| {
+            parent == DerivationParentRef::Clause(ClauseDerivationRef::new(81, 0))
+        }));
+        assert!(!clause_is_orphaned_with(&child, |parent| {
+            parent == DerivationParentRef::Clause(ClauseDerivationRef::new(82, 0))
+        }));
     }
 
     #[test]
