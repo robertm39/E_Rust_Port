@@ -1369,6 +1369,7 @@ pub fn proof_control_from_config(config: &EProverConfig) -> Result<ProofControl,
     let mut control = ProofControl::new();
     control.set_heuristic_parms(heuristic_parms_from_config(config)?);
     control.set_fvi_parms(fv_index_params_from_config(&config.search.fv_index)?);
+    control.set_record_gc_selection(config.flags.contains(EProverFlag::RecordGivenClauses));
     Ok(control)
 }
 
@@ -4796,6 +4797,7 @@ mod tests {
             "--fvindex-featuretypes=ACStagger",
             "--fvindex-maxfeatures=19",
             "--fvindex-slack=2",
+            "--record-gcs",
         ]);
 
         let control = proof_control_from_config(&config).unwrap_or_else(|err| panic!("{err}"));
@@ -4805,6 +4807,7 @@ mod tests {
         assert!(control.wfcbs().is_empty());
         assert!(control.hcbs().is_empty());
         assert_eq!(control.solver().generation(), 1);
+        assert!(control.record_gc_selection());
         assert_eq!(control.heuristic_parms().heuristic_name, "Auto");
         assert_eq!(control.heuristic_parms().delete_bad_limit, 77);
         assert_eq!(control.heuristic_parms().split_clauses.c_value(), 3);

@@ -12,7 +12,7 @@ use crate::clauses::clausefunc::{
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::condensation::condense;
 use crate::clauses::context_sr::clause_contextual_simplify_reflect;
-use crate::clauses::derivation::{clause_push_derivation, DC_CNF_QUOTE};
+use crate::clauses::derivation::{clause_push_derivation, DC_CNF_EVAL_GC, DC_CNF_QUOTE};
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::clause_er_normalize_var;
 use crate::clauses::fcvindexing::fv_index_pack_clause;
@@ -199,6 +199,7 @@ pub struct ProofControl {
     fvi_parms: FvIndexParams,
     problem_specs: SpecFeatureCell,
     solver: SatSolverState,
+    record_gc_selection: bool,
 }
 
 impl ProofControl {
@@ -214,6 +215,7 @@ impl ProofControl {
             fvi_parms: FvIndexParams::default(),
             problem_specs: SpecFeatureCell::default(),
             solver: SatSolverState::new(),
+            record_gc_selection: false,
         }
     }
 
@@ -305,6 +307,15 @@ impl ProofControl {
 
     pub fn reset_sat_solver(&mut self) {
         self.solver.reset();
+    }
+
+    #[must_use]
+    pub const fn record_gc_selection(&self) -> bool {
+        self.record_gc_selection
+    }
+
+    pub const fn set_record_gc_selection(&mut self, record: bool) {
+        self.record_gc_selection = record;
     }
 }
 
@@ -534,6 +545,7 @@ pub fn proof_state_init_axioms(
     let static_watchlist = control.heuristic_parms.watchlist_is_static;
     let lambda_demod = control.heuristic_parms.lambda_demod;
     let use_tptp_sos = control.heuristic_parms.use_tptp_sos;
+    let record_gc_selection = control.record_gc_selection();
     let mut initial_clauses = 0;
     let mut watchlist_matches = 0;
     let mut watchlist_removed = 0;
@@ -556,6 +568,9 @@ pub fn proof_state_init_axioms(
 
             hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut new);
             clause_push_derivation(&mut new, DC_CNF_QUOTE, Some(&source), None);
+            if record_gc_selection {
+                clause_push_derivation(&mut new, DC_CNF_EVAL_GC, None, None);
+            }
             if prefer_initial {
                 let Some(evaluations) = new.evaluations_mut() else {
                     return Err(Diagnostic::new(
@@ -683,6 +698,7 @@ pub fn proof_state_reset_processed(
         )
     })?;
     let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
+    let record_gc_selection = control.record_gc_selection();
     let mut reset = 0;
 
     {
@@ -697,24 +713,28 @@ pub fn proof_state_reset_processed(
         reset += proof_state_reset_processed_set_by(
             state,
             prefer_initial,
+            record_gc_selection,
             |state| state.processed_pos_rules_mut().extract_first(),
             &mut evaluate,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
             prefer_initial,
+            record_gc_selection,
             |state| state.processed_pos_eqns_mut().extract_first(),
             &mut evaluate,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
             prefer_initial,
+            record_gc_selection,
             |state| state.processed_neg_units_mut().extract_first(),
             &mut evaluate,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
             prefer_initial,
+            record_gc_selection,
             |state| state.processed_non_units_mut().extract_first(),
             &mut evaluate,
         )?;
@@ -726,6 +746,7 @@ pub fn proof_state_reset_processed(
 fn proof_state_reset_processed_set_by<E>(
     state: &mut ProofState,
     prefer_initial: bool,
+    record_gc_selection: bool,
     mut extract_first: impl FnMut(&mut ProofState) -> Option<Clause>,
     evaluate: &mut E,
 ) -> Result<i64, Diagnostic>
@@ -734,7 +755,13 @@ where
 {
     let mut reset = 0;
     while let Some(handle) = extract_first(state) {
-        proof_state_reset_processed_clause(state, handle, prefer_initial, evaluate)?;
+        proof_state_reset_processed_clause(
+            state,
+            handle,
+            prefer_initial,
+            record_gc_selection,
+            evaluate,
+        )?;
         reset += 1;
     }
     Ok(reset)
@@ -742,13 +769,17 @@ where
 
 fn proof_state_reset_processed_clause<E>(
     state: &mut ProofState,
-    handle: Clause,
+    mut handle: Clause,
     prefer_initial: bool,
+    record_gc_selection: bool,
     evaluate: &mut E,
 ) -> Result<(), Diagnostic>
 where
     E: FnMut(&TermBank, &mut Clause),
 {
+    if record_gc_selection {
+        clause_push_derivation(&mut handle, DC_CNF_EVAL_GC, None, None);
+    }
     let mut requeued = {
         let (terms, archive) = state.terms_and_archive_mut();
         clause_archive(archive, handle, terms)?
@@ -1360,6 +1391,9 @@ pub fn proof_state_queue_generated_clause_for_eval(
     let create_date = i64::try_from(state.statistics().proc_non_trivial_count).unwrap_or(i64::MAX);
     clause.set_create_date(create_date);
     state.statistics_mut().non_trivial_generated_count += 1;
+    if control.record_gc_selection() {
+        clause_push_derivation(&mut clause, DC_CNF_EVAL_GC, None, None);
+    }
     state.eval_store_mut().insert(clause);
     Ok(())
 }
@@ -1846,7 +1880,9 @@ mod tests {
         CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
-    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE};
+    use crate::clauses::derivation::{
+        ClauseDerivationRef, DerivationEntry, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
         EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_SELECTED, EP_IS_SPLIT_LIT,
@@ -2265,6 +2301,38 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_init_records_eval_gc_when_gc_selection_is_enabled() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let axiom = unit_clause_with_id(state.terms_mut(), "pc_init_gc", 4_018);
+        let axiom_id = axiom.ident();
+        state.axioms_mut().insert(axiom);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InitGcSelection");
+        control.set_record_gc_selection(true);
+
+        let outcome = proof_state_init(&mut state, &mut control).unwrap_or_else(|err| {
+            panic!("{err}");
+        });
+
+        assert_eq!(outcome.initial_clauses, 1);
+        let copied = state.unprocessed().find_by_id(axiom_id).unwrap();
+        assert_eq!(
+            copied
+                .derivation()
+                .map(crate::basics::pstacks::PStack::as_slice),
+            Some(
+                &[
+                    DerivationEntry::Operation(DC_CNF_QUOTE),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(axiom_id, 0)),
+                    DerivationEntry::Operation(DC_CNF_EVAL_GC),
+                ][..]
+            )
+        );
+    }
+
+    #[test]
     fn proof_state_init_static_watchlist_marks_matching_initial_clause() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (axiom, watch) =
@@ -2376,6 +2444,7 @@ mod tests {
 
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
+        control.set_record_gc_selection(true);
         let mut params = HeuristicParmsCell {
             heuristic_name: "ResetProcessedTest".to_owned(),
             prefer_initial_clauses: true,
@@ -2407,6 +2476,12 @@ mod tests {
             let archived = state.archive().find_by_id(ident).unwrap();
             assert!(archived.query_prop(CP_IS_PROCESSED | CP_IS_ORIENTED));
             assert!(archived.evaluations().is_none());
+            assert_eq!(
+                archived
+                    .derivation()
+                    .map(crate::basics::pstacks::PStack::as_slice),
+                Some(&[DerivationEntry::Operation(DC_CNF_EVAL_GC)][..])
+            );
 
             let requeued = state.unprocessed().find_by_id(ident).unwrap();
             assert!(requeued.query_prop(CP_IS_PROCESSED));
@@ -2979,6 +3054,7 @@ mod tests {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         state.statistics_mut().proc_non_trivial_count = 77;
         let mut control = proof_control_alloc();
+        control.set_record_gc_selection(true);
         control.heuristic_parms_mut().selection_strategy = SELECT_NEGATIVE_LITERALS.to_owned();
         let mut clause = negative_clause(state.terms_mut());
         clause.set_ident(4_063);
@@ -2996,6 +3072,12 @@ mod tests {
         assert!(!queued.query_prop(CP_IS_ORIENTED));
         assert_eq!(queued.prop_lit_number(EP_IS_SELECTED), 1);
         assert!(queued.evaluations().is_none());
+        assert_eq!(
+            queued
+                .derivation()
+                .map(crate::basics::pstacks::PStack::as_slice),
+            Some(&[DerivationEntry::Operation(DC_CNF_EVAL_GC)][..])
+        );
     }
 
     #[test]
