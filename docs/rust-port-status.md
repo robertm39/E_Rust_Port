@@ -46,10 +46,10 @@ Implemented:
 - First-order `ComputeOverlap`, including MGU construction, ordered source-side rejection, substitution normalization before term-bank insertion, and first-order `TBTermPosReplace` rebuilding.
 - First-order `EqnOrderedParamod`, including target-side ordering rejection, positive trivial-paramodulant elimination, negative trivial-paramodulant retention for resolved-literal cleanup, and `EPIsPMIntoLit` marking.
 - First-order low-level `ClauseOrderedParamod` for explicit clause positions, including strict maximality rechecks after substitution, normalized copies excluding source/target literals, `EPFromClauseLit` and `EPIsPMIntoLit` flag flow, resolved-literal cleanup, and duplicate cleanup.
+- First-order paramodulation source/target/pair candidate enumeration matching `ClausePosFirst/NextParamodFromSide`, `ClausePosFirst/NextParamodInto`, and `ClausePosFirst/NextParamodPair` cursor order for the plain path, including selected-source rejection, positive-root `no_top` skipping, target-variable skipping, and non-equational predicate-root skipping for free-variable sources.
 
 Pending:
 
-- `ClausePosFirst/NextParamodInto`, `ClausePosFirst/NextParamodFromSide`, and clause-pair candidate iteration, including exact `no_top` behavior and non-equational/negative-overlap strategy gates.
 - `ComputeClauseClauseParamodulants`, `ComputeAllParamodulants`, unindexed/indexed control wrappers, generated-clause insertion, proof-depth/proof-size/TPTP/SOS metadata propagation, and `DCParamod` / `DCSimParamod` derivation entries.
 - Simultaneous and super-simultaneous ordered paramodulation, `TPPotentialParamod` marking, higher-order unification constraints, lambda normalization, and proof-documentation output.
 - The optional C `check_paramod_ordering_constraint` path remains disabled in C and unported in Rust.

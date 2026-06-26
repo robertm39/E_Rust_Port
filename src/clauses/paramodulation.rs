@@ -13,9 +13,106 @@ use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termpos::TermPos;
-use crate::terms::termtypes::{DerefType, Term};
+use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
 use crate::terms::termvars::VarBank;
 use std::collections::BTreeMap;
+
+pub const PARAMOD_OVERLAP_NON_EQ_LITERALS: bool = true;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParamodulationType {
+    Plain,
+    Simultaneous,
+    SuperSimultaneous,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParamodulationPair {
+    from: ClausePos,
+    into: ClausePos,
+}
+
+impl ParamodulationPair {
+    #[must_use]
+    pub const fn new(from: ClausePos, into: ClausePos) -> Self {
+        Self { from, into }
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> &ClausePos {
+        &self.from
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &ClausePos {
+        &self.into
+    }
+}
+
+/// Returns C `ClausePosFirst/NextParamodFromSide` source-side candidates.
+///
+/// The current C defaults allow overlap from non-equational positive maximal
+/// literals, so the only active filter beyond maximal positive side iteration
+/// is selected-literal rejection.
+#[must_use]
+pub fn paramod_from_side_positions(bank: &TermBank, from: &Clause) -> Vec<ClausePos> {
+    let mut positions = Vec::new();
+    let mut position = ClausePos::for_clause(from.clone());
+    let mut current = position.find_first_maximal_side(true);
+
+    while current.is_some() {
+        if from_side_allows_paramod(bank, &position) {
+            positions.push(position.clone());
+        }
+        current = position.find_next_maximal_side(true);
+    }
+
+    positions
+}
+
+/// Returns C `ClausePosFirst/NextParamodInto` target-position candidates for a
+/// fixed source side.
+#[must_use]
+pub fn paramod_into_positions(
+    bank: &TermBank,
+    into: &Clause,
+    from_pos: &ClausePos,
+    no_top: bool,
+    pm_type: ParamodulationType,
+) -> Vec<ClausePos> {
+    let mut positions = Vec::new();
+    let mut position = ClausePos::for_clause(into.clone());
+    let mut current = first_paramod_into_candidate(bank, &mut position, from_pos, no_top);
+
+    if pm_type != ParamodulationType::Plain && current.is_some() {
+        mark_potential_paramod_terms_from_position(&position);
+    }
+
+    while current.is_some() {
+        positions.push(position.clone());
+        current = next_paramod_into_candidate(bank, &mut position, from_pos, no_top);
+    }
+
+    positions
+}
+
+/// Returns C `ClausePosFirst/NextParamodPair` candidates in cursor order.
+#[must_use]
+pub fn paramodulation_pair_positions(
+    bank: &TermBank,
+    from: &Clause,
+    into: &Clause,
+    no_top: bool,
+    pm_type: ParamodulationType,
+) -> Vec<ParamodulationPair> {
+    let mut pairs = Vec::new();
+    for from_pos in paramod_from_side_positions(bank, from) {
+        for into_pos in paramod_into_positions(bank, into, &from_pos, no_top, pm_type) {
+            pairs.push(ParamodulationPair::new(from_pos.clone(), into_pos));
+        }
+    }
+    pairs
+}
 
 /// Computes the first-order C `ComputeOverlap` replacement term.
 ///
@@ -387,16 +484,151 @@ fn fresh_var_bank_for_clauses(bank: &TermBank, first: &Clause, second: &Clause) 
     freshvars
 }
 
+fn from_side_allows_paramod(bank: &TermBank, position: &ClausePos) -> bool {
+    let literal = position
+        .literal()
+        .expect("source-side position must select a literal");
+    (PARAMOD_OVERLAP_NON_EQ_LITERALS || literal.is_equ_lit(bank)) && !literal.is_selected()
+}
+
+fn first_paramod_into_candidate(
+    bank: &TermBank,
+    position: &mut ClausePos,
+    from_pos: &ClausePos,
+    no_top: bool,
+) -> Option<Term> {
+    let mut current = if from_uses_full_subterm_iteration(bank, from_pos) {
+        position.find_first_maximal_subterm()
+    } else {
+        find_first_negative_maximal_left_side(position)
+    };
+    while let Some(term) = current {
+        if !is_no_paramod_position(bank, position, from_pos, &term, no_top) {
+            return Some(term);
+        }
+        current = next_paramod_into_candidate_raw(bank, position, from_pos);
+    }
+    None
+}
+
+fn next_paramod_into_candidate(
+    bank: &TermBank,
+    position: &mut ClausePos,
+    from_pos: &ClausePos,
+    no_top: bool,
+) -> Option<Term> {
+    let mut current = next_paramod_into_candidate_raw(bank, position, from_pos);
+    while let Some(term) = current {
+        if !is_no_paramod_position(bank, position, from_pos, &term, no_top) {
+            return Some(term);
+        }
+        current = next_paramod_into_candidate_raw(bank, position, from_pos);
+    }
+    None
+}
+
+fn next_paramod_into_candidate_raw(
+    bank: &TermBank,
+    position: &mut ClausePos,
+    from_pos: &ClausePos,
+) -> Option<Term> {
+    if from_uses_full_subterm_iteration(bank, from_pos) {
+        position.find_next_maximal_subterm()
+    } else {
+        advance_position_to_next_literal(position);
+        find_first_negative_maximal_left_side(position)
+    }
+}
+
+fn from_uses_full_subterm_iteration(bank: &TermBank, from_pos: &ClausePos) -> bool {
+    from_pos
+        .literal()
+        .expect("source-side position must select a literal")
+        .is_equ_lit(bank)
+        || problem_type() == ProblemType::HigherOrder
+}
+
+fn is_no_paramod_position(
+    bank: &TermBank,
+    position: &ClausePos,
+    from_pos: &ClausePos,
+    term: &Term,
+    no_top: bool,
+) -> bool {
+    let target_literal = position
+        .literal()
+        .expect("target position must select a literal");
+    let source_side = from_pos
+        .get_side()
+        .expect("source position must select a side");
+
+    term.is_free_var()
+        || (target_literal.is_positive() && no_top && position.is_top())
+        || (source_side.is_free_var()
+            && problem_type() == ProblemType::FirstOrder
+            && !target_literal.is_equ_lit(bank)
+            && position.is_top())
+}
+
+fn find_first_negative_maximal_left_side(position: &mut ClausePos) -> Option<Term> {
+    let found = {
+        let clause = position.clause()?;
+        let start = position.literal_index().unwrap_or(0);
+        (start..clause.literals().len()).find(|&index| {
+            let literal = &clause.literals().as_slice()[index];
+            literal.is_maximal() && literal.is_negative()
+        })
+    };
+
+    position.set_literal_index(found);
+    if found.is_some() {
+        position.set_side(EqnSide::LeftSide);
+        position.term_pos_mut().clear();
+        position.get_side()
+    } else {
+        None
+    }
+}
+
+fn advance_position_to_next_literal(position: &mut ClausePos) {
+    let next = {
+        let Some(clause) = position.clause() else {
+            position.set_literal_index(None);
+            return;
+        };
+        position.literal_index().and_then(|index| {
+            let next = index.saturating_add(1);
+            (next < clause.literals().len()).then_some(next)
+        })
+    };
+    position.set_literal_index(next);
+}
+
+fn mark_potential_paramod_terms_from_position(position: &ClausePos) {
+    let Some(clause) = position.clause() else {
+        return;
+    };
+    let Some(start) = position.literal_index() else {
+        return;
+    };
+    for literal in &clause.literals().as_slice()[start..] {
+        literal.term_set_prop(TP_POTENTIAL_PARAMOD);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::clause_ordered_paramod;
+    use super::{
+        clause_ordered_paramod, paramod_from_side_positions, paramod_into_positions,
+        paramodulation_pair_positions, ParamodulationType,
+    };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausepos::ClausePos;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
         EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT,
-        EP_MAX_IS_UP_TO_DATE,
+        EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::heuristics::to_params::TermOrdering;
@@ -462,11 +694,119 @@ mod tests {
         literal.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
     }
 
+    fn maximal(literal: &mut Eqn) {
+        literal.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+    }
+
     fn top_left_position(clause: &Clause) -> ClausePos {
         let mut position = ClausePos::for_clause(clause.clone());
         assert!(position.set_literal_index(Some(0)));
         position.set_side(EqnSide::LeftSide);
         position
+    }
+
+    #[test]
+    fn paramod_from_side_positions_follow_c_side_order_and_skip_selected() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "pm_from_left");
+        let right = typed_const(&mut bank, "pm_from_right");
+        let extra_left = typed_const(&mut bank, "pm_from_extra_left");
+        let extra_right = typed_const(&mut bank, "pm_from_extra_right");
+        let selected_left = typed_const(&mut bank, "pm_from_selected_left");
+        let selected_right = typed_const(&mut bank, "pm_from_selected_right");
+        let mut selected = lit(&mut bank, &selected_left, &selected_right, true);
+        let mut unoriented = lit(&mut bank, &left, &right, true);
+        let mut oriented = lit(&mut bank, &extra_left, &extra_right, true);
+        selected.set_prop(EP_IS_MAXIMAL | EP_IS_SELECTED);
+        maximal(&mut unoriented);
+        maximal_oriented(&mut oriented);
+        let clause = Clause::alloc(EqnList::from_vec(vec![selected, unoriented, oriented]));
+
+        let positions = paramod_from_side_positions(&bank, &clause);
+
+        assert_eq!(positions.len(), 3);
+        assert_eq!(positions[0].literal_index(), Some(1));
+        assert_eq!(positions[0].side(), EqnSide::LeftSide);
+        assert_eq!(positions[1].literal_index(), Some(1));
+        assert_eq!(positions[1].side(), EqnSide::RightSide);
+        assert_eq!(positions[2].literal_index(), Some(2));
+        assert_eq!(positions[2].side(), EqnSide::LeftSide);
+    }
+
+    #[test]
+    fn paramod_into_positions_skip_positive_roots_when_no_top_is_set() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_into_source_left");
+        let source_right = typed_const(&mut bank, "pm_into_source_right");
+        let target_arg = typed_const(&mut bank, "pm_into_target_arg");
+        let target_rhs = typed_const(&mut bank, "pm_into_target_rhs");
+        let neg_arg = typed_const(&mut bank, "pm_into_neg_arg");
+        let neg_rhs = typed_const(&mut bank, "pm_into_neg_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_into_f");
+        let g_code = typed_unary_code(&mut bank, "pm_into_g");
+        let f_of_target = typed_unary(&mut bank, f_code, &target_arg);
+        let g_of_negative = typed_unary(&mut bank, g_code, &neg_arg);
+        let mut from_lit = lit(&mut bank, &source_left, &source_right, true);
+        let mut positive_target = lit(&mut bank, &f_of_target, &target_rhs, true);
+        let mut negative_target = lit(&mut bank, &g_of_negative, &neg_rhs, false);
+        maximal_oriented(&mut from_lit);
+        maximal_oriented(&mut positive_target);
+        maximal_oriented(&mut negative_target);
+        let from_clause = Clause::alloc(EqnList::from_vec(vec![from_lit]));
+        let into_clause = Clause::alloc(EqnList::from_vec(vec![positive_target, negative_target]));
+        let from_pos = top_left_position(&from_clause);
+
+        let positions = paramod_into_positions(
+            &bank,
+            &into_clause,
+            &from_pos,
+            true,
+            ParamodulationType::Plain,
+        );
+
+        assert_eq!(positions.len(), 3);
+        assert_eq!(positions[0].literal_index(), Some(0));
+        assert_eq!(positions[0].side(), EqnSide::LeftSide);
+        assert!(!positions[0].is_top());
+        assert_eq!(positions[1].literal_index(), Some(1));
+        assert_eq!(positions[1].side(), EqnSide::LeftSide);
+        assert!(!positions[1].is_top());
+        assert_eq!(positions[2].literal_index(), Some(1));
+        assert_eq!(positions[2].side(), EqnSide::LeftSide);
+        assert!(positions[2].is_top());
+    }
+
+    #[test]
+    fn paramodulation_pair_positions_nest_into_positions_under_each_source_side() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_pair_source_left");
+        let source_right = typed_const(&mut bank, "pm_pair_source_right");
+        let target_arg = typed_const(&mut bank, "pm_pair_target_arg");
+        let target_rhs = typed_const(&mut bank, "pm_pair_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_pair_f");
+        let f_of_target = typed_unary(&mut bank, f_code, &target_arg);
+        let mut from_lit = lit(&mut bank, &source_left, &source_right, true);
+        let mut into_lit = lit(&mut bank, &f_of_target, &target_rhs, true);
+        maximal(&mut from_lit);
+        maximal_oriented(&mut into_lit);
+        let from_clause = Clause::alloc(EqnList::from_vec(vec![from_lit]));
+        let into_clause = Clause::alloc(EqnList::from_vec(vec![into_lit]));
+
+        let pairs = paramodulation_pair_positions(
+            &bank,
+            &from_clause,
+            &into_clause,
+            true,
+            ParamodulationType::Plain,
+        );
+
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].source().side(), EqnSide::LeftSide);
+        assert_eq!(pairs[0].target().literal_index(), Some(0));
+        assert!(!pairs[0].target().is_top());
+        assert_eq!(pairs[1].source().side(), EqnSide::RightSide);
+        assert_eq!(pairs[1].target().literal_index(), Some(0));
+        assert!(!pairs[1].target().is_top());
     }
 
     #[test]
