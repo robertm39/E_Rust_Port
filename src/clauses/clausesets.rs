@@ -4,8 +4,8 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::{
     clause_parse_with_options, clause_print_lop_format_string,
-    clause_print_lop_format_string_with_options, clause_starts_maybe, clause_write_tstp, Clause,
-    ClauseParseOptions,
+    clause_print_lop_format_string_with_options, clause_print_tptp_format_string,
+    clause_starts_maybe, clause_write_tstp, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_CONJECTURE,
@@ -232,6 +232,16 @@ impl ClauseSet {
         for clause in &self.clauses {
             output.push_str(prefix);
             output.push_str(&clause_print_lop_format_string(bank, clause, true));
+            output.push('\n');
+        }
+        output
+    }
+
+    #[must_use]
+    pub fn print_tptp_format_string(&self, bank: &TermBank) -> String {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(&clause_print_tptp_format_string(bank, clause));
             output.push('\n');
         }
         output

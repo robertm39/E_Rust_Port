@@ -3639,7 +3639,10 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
 
     if config.flags.contains(EProverFlag::PrintFormulas) {
         match config.output_format {
-            IoFormat::Tstp | IoFormat::Tptp => {
+            IoFormat::Tptp => {
+                output.write_all(clauses.print_tptp_format_string(&bank).as_bytes())?;
+            }
+            IoFormat::Tstp => {
                 let rendered = clauses.tstp_print_string(
                     &bank,
                     true,
@@ -6845,6 +6848,37 @@ mod tests {
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(String::from_utf8(stdout).unwrap(), "equal(a, b) <- .\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_uses_old_tptp_output_when_requested() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tptp-out");
+        std::fs::write(&path, "a=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--lop-in",
+                "--tptp-out",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("input_clause(i_0_"));
+        assert!(printed.ends_with(",axiom,[++equal(a, b)]).\n"));
+        assert!(!printed.starts_with("cnf("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
