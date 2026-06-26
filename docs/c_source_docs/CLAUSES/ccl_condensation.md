@@ -92,11 +92,12 @@ Source files reviewed: `CLAUSES/ccl_condensation.h`, `CLAUSES/ccl_condensation.c
 
 - `src/clauses/condensation.rs` ports `CondenseOnce`, `Condense`, the process-wide attempt/success counters, and the candidate-replacement flow through one-way literal unification, duplicate/resolved cleanup, subsumption-order sorting, and candidate subsumption checking.
 - The Rust port preserves the C gate that only attempts full condensation when there are at least two positive literals or at least two negative literals, while still counting every `Condense` call as an attempt.
-- Proof-documentation and derivation-stack side effects (`DocClauseModificationDefault`, `ClausePushDerivation`) remain pending until proof-output ownership is ported.
+- The `DCCondense` derivation-stack side effect is ported when at least one condensation step changes the clause. Proof-documentation output (`DocClauseModificationDefault`) remains pending until proof-output ownership is ported.
 
 ### Change-Later Observations
 
 - `try_condensation` accepts a `swap` argument, and `CondenseOnce` retries with `swap=true` when either literal is unoriented, but the C helper never reads the argument or swaps literal sides. Rust preserves that no-op retry for compatibility; remove or repair it only after C/Rust comparison tests show the observable behavior intended.
 - C replaces `clause->literals` with `cand->literals` and nulls the candidate list before freeing the candidate. Rust uses owned literal transfer, but stable clause-handle/index ownership should still audit this mutation point because live C callers observe the same clause object with a new literal list.
 - Condensation statistics are writable process-global `long` variables in C. Rust uses atomic counters for safe test concurrency, but a later statistics subsystem should decide whether these counters remain global, become proof-state-local, or are reset per run.
+- `DCCondense` has no explicit parent in C; Rust records only the operation entry. Keep this no-parent shape unless proof-object reconstruction proves a synthetic self-parent is required.
 <!-- END MANUAL REVIEW: c_source_docs -->

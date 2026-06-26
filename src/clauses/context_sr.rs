@@ -3,6 +3,7 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
 use crate::clauses::clausefunc::{clause_flip_literal_sign_index, clause_remove_literal_index};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{clause_push_derivation, DC_CONTEXT_SR};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::subsumption::{
@@ -12,8 +13,8 @@ use crate::terms::termbanks::TermBank;
 
 /// Performs C `ClauseContextualSimplifyReflect` over a plain clause set.
 ///
-/// Derivation and proof-documentation side effects are left to the future
-/// proof-control integration layer.
+/// Proof-documentation output is left to the future proof-control integration
+/// layer.
 pub fn clause_contextual_simplify_reflect(
     set: &ClauseSet,
     clause: &mut Clause,
@@ -42,6 +43,7 @@ pub fn clause_contextual_simplify_reflect(
             );
             debug_assert_eq!(clause.weight(), clause.standard_weight());
             result += 1;
+            clause_push_derivation(clause, DC_CONTEXT_SR, Some(subsumer), None);
         } else {
             let restored = flip_literal_sign(clause, &flipped);
             debug_assert!(restored, "flipped literal must be restored if kept");
@@ -141,6 +143,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_CONTEXT_SR};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
@@ -213,6 +216,13 @@ mod tests {
         assert!(target.query_prop(CP_IS_SOS));
         assert!(!target.is_any_prop_set(CP_INITIAL | CP_LIMITED_RW));
         assert_eq!(target.weight(), target.standard_weight());
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_CONTEXT_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(10, 0)),
+            ]
+        );
     }
 
     #[test]
@@ -246,6 +256,7 @@ mod tests {
             original_positive
         );
         assert_eq!(target.weight(), target.standard_weight());
+        assert!(target.derivation().is_none());
     }
 
     #[test]

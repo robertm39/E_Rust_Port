@@ -3,6 +3,7 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
 use crate::clauses::clausefunc::clause_remove_literal_index;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{clause_push_derivation, DC_SR};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndex, FvIndexAnchor};
 use crate::clauses::freqvectors::FvPackedClause;
@@ -211,25 +212,26 @@ pub fn clause_positive_simplify_reflect_with_strong(
 ) -> bool {
     let mut index = 0;
     while index < clause.literal_number() {
-        let simplifier_sos = {
+        let simplifier = {
             let literal = &clause.literals().as_slice()[index];
             if literal.is_positive() {
                 None
             } else if strong_unit_forward_subsumption {
                 find_strong_unit_simplifier(set, literal.left(), literal.right(), true)
-                    .map(Clause::is_sos)
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
             } else {
                 find_positive_unit_simplifier(set, literal.left(), literal.right())
-                    .map(Clause::is_sos)
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
             }
         };
 
-        if let Some(simplifier_sos) = simplifier_sos {
+        if let Some((simplifier_sos, simplifier)) = simplifier {
             let _ = clause_remove_literal_index(clause, index);
             if simplifier_sos {
                 clause.set_prop(CP_IS_SOS);
             }
             clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            clause_push_derivation(clause, DC_SR, Some(simplifier), None);
         } else {
             index += 1;
         }
@@ -245,22 +247,23 @@ pub fn clause_positive_simplify_reflect_with_strong(
 pub fn clause_negative_simplify_reflect(set: &ClauseSet, clause: &mut Clause) -> bool {
     let mut index = 0;
     while index < clause.literal_number() {
-        let simplifier_sos = {
+        let simplifier = {
             let literal = &clause.literals().as_slice()[index];
             if literal.is_negative() {
                 None
             } else {
                 find_negative_top_unit_simplifier(set, literal.left(), literal.right())
-                    .map(Clause::is_sos)
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
             }
         };
 
-        if let Some(simplifier_sos) = simplifier_sos {
+        if let Some((simplifier_sos, simplifier)) = simplifier {
             let _ = clause_remove_literal_index(clause, index);
             if simplifier_sos {
                 clause.set_prop(CP_IS_SOS);
             }
             clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            clause_push_derivation(clause, DC_SR, Some(simplifier), None);
         } else {
             index += 1;
         }
@@ -935,6 +938,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_SR};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
@@ -1572,6 +1576,7 @@ mod tests {
         let left = typed_unary(&mut bank, "f", &other);
         let right = typed_unary(&mut bank, "f", &constant);
         let mut positive_unit = clause_from(vec![literal(&mut bank, &variable, &constant, true)]);
+        positive_unit.set_ident(101);
         positive_unit.set_prop(CP_IS_SOS);
         let set = ClauseSet::from_clauses([positive_unit]);
         let mut target = clause_from(vec![
@@ -1591,6 +1596,13 @@ mod tests {
         assert!(target.query_prop(CP_IS_SOS));
         assert!(!target.query_prop(CP_INITIAL));
         assert!(!target.query_prop(CP_LIMITED_RW));
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(101, 0)),
+            ]
+        );
     }
 
     #[test]
@@ -1605,7 +1617,9 @@ mod tests {
         let kept_right = typed_const(&mut bank, "g");
         let left = typed_binary(&mut bank, "f", &left_other, &right_other);
         let right = typed_binary(&mut bank, "f", &constant, &right_match);
-        let positive_unit = clause_from(vec![literal(&mut bank, &variable, &right_match, true)]);
+        let mut positive_unit =
+            clause_from(vec![literal(&mut bank, &variable, &right_match, true)]);
+        positive_unit.set_ident(102);
         let set = ClauseSet::from_clauses([positive_unit]);
         let mut default_target = clause_from(vec![
             literal(&mut bank, &left, &right, false),
@@ -1617,6 +1631,7 @@ mod tests {
 
         assert!(!clause_positive_simplify_reflect(&set, &mut default_target));
         assert_eq!(default_target.negative_literal_count(), 1);
+        assert!(default_target.derivation().is_none());
 
         assert!(!clause_positive_simplify_reflect_with_strong(
             &set,
@@ -1625,6 +1640,13 @@ mod tests {
         ));
         assert_eq!(strong_target.negative_literal_count(), 0);
         assert_eq!(strong_target.positive_literal_count(), 1);
+        assert_eq!(
+            strong_target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(102, 0)),
+            ]
+        );
     }
 
     #[test]
@@ -1635,7 +1657,8 @@ mod tests {
         let other = typed_const(&mut bank, "b");
         let left = typed_unary(&mut bank, "f", &other);
         let right = typed_unary(&mut bank, "f", &constant);
-        let negative_unit = clause_from(vec![literal(&mut bank, &variable, &constant, false)]);
+        let mut negative_unit = clause_from(vec![literal(&mut bank, &variable, &constant, false)]);
+        negative_unit.set_ident(103);
         let set = ClauseSet::from_clauses([negative_unit]);
         let mut target = clause_from(vec![
             literal(&mut bank, &left, &right, true),
@@ -1654,6 +1677,13 @@ mod tests {
         assert_eq!(target.literals().as_slice()[0].left(), &left);
         assert!(!target.query_prop(CP_INITIAL));
         assert!(!target.query_prop(CP_LIMITED_RW));
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(103, 0)),
+            ]
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
+use crate::clauses::derivation::{clause_push_derivation, DC_CONDENSE};
 use crate::clauses::subsumption::{
     clause_is_subsume_ordered, clause_subsume_order_sort_lits, clause_subsumes_clause,
 };
@@ -110,6 +111,7 @@ pub fn condense(clause: &mut Clause, bank: &mut TermBank) -> Result<bool, Diagno
         }
         if result {
             CONDENSATION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+            clause_push_derivation(clause, DC_CONDENSE, None, None);
         }
     }
     Ok(result)
@@ -128,6 +130,7 @@ mod tests {
         reset_condensation_counters,
     };
     use crate::clauses::clause::Clause;
+    use crate::clauses::derivation::{DerivationEntry, DC_CONDENSE};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::subsumption::{clause_is_subsume_ordered, clause_subsume_order_sort_lits};
@@ -231,6 +234,10 @@ mod tests {
         assert_eq!(condensation_attempts(), 1);
         assert_eq!(condensation_successes(), 1);
         assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_CONDENSE)]
+        );
     }
 
     #[test]
@@ -246,6 +253,7 @@ mod tests {
 
         assert_eq!(condensation_attempts(), 1);
         assert_eq!(condensation_successes(), 0);
+        assert!(clause.derivation().is_none());
     }
 
     #[test]

@@ -197,6 +197,7 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - `src/clauses/derivation.rs` ports the derivation opcode/argument bit layout used by `DerivationCode`, including the currently needed clause-generation and simplification constants.
 - Rust now has a clause derivation entry stack that preserves existing rewrite-trace demodulator entries and adds C-shaped operation entries, clause-parent references, and numeric arguments.
 - The reusable `clause_push_derivation` helper ports the clause-parent subset of `ClausePushDerivation`, and `clause_push_numeric_derivation` covers numeric-argument entries such as `DCACRes`.
+- Clause derivation pushes are wired for currently ported first-order generation and contraction helpers including factoring, equality resolution, disequality decomposition, condensation, contextual simplify-reflect, simplify-reflect, and local rewriting.
 - `ClauseIsEvalGC` and `ClauseIsDummyQuote` are ported over the Rust derivation stack shape.
 - Formula derivation stacks, proof-object extraction, optional-parent replacement, topological sorting, renumbering, PCL/TSTP/DOT printing, and proof-object analysis remain pending.
 
