@@ -208,6 +208,7 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - C `ClauseIsEvalGC` reads the top stack element as an integer, so it only works for no-argument derivation entries whose opcode is at the stack top. Rust preserves the no-argument top-op behavior explicitly; revisit only if later callers need to scan through argument entries.
 - `DerivStackExtractParents` pushes `DCACRes` AC axiom parents into the result stack but does not add them to its returned count. Rust preserves that split as a direct-parent count plus appended AC parents; callers should not treat the count as the result length.
 - `DerivStackCountSearchInferences` uses exact opcode cases rather than `DCOpIsGenerating`, so HO-marked variants and some generating-range operations such as `DCDisEqDecompose` are not counted there. Rust preserves the switch behavior until proof-analysis reference tests decide whether the C accounting is intentional.
+- `DerivationPrintConditional` uses the process-global `DocOutputFormat`, compile-time `COMCHAR`, and an ordered derivation graph to render proof objects. Rust currently emits only the supported executable's proof-object list framing and final proof-success step; full parity still needs extraction roots, topological ordering, renumbering, and PCL/TSTP derived-step printers.
 
 ### Porting Focus
 

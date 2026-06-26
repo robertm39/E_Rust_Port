@@ -3813,12 +3813,13 @@ fn run_proof_search<W: Write + ?Sized>(
     }
     let inference_system_complete = proof_search_inference_system_complete(&state, &control);
     write_proof_search_side_outputs(output, config, &mut state, &outcome, next_doc_ident)?;
-    write_proof_search_result(
+    write_proof_search_result_outputs(
         output,
-        &outcome,
+        config,
         &state,
+        &outcome,
         inference_system_complete,
-        config.search.completeness.assume_inference_system_complete,
+        next_doc_ident,
     )?;
     let saturated_success = match &outcome {
         SaturateOutcome::Returned { clause, .. } => Some(clause.as_ref()),
@@ -3839,6 +3840,27 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     ))
+}
+
+fn write_proof_search_result_outputs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
+    next_doc_ident: i64,
+) -> Result<(), EProverError> {
+    write_proof_search_result(
+        output,
+        outcome,
+        state,
+        inference_system_complete,
+        config.search.completeness.assume_inference_system_complete,
+    )?;
+    if let SaturateOutcome::Returned { clause, .. } = outcome {
+        write_proof_object_output(output, config, state.terms(), clause, next_doc_ident)?;
+    }
+    Ok(())
 }
 
 fn write_proof_search_side_outputs<W: Write + ?Sized>(
@@ -4144,12 +4166,15 @@ fn write_proof_success_doc(
     }
 }
 
-fn proof_success_doc_clause(clause: &Clause, doc_ident: i64) -> (Clause, i64) {
-    let old_id = clause.ident();
+fn proof_success_doc_clause_with_parent(
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+) -> (Clause, i64) {
     let mut quoted = clause.clone();
     quoted.del_prop(CP_INPUT_FORMULA);
     quoted.set_ident(doc_ident);
-    (quoted, old_id)
+    (quoted, parent_ident)
 }
 
 fn write_pcl_proof_success_doc(
@@ -4159,7 +4184,18 @@ fn write_pcl_proof_success_doc(
     clause: &Clause,
     doc_ident: i64,
 ) -> Result<(), EProverError> {
-    let (quoted, old_id) = proof_success_doc_clause(clause, doc_ident);
+    write_pcl_proof_success_doc_with_parent(output, config, bank, clause, doc_ident, clause.ident())
+}
+
+fn write_pcl_proof_success_doc_with_parent(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+) -> Result<(), EProverError> {
+    let (quoted, old_id) = proof_success_doc_clause_with_parent(clause, doc_ident, parent_ident);
     let mut rendered = String::new();
     write_pcl_doc_step_start(
         &mut rendered,
@@ -4186,7 +4222,25 @@ fn write_tstp_proof_success_doc(
     clause: &Clause,
     doc_ident: i64,
 ) -> Result<(), EProverError> {
-    let (quoted, old_id) = proof_success_doc_clause(clause, doc_ident);
+    write_tstp_proof_success_doc_with_parent(
+        output,
+        config,
+        bank,
+        clause,
+        doc_ident,
+        clause.ident(),
+    )
+}
+
+fn write_tstp_proof_success_doc_with_parent(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+) -> Result<(), EProverError> {
+    let (quoted, old_id) = proof_success_doc_clause_with_parent(clause, doc_ident, parent_ident);
     let mut rendered = String::new();
     clause_write_tstp_with_type_suffixes(
         &mut rendered,
@@ -4200,6 +4254,66 @@ fn write_tstp_proof_success_doc(
     writeln!(&mut rendered, ", c_0_{old_id},['proof']).").map_err(proof_doc_write_error)?;
     output.write_all(rendered.as_bytes())?;
     Ok(())
+}
+
+fn write_proof_object_output(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    next_doc_ident: i64,
+) -> Result<(), EProverError> {
+    if config.proof_output != 1 {
+        return Ok(());
+    }
+
+    output.write_all(b"# SZS output start CNFRefutation\n")?;
+    let doc_ident = proof_object_success_doc_ident(config, clause, next_doc_ident);
+    let parent_ident = proof_object_success_parent_ident(config, clause);
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => write_pcl_proof_success_doc_with_parent(
+            output,
+            config,
+            bank,
+            clause,
+            doc_ident,
+            parent_ident,
+        )?,
+        DocOutputFormat::Tstp => {
+            write_tstp_proof_success_doc_with_parent(
+                output,
+                config,
+                bank,
+                clause,
+                doc_ident,
+                parent_ident,
+            )?;
+        }
+        _ => output.write_all(b"# Output format not implemented.\n")?,
+    }
+    output.write_all(b"# SZS output end CNFRefutation\n")?;
+    Ok(())
+}
+
+fn proof_object_success_doc_ident(
+    config: &EProverConfig,
+    clause: &Clause,
+    next_doc_ident: i64,
+) -> i64 {
+    if config.output_level >= 2 {
+        next_doc_ident
+    } else {
+        proof_object_success_parent_ident(config, clause).saturating_add(1)
+    }
+}
+
+fn proof_object_success_parent_ident(config: &EProverConfig, clause: &Clause) -> i64 {
+    let ident = clause.ident();
+    if config.output_level >= 2 || ident >= 0 {
+        ident
+    } else {
+        1
+    }
 }
 
 fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
@@ -7438,6 +7552,66 @@ mod tests {
             printed.contains("\ncnf(c_0_2, plain, ($false), c_0_1,['proof']).\n\n# Proof found!\n")
         );
         assert!(printed.contains("# SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_list_prints_supported_success_block_in_default_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-success-pcl");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--proof-object=1", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains(
+            "\n# Proof found!\n# SZS status Unsatisfiable\n# SZS output start CNFRefutation\n"
+        ));
+        assert!(printed.contains("     2 : :[] : 1 : 'proof'\n"));
+        assert!(printed.contains("# SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_list_prints_supported_success_block_in_tstp() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-success-tstp");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--tstp-out",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains(
+            "\n# Proof found!\n# SZS status Unsatisfiable\n# SZS output start CNFRefutation\n"
+        ));
+        assert!(printed.contains("cnf(c_0_2, plain, ($false), c_0_1,['proof']).\n"));
+        assert!(printed.contains("# SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

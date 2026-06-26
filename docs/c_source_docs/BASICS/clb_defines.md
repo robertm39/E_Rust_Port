@@ -109,6 +109,7 @@ Source files reviewed: `BASICS/clb_defines.h`.
 - Foundation code. Preserve allocation, container, assertion, and fatal-error conventions before trying to make the Rust version more idiomatic.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `COMCHAR` is compile-time selected: the reference WSL/Linux build used by `e-interop` does not define `UNIX_COMMENTS`, so C prints `%`-prefixed status, proof, resource, and statistics comments. Rust still has several executable paths with `#`-prefixed comments; converting those should be handled as an output-compatibility slice rather than mixed into parser or proof-object work.
 
 ### Porting Focus
 
