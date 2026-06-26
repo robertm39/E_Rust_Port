@@ -101,7 +101,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for the first Rust super-simultaneous unindexed wrapper slice on 2026-06-26.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for the first Rust indexed simultaneous/super-simultaneous wrapper slice on 2026-06-26.
 
 Source files reviewed: `CONTROL/cco_paramodulation.h`, `CONTROL/cco_paramodulation.c`.
 
@@ -117,16 +117,17 @@ Source files reviewed: `CONTROL/cco_paramodulation.h`, `CONTROL/cco_paramodulati
 - `ComputeClauseClauseParamodulants` first paramodulates from `clause` into `with` with top target positions allowed, then, when the parents are distinct, paramodulates from `with` into `clause` with positive top target positions suppressed. This direction/no-top order is part of the generated-clause stream.
 - `parent_alias` is metadata, not necessarily the same object used for source positions. The Rust wrapper preserves this split so temporary source views can still document the original parent.
 - `update_clause_info` combines proof size, proof depth, TPTP type, and SOS flags from the two real parents before insertion into the caller store.
-- Rust now ports the plain first-order unindexed wrapper path, simultaneous and super-simultaneous first-order unindexed wrapper paths, and reusable plain indexed wrapper path with `DCParamod`/`DCSimParamod` derivation entries on generated child clauses as appropriate. Proof-control indexed wiring, indexed simultaneous/super-simultaneous mode selection, higher-order substitutions, and proof-documentation output remain pending.
+- Rust now ports the plain, simultaneous, and super-simultaneous first-order unindexed wrapper paths, plus the reusable indexed wrapper path with plain/simultaneous/super-simultaneous mode dispatch and `DCParamod`/`DCSimParamod` derivation entries on generated child clauses as appropriate. Proof-control indexed wiring, higher-order substitutions, and proof-documentation output remain pending.
 
 ### Change-Later Observations
 
 - In the unindexed C wrapper, the two `ClausePushDerivation` calls pass `clause` rather than the freshly created `paramod` child. That looks inconsistent with the surrounding metadata update and other inference wrappers. Rust records the derivation on the generated child; keep this as a C/Rust reference-test target before changing C or compatibility expectations.
-- `variable_paramod` selects plain, simultaneous, or super-simultaneous construction through `sim_paramod_q`, while the indexed path may decide a different simultaneous mode for each source position. Rust now supports simultaneous and super-simultaneous construction in the unindexed wrapper, including oriented-source, order-decreasing, and size-decreasing mode selection; indexed simultaneous/super-simultaneous mode selection still needs separate tests before proof-control enables indexed generation.
+- `variable_paramod` selects plain, simultaneous, or super-simultaneous construction through `sim_paramod_q`, while the indexed path may decide a different simultaneous mode for each source position. Rust now supports simultaneous and super-simultaneous construction in the unindexed and indexed wrappers, including oriented-source, order-decreasing, and size-decreasing mode selection; proof-control still needs state-owned global-index integration before it can enable indexed generation.
 - The unindexed simultaneous C path relies on `TPPotentialParamod` mutable term flags to mark candidate targets and suppress duplicate all-occurrence rewrites. Rust mirrors the flag semantics for parity; a later design could carry this marking in per-inference side state instead of shared term cells.
 - The C wrapper takes a reusable `VarBank_p freshvars` from outside this unit and resets/uses it through lower constructors. Rust low-level constructors seed a local fresh-variable bank; revisit reusable-bank performance once wrapper ownership and selected-clause integration are stable.
 - `ComputeAllParamodulantsIndexed` omits the unindexed wrapper's explicit `CPNoGeneration` parent/candidate gate. Rust mirrors that shape for compatibility; verify whether globally indexed no-generation clauses can occur before deciding whether to clean this up after parity is secured.
 - Rust can exercise indexed paramodulation with overlap indexes tied to a cloned signature, but proof-control needs a proof-session owner that can hold global indexes tied to the term-bank signature while still mutating the term bank during generation.
+- The indexed C path calls `sim_paramod_q` with source-position bindings from the current CSU active, whereas the unindexed path chooses before the constructor performs its MGU. Rust mirrors the indexed order-decreasing decision with a trial first-order MGU; benchmark whether this extra pass matters once indexed proof-control generation is wired.
 
 ### Porting Focus
 

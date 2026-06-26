@@ -226,7 +226,7 @@ pub fn compute_all_paramodulants(
     Ok(paramod_count)
 }
 
-/// Computes all currently ported plain first-order paramodulants between one
+/// Computes all currently ported first-order paramodulants between one
 /// selected clause and clauses stored in the global paramodulation indexes.
 ///
 /// This mirrors C `ComputeAllParamodulantsIndexed`: source-side positions of
@@ -239,8 +239,8 @@ pub fn compute_all_paramodulants(
 ///
 /// # Errors
 ///
-/// Returns diagnostics from the low-level paramodulation constructor. Only
-/// plain paramodulation is currently supported.
+/// Returns diagnostics from the low-level paramodulation constructor. Plain,
+/// simultaneous, and super-simultaneous indexed paramodulation are supported.
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible wrapper mirrors ComputeAllParamodulantsIndexed inputs"
@@ -256,13 +256,6 @@ pub fn compute_all_paramodulants_indexed(
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
-    if pm_type != ParamodulationType::Plain {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "simultaneous indexed paramodulation wrappers are not ported yet",
-        ));
-    }
-
     let mut paramod_count = compute_into_paramodulants_indexed(
         bank,
         ocb,
@@ -271,12 +264,24 @@ pub fn compute_all_paramodulants_indexed(
         into_index,
         negp_index,
         store,
+        pm_type,
     )?;
-    paramod_count +=
-        compute_from_paramodulants_indexed(bank, ocb, clause, parent_alias, from_index, store)?;
+    paramod_count += compute_from_paramodulants_indexed(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        from_index,
+        store,
+        pm_type,
+    )?;
     Ok(paramod_count)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed wrapper keeps source clause and indexes explicit"
+)]
 fn compute_into_paramodulants_indexed(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -285,6 +290,7 @@ fn compute_into_paramodulants_indexed(
     into_index: &OverlapIndex<'_>,
     negp_index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
+    pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let mut positions = Vec::new();
@@ -300,6 +306,7 @@ fn compute_into_paramodulants_indexed(
             negp_index,
             store,
             parent_alias,
+            pm_type,
         )?;
         if from_pos
             .literal()
@@ -314,6 +321,7 @@ fn compute_into_paramodulants_indexed(
                 into_index,
                 store,
                 parent_alias,
+                pm_type,
             )?;
         }
     }
@@ -328,6 +336,7 @@ fn compute_from_paramodulants_indexed(
     parent_alias: &Clause,
     from_index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
+    pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let mut positions = Vec::new();
@@ -347,6 +356,7 @@ fn compute_from_paramodulants_indexed(
                 from_index,
                 store,
                 parent_alias,
+                pm_type,
             )?;
         }
     }
@@ -354,6 +364,10 @@ fn compute_from_paramodulants_indexed(
     Ok(paramod_count)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed wrapper keeps selected source and target index explicit"
+)]
 fn compute_from_position_into_index(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -362,6 +376,7 @@ fn compute_from_position_into_index(
     index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
     parent_alias: &Clause,
+    pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for occurrence in unifiable_occurrences(index, overlap_term) {
@@ -372,6 +387,7 @@ fn compute_from_position_into_index(
             occurrence,
             store,
             parent_alias,
+            pm_type,
         )?;
     }
     Ok(paramod_count)
@@ -384,29 +400,70 @@ fn compute_from_position_into_occurrence(
     occurrence: &SubtermOcc,
     store: &mut ClauseSet,
     parent_alias: &Clause,
+    pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
+    let Some(effective_pm_type) =
+        indexed_effective_paramodulation_type(bank, ocb, from_pos, occurrence.term(), pm_type)
+    else {
+        return Ok(0);
+    };
+    let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
+
     for into_clause_pos in occurrence.position_clauses().entries() {
+        let mut marked_term = None;
         for into_cpos in into_clause_pos.positions() {
             let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
-            let Some(mut paramodulant) = clause_ordered_paramod(bank, ocb, from_pos, &into_pos)?
-            else {
+            if is_simultaneous {
+                let into_term = into_pos
+                    .get_subterm()
+                    .expect("indexed target position must select a subterm");
+                if marked_term.is_none() {
+                    into_term.set_prop(TP_POTENTIAL_PARAMOD);
+                    marked_term = Some(into_term.clone());
+                } else if !into_term.query_prop(TP_POTENTIAL_PARAMOD) {
+                    break;
+                }
+            }
+
+            let paramodulant =
+                clause_ordered_paramod_by_type(bank, ocb, from_pos, &into_pos, effective_pm_type);
+            let paramodulant = match paramodulant {
+                Ok(paramodulant) => paramodulant,
+                Err(error) => {
+                    if let Some(term) = marked_term {
+                        term.del_prop(TP_POTENTIAL_PARAMOD);
+                    }
+                    return Err(error);
+                }
+            };
+            let Some(mut paramodulant) = paramodulant else {
                 continue;
             };
             paramod_count += 1;
             update_paramodulant_info(&mut paramodulant, into_clause_pos.clause(), parent_alias);
             clause_push_derivation(
                 &mut paramodulant,
-                DC_PARAMOD,
+                paramodulation_derivation_code(effective_pm_type),
                 Some(into_clause_pos.clause()),
                 Some(parent_alias),
             );
             store.insert(paramodulant);
+            if is_simultaneous {
+                break;
+            }
+        }
+        if let Some(term) = marked_term {
+            term.del_prop(TP_POTENTIAL_PARAMOD);
         }
     }
     Ok(paramod_count)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed wrapper keeps selected target and source index explicit"
+)]
 fn compute_indexed_sources_into_position(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -415,6 +472,7 @@ fn compute_indexed_sources_into_position(
     from_index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
     parent_alias: &Clause,
+    pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
@@ -425,16 +483,41 @@ fn compute_indexed_sources_into_position(
             }
             for from_cpos in from_clause_pos.positions() {
                 let from_pos = unpack_clause_pos(*from_cpos, from_clause_pos.clause().clone());
-                let Some(mut paramodulant) =
-                    clause_ordered_paramod(bank, ocb, &from_pos, into_pos)?
-                else {
+                let Some(effective_pm_type) = indexed_effective_paramodulation_type(
+                    bank,
+                    ocb,
+                    &from_pos,
+                    overlap_term,
+                    pm_type,
+                ) else {
+                    continue;
+                };
+                let into_term = into_pos
+                    .get_subterm()
+                    .expect("indexed target position must select a subterm");
+                let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
+                if is_simultaneous {
+                    into_term.set_prop(TP_POTENTIAL_PARAMOD);
+                }
+                let paramodulant = clause_ordered_paramod_by_type(
+                    bank,
+                    ocb,
+                    &from_pos,
+                    into_pos,
+                    effective_pm_type,
+                );
+                if is_simultaneous {
+                    into_term.del_prop(TP_POTENTIAL_PARAMOD);
+                }
+                let paramodulant = paramodulant?;
+                let Some(mut paramodulant) = paramodulant else {
                     continue;
                 };
                 paramod_count += 1;
                 update_paramodulant_info(&mut paramodulant, from_clause_pos.clause(), parent_alias);
                 clause_push_derivation(
                     &mut paramodulant,
-                    DC_PARAMOD,
+                    paramodulation_derivation_code(effective_pm_type),
                     Some(parent_alias),
                     Some(from_clause_pos.clause()),
                 );
@@ -443,6 +526,60 @@ fn compute_indexed_sources_into_position(
         }
     }
     Ok(paramod_count)
+}
+
+fn indexed_effective_paramodulation_type(
+    bank: &TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    overlap_term: &Term,
+    pm_type: ParamodulationType,
+) -> Option<ParamodulationType> {
+    if pm_type == ParamodulationType::DecreasingSimultaneous {
+        let from_term = from_pos
+            .get_side()
+            .expect("indexed source position must select a side");
+        let mut subst = Substitution::new();
+        if !subst_mgu_complete(&from_term, overlap_term, &mut subst) {
+            return None;
+        }
+        let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
+        subst.backtrack();
+        Some(effective)
+    } else {
+        Some(effective_paramodulation_type(bank, ocb, from_pos, pm_type))
+    }
+}
+
+fn clause_ordered_paramod_by_type(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    into_pos: &ClausePos,
+    pm_type: ParamodulationType,
+) -> Result<Option<Clause>, Diagnostic> {
+    match pm_type {
+        ParamodulationType::Plain => clause_ordered_paramod(bank, ocb, from_pos, into_pos),
+        ParamodulationType::Simultaneous => {
+            clause_ordered_sim_paramod(bank, ocb, from_pos, into_pos)
+        }
+        ParamodulationType::SuperSimultaneous => {
+            clause_ordered_super_sim_paramod(bank, ocb, from_pos, into_pos)
+        }
+        ParamodulationType::OrientedSimultaneous
+        | ParamodulationType::OrientedSuperSimultaneous
+        | ParamodulationType::DecreasingSimultaneous
+        | ParamodulationType::SizeDecreasingSimultaneous => {
+            unreachable!("effective paramodulation type must be concrete")
+        }
+    }
+}
+
+const fn paramodulation_is_simultaneous(pm_type: ParamodulationType) -> bool {
+    matches!(
+        pm_type,
+        ParamodulationType::Simultaneous | ParamodulationType::SuperSimultaneous
+    )
 }
 
 fn unifiable_occurrences<'index>(
@@ -1862,6 +1999,122 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
             ]
         );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_simultaneous_rewrites_target_clause_once() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_idx_sim_source_left");
+        let source_right = typed_const(&mut bank, "pm_idx_sim_source_right");
+        let f_code = typed_unary_code(&mut bank, "pm_idx_sim_f");
+        let g_code = typed_unary_code(&mut bank, "pm_idx_sim_g");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let g_of_source = typed_unary(&mut bank, g_code, &source_left);
+        let f_of_replacement = typed_unary(&mut bank, f_code, &source_right);
+        let g_of_replacement = typed_unary(&mut bank, g_code, &source_right);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &g_of_source, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut target, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Simultaneous,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(store.members(), 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one indexed simultaneous paramodulant");
+        let generated = &stored.literals().as_slice()[0];
+        assert_eq!(generated.left(), &f_of_replacement);
+        assert_eq!(generated.right(), &g_of_replacement);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SIM_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_super_sim_replaces_instantiated_target_occurrences() {
+        let mut bank = test_bank();
+        let source_arg = typed_const(&mut bank, "pm_idx_super_source_arg");
+        let replacement = typed_const(&mut bank, "pm_idx_super_replacement");
+        let variable = typed_var(&bank, -20);
+        let f_code = typed_unary_code(&mut bank, "pm_idx_super_f");
+        let h_code = typed_unary_code(&mut bank, "pm_idx_super_h");
+        let k_code = typed_unary_code(&mut bank, "pm_idx_super_k");
+        let f_of_source_arg = typed_unary(&mut bank, f_code, &source_arg);
+        let f_of_variable = typed_unary(&mut bank, f_code, &variable);
+        let h_of_variable_instance = typed_unary(&mut bank, h_code, &f_of_variable);
+        let k_of_source_instance = typed_unary(&mut bank, k_code, &f_of_source_arg);
+        let h_of_replacement = typed_unary(&mut bank, h_code, &replacement);
+        let k_of_replacement = typed_unary(&mut bank, k_code, &replacement);
+        let mut source_literal = lit(&mut bank, &f_of_source_arg, &replacement, true);
+        let mut target_literal = lit(
+            &mut bank,
+            &h_of_variable_instance,
+            &k_of_source_instance,
+            true,
+        );
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut target, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::SuperSimultaneous,
+        )
+        .unwrap();
+
+        assert!(count >= 1);
+        assert!(store.iter().any(|clause| {
+            clause.literal_number() == 1 && {
+                let literal = &clause.literals().as_slice()[0];
+                literal.left() == &h_of_replacement
+                    && literal.right() == &k_of_replacement
+                    && clause.derivation().unwrap().as_slice()[0]
+                        == DerivationEntry::Operation(DC_SIM_PARAMOD)
+            }
+        }));
     }
 
     #[test]
