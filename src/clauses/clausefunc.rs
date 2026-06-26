@@ -7,8 +7,8 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating, DerivationEntry, DerivationParentRef,
-    DC_CNF_ADD_ARG,
+    clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
+    ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
@@ -38,6 +38,45 @@ pub fn pstack_clause_print_lop_string(
         output.push('\n');
     }
     output
+}
+
+pub fn clause_archive(
+    archive: &mut ClauseSet,
+    clause: Clause,
+    bank: &mut TermBank,
+) -> Result<Clause, Diagnostic> {
+    let mut new_clause = clause.flat_copy(bank)?;
+    clause_push_derivation(&mut new_clause, DC_CNF_QUOTE, Some(&clause), None);
+    archive.insert(clause);
+    Ok(new_clause)
+}
+
+pub fn clause_archive_copy(
+    archive: &mut ClauseSet,
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<ClauseDerivationRef, Diagnostic> {
+    let mut archived = clause.flat_copy(bank)?;
+    archived.set_info(clause.take_info());
+    archived.set_derivation(clause.take_derivation());
+    let archived_ref = ClauseDerivationRef::from(&archived);
+
+    clause_push_derivation(clause, DC_CNF_QUOTE, Some(&archived), None);
+    archive.insert(archived);
+    Ok(archived_ref)
+}
+
+pub fn clause_set_archive_copy(
+    archive: &mut ClauseSet,
+    set: &mut ClauseSet,
+    bank: &mut TermBank,
+) -> Result<i64, Diagnostic> {
+    let mut archived = 0;
+    for clause in set.iter_mut() {
+        let _ = clause_archive_copy(archive, clause, bank)?;
+        archived += 1;
+    }
+    Ok(archived)
 }
 
 pub fn clause_is_orphaned_with(
@@ -627,10 +666,11 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
-        clause_flip_literal_sign_index, clause_is_orphaned_with, clause_recognize_injectivity,
-        clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
-        clause_remove_superfluous_literals, clause_set_canonize, clause_set_delete_orphans_with,
+        clause_archive, clause_archive_copy, clause_canon_compare_ref,
+        clause_eliminate_naked_boolean_variables, clause_flip_literal_sign_index,
+        clause_is_orphaned_with, clause_recognize_injectivity, clause_remove_ac_resolved,
+        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
+        clause_set_archive_copy, clause_set_canonize, clause_set_delete_orphans_with,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, pstack_clause_print_lop_string,
     };
@@ -640,10 +680,11 @@ mod tests {
         CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW,
         CP_TYPE_AXIOM,
     };
+    use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_ADD_ARG,
-        DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
+        clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
+        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
@@ -730,6 +771,113 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    #[test]
+    fn clause_archive_moves_original_and_returns_quoted_flat_copy_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "archive_a");
+        let b = typed_const(&mut bank, "archive_b");
+        let mut original = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        original.set_ident(60);
+        original.set_csscpa_source(4);
+        original.set_info(Some(ClauseInfo::new(Some("source"), None, -1, -1)));
+        original
+            .ensure_derivation()
+            .push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
+
+        let mut archive = ClauseSet::new();
+        let quoted = clause_archive(&mut archive, original, &mut bank).unwrap();
+
+        assert_eq!(archive.members(), 1);
+        let archived = archive.find_by_id(60).unwrap();
+        assert_eq!(archived.info().and_then(ClauseInfo::name), Some("source"));
+        assert_eq!(
+            archived.derivation().map(PStack::as_slice),
+            Some(&[DerivationEntry::Operation(DC_CNF_EVAL_GC)][..])
+        );
+        assert!(quoted.info().is_none());
+        assert_eq!(
+            quoted.derivation().map(PStack::as_slice),
+            Some(
+                &[
+                    DerivationEntry::Operation(DC_CNF_QUOTE),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(60, 4)),
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn clause_archive_copy_transfers_info_and_derivation_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "copy_a");
+        let b = typed_const(&mut bank, "copy_b");
+        let mut clause = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        clause.set_ident(61);
+        clause.set_csscpa_source(5);
+        clause.set_info(Some(ClauseInfo::new(Some("active"), None, -1, -1)));
+        clause
+            .ensure_derivation()
+            .push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
+
+        let mut archive = ClauseSet::new();
+        let archived_ref = clause_archive_copy(&mut archive, &mut clause, &mut bank).unwrap();
+
+        assert_eq!(archived_ref, ClauseDerivationRef::new(61, 5));
+        assert_eq!(archive.members(), 1);
+        let archived = archive.find_by_id(61).unwrap();
+        assert_eq!(archived.info().and_then(ClauseInfo::name), Some("active"));
+        assert_eq!(
+            archived.derivation().map(PStack::as_slice),
+            Some(&[DerivationEntry::Operation(DC_CNF_EVAL_GC)][..])
+        );
+        assert!(clause.info().is_none());
+        assert_eq!(
+            clause.derivation().map(PStack::as_slice),
+            Some(
+                &[
+                    DerivationEntry::Operation(DC_CNF_QUOTE),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(61, 5)),
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn clause_set_archive_copy_archives_each_member_and_requotes_originals() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_archive_a");
+        let b = typed_const(&mut bank, "set_archive_b");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        first.set_ident(62);
+        first.set_info(Some(ClauseInfo::new(Some("first"), None, -1, -1)));
+        let mut second = clause_from(vec![literal(&mut bank, &b, &a, false)]);
+        second.set_ident(63);
+        second.set_info(Some(ClauseInfo::new(Some("second"), None, -1, -1)));
+        let mut active = ClauseSet::from_clauses([first, second]);
+        let mut archive = ClauseSet::new();
+
+        let archived = clause_set_archive_copy(&mut archive, &mut active, &mut bank).unwrap();
+
+        assert_eq!(archived, 2);
+        assert_eq!(archive.members(), 2);
+        assert_eq!(active.members(), 2);
+        assert_eq!(
+            archive
+                .find_by_id(62)
+                .and_then(Clause::info)
+                .and_then(ClauseInfo::name),
+            Some("first")
+        );
+        assert_eq!(
+            active
+                .find_by_id(62)
+                .and_then(Clause::derivation)
+                .and_then(|derivation| derivation.as_slice().first()),
+            Some(&DerivationEntry::Operation(DC_CNF_QUOTE))
+        );
+        assert!(active.find_by_id(63).and_then(Clause::info).is_none());
     }
 
     #[test]

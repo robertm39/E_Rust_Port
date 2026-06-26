@@ -288,6 +288,10 @@ impl Clause {
         self.info = info;
     }
 
+    pub fn take_info(&mut self) -> Option<ClauseInfo> {
+        self.info.take()
+    }
+
     #[must_use]
     pub const fn create_date(&self) -> i64 {
         self.create_date
@@ -322,6 +326,14 @@ impl Clause {
 
     pub fn ensure_derivation(&mut self) -> &mut PStack<RewriteSequenceEntry> {
         self.derivation.get_or_insert_with(PStack::new)
+    }
+
+    pub fn set_derivation(&mut self, derivation: Option<PStack<RewriteSequenceEntry>>) {
+        self.derivation = derivation;
+    }
+
+    pub fn take_derivation(&mut self) -> Option<PStack<RewriteSequenceEntry>> {
+        self.derivation.take()
     }
 
     #[must_use]
@@ -1123,7 +1135,7 @@ impl Clause {
             create_date: self.create_date,
             proof_depth: self.proof_depth,
             proof_size: self.proof_size,
-            derivation: self.derivation.clone(),
+            derivation: None,
         };
         copy.recompute_lit_counts();
         copy
@@ -1946,6 +1958,7 @@ mod tests {
         CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
+    use crate::clauses::derivation::{DerivationEntry, DC_CNF_EVAL_GC};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
         EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_IS_MAXIMAL, EP_IS_ORIENTED,
@@ -2557,20 +2570,26 @@ mod tests {
         clause.set_info(Some(ClauseInfo::new(Some("input"), None, -1, -1)));
         clause.set_create_date(7);
         clause.add_eval_cell_with_object(evals_alloc(1), Some(23));
+        clause
+            .ensure_derivation()
+            .push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
 
         let flat = clause.flat_copy(&mut bank).unwrap();
         assert_eq!(flat.ident(), clause.ident());
         assert_eq!(flat.query_tptp_type(), CP_TYPE_AXIOM);
         assert!(flat.info().is_none());
         assert!(flat.evaluations().is_none());
+        assert!(flat.derivation().is_none());
         assert_eq!(flat.literals(), clause.literals());
 
         let copied = clause.copy_opt(&mut bank).unwrap();
         assert_eq!(copied.literal_number(), clause.literal_number());
         assert!(copied.evaluations().is_none());
+        assert!(copied.derivation().is_none());
         let disjoint = clause.copy_disjoint(&mut bank).unwrap();
         assert_ne!(disjoint.literals().as_slice()[1].left(), &x);
         assert!(disjoint.evaluations().is_none());
+        assert!(disjoint.derivation().is_none());
     }
 
     #[test]
