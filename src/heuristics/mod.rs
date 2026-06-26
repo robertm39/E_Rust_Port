@@ -16,6 +16,7 @@ pub mod learning;
 pub mod levweight;
 pub mod lifo;
 pub mod litselection;
+pub mod new_autoschedule;
 pub mod normsubst;
 pub mod orientweight;
 pub mod prefixweight;

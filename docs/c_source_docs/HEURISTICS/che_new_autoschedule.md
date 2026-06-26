@@ -92,6 +92,11 @@ Source files reviewed: `HEURISTICS/che_new_autoschedule.h`, `HEURISTICS/che_new_
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change-Later Observations
+
+- `schedule.vars` is generated C data included directly into `che_new_autoschedule.c`; `StrategiesPrintPredefined` and `GetHeuristicWithName` scan the `conf_map` array linearly and treat its strings as authoritative compatibility data. Rust now includes and parses only that generated `conf_map` table for predefined strategy lookup and printing. A build-time extractor or checked-in Rust table may be cleaner later, but only after reference tests pin exact update and formatting behavior.
+- `GetHeuristicWithName` reparses the selected strategy text into an existing `HeuristicParmsCell`, relying on the ordered sparse `HeuristicParmsParseInto` behavior to leave omitted fields untouched. Preserve that mutation style for compatibility; a future typed strategy format should make partial overrides explicit if the generated strategy table is ever normalized.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

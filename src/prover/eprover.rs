@@ -12,7 +12,11 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
 use crate::heuristics::clausesetfeatures::proof_state_print_selective_string;
-use crate::heuristics::hcb::{self, HeuristicParmsCell};
+use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
+use crate::heuristics::new_autoschedule::{
+    get_heuristic_with_name, heuristic_parms_strategy_print_string,
+    strategies_print_predefined_string,
+};
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_init, proof_state_saturate, ProofControl, SaturateOutcome,
     SaturateStopReason,
@@ -1372,10 +1376,33 @@ pub fn heuristic_parms_from_config(
 /// represented by the C-shaped proof-control parameter fields.
 pub fn proof_control_from_config(config: &EProverConfig) -> Result<ProofControl, Diagnostic> {
     let mut control = ProofControl::new();
-    control.set_heuristic_parms(heuristic_parms_from_config(config)?);
+    control.set_heuristic_parms(heuristic_parms_with_strategy_io(config)?);
     control.set_fvi_parms(fv_index_params_from_config(&config.search.fv_index)?);
     control.set_record_gc_selection(config.flags.contains(EProverFlag::RecordGivenClauses));
     Ok(control)
+}
+
+fn heuristic_parms_with_strategy_io(
+    config: &EProverConfig,
+) -> Result<HeuristicParmsCell, Diagnostic> {
+    let mut params = heuristic_parms_from_config(config)?;
+    apply_strategy_io_to_params(config, &mut params)?;
+    Ok(params)
+}
+
+fn apply_strategy_io_to_params(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+) -> Result<(), Diagnostic> {
+    if let Some(path) = &config.parse_strategy_file {
+        let mut scanner = Scanner::from_file(Path::new(path), true)?;
+        heuristic_parms_parse_into(&mut scanner, params, true)?;
+        scanner.check_tok(TokenType::NO_TOKEN)?;
+    }
+    if let Some(name) = &config.select_strategy {
+        get_heuristic_with_name(name, params)?;
+    }
+    Ok(())
 }
 
 /// Builds C-shaped feature-vector index parameters from parsed executable
@@ -3524,6 +3551,12 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     }
     output.flush()?;
 
+    if config.print_strategy.is_some() {
+        run_print_strategy(&mut output, config)?;
+        output.flush()?;
+        return Ok(ErrorCode::NO_ERROR.exit_status());
+    }
+
     if config.flags.contains(EProverFlag::SyntaxOnly) {
         run_syntax_only(&mut output, config)?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
@@ -3532,6 +3565,28 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     let status = run_proof_search(&mut output, config)?;
     output.flush()?;
     Ok(status)
+}
+
+fn run_print_strategy(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
+    let Some(print_strategy) = config.print_strategy.as_deref() else {
+        return Ok(());
+    };
+    let mut params = heuristic_parms_with_strategy_io(config)?;
+    match print_strategy {
+        ">all-strats<" => {
+            output.write_all(strategies_print_predefined_string(false)?.as_bytes())?;
+        }
+        ">all-names<" => {
+            output.write_all(strategies_print_predefined_string(true)?.as_bytes())?;
+        }
+        strategy_name => {
+            if strategy_name != ">current-strategy<" {
+                get_heuristic_with_name(strategy_name, &mut params)?;
+            }
+            output.write_all(heuristic_parms_strategy_print_string(&params).as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
@@ -5007,6 +5062,26 @@ mod tests {
     }
 
     #[test]
+    fn proof_control_from_config_applies_selected_predefined_strategy() {
+        let config = run_config_from([
+            "eprover",
+            "--select-strategy=G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN",
+        ]);
+
+        let control = proof_control_from_config(&config).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(control.heuristic_parms().heuristic_name, "Default");
+        assert_eq!(
+            control.heuristic_parms().selection_strategy,
+            "PSelectComplexExceptUniqMaxHorn"
+        );
+        assert_eq!(
+            control.heuristic_parms().forward_demod,
+            RewriteLevel::FullRewrite
+        );
+    }
+
+    #[test]
     fn process_options_records_fingerprint_index_state_like_c() {
         let action = process_options(["eprover"]).unwrap();
         let EProverAction::Run(config) = action else {
@@ -5673,6 +5748,89 @@ mod tests {
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("Usage: eprover [options] [files]"));
         assert!(output.contains("--version"));
+    }
+
+    #[test]
+    fn run_print_strategy_prints_current_parameters_without_input() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", "--print-strategy"], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.starts_with("{\n"));
+        assert!(output.contains("heuristic_name:                Default"));
+        assert!(output.contains("selection_strategy:             NoSelection"));
+    }
+
+    #[test]
+    fn run_print_strategy_prints_predefined_names_without_input() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-strategy=>all-names<"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.starts_with("G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN\n"));
+        assert!(output.lines().count() > 400);
+        assert!(!output.contains(" = "));
+    }
+
+    #[test]
+    fn run_print_strategy_validates_selected_strategy_before_all_names() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--select-strategy=Missing",
+                "--print-strategy=>all-names<",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(
+            error.message(),
+            "Error: Configuration name Missing not found."
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn run_print_strategy_prints_named_predefined_strategy_without_input() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-strategy=G-E--_208_C12_11_nc_F1_SE_CS_SP_PS_S5PRR_S04BN",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.starts_with("{\n"));
+        assert!(output.contains("selection_strategy:             PSelectComplexExceptUniqMaxHorn"));
+        assert!(output.contains("pm_type:                        ParamodSim"));
     }
 
     #[test]
