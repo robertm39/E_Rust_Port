@@ -38,12 +38,15 @@ pub const DC_CNF_ADD_ARG: i64 = DO_ADD_CNF_ARG | ARG1_CNF;
 pub const DC_CNF_EVAL_GC: i64 = DO_EVAL_GC;
 pub const DC_REWRITE: i64 = DO_REWRITE | ARG1_CNF;
 pub const DC_LOCAL_REWRITE: i64 = DO_LOCAL_REWRITE;
+pub const DC_UNFOLD: i64 = DO_UNFOLD | ARG1_CNF;
+pub const DC_APPLY_DEF: i64 = DO_APPLY_DEF | ARG1_FOF;
 pub const DC_CONTEXT_SR: i64 = DO_CONTEXT_SR | ARG1_CNF;
 pub const DC_DES_EQ_RES: i64 = DO_DES_EQ_RES;
 pub const DC_SR: i64 = DO_SR | ARG1_CNF;
 pub const DC_AC_RES: i64 = DO_AC_RES | ARG1_NUM;
 pub const DC_CONDENSE: i64 = DO_CONDENSE;
 pub const DC_NORMALIZE: i64 = DO_NORMALIZE;
+pub const DC_EVAL_ANSWERS: i64 = DO_EVAL_ANSWERS;
 pub const DC_PARAMOD: i64 = DO_PARAMOD | ARG1_CNF | ARG2_CNF;
 pub const DC_SIM_PARAMOD: i64 = DO_SIM_PARAMOD | ARG1_CNF | ARG2_CNF;
 pub const DC_ORDERED_FACTOR: i64 = DO_ORDERED_FACTOR | ARG1_CNF;
@@ -86,6 +89,12 @@ pub enum DerivationEntry {
     Operation(i64),
     ClauseParent(ClauseDerivationRef),
     NumericArg(i64),
+    Demodulator(RewriteDemodulator),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DerivationParentRef {
+    Clause(ClauseDerivationRef),
     Demodulator(RewriteDemodulator),
 }
 
@@ -213,6 +222,193 @@ pub fn clause_push_numeric_derivation(clause: &mut Clause, op: i64, arg1: i64) {
     stack.push(DerivationEntry::NumericArg(arg1));
 }
 
+/// Extracts the clause-side parent references from a C-shaped derivation stack.
+///
+/// The returned count matches C `DerivStackExtractParents`: it counts only
+/// parents that are direct opcode arguments. Additional `DCACRes` parents from
+/// `ac_axioms` are appended but not included in the count.
+///
+/// # Panics
+///
+/// Panics if an opcode-declared argument is missing, has the wrong Rust stack
+/// entry shape, or if a `DCACRes` numeric argument requests more AC axioms than
+/// the caller supplied.
+#[must_use]
+pub fn deriv_stack_extract_parents(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
+) -> (Vec<DerivationParentRef>, usize) {
+    let Some(derivation) = derivation else {
+        return (Vec::new(), 0);
+    };
+
+    let mut parents = Vec::new();
+    let mut direct_parent_count = 0;
+    let mut numarg1 = 0;
+    let entries = derivation.as_slice();
+    let mut index = 0;
+
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+
+        if op_has_cnf_arg1(op) {
+            parents.push(read_parent_arg(entries, &mut index));
+            direct_parent_count += 1;
+        } else if op_has_fof_arg1(op) {
+            skip_arg(entries, &mut index);
+            direct_parent_count += 1;
+        } else if op_has_num_arg1(op) {
+            numarg1 = read_numeric_arg(entries, &mut index);
+        }
+
+        if op_has_cnf_arg2(op) {
+            parents.push(read_parent_arg(entries, &mut index));
+            direct_parent_count += 1;
+        } else if op_has_fof_arg2(op) {
+            skip_arg(entries, &mut index);
+            direct_parent_count += 1;
+        } else if op_has_num_arg2(op) {
+            skip_arg(entries, &mut index);
+        }
+
+        if op == DC_AC_RES {
+            let ac_count = usize::try_from(numarg1)
+                .unwrap_or_else(|_| panic!("DCACRes parent count must be non-negative"));
+            assert!(
+                ac_count <= ac_axioms.len(),
+                "DCACRes parent count exceeds supplied AC axioms"
+            );
+            parents.extend(
+                ac_axioms[..ac_count]
+                    .iter()
+                    .copied()
+                    .map(DerivationParentRef::Clause),
+            );
+        }
+    }
+
+    (parents, direct_parent_count)
+}
+
+#[must_use]
+pub fn deriv_stack_indicates_initial_clause(derivation: Option<&PStack<DerivationEntry>>) -> bool {
+    let Some(derivation) = derivation else {
+        return true;
+    };
+
+    let entries = derivation.as_slice();
+    let mut index = 0;
+
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+
+        if op_has_cnf_arg1(op) {
+            return false;
+        } else if op_has_arg1(op) {
+            skip_arg(entries, &mut index);
+        }
+
+        if op_has_cnf_arg2(op) {
+            return false;
+        } else if op_has_arg2(op) {
+            skip_arg(entries, &mut index);
+        }
+
+        if op == DC_AC_RES {
+            return false;
+        }
+    }
+
+    true
+}
+
+#[must_use]
+pub fn deriv_stack_count_search_inferences(
+    derivation: Option<&PStack<DerivationEntry>>,
+) -> (u64, u64) {
+    let Some(derivation) = derivation else {
+        return (0, 0);
+    };
+
+    let entries = derivation.as_slice();
+    let mut index = 0;
+    let mut generating_count = 0;
+    let mut simplifying_count = 0;
+
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+
+        if op_has_arg1(op) {
+            skip_arg(entries, &mut index);
+        }
+        if op_has_arg2(op) {
+            skip_arg(entries, &mut index);
+        }
+
+        match op {
+            DC_PARAMOD | DC_SIM_PARAMOD | DC_ORDERED_FACTOR | DC_EQ_FACTOR | DC_EQ_RES => {
+                generating_count += 1;
+            }
+            DC_REWRITE | DC_UNFOLD | DC_APPLY_DEF | DC_CONTEXT_SR | DC_DES_EQ_RES | DC_SR
+            | DC_AC_RES | DC_CONDENSE | DC_NORMALIZE | DC_EVAL_ANSWERS => {
+                simplifying_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    (generating_count, simplifying_count)
+}
+
+fn read_parent_arg(entries: &[DerivationEntry], index: &mut usize) -> DerivationParentRef {
+    let entry = entries
+        .get(*index)
+        .unwrap_or_else(|| panic!("derivation parent argument is missing"));
+    *index += 1;
+    match entry {
+        DerivationEntry::ClauseParent(parent) => DerivationParentRef::Clause(*parent),
+        DerivationEntry::Demodulator(demodulator) => DerivationParentRef::Demodulator(*demodulator),
+        DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {
+            panic!("derivation parent argument has the wrong entry shape")
+        }
+    }
+}
+
+fn read_numeric_arg(entries: &[DerivationEntry], index: &mut usize) -> i64 {
+    let entry = entries
+        .get(*index)
+        .unwrap_or_else(|| panic!("derivation numeric argument is missing"));
+    *index += 1;
+    match entry {
+        DerivationEntry::NumericArg(value) => *value,
+        DerivationEntry::Operation(_)
+        | DerivationEntry::ClauseParent(_)
+        | DerivationEntry::Demodulator(_) => {
+            panic!("derivation numeric argument has the wrong entry shape")
+        }
+    }
+}
+
+fn skip_arg(entries: &[DerivationEntry], index: &mut usize) {
+    assert!(
+        *index < entries.len(),
+        "derivation opcode argument is missing"
+    );
+    *index += 1;
+}
+
 #[must_use]
 pub fn clause_is_eval_gc(clause: &Clause) -> bool {
     derivation_top_operation(clause) == Some(DC_CNF_EVAL_GC)
@@ -249,13 +445,18 @@ pub fn derivation_entries(clause: &Clause) -> &[DerivationEntry] {
 mod tests {
     use super::{
         clause_is_dummy_quote, clause_is_eval_gc, clause_push_derivation,
-        clause_push_numeric_derivation, derivation_entries, get_is_ho, op_code, op_is_generating,
-        set_is_ho, ClauseDerivationRef, DerivationEntry, ARG1_CNF, ARG1_NUM, ARG2_CNF, ARG_IS_HO,
-        DC_AC_RES, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_FACTOR, DC_EQ_RES, DC_LOCAL_REWRITE,
-        DC_ORDERED_FACTOR, DC_REWRITE,
+        clause_push_numeric_derivation, deriv_stack_count_search_inferences,
+        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, derivation_entries,
+        get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef, DerivationEntry,
+        DerivationParentRef, ARG1_CNF, ARG1_NUM, ARG2_CNF, ARG_IS_HO, DC_AC_RES, DC_APPLY_DEF,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DIS_EQ_DECOMPOSE,
+        DC_EQ_FACTOR, DC_EQ_RES, DC_EVAL_ANSWERS, DC_LOCAL_REWRITE, DC_ORDERED_FACTOR, DC_PARAMOD,
+        DC_REWRITE, DC_UNFOLD,
     };
+    use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqnlist::EqnList;
+    use crate::terms::termtypes::RewriteDemodulator;
 
     #[test]
     fn derivation_code_values_match_c_bit_layout() {
@@ -265,11 +466,14 @@ mod tests {
         assert_eq!(ARG_IS_HO, 16384);
         assert_eq!(DC_LOCAL_REWRITE, 5);
         assert_eq!(DC_REWRITE, 516);
+        assert_eq!(DC_UNFOLD, 518);
+        assert_eq!(DC_APPLY_DEF, 263);
         assert_eq!(DC_CNF_QUOTE, 513);
         assert_eq!(DC_ORDERED_FACTOR, 538);
         assert_eq!(DC_EQ_FACTOR, 539);
         assert_eq!(DC_EQ_RES, 540);
         assert_eq!(DC_AC_RES, 1035);
+        assert_eq!(DC_EVAL_ANSWERS, 14);
         assert_eq!(op_code(DC_EQ_RES), 28);
         assert!(op_is_generating(DC_EQ_FACTOR));
         assert!(get_is_ho(set_is_ho(DC_EQ_RES)));
@@ -320,5 +524,85 @@ mod tests {
         clause_push_derivation(&mut eval_gc, DC_CNF_EVAL_GC, None, None);
         assert!(clause_is_eval_gc(&eval_gc));
         assert!(!clause_is_dummy_quote(&eval_gc));
+    }
+
+    #[test]
+    fn deriv_stack_extract_parents_preserves_direct_count_and_ac_axiom_shape() {
+        let first = ClauseDerivationRef::new(10, 1);
+        let second = ClauseDerivationRef::new(11, 2);
+        let ac_first = ClauseDerivationRef::new(20, 3);
+        let ac_second = ClauseDerivationRef::new(21, 4);
+        let demodulator = RewriteDemodulator::new(99);
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_PARAMOD));
+        derivation.push(DerivationEntry::ClauseParent(first));
+        derivation.push(DerivationEntry::ClauseParent(second));
+        derivation.push(DerivationEntry::Operation(DC_REWRITE));
+        derivation.push(DerivationEntry::Demodulator(demodulator));
+        derivation.push(DerivationEntry::Operation(DC_AC_RES));
+        derivation.push(DerivationEntry::NumericArg(2));
+
+        let (parents, direct_count) =
+            deriv_stack_extract_parents(Some(&derivation), &[ac_first, ac_second]);
+
+        assert_eq!(direct_count, 3);
+        assert_eq!(
+            parents,
+            vec![
+                DerivationParentRef::Clause(first),
+                DerivationParentRef::Clause(second),
+                DerivationParentRef::Demodulator(demodulator),
+                DerivationParentRef::Clause(ac_first),
+                DerivationParentRef::Clause(ac_second),
+            ]
+        );
+    }
+
+    #[test]
+    fn deriv_stack_indicates_initial_clause_matches_c_cnf_parent_scan() {
+        assert!(deriv_stack_indicates_initial_clause(None));
+        let empty = PStack::new();
+        assert!(deriv_stack_indicates_initial_clause(Some(&empty)));
+
+        let mut no_parent_simplification = PStack::new();
+        no_parent_simplification.push(DerivationEntry::Operation(DC_CONDENSE));
+        assert!(deriv_stack_indicates_initial_clause(Some(
+            &no_parent_simplification
+        )));
+
+        let mut cnf_parent = PStack::new();
+        cnf_parent.push(DerivationEntry::Operation(DC_CNF_QUOTE));
+        cnf_parent.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            30, 5,
+        )));
+        assert!(!deriv_stack_indicates_initial_clause(Some(&cnf_parent)));
+
+        let mut ac_res = PStack::new();
+        ac_res.push(DerivationEntry::Operation(DC_AC_RES));
+        ac_res.push(DerivationEntry::NumericArg(0));
+        assert!(!deriv_stack_indicates_initial_clause(Some(&ac_res)));
+    }
+
+    #[test]
+    fn deriv_stack_count_search_inferences_uses_c_exact_switch_cases() {
+        let parent = ClauseDerivationRef::new(40, 6);
+        let demodulator = RewriteDemodulator::new(100);
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_ORDERED_FACTOR));
+        derivation.push(DerivationEntry::ClauseParent(parent));
+        derivation.push(DerivationEntry::Operation(DC_REWRITE));
+        derivation.push(DerivationEntry::Demodulator(demodulator));
+        derivation.push(DerivationEntry::Operation(DC_CONTEXT_SR));
+        derivation.push(DerivationEntry::ClauseParent(parent));
+        derivation.push(DerivationEntry::Operation(DC_CONDENSE));
+        derivation.push(DerivationEntry::Operation(DC_DIS_EQ_DECOMPOSE));
+        derivation.push(DerivationEntry::ClauseParent(parent));
+        derivation.push(DerivationEntry::Operation(set_is_ho(DC_EQ_RES)));
+        derivation.push(DerivationEntry::ClauseParent(parent));
+
+        assert_eq!(
+            deriv_stack_count_search_inferences(Some(&derivation)),
+            (1, 3)
+        );
     }
 }

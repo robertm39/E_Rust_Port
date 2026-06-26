@@ -67,13 +67,14 @@ Implemented:
 
 - C derivation opcode and argument-bit constants for currently wired clause-generation and simplification entries.
 - Clause derivation stack entries for operations, compact clause-parent references, numeric arguments, and existing rewrite demodulator trace entries.
-- Clause-parent `ClausePushDerivation` subset, numeric-argument push helper, `ClauseIsEvalGC`, and `ClauseIsDummyQuote`.
+- Clause-parent `ClausePushDerivation` subset, numeric-argument push helper, `ClauseIsEvalGC`, `ClauseIsDummyQuote`, parent extraction, initial-clause indication, and search-inference counting.
 - Derivation pushes for first-order ordered factoring, first-order equality factoring, first-order equality resolution, destructive equality-resolution normalization, disequality decomposition, condensation, contextual simplify-reflect, positive/negative simplify-reflect, and local rewriting.
 
 Pending:
 
 - Stable clause/formula parent handles instead of compact `ident`/source references.
-- Formula derivation stacks, proof-object extraction, optional-parent replacement, topological sorting, renumbering, PCL/TSTP/DOT printing, and proof-object analysis.
+- Signature/proof-state ownership for AC axiom parent references.
+- Formula derivation stacks, optional-parent replacement, proof-object extraction, topological sorting, renumbering, PCL/TSTP/DOT printing, and proof-object analysis.
 
 ## Initial Crate And CLI Foundation
 

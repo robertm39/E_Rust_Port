@@ -198,7 +198,7 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - Rust now has a clause derivation entry stack that preserves existing rewrite-trace demodulator entries and adds C-shaped operation entries, clause-parent references, and numeric arguments.
 - The reusable `clause_push_derivation` helper ports the clause-parent subset of `ClausePushDerivation`, and `clause_push_numeric_derivation` covers numeric-argument entries such as `DCACRes`.
 - Clause derivation pushes are wired for currently ported first-order generation and contraction helpers including factoring, equality resolution, disequality decomposition, condensation, contextual simplify-reflect, simplify-reflect, and local rewriting.
-- `ClauseIsEvalGC` and `ClauseIsDummyQuote` are ported over the Rust derivation stack shape.
+- `ClauseIsEvalGC`, `ClauseIsDummyQuote`, `DerivStackExtractParents`, `DerivStackIndicatesInitialClause`, and `DerivStackCountSearchInferences` are ported over the Rust derivation stack shape. Rust parent extraction returns compact clause references and demodulator handles, and takes AC axiom references explicitly because `Signature` does not yet own `sig->ac_axioms`.
 - Formula derivation stacks, proof-object extraction, optional-parent replacement, topological sorting, renumbering, PCL/TSTP/DOT printing, and proof-object analysis remain pending.
 
 ### Change-Later Observations
@@ -206,6 +206,8 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - C stores raw `Clause_p` and `WFormula_p` parent pointers directly in the derivation `PStack`. Rust currently stores compact clause references (`ident` plus CSSCPA source) because stable proof-state clause handles are not represented yet; replace these with stable clause/formula handles before full proof reconstruction and parent traversal are wired.
 - `ClausePushDerivation` accepts `void*` arguments and validates them only through opcode bit assertions. Rust separates clause-parent and numeric helpers for type safety; keep this split unless proof-output parity requires a single untyped stack API.
 - C `ClauseIsEvalGC` reads the top stack element as an integer, so it only works for no-argument derivation entries whose opcode is at the stack top. Rust preserves the no-argument top-op behavior explicitly; revisit only if later callers need to scan through argument entries.
+- `DerivStackExtractParents` pushes `DCACRes` AC axiom parents into the result stack but does not add them to its returned count. Rust preserves that split as a direct-parent count plus appended AC parents; callers should not treat the count as the result length.
+- `DerivStackCountSearchInferences` uses exact opcode cases rather than `DCOpIsGenerating`, so HO-marked variants and some generating-range operations such as `DCDisEqDecompose` are not counted there. Rust preserves the switch behavior until proof-analysis reference tests decide whether the C accounting is intentional.
 
 ### Porting Focus
 
