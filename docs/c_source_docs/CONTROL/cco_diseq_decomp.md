@@ -85,6 +85,7 @@ Source files reviewed: `CONTROL/cco_diseq_decomp.h`, `CONTROL/cco_diseq_decomp.c
 ### Rust Port Status Notes
 
 - `src/clauses/diseq_decomp.rs` ports `ComputeDisEqDecompositions`: it gates on `ClauseLiteralNumber(clause) <= diseq_decomposition`, scans compact literal positions in C order, checks for negative equational literals with matching non-null top symbols and an arity no larger than `diseq_decomp_maxarity`, inserts generated clauses into the caller-owned `ClauseSet`, and returns the number generated.
+- The wrapper preserves C's metadata boundary: derivation metadata is attached by the lower-level `ClauseDisEqDecomposition` builder, not copied or pushed in `ComputeDisEqDecompositions`.
 
 ### Change-Later Observations
 

@@ -100,7 +100,8 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 - The port preserves C's pair ordering, second-literal side retry, post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - `src/clauses/factor.rs` also ports first-order equality factor candidate enumeration (`ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) and the first-order MGU subset of `ComputeEqualityFactor`.
 - The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, and resolved/duplicate cleanup.
-- Higher-order CSU enumeration, lambda normalization, and derivation/proof-output ownership remain pending.
+- The first-order all-factor wrappers now attach `DCOrderedFactor` / `DCEqFactor` derivation entries with the source clause reference.
+- Higher-order CSU enumeration, lambda normalization, and proof-documentation output remain pending.
 
 ### Change-Later Observations
 
@@ -108,6 +109,7 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 - Ordered factoring and equality factoring both receive a reusable `VarBank_p freshvars` and reset its counts per attempt. Rust initializes normalized variables past the clause's current variable-code range to avoid collisions in the term bank's pointer-identity variable model; revisit reusable-bank performance once clause/literal ownership is fully ported.
 - Equality factoring pushes generated clauses on a stack for CSU enumeration and the control wrapper later pops them, so multi-CSU insertion order is reversed. Rust's first-order path has at most one result per candidate; preserve or deliberately revisit the stack reversal when higher-order CSU enumeration is ported.
 - `ComputeEqualityFactor` normalizes the copied literal list except for `pos2->literal`, then copies all literals except `pos1->literal` and inserts a new negative condition. This asymmetry is compatibility-relevant and should be kept visible when refactoring the Rust builder.
+- C stores the parent as a raw `Clause_p` in the derivation stack. Rust records a compact clause reference for now; replace it with a stable proof-state handle before derivation traversal or proof printing depends on parent object identity.
 
 ### Porting Focus
 

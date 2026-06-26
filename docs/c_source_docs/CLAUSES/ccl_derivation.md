@@ -192,6 +192,20 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
+### Rust Port Status Notes
+
+- `src/clauses/derivation.rs` ports the derivation opcode/argument bit layout used by `DerivationCode`, including the currently needed clause-generation and simplification constants.
+- Rust now has a clause derivation entry stack that preserves existing rewrite-trace demodulator entries and adds C-shaped operation entries, clause-parent references, and numeric arguments.
+- The reusable `clause_push_derivation` helper ports the clause-parent subset of `ClausePushDerivation`, and `clause_push_numeric_derivation` covers numeric-argument entries such as `DCACRes`.
+- `ClauseIsEvalGC` and `ClauseIsDummyQuote` are ported over the Rust derivation stack shape.
+- Formula derivation stacks, proof-object extraction, optional-parent replacement, topological sorting, renumbering, PCL/TSTP/DOT printing, and proof-object analysis remain pending.
+
+### Change-Later Observations
+
+- C stores raw `Clause_p` and `WFormula_p` parent pointers directly in the derivation `PStack`. Rust currently stores compact clause references (`ident` plus CSSCPA source) because stable proof-state clause handles are not represented yet; replace these with stable clause/formula handles before full proof reconstruction and parent traversal are wired.
+- `ClausePushDerivation` accepts `void*` arguments and validates them only through opcode bit assertions. Rust separates clause-parent and numeric helpers for type safety; keep this split unless proof-output parity requires a single untyped stack API.
+- C `ClauseIsEvalGC` reads the top stack element as an integer, so it only works for no-argument derivation entries whose opcode is at the stack top. Rust preserves the no-argument top-op behavior explicitly; revisit only if later callers need to scan through argument entries.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

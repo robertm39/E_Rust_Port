@@ -8,6 +8,7 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::clause_remove_superfluous_literals;
 use crate::clauses::clausepos::{term_compute_rw_sequence, RewriteSequenceEntry};
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
+use crate::clauses::derivation::{DC_LOCAL_REWRITE, DC_REWRITE};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
     EqnSide, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE, MAX_SIDE,
@@ -30,9 +31,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
-
-const DC_LOCAL_REWRITE: i32 = 5;
-const DC_REWRITE: i32 = 516;
 
 pub static REWRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
@@ -126,7 +124,7 @@ pub fn clause_local_rw(
         clause.del_prop(CP_IS_ORIENTED);
         clause
             .ensure_derivation()
-            .push(RewriteSequenceEntry::Operation(i64::from(DC_LOCAL_REWRITE)));
+            .push(RewriteSequenceEntry::Operation(DC_LOCAL_REWRITE));
         clause.set_weight(clause.standard_weight());
     }
 

@@ -3,6 +3,7 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{clause_push_derivation, DC_EQ_FACTOR, DC_ORDERED_FACTOR};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
 use crate::orderings::cto_orderings::to_greater;
@@ -350,8 +351,8 @@ pub fn compute_equality_factor(
 /// Computes all first-order ordered factors and inserts them into `store`.
 ///
 /// This mirrors C `ComputeAllOrderedFactors` for the first-order ordered
-/// factoring path. Proof-documentation and derivation-stack side effects remain
-/// pending until clause derivation ownership is ported.
+/// factoring path, including the C derivation opcode and parent reference.
+/// Proof-documentation output remains pending.
 ///
 /// # Errors
 ///
@@ -374,6 +375,7 @@ pub fn compute_all_ordered_factors(
             factor.set_proof_size(clause.proof_size().saturating_add(1));
             factor.set_tptp_type(clause.query_tptp_type());
             factor.set_prop(clause.give_props(CP_IS_SOS));
+            clause_push_derivation(&mut factor, DC_ORDERED_FACTOR, Some(clause), None);
             store.insert(factor);
         }
     }
@@ -384,8 +386,8 @@ pub fn compute_all_ordered_factors(
 /// Computes all first-order equality factors and inserts them into `store`.
 ///
 /// This mirrors C `ComputeAllEqualityFactors` for the first-order MGU path.
-/// Higher-order CSU enumeration, lambda normalization, proof documentation, and
-/// derivation-stack side effects remain pending.
+/// Higher-order CSU enumeration, lambda normalization, and proof documentation
+/// remain pending.
 ///
 /// # Errors
 ///
@@ -408,6 +410,7 @@ pub fn compute_all_equality_factors(
             factor.set_proof_size(clause.proof_size().saturating_add(1));
             factor.set_tptp_type(clause.query_tptp_type());
             factor.set_prop(clause.give_props(CP_IS_SOS));
+            clause_push_derivation(&mut factor, DC_EQ_FACTOR, Some(clause), None);
             store.insert(factor);
         }
     }
@@ -526,6 +529,9 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{
+        ClauseDerivationRef, DerivationEntry, DC_EQ_FACTOR, DC_ORDERED_FACTOR,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
@@ -827,6 +833,13 @@ mod tests {
         assert_eq!(stored.proof_size(), 8);
         assert_eq!(stored.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
         assert!(stored.query_prop(CP_IS_SOS));
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_EQ_FACTOR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+            ]
+        );
 
         let horn = Clause::alloc(EqnList::from_vec(vec![lit(&mut bank, &a, &b, true)]));
         let mut horn_store = ClauseSet::new();
@@ -901,6 +914,13 @@ mod tests {
         assert_eq!(stored.proof_size(), 6);
         assert_eq!(stored.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
         assert!(stored.query_prop(CP_IS_SOS));
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_ORDERED_FACTOR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+            ]
+        );
 
         let horn = Clause::alloc(EqnList::from_vec(vec![lit(&mut bank, &a, &b, true)]));
         let mut horn_store = ClauseSet::new();

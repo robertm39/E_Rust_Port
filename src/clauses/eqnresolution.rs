@@ -3,6 +3,7 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{clause_push_derivation, DC_DES_EQ_RES, DC_EQ_RES};
 use crate::clauses::eqn::Eqn;
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
@@ -160,6 +161,7 @@ pub fn compute_all_eqn_resolvents(
             resolvent.set_proof_size(clause.proof_size().saturating_add(1));
             resolvent.set_tptp_type(clause.query_tptp_type());
             resolvent.set_prop(clause.give_props(CP_IS_SOS));
+            clause_push_derivation(&mut resolvent, DC_EQ_RES, Some(clause), None);
             store.insert(resolvent);
         }
     }
@@ -206,6 +208,7 @@ pub fn clause_er_normalize_var(
         clause.set_proof_depth(clause.proof_depth().saturating_add(1));
         clause.set_proof_size(clause.proof_size().saturating_add(1));
         clause.replace_literals(resolvent.into_literals());
+        clause_push_derivation(&mut clause, DC_DES_EQ_RES, None, None);
     }
 
     Ok((clause, count))
@@ -220,6 +223,9 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{
+        ClauseDerivationRef, DerivationEntry, DC_DES_EQ_RES, DC_EQ_RES,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
@@ -376,6 +382,13 @@ mod tests {
             assert_eq!(resolvent.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
             assert!(resolvent.query_prop(CP_IS_SOS));
             assert_eq!(resolvent.literal_number(), 2);
+            assert_eq!(
+                resolvent.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(DC_EQ_RES),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+                ]
+            );
         }
     }
 
@@ -462,6 +475,13 @@ mod tests {
             .as_slice()
             .iter()
             .any(|literal| literal.right() == &right_const));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_DES_EQ_RES),
+                DerivationEntry::Operation(DC_DES_EQ_RES),
+            ]
+        );
     }
 
     #[test]

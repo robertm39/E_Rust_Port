@@ -4,6 +4,7 @@ use crate::clauses::clausecpos::{
     clause_cpos_first_lit, clause_cpos_next_lit, clause_cpos_split, CompactPos,
 };
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{clause_push_derivation, DC_DIS_EQ_DECOMPOSE};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::termbanks::TermBank;
@@ -61,7 +62,9 @@ pub fn clause_dis_eq_decomposition(
     literals.append(new_literals);
     literals.remove_resolved(bank);
     literals.remove_duplicates(bank);
-    Ok(Clause::alloc(literals))
+    let mut result = Clause::alloc(literals);
+    clause_push_derivation(&mut result, DC_DIS_EQ_DECOMPOSE, Some(clause), None);
+    Ok(result)
 }
 
 /// Computes all C `ComputeDisEqDecompositions` results for one clause.
@@ -110,6 +113,7 @@ mod tests {
     use super::{clause_dis_eq_decomposition, compute_dis_eq_decompositions};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_DIS_EQ_DECOMPOSE};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -186,6 +190,13 @@ mod tests {
         assert_eq!(decomposed.literals().as_slice()[2].left(), &a_term);
         assert_eq!(decomposed.literals().as_slice()[2].right(), &c_term);
         assert!(decomposed.literals().as_slice()[2].is_negative());
+        assert_eq!(
+            decomposed.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_DIS_EQ_DECOMPOSE),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+            ]
+        );
     }
 
     #[test]

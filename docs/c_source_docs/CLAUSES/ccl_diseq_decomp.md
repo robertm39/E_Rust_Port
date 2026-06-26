@@ -89,11 +89,11 @@ Source files reviewed: `CLAUSES/ccl_diseq_decomp.h`, `CLAUSES/ccl_diseq_decomp.c
 ### Rust Port Status Notes
 
 - `src/clauses/diseq_decomp.rs` ports `ClauseDisEqDecomposition`, including compact-position literal selection, copying all residual literals except the selected disequality, prepending generated argument-pair disequalities, appending that temporary list, and removing resolved/duplicate literals before clause allocation.
-- Derivation-stack side effects (`ClausePushDerivation(..., DCDisEqDecompose, ...)`) remain pending until clause derivation ownership is ported.
+- Derivation-stack side effects (`ClausePushDerivation(..., DCDisEqDecompose, ...)`) are ported with a compact source-clause reference.
 
 ### Change-Later Observations
 
 - C builds the generated argument-pair disequalities by pushing each new literal onto a temporary list head, so argument-pair order is reversed before append. Rust preserves this order; change it only after proof-output and search-order comparisons show it is unobservable.
 - `ClauseDisEqDecomposition` assumes the selected compact position is a top-level literal and asserts equal top symbols and arities. Rust keeps those as panicking internal preconditions; a later public API could expose fallible validation if external callers need it.
-- C attaches derivation metadata inside the low-level clause builder rather than in the control wrapper. Rust currently omits this side effect; when derivations are ported, keep the ownership boundary deliberate.
+- C attaches derivation metadata inside the low-level clause builder rather than in the control wrapper. Rust now keeps that ownership boundary, but the parent is a compact reference until stable clause handles exist.
 <!-- END MANUAL REVIEW: c_source_docs -->

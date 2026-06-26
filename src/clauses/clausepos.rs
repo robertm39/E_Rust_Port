@@ -1,16 +1,11 @@
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
+pub use crate::clauses::derivation::DerivationEntry as RewriteSequenceEntry;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
 use crate::terms::termpos::TermPos;
-use crate::terms::termtypes::{RewriteDemodulator, Term};
+use crate::terms::termtypes::Term;
 use std::fmt::{self, Write};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RewriteSequenceEntry {
-    Operation(i64),
-    Demodulator(RewriteDemodulator),
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClausePos<T = ()> {
@@ -324,7 +319,7 @@ pub fn term_compute_rw_sequence(
     stack: &mut PStack<RewriteSequenceEntry>,
     from: &Term,
     to: &Term,
-    inject_op: i32,
+    inject_op: i64,
 ) -> bool {
     let mut current = from.clone();
     let mut changed = false;
@@ -339,7 +334,7 @@ pub fn term_compute_rw_sequence(
             .expect("rewritten term must have a replacement");
         if let Some(demodulator) = current.rw_demod_field() {
             if inject_op != 0 {
-                stack.push(RewriteSequenceEntry::Operation(i64::from(inject_op)));
+                stack.push(RewriteSequenceEntry::Operation(inject_op));
             }
             stack.push(RewriteSequenceEntry::Demodulator(demodulator));
         } else {
