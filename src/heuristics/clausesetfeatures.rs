@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::{clause_print_lop_format_string_with_options, Clause};
@@ -840,12 +841,12 @@ pub fn proof_state_print_selective_string(
         match current {
             b't' => {
                 if problem_type() == ProblemType::HigherOrder || !state.axioms().is_untyped() {
-                    output.push_str("# Type declarations:\n");
+                    push_comment_line(&mut output, "Type declarations:");
                     output.push_str(&type_decls_tstp_string(state)?);
                 }
             }
             b'e' => {
-                output.push_str("# Processed positive unit clauses:\n");
+                push_comment_line(&mut output, "Processed positive unit clauses:");
                 output.push_str(&clause_set_print_pos_units_with_options(
                     state.terms(),
                     state.processed_pos_rules(),
@@ -861,7 +862,7 @@ pub fn proof_state_print_selective_string(
                 output.push('\n');
             }
             b'i' => {
-                output.push_str("# Processed negative unit clauses:\n");
+                push_comment_line(&mut output, "Processed negative unit clauses:");
                 output.push_str(&clause_set_print_neg_units_with_options(
                     state.terms(),
                     state.processed_neg_units(),
@@ -871,7 +872,7 @@ pub fn proof_state_print_selective_string(
                 output.push('\n');
             }
             b'g' => {
-                output.push_str("# Processed non-unit clauses:\n");
+                push_comment_line(&mut output, "Processed non-unit clauses:");
                 output.push_str(&clause_set_print_non_units_with_options(
                     state.terms(),
                     state.processed_non_units(),
@@ -881,7 +882,7 @@ pub fn proof_state_print_selective_string(
                 output.push('\n');
             }
             b'E' => {
-                output.push_str("# Unprocessed positive unit clauses:\n");
+                push_comment_line(&mut output, "Unprocessed positive unit clauses:");
                 output.push_str(&clause_set_print_pos_units_with_options(
                     state.terms(),
                     state.unprocessed(),
@@ -891,7 +892,7 @@ pub fn proof_state_print_selective_string(
                 output.push('\n');
             }
             b'I' => {
-                output.push_str("# Unprocessed negative unit clauses:\n");
+                push_comment_line(&mut output, "Unprocessed negative unit clauses:");
                 output.push_str(&clause_set_print_neg_units_with_options(
                     state.terms(),
                     state.unprocessed(),
@@ -901,7 +902,7 @@ pub fn proof_state_print_selective_string(
                 output.push('\n');
             }
             b'G' => {
-                output.push_str("# Unprocessed non-unit clauses:\n");
+                push_comment_line(&mut output, "Unprocessed non-unit clauses:");
                 output.push_str(&clause_set_print_non_units_with_options(
                     state.terms(),
                     state.unprocessed(),
@@ -912,14 +913,14 @@ pub fn proof_state_print_selective_string(
             }
             b'a' | b'A' => {
                 if clause_set_is_equational(state.terms(), state.axioms()) {
-                    output.push_str("# Equality axioms:\n");
+                    push_comment_line(&mut output, "Equality axioms:");
                     output.push_str(&eq_axioms_print_string(
                         state.terms().signature(),
                         output_format,
                         current == b'a',
                     )?);
                 } else {
-                    output.push_str("# No equality axioms required.\n");
+                    push_comment_line(&mut output, "No equality axioms required.");
                 }
             }
             _ => {
@@ -934,6 +935,13 @@ pub fn proof_state_print_selective_string(
         }
     }
     Ok(output)
+}
+
+fn push_comment_line(output: &mut String, text: &str) {
+    output.push_str(DEFAULT_COMCHAR_RAW);
+    output.push(' ');
+    output.push_str(text);
+    output.push('\n');
 }
 
 fn clause_set_print_pos_units_with_options(

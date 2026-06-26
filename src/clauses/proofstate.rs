@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_answer_output_string, Clause};
@@ -407,7 +408,7 @@ impl ProofState {
         };
         if !self.statistics.status_reported {
             self.answer_outputs
-                .push("# SZS status Theorem\n".to_owned());
+                .push(format!("{DEFAULT_COMCHAR_RAW} SZS status Theorem\n"));
             self.statistics.status_reported = true;
         }
         self.answer_outputs.push(answer_output);
@@ -589,14 +590,23 @@ impl ProofState {
     ///
     /// Returns any formatting error from `output`.
     pub fn write_print(&self, output: &mut impl fmt::Write) -> fmt::Result {
-        output.write_str("\n# Processed positive unit clauses:\n")?;
+        writeln!(
+            output,
+            "\n{DEFAULT_COMCHAR_RAW} Processed positive unit clauses:"
+        )?;
         output.write_str(&self.processed_pos_rules.print_lop_string(&self.terms, true))?;
         output.write_str(&self.processed_pos_eqns.print_lop_string(&self.terms, true))?;
-        output.write_str("\n# Processed negative unit clauses:\n")?;
+        writeln!(
+            output,
+            "\n{DEFAULT_COMCHAR_RAW} Processed negative unit clauses:"
+        )?;
         output.write_str(&self.processed_neg_units.print_lop_string(&self.terms, true))?;
-        output.write_str("\n# Processed non-unit clauses:\n")?;
+        writeln!(
+            output,
+            "\n{DEFAULT_COMCHAR_RAW} Processed non-unit clauses:"
+        )?;
         output.write_str(&self.processed_non_units.print_lop_string(&self.terms, true))?;
-        output.write_str("\n# Unprocessed clauses:\n")?;
+        writeln!(output, "\n{DEFAULT_COMCHAR_RAW} Unprocessed clauses:")?;
         output.write_str(&self.unprocessed.print_lop_string(&self.terms, true))
     }
 
@@ -631,47 +641,47 @@ impl ProofState {
         let statistics = self.statistics();
         writeln!(
             output,
-            "# Initial clauses in saturation        : {}",
+            "{DEFAULT_COMCHAR_RAW} Initial clauses in saturation        : {}",
             self.axioms.members()
         )?;
         writeln!(
             output,
-            "# Processed clauses                    : {}",
+            "{DEFAULT_COMCHAR_RAW} Processed clauses                    : {}",
             statistics.processed_count
         )?;
         writeln!(
             output,
-            "# ...of these trivial                  : {}",
+            "{DEFAULT_COMCHAR_RAW} ...of these trivial                  : {}",
             statistics.proc_trivial_count
         )?;
         writeln!(
             output,
-            "# ...subsumed                          : {}",
+            "{DEFAULT_COMCHAR_RAW} ...subsumed                          : {}",
             statistics.proc_forward_subsumed_count
         )?;
         writeln!(
             output,
-            "# ...remaining for further processing  : {}",
+            "{DEFAULT_COMCHAR_RAW} ...remaining for further processing  : {}",
             statistics.proc_non_trivial_count
         )?;
         writeln!(
             output,
-            "# Other redundant clauses eliminated   : {}",
+            "{DEFAULT_COMCHAR_RAW} Other redundant clauses eliminated   : {}",
             statistics.other_redundant_count
         )?;
         writeln!(
             output,
-            "# Clauses deleted for lack of memory   : {}",
+            "{DEFAULT_COMCHAR_RAW} Clauses deleted for lack of memory   : {}",
             statistics.non_redundant_deleted
         )?;
         writeln!(
             output,
-            "# Backward-subsumed                    : {}",
+            "{DEFAULT_COMCHAR_RAW} Backward-subsumed                    : {}",
             statistics.backward_subsumed_count
         )?;
         writeln!(
             output,
-            "# Backward-rewritten                   : {}",
+            "{DEFAULT_COMCHAR_RAW} Backward-rewritten                   : {}",
             statistics.backward_rewritten_count
         )
     }
@@ -680,59 +690,59 @@ impl ProofState {
         let statistics = self.statistics();
         writeln!(
             output,
-            "# Generated clauses                    : {}",
+            "{DEFAULT_COMCHAR_RAW} Generated clauses                    : {}",
             statistics
                 .generated_count
                 .wrapping_sub(statistics.backward_rewritten_count)
         )?;
         writeln!(
             output,
-            "# ...of the previous two non-redundant : {}",
+            "{DEFAULT_COMCHAR_RAW} ...of the previous two non-redundant : {}",
             statistics.non_trivial_generated_count
         )?;
         writeln!(
             output,
-            "# ...aggressively subsumed             : {}",
+            "{DEFAULT_COMCHAR_RAW} ...aggressively subsumed             : {}",
             statistics.aggressive_forward_subsumed_count
         )?;
         writeln!(
             output,
-            "# Contextual simplify-reflections      : {}",
+            "{DEFAULT_COMCHAR_RAW} Contextual simplify-reflections      : {}",
             statistics.context_sr_count
         )?;
         writeln!(
             output,
-            "# Paramodulations                      : {}",
+            "{DEFAULT_COMCHAR_RAW} Paramodulations                      : {}",
             statistics.paramod_count
         )?;
         writeln!(
             output,
-            "# Factorizations                       : {}",
+            "{DEFAULT_COMCHAR_RAW} Factorizations                       : {}",
             statistics.factor_count
         )?;
         writeln!(
             output,
-            "# NegExts                              : {}",
+            "{DEFAULT_COMCHAR_RAW} NegExts                              : {}",
             statistics.neg_ext_count
         )?;
         writeln!(
             output,
-            "# Equation resolutions                 : {}",
+            "{DEFAULT_COMCHAR_RAW} Equation resolutions                 : {}",
             statistics.resolv_count
         )?;
         writeln!(
             output,
-            "# Disequality decompositions           : {}",
+            "{DEFAULT_COMCHAR_RAW} Disequality decompositions           : {}",
             statistics.disequ_deco_count
         )?;
         writeln!(
             output,
-            "# Total rewrite steps                  : {}",
+            "{DEFAULT_COMCHAR_RAW} Total rewrite steps                  : {}",
             statistics.rw_count
         )?;
         writeln!(
             output,
-            "# ...of those cached                   : {}",
+            "{DEFAULT_COMCHAR_RAW} ...of those cached                   : {}",
             statistics.rw_count
         )
     }
@@ -741,62 +751,62 @@ impl ProofState {
         let statistics = self.statistics();
         writeln!(
             output,
-            "# Propositional unsat checks           : {}",
+            "{DEFAULT_COMCHAR_RAW} Propositional unsat checks           : {}",
             statistics.satcheck_count
         )?;
         writeln!(
             output,
-            "#    Propositional check models        : {}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional check models        : {}",
             statistics.satcheck_satisfiable
         )?;
         writeln!(
             output,
-            "#    Propositional check unsatisfiable : {}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional check unsatisfiable : {}",
             statistics.satcheck_success
         )?;
         writeln!(
             output,
-            "#    Propositional clauses             : {}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional clauses             : {}",
             statistics.satcheck_full_size
         )?;
         writeln!(
             output,
-            "#    Propositional clauses after purity: {}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional clauses after purity: {}",
             statistics.satcheck_actual_size
         )?;
         writeln!(
             output,
-            "#    Propositional unsat core size     : {}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional unsat core size     : {}",
             statistics.satcheck_core_size
         )?;
         writeln!(
             output,
-            "#    Propositional preprocessing time  : {:.3}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional preprocessing time  : {:.3}",
             statistics.satcheck_preproc_time
         )?;
         writeln!(
             output,
-            "#    Propositional encoding time       : {:.3}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional encoding time       : {:.3}",
             statistics.satcheck_encoding_time
         )?;
         writeln!(
             output,
-            "#    Propositional solver time         : {:.3}",
+            "{DEFAULT_COMCHAR_RAW}    Propositional solver time         : {:.3}",
             statistics.satcheck_solver_time
         )?;
         writeln!(
             output,
-            "#    Success case prop preproc time    : {:.3}",
+            "{DEFAULT_COMCHAR_RAW}    Success case prop preproc time    : {:.3}",
             statistics.satcheck_preproc_stime
         )?;
         writeln!(
             output,
-            "#    Success case prop encoding time   : {:.3}",
+            "{DEFAULT_COMCHAR_RAW}    Success case prop encoding time   : {:.3}",
             statistics.satcheck_encoding_stime
         )?;
         writeln!(
             output,
-            "#    Success case prop solver time     : {:.3}",
+            "{DEFAULT_COMCHAR_RAW}    Success case prop solver time     : {:.3}",
             statistics.satcheck_solver_stime
         )
     }
@@ -809,54 +819,57 @@ impl ProofState {
         let statistics = self.statistics();
         writeln!(
             output,
-            "# Current number of processed clauses  : {}",
+            "{DEFAULT_COMCHAR_RAW} Current number of processed clauses  : {}",
             self.processed_cardinality()
         )?;
         writeln!(
             output,
-            "#    Positive orientable unit clauses  : {}",
+            "{DEFAULT_COMCHAR_RAW}    Positive orientable unit clauses  : {}",
             self.processed_pos_rules.members()
         )?;
         writeln!(
             output,
-            "#    Positive unorientable unit clauses: {}",
+            "{DEFAULT_COMCHAR_RAW}    Positive unorientable unit clauses: {}",
             self.processed_pos_eqns.members()
         )?;
         writeln!(
             output,
-            "#    Negative unit clauses             : {}",
+            "{DEFAULT_COMCHAR_RAW}    Negative unit clauses             : {}",
             self.processed_neg_units.members()
         )?;
         writeln!(
             output,
-            "#    Non-unit-clauses                  : {}",
+            "{DEFAULT_COMCHAR_RAW}    Non-unit-clauses                  : {}",
             self.processed_non_units.members()
         )?;
         writeln!(
             output,
-            "# Current number of unprocessed clauses: {}",
+            "{DEFAULT_COMCHAR_RAW} Current number of unprocessed clauses: {}",
             self.unprocessed.members()
         )?;
         writeln!(
             output,
-            "# ...number of literals in the above   : {}",
+            "{DEFAULT_COMCHAR_RAW} ...number of literals in the above   : {}",
             self.unprocessed.literals()
         )?;
-        writeln!(output, "# Current number of archived formulas  : 0")?;
         writeln!(
             output,
-            "# Current number of archived clauses   : {}",
+            "{DEFAULT_COMCHAR_RAW} Current number of archived formulas  : 0"
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Current number of archived clauses   : {}",
             self.archive.members()
         )?;
         if record_gc_selection {
             writeln!(
                 output,
-                "# Proof object given clauses           : {}",
+                "{DEFAULT_COMCHAR_RAW} Proof object given clauses           : {}",
                 statistics.gc_used_count
             )?;
             writeln!(
                 output,
-                "# Proof search given clauses           : {}",
+                "{DEFAULT_COMCHAR_RAW} Proof search given clauses           : {}",
                 statistics.gc_count
             )?;
         }
@@ -1138,10 +1151,10 @@ mod tests {
         assert_eq!(
             state.print_string(),
             format!(
-                "\n# Processed positive unit clauses:\n{rule_print}\n{equation_print}\n\n\
-                 # Processed negative unit clauses:\n{negative_print}\n\n\
-                 # Processed non-unit clauses:\n{non_unit_print}\n\n\
-                 # Unprocessed clauses:\n{unprocessed_print}\n"
+                "\n% Processed positive unit clauses:\n{rule_print}\n{equation_print}\n\n\
+                 % Processed negative unit clauses:\n{negative_print}\n\n\
+                 % Processed non-unit clauses:\n{non_unit_print}\n\n\
+                 % Unprocessed clauses:\n{unprocessed_print}\n"
             )
         );
     }

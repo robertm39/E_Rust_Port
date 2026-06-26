@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::CompareResult;
 use crate::basics::pdarrays::PDIntArray;
@@ -1177,7 +1178,7 @@ pub fn clause_answer_output_string(bank: &TermBank, clause: &Clause) -> Option<S
         return None;
     }
 
-    let mut output = String::from("# SZS answers Tuple [");
+    let mut output = format!("{DEFAULT_COMCHAR_RAW} SZS answers Tuple [");
     if clause.literal_number() > 1 {
         output.push('(');
     }
@@ -2687,7 +2688,7 @@ mod tests {
 
         assert_eq!(
             clause.answer_output_string(&bank).as_deref(),
-            Some("# SZS answers Tuple [([answer_a]|[answer_b])|_]\n")
+            Some("% SZS answers Tuple [([answer_a]|[answer_b])|_]\n")
         );
     }
 

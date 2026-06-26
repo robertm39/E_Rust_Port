@@ -1,5 +1,7 @@
 pub type IntOrPInt = i64;
 
+pub const DEFAULT_COMCHAR_RAW: &str = "%";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IntOrP<P> {
     Int(IntOrPInt),

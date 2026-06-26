@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -81,11 +82,11 @@ pub fn get_sec_time_mod() -> i64 {
 #[must_use]
 pub fn format_resource_usage(usage: ResourceUsage) -> String {
     format!(
-        "\n# -------------------------------------------------\n\
-         # User time                : {:.3} s\n\
-         # System time              : {:.3} s\n\
-         # Total time               : {:.3} s\n\
-         # Maximum resident set size: {} pages\n",
+        "\n{DEFAULT_COMCHAR_RAW} -------------------------------------------------\n\
+         {DEFAULT_COMCHAR_RAW} User time                : {:.3} s\n\
+         {DEFAULT_COMCHAR_RAW} System time              : {:.3} s\n\
+         {DEFAULT_COMCHAR_RAW} Total time               : {:.3} s\n\
+         {DEFAULT_COMCHAR_RAW} Maximum resident set size: {} pages\n",
         usage.user_time_seconds,
         usage.system_time_seconds,
         usage.user_time_seconds + usage.system_time_seconds,
@@ -271,11 +272,11 @@ mod tests {
 
         assert_eq!(
             format_resource_usage(usage),
-            "\n# -------------------------------------------------\n\
-             # User time                : 1.250 s\n\
-             # System time              : 0.500 s\n\
-             # Total time               : 1.750 s\n\
-             # Maximum resident set size: 42 pages\n"
+            "\n% -------------------------------------------------\n\
+             % User time                : 1.250 s\n\
+             % System time              : 0.500 s\n\
+             % Total time               : 1.750 s\n\
+             % Maximum resident set size: 42 pages\n"
         );
 
         let current = current_resource_usage();
