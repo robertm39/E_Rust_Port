@@ -201,6 +201,16 @@ pub struct CleanupUnprocessedOutcome {
     pub term_gc_recovered: i64,
 }
 
+/// Result of C `replacing_inferences`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReplacingInferenceOutcome {
+    /// No replacing inference fired, so the original clause remains selected.
+    Survivor(Clause),
+    /// The selected clause was consumed and any produced clauses were routed
+    /// through `insert_new_clauses`.
+    Replaced { empty: Option<Clause> },
+}
+
 pub struct ProofControl {
     ocb: Option<OrderControlBlock>,
     active_hcb: Option<usize>,
@@ -1688,6 +1698,75 @@ pub fn proof_state_insert_new_clauses(
     Ok(None)
 }
 
+/// Applies C `replacing_inferences` to one already packed selected clause.
+///
+/// The current port covers the first-order destructive equality-resolution
+/// branch and the fresh-definition controlled-splitting branch. If either
+/// branch replaces the selected clause, the produced clauses are routed through
+/// [`proof_state_insert_new_clauses`] immediately, matching the C helper.
+///
+/// # Errors
+///
+/// Returns diagnostics from destructive equality resolution, controlled
+/// splitting, generated-clause insertion, or from replacement branches whose C
+/// dependencies are not ported yet.
+pub fn proof_state_replacing_inferences(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    packed: FvPackedClause,
+) -> Result<ReplacingInferenceOutcome, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "replacing_inferences higher-order immediate clausification is not ported yet",
+        ));
+    }
+
+    let mut clause = packed.into_clause();
+
+    if control.heuristic_parms().er_varlit_destructive {
+        let strong = control.heuristic_parms().er_strong_destructive;
+        let (normalized, clause_count) =
+            clause_er_normalize_var(state.terms_mut(), clause, strong)?;
+        clause = normalized;
+        if clause_count != 0 {
+            let count = i64_to_u64_saturating(clause_count);
+            let statistics = state.statistics_mut();
+            statistics.other_redundant_count += count;
+            statistics.resolv_count += count;
+            state.tmp_store_mut().insert(clause);
+            let empty = proof_state_insert_new_clauses(state, control)?;
+            return Ok(ReplacingInferenceOutcome::Replaced { empty });
+        }
+    }
+
+    let split_class = control.heuristic_parms().split_clauses;
+    if controlled_split_class_matches(&clause, split_class) {
+        if !control.heuristic_parms().split_fresh_defs {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "replacing_inferences controlled splitting definition reuse is not ported yet",
+            ));
+        }
+
+        let split_method = clause_split_method(control.heuristic_parms().split_method);
+        match clause_split_fresh(state.terms_mut(), clause, split_method)? {
+            ClauseSplitOutcome::Unsplit(unsplit) => {
+                clause = *unsplit;
+            }
+            ClauseSplitOutcome::Split(clauses) => {
+                for split_clause in clauses {
+                    state.tmp_store_mut().insert(split_clause);
+                }
+                let empty = proof_state_insert_new_clauses(state, control)?;
+                return Ok(ReplacingInferenceOutcome::Replaced { empty });
+            }
+        }
+    }
+
+    Ok(ReplacingInferenceOutcome::Survivor(clause))
+}
+
 fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
     let params = control.heuristic_parms();
     if params.split_aggressive
@@ -2032,10 +2111,10 @@ mod tests {
         proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_queue_generated_clause_for_eval, proof_state_reset_processed,
-        proof_state_storage_estimate, select_inherited_literal, ForwardContractCounts,
-        ForwardContractOptions, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
+        proof_state_reset_processed, proof_state_storage_estimate, select_inherited_literal,
+        ForwardContractCounts, ForwardContractOptions, LiteralSelectionOutcome,
+        ReplacingInferenceOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2057,7 +2136,7 @@ mod tests {
         EP_MAX_IS_UP_TO_DATE,
     };
     use crate::clauses::eqnlist::EqnList;
-    use crate::clauses::fcvindexing::FvIndexParams;
+    use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexParams};
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::global_indices_null;
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
@@ -3646,6 +3725,132 @@ mod tests {
         assert_eq!(state.tmp_store().members(), 1);
         assert_eq!(state.statistics().generated_count, 0);
         assert_eq!(state.statistics().generated_lit_count, 0);
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_returns_surviving_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_replacing_survivor", 4_084);
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+
+        let outcome = proof_state_replacing_inferences(&mut state, &mut control, packed)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ReplacingInferenceOutcome::Survivor(survivor) = outcome else {
+            panic!("clause should survive without replacement");
+        };
+        assert_eq!(survivor.ident(), 4_084);
+        assert!(state.tmp_store().is_empty());
+        assert!(state.unprocessed().is_empty());
+        assert_eq!(state.statistics().generated_count, 0);
+        assert_eq!(state.statistics().other_redundant_count, 0);
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_requeues_destructive_er_result() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, rhs) = {
+            let terms = state.terms_mut();
+            let x = typed_var(terms, -50);
+            let y = typed_var(terms, -52);
+            let rhs = typed_const(terms, "pc_replacing_er_rhs");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &x, &rhs, true),
+                literal(terms, &x, &y, false),
+            ]));
+            clause.set_ident(4_085);
+            (clause, rhs)
+        };
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ReplacingDestructiveErTest");
+        control.heuristic_parms_mut().er_varlit_destructive = true;
+
+        let outcome = proof_state_replacing_inferences(&mut state, &mut control, packed)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ReplacingInferenceOutcome::Replaced { empty } = outcome else {
+            panic!("destructive equality resolution should replace the clause");
+        };
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 1);
+        assert_eq!(state.statistics().generated_count, 1);
+        assert_eq!(state.statistics().generated_lit_count, 1);
+        assert_eq!(state.statistics().other_redundant_count, 1);
+        assert_eq!(state.statistics().resolv_count, 1);
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
+        let queued = state.unprocessed().find_by_id(4_085).unwrap();
+        assert_eq!(queued.literal_number(), 1);
+        assert_eq!(queued.proof_depth(), 1);
+        assert_eq!(queued.proof_size(), 1);
+        assert_eq!(queued.literals().as_slice()[0].right(), &rhs);
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_requeues_fresh_split_result() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let left_var = typed_var(terms, -60);
+            let right_var = typed_var(terms, -62);
+            let left_const = typed_const(terms, "pc_replacing_split_left");
+            let right_const = typed_const(terms, "pc_replacing_split_right");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left_var, &left_const, true),
+                literal(terms, &right_var, &right_const, true),
+            ]));
+            clause.set_ident(4_086);
+            clause
+        };
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ReplacingFreshSplitTest");
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
+
+        let outcome = proof_state_replacing_inferences(&mut state, &mut control, packed)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ReplacingInferenceOutcome::Replaced { empty } = outcome else {
+            panic!("controlled splitting should replace the clause");
+        };
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.unprocessed().members(), 3);
+        assert_eq!(state.statistics().generated_count, 3);
+        assert_eq!(state.statistics().generated_lit_count, 6);
+        assert_eq!(state.statistics().non_trivial_generated_count, 3);
+
+        let residual = state.unprocessed().find_by_id(4_086).unwrap();
+        assert_eq!(residual.literal_number(), 2);
+        assert!(residual.literals().as_slice().iter().all(Eqn::is_negative));
+        assert!(residual
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| literal.query_prop(EP_IS_SPLIT_LIT)));
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_rejects_unported_split_definition_reuse() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_replacing_unsupported", 4_087);
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_fresh_defs = false;
+
+        let error = proof_state_replacing_inferences(&mut state, &mut control, packed).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(state.tmp_store().is_empty());
+        assert_eq!(state.statistics().generated_count, 0);
     }
 
     #[test]
