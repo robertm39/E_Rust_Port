@@ -3674,6 +3674,7 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
         config.term_bank_insert_limit,
         config.answer_limit,
     )?;
+    write_proof_search_result(output, &outcome)?;
     write_saturated_output(output, config, &state)?;
     write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
     Ok(saturate_outcome_exit_status(&outcome))
@@ -3729,6 +3730,27 @@ fn load_configured_watchlist(
 
 fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
     output.write_all(b"\n# CNFization successful!\n")?;
+    Ok(())
+}
+
+fn write_proof_search_result(
+    output: &mut impl Write,
+    outcome: &SaturateOutcome,
+) -> Result<(), EProverError> {
+    match outcome {
+        SaturateOutcome::Returned { .. } => output.write_all(b"\n# Proof found!\n")?,
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::Saturated,
+            ..
+        } => output.write_all(b"\n# No proof found!\n")?,
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::WatchlistEmpty,
+            ..
+        } => output.write_all(b"\n# Watchlist is empty!\n")?,
+        SaturateOutcome::Stopped { .. } => {
+            output.write_all(b"\n# Failure: User resource limit exceeded!\n")?;
+        }
+    }
     Ok(())
 }
 
@@ -5976,7 +5998,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            format!("# Version: {VERSION}\n")
+            format!("# Version: {VERSION}\n\n# No proof found!\n")
         );
         std::fs::remove_file(&path).unwrap();
 
@@ -5990,7 +6012,7 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            format!("# Version: {VERSION}\n")
+            format!("# Version: {VERSION}\n\n# No proof found!\n")
         );
         std::fs::remove_file(&input_path).unwrap();
     }
@@ -6033,7 +6055,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "\n# Proof found!\n");
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -6055,7 +6077,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "\n# No proof found!\n");
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -6084,6 +6106,7 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.starts_with("\n# No proof found!\n"));
         assert!(printed.contains("# Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
         assert!(stderr.is_empty());
@@ -6114,6 +6137,7 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.starts_with("\n# No proof found!\n"));
         assert!(printed.contains("# Parsed axioms                        : 1\n"));
         assert!(printed.contains("# Initial clauses in saturation        : 1\n"));
         assert!(printed.contains("# Processed clauses                    : 1\n"));
@@ -6170,7 +6194,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Failure: User resource limit exceeded!\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -6201,7 +6228,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Watchlist is empty!\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
         std::fs::remove_file(&watch_path).unwrap();
@@ -6233,7 +6263,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(stdout.is_empty());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "\n# No proof found!\n");
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
         std::fs::remove_file(&watch_path).unwrap();
