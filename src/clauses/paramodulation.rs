@@ -46,6 +46,12 @@ pub struct ParamodulationPair {
     into: ClausePos,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SimParamodReplacement {
+    SharedTarget,
+    InstantiatedTargetCopy,
+}
+
 impl ParamodulationPair {
     #[must_use]
     pub const fn new(from: ClausePos, into: ClausePos) -> Self {
@@ -136,8 +142,9 @@ pub fn paramodulation_pair_positions(
 ///
 /// # Errors
 ///
-/// Returns diagnostics from the low-level paramodulation constructor. Plain and
-/// ordinary simultaneous paramodulation are currently supported.
+/// Returns diagnostics from the low-level paramodulation constructor. Plain,
+/// simultaneous, and super-simultaneous paramodulation are currently supported
+/// for first-order unindexed generation.
 pub fn compute_clause_clause_paramodulants(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -147,13 +154,6 @@ pub fn compute_clause_clause_paramodulants(
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
-    if is_super_paramodulation_type(pm_type) {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "super-simultaneous paramodulation wrappers are not ported yet",
-        ));
-    }
-
     debug_assert!(clause.literals().query_prop_number(EP_IS_MAXIMAL) != 0);
     debug_assert_eq!(
         clause.literals().query_prop_number(EP_IS_MAXIMAL),
@@ -749,6 +749,47 @@ pub fn clause_ordered_sim_paramod(
     from: &ClausePos,
     into: &ClausePos,
 ) -> Result<Option<Clause>, Diagnostic> {
+    clause_ordered_sim_paramod_variant(bank, ocb, from, into, SimParamodReplacement::SharedTarget)
+}
+
+/// Builds the first-order C `ClauseOrderedSuperSimParamod` result for explicit
+/// positions.
+///
+/// The super-simultaneous constructor first instantiates a copy of the target
+/// clause, then replaces every copied occurrence of the instantiated target
+/// term. This matches C's `TBInsert` + `EqnListCopy` + `EqnListCopyRepl` path.
+///
+/// # Errors
+///
+/// Returns diagnostics from unported higher-order constraints,
+/// substitution-normalized copying, or term-bank insertion.
+///
+/// # Panics
+///
+/// Panics if either position is not backed by a clause/literal or violates the
+/// C internal-caller invariants.
+pub fn clause_ordered_super_sim_paramod(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from: &ClausePos,
+    into: &ClausePos,
+) -> Result<Option<Clause>, Diagnostic> {
+    clause_ordered_sim_paramod_variant(
+        bank,
+        ocb,
+        from,
+        into,
+        SimParamodReplacement::InstantiatedTargetCopy,
+    )
+}
+
+fn clause_ordered_sim_paramod_variant(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from: &ClausePos,
+    into: &ClausePos,
+    replacement: SimParamodReplacement,
+) -> Result<Option<Clause>, Diagnostic> {
     let from_clause = from
         .clause()
         .expect("simultaneous paramodulation source position must be backed by a clause");
@@ -832,6 +873,7 @@ pub fn clause_ordered_sim_paramod(
         &into_other,
         &freshvars,
         &mut subst,
+        replacement,
     );
     subst.backtrack();
     result
@@ -916,6 +958,7 @@ fn clause_ordered_sim_paramod_with_subst(
     into_other: &Term,
     freshvars: &VarBank,
     subst: &mut Substitution,
+    replacement: SimParamodReplacement,
 ) -> Result<Option<Clause>, Diagnostic> {
     let unified = subst_mgu_complete(from_term, into_term, subst);
     if !unified
@@ -969,9 +1012,18 @@ fn clause_ordered_sim_paramod_with_subst(
         .subst_norm_except(None, subst, freshvars);
 
     let rhs_instance = bank.insert_no_props(from_other, DerefType::Always)?;
-    let mut into_copy = into_clause
-        .literals()
-        .copy_repl(bank, into_term, &rhs_instance)?;
+    let mut into_copy = match replacement {
+        SimParamodReplacement::SharedTarget => {
+            into_clause
+                .literals()
+                .copy_repl(bank, into_term, &rhs_instance)?
+        }
+        SimParamodReplacement::InstantiatedTargetCopy => {
+            let lhs_instance = bank.insert(into_term, DerefType::Always)?;
+            let tmp_copy = into_clause.literals().copy_to_bank(bank)?;
+            tmp_copy.copy_repl(bank, &lhs_instance, &rhs_instance)?
+        }
+    };
     if into_copy.find_true(bank).is_some() {
         return Ok(None);
     }
@@ -1196,7 +1248,7 @@ fn compute_directed_clause_paramodulants(
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for pair in paramodulation_pair_positions(bank, source, target, no_top, pm_type) {
-        let effective_pm_type = effective_paramodulation_type(bank, ocb, pair.source(), pm_type)?;
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, pair.source(), pm_type);
         let paramodulant = match effective_pm_type {
             ParamodulationType::Plain => {
                 clause_ordered_paramod(bank, ocb, pair.source(), pair.target())?
@@ -1204,8 +1256,10 @@ fn compute_directed_clause_paramodulants(
             ParamodulationType::Simultaneous => {
                 clause_ordered_sim_paramod(bank, ocb, pair.source(), pair.target())?
             }
+            ParamodulationType::SuperSimultaneous => {
+                clause_ordered_super_sim_paramod(bank, ocb, pair.source(), pair.target())?
+            }
             ParamodulationType::OrientedSimultaneous
-            | ParamodulationType::SuperSimultaneous
             | ParamodulationType::OrientedSuperSimultaneous
             | ParamodulationType::DecreasingSimultaneous
             | ParamodulationType::SizeDecreasingSimultaneous => {
@@ -1264,18 +1318,18 @@ fn effective_paramodulation_type(
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
     pm_type: ParamodulationType,
-) -> Result<ParamodulationType, Diagnostic> {
+) -> ParamodulationType {
     match pm_type {
-        ParamodulationType::Plain => Ok(ParamodulationType::Plain),
-        ParamodulationType::Simultaneous => Ok(ParamodulationType::Simultaneous),
+        ParamodulationType::Plain => ParamodulationType::Plain,
+        ParamodulationType::Simultaneous => ParamodulationType::Simultaneous,
         ParamodulationType::OrientedSimultaneous => {
             let literal = from_pos
                 .literal()
                 .expect("paramodulation source position must select a literal");
             if literal.is_oriented() {
-                Ok(ParamodulationType::Simultaneous)
+                ParamodulationType::Simultaneous
             } else {
-                Ok(ParamodulationType::Plain)
+                ParamodulationType::Plain
             }
         }
         ParamodulationType::DecreasingSimultaneous => {
@@ -1293,9 +1347,9 @@ fn effective_paramodulation_type(
                 DerefType::Always,
                 DerefType::Always,
             ) {
-                Ok(ParamodulationType::Simultaneous)
+                ParamodulationType::Simultaneous
             } else {
-                Ok(ParamodulationType::Plain)
+                ParamodulationType::Plain
             }
         }
         ParamodulationType::SizeDecreasingSimultaneous => {
@@ -1306,33 +1360,32 @@ fn effective_paramodulation_type(
                 .get_other_side()
                 .expect("paramodulation source position must select an opposite side");
             if term_standard_weight(&max_side) > term_standard_weight(&rep_side) {
-                Ok(ParamodulationType::Simultaneous)
+                ParamodulationType::Simultaneous
             } else {
-                Ok(ParamodulationType::Plain)
+                ParamodulationType::Plain
             }
         }
-        ParamodulationType::SuperSimultaneous | ParamodulationType::OrientedSuperSimultaneous => {
-            Err(Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "super-simultaneous paramodulation wrappers are not ported yet",
-            ))
+        ParamodulationType::SuperSimultaneous => ParamodulationType::SuperSimultaneous,
+        ParamodulationType::OrientedSuperSimultaneous => {
+            let literal = from_pos
+                .literal()
+                .expect("paramodulation source position must select a literal");
+            if literal.is_oriented() {
+                ParamodulationType::SuperSimultaneous
+            } else {
+                ParamodulationType::Plain
+            }
         }
     }
-}
-
-const fn is_super_paramodulation_type(pm_type: ParamodulationType) -> bool {
-    matches!(
-        pm_type,
-        ParamodulationType::SuperSimultaneous | ParamodulationType::OrientedSuperSimultaneous
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_ordered_paramod, compute_all_paramodulants, compute_all_paramodulants_indexed,
-        compute_clause_clause_paramodulants, paramod_from_side_positions, paramod_into_positions,
-        paramodulation_pair_positions, ParamodulationType,
+        clause_ordered_paramod, clause_ordered_super_sim_paramod, compute_all_paramodulants,
+        compute_all_paramodulants_indexed, compute_clause_clause_paramodulants,
+        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
+        ParamodulationType,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -1354,7 +1407,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -1383,6 +1436,11 @@ mod tests {
         let term = Term::const_cell_alloc(f_code);
         term.set_type(Some(type_));
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_var(bank: &TermBank, f_code: i64) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(f_code, &type_)
     }
 
     fn typed_unary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -1666,37 +1724,48 @@ mod tests {
     }
 
     #[test]
-    fn compute_clause_clause_paramodulants_keeps_super_simultaneous_pending() {
+    fn clause_ordered_super_sim_paramod_replaces_instantiated_target_occurrences() {
         let mut bank = test_bank();
-        let source_left = typed_const(&mut bank, "pm_super_pending_source_left");
-        let source_right = typed_const(&mut bank, "pm_super_pending_source_right");
-        let target_left = typed_const(&mut bank, "pm_super_pending_target_left");
-        let target_right = typed_const(&mut bank, "pm_super_pending_target_right");
-        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
-        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        let source_arg = typed_const(&mut bank, "pm_super_source_arg");
+        let replacement = typed_const(&mut bank, "pm_super_replacement");
+        let variable = typed_var(&bank, -10);
+        let f_code = typed_unary_code(&mut bank, "pm_super_f");
+        let h_code = typed_unary_code(&mut bank, "pm_super_h");
+        let k_code = typed_unary_code(&mut bank, "pm_super_k");
+        let f_of_source_arg = typed_unary(&mut bank, f_code, &source_arg);
+        let f_of_variable = typed_unary(&mut bank, f_code, &variable);
+        let h_of_variable_instance = typed_unary(&mut bank, h_code, &f_of_variable);
+        let k_of_source_instance = typed_unary(&mut bank, k_code, &f_of_source_arg);
+        let h_of_replacement = typed_unary(&mut bank, h_code, &replacement);
+        let k_of_replacement = typed_unary(&mut bank, k_code, &replacement);
+        let mut source_literal = lit(&mut bank, &f_of_source_arg, &replacement, true);
+        let mut target_literal = lit(
+            &mut bank,
+            &h_of_variable_instance,
+            &k_of_source_instance,
+            true,
+        );
         maximal_oriented(&mut source_literal);
         maximal_oriented(&mut target_literal);
         let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
         let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let from_pos = top_left_position(&source);
+        let mut into_pos = top_left_position(&target);
+        into_pos
+            .term_pos_mut()
+            .push_component(h_of_variable_instance, 0);
+        f_of_variable.set_prop(TP_POTENTIAL_PARAMOD);
         let mut ocb = kbo_ocb(&bank);
-        let mut store = ClauseSet::new();
 
-        let error = compute_clause_clause_paramodulants(
-            &mut bank,
-            &mut ocb,
-            &source,
-            &source,
-            &target,
-            &mut store,
-            ParamodulationType::SuperSimultaneous,
-        )
-        .unwrap_err();
+        let paramodulant =
+            clause_ordered_super_sim_paramod(&mut bank, &mut ocb, &from_pos, &into_pos)
+                .unwrap()
+                .expect("super-simultaneous paramodulation should replace both instances");
 
-        assert_eq!(
-            error.message(),
-            "super-simultaneous paramodulation wrappers are not ported yet"
-        );
-        assert!(store.is_empty());
+        assert_eq!(paramodulant.literal_number(), 1);
+        let literal = &paramodulant.literals().as_slice()[0];
+        assert_eq!(literal.left(), &h_of_replacement);
+        assert_eq!(literal.right(), &k_of_replacement);
     }
 
     #[test]
