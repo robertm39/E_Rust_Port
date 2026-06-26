@@ -3647,6 +3647,9 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     let raw_clause_no = state.axioms().members();
+    if config.search.completeness.incomplete {
+        state.set_state_is_complete(false);
+    }
     load_configured_watchlist(config, &mut state)?;
 
     let mut control = proof_control_from_config(config)?;
@@ -3701,18 +3704,22 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
             processed_steps: outcome.processed_steps(),
         };
     }
+    let inference_system_complete = proof_search_inference_system_complete(&control);
     write_answer_outputs(output, &mut state)?;
     write_proof_search_result(
         output,
         &outcome,
-        state.statistics().answer_count,
-        state.statistics().status_reported,
+        &state,
+        inference_system_complete,
+        config.search.completeness.assume_inference_system_complete,
     )?;
     write_saturated_output(output, config, &state)?;
     write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
     Ok(saturate_outcome_exit_status(
         &outcome,
-        state.statistics().answer_count,
+        &state,
+        inference_system_complete,
+        config.search.completeness.assume_inference_system_complete,
     ))
 }
 
@@ -3814,12 +3821,13 @@ fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
 fn write_proof_search_result(
     output: &mut impl Write,
     outcome: &SaturateOutcome,
-    answer_count: i64,
-    status_reported: bool,
+    state: &crate::clauses::proofstate::ProofState,
+    inference_system_complete: bool,
+    assume_inference_system_complete: bool,
 ) -> Result<(), EProverError> {
-    if answer_count > 0 {
+    if state.statistics().answer_count > 0 {
         output.write_all(b"\n# Proof found!\n")?;
-        if !status_reported {
+        if !state.statistics().status_reported {
             write_tstp_status(output, "Unsatisfiable")?;
         }
         return Ok(());
@@ -3828,7 +3836,7 @@ fn write_proof_search_result(
     match outcome {
         SaturateOutcome::Returned { .. } => {
             output.write_all(b"\n# Proof found!\n")?;
-            if !status_reported {
+            if !state.statistics().status_reported {
                 write_tstp_status(output, "Unsatisfiable")?;
             }
         }
@@ -3836,8 +3844,12 @@ fn write_proof_search_result(
             reason: SaturateStopReason::Saturated,
             ..
         } => {
-            output.write_all(b"\n# No proof found!\n")?;
-            write_tstp_status(output, "Satisfiable")?;
+            write_saturated_final_result(
+                output,
+                state,
+                inference_system_complete,
+                assume_inference_system_complete,
+            )?;
         }
         SaturateOutcome::Stopped {
             reason: SaturateStopReason::WatchlistEmpty,
@@ -3850,6 +3862,31 @@ fn write_proof_search_result(
             output.write_all(b"\n# Failure: User resource limit exceeded!\n")?;
             write_tstp_status(output, "ResourceOut")?;
         }
+    }
+    Ok(())
+}
+
+fn write_saturated_final_result(
+    output: &mut impl Write,
+    state: &crate::clauses::proofstate::ProofState,
+    inference_system_complete: bool,
+    assume_inference_system_complete: bool,
+) -> Result<(), EProverError> {
+    if !(inference_system_complete || assume_inference_system_complete) {
+        output.write_all(b"\n# Clause set closed under restricted calculus!\n")?;
+        write_tstp_status(output, "GaveUp")?;
+    } else if state.state_is_complete()
+        && inference_system_complete
+        && state.has_interpreted_symbols()
+    {
+        output.write_all(b"\n# Clause set saturated up to interpreted theories!\n")?;
+        write_tstp_status(output, "GaveUp")?;
+    } else if state.state_is_complete() && inference_system_complete {
+        output.write_all(b"\n# No proof found!\n")?;
+        write_tstp_status(output, "Satisfiable")?;
+    } else {
+        output.write_all(b"\n# Failure: Out of unprocessed clauses!\n")?;
+        write_tstp_status(output, "GaveUp")?;
     }
     Ok(())
 }
@@ -3935,8 +3972,13 @@ fn write_proof_statistics(
     Ok(())
 }
 
-const fn saturate_outcome_exit_status(outcome: &SaturateOutcome, answer_count: i64) -> u8 {
-    if answer_count > 0 {
+fn saturate_outcome_exit_status(
+    outcome: &SaturateOutcome,
+    state: &crate::clauses::proofstate::ProofState,
+    inference_system_complete: bool,
+    assume_inference_system_complete: bool,
+) -> u8 {
+    if state.statistics().answer_count > 0 {
         return ErrorCode::PROOF_FOUND.exit_status();
     }
     match outcome {
@@ -3944,13 +3986,36 @@ const fn saturate_outcome_exit_status(outcome: &SaturateOutcome, answer_count: i
         SaturateOutcome::Stopped {
             reason: SaturateStopReason::Saturated,
             ..
-        } => ErrorCode::SATISFIABLE.exit_status(),
+        } if inference_system_complete
+            && state.state_is_complete()
+            && !state.has_interpreted_symbols() =>
+        {
+            ErrorCode::SATISFIABLE.exit_status()
+        }
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::Saturated,
+            ..
+        } if !inference_system_complete && !assume_inference_system_complete => {
+            ErrorCode::INCOMPLETE_PROOFSTATE.exit_status()
+        }
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::Saturated,
+            ..
+        } => ErrorCode::INCOMPLETE_PROOFSTATE.exit_status(),
         SaturateOutcome::Stopped {
             reason: SaturateStopReason::TimeLimit,
             ..
         } => ErrorCode::CPU_LIMIT_ERROR.exit_status(),
         SaturateOutcome::Stopped { .. } => ErrorCode::RESOURCE_OUT.exit_status(),
     }
+}
+
+fn proof_search_inference_system_complete(control: &ProofControl) -> bool {
+    let heuristic = control.heuristic_parms();
+    heuristic.selection_strategy != NO_GENERATION
+        && heuristic.order_params.lit_cmp != i64::from(to_params::LiteralCmp::TfoEqMax.c_value())
+        && heuristic.enable_eq_factoring
+        && heuristic.enable_neg_unit_paramod
 }
 
 fn parse_clause_file(
@@ -6219,7 +6284,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--no-generation", path_arg.as_str()],
+            ["eprover", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
@@ -6229,6 +6294,61 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             "\n# No proof found!\n# SZS status Satisfiable\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_no_generation_as_restricted_calculus() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-restricted-calculus");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--no-generation", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_assumed_incompleteness_as_gave_up() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-assume-incomplete");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--assume-incompleteness",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Failure: Out of unprocessed clauses!\n# SZS status GaveUp\n"
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6257,8 +6377,10 @@ mod tests {
         .unwrap();
 
         let printed = String::from_utf8(stdout).unwrap();
-        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(printed.starts_with("\n# No proof found!\n# SZS status Satisfiable\n"));
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.starts_with(
+            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
+        ));
         assert!(printed.contains("# Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
         assert!(stderr.is_empty());
@@ -6278,7 +6400,6 @@ mod tests {
             [
                 "eprover",
                 "--lop-in",
-                "--no-generation",
                 "--print-statistics",
                 path_arg.as_str(),
             ],
@@ -6311,7 +6432,6 @@ mod tests {
             [
                 "eprover",
                 "--lop-in",
-                "--no-generation",
                 "--presat-simplify=true",
                 path_arg.as_str(),
             ],
@@ -6473,10 +6593,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# No proof found!\n# SZS status Satisfiable\n"
+            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
