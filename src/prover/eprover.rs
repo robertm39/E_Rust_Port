@@ -22,6 +22,7 @@ use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
+use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::heuristics::clausesetfeatures::proof_state_print_selective_string;
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
@@ -3726,6 +3727,7 @@ fn run_prune_only<W: Write + ?Sized>(
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     write_preprocessing_config_debug_line(output, config)?;
+    let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
     write_initial_clause_docs(output, config, &mut state)?;
     output.write_all(b"\n# Pruning successful!\n")?;
     write_tstp_status(output, "Unknown")?;
@@ -3738,9 +3740,10 @@ fn run_proof_search<W: Write + ?Sized>(
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
-    let raw_clause_no = state.axioms().members();
     write_preprocessing_config_debug_line(output, config)?;
-    if config.search.completeness.incomplete {
+    let relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
+    let raw_clause_no = state.axioms().members();
+    if relevancy_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
     }
     load_configured_watchlist(config, &mut state)?;
@@ -3768,7 +3771,14 @@ fn run_proof_search<W: Write + ?Sized>(
     if config.flags.contains(EProverFlag::CnfOnly) {
         write_cnf_only_success(output)?;
         write_saturated_output(output, config, &state)?;
-        write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
+        write_proof_statistics(
+            output,
+            config,
+            &state,
+            parsed_ax_no,
+            relevancy_pruned,
+            raw_clause_no,
+        )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
     let presat_outcome = if control.heuristic_parms().presat_interreduction {
@@ -3808,7 +3818,14 @@ fn run_proof_search<W: Write + ?Sized>(
         config.search.completeness.assume_inference_system_complete,
     )?;
     write_saturated_output(output, config, &state)?;
-    write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
+    write_proof_statistics(
+        output,
+        config,
+        &state,
+        parsed_ax_no,
+        relevancy_pruned,
+        raw_clause_no,
+    )?;
     Ok(saturate_outcome_exit_status(
         &outcome,
         &state,
@@ -3911,6 +3928,21 @@ fn preprocessing_config_debug_line(config: &EProverConfig) -> String {
         i32::from(ho_preprocessing.unroll_only_formulas),
         config.sine.as_deref().unwrap_or("(null)")
     )
+}
+
+fn apply_clause_relevance_pruning(
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> i64 {
+    let level = config.preprocessing.relevance_prune_level;
+    if level == 0 {
+        return 0;
+    }
+
+    let (pruned, removed) =
+        clause_set_relevance_prune(state.terms().signature(), state.axioms(), level);
+    *state.axioms_mut() = pruned;
+    removed
 }
 
 fn load_configured_watchlist(
@@ -4182,6 +4214,7 @@ fn write_proof_statistics(
     config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
     parsed_ax_no: i64,
+    relevancy_pruned: i64,
     raw_clause_no: i64,
 ) -> Result<(), EProverError> {
     if config.output_level <= 1 && !config.flags.contains(EProverFlag::PrintStatistics) {
@@ -4191,7 +4224,10 @@ fn write_proof_statistics(
         output,
         "# Parsed axioms                        : {parsed_ax_no}"
     )?;
-    writeln!(output, "# Removed by relevancy pruning/SinE    : 0")?;
+    writeln!(
+        output,
+        "# Removed by relevancy pruning/SinE    : {relevancy_pruned}"
+    )?;
     writeln!(
         output,
         "# Initial clauses                      : {raw_clause_no}"
@@ -6655,6 +6691,49 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_clause_relevance_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-relevance");
+        std::fs::write(
+            &path,
+            "cnf(goal, negated_conjecture, (f(a)=a)).\n\
+             cnf(rel, axiom, (g(a)=a)).\n\
+             cnf(irr, axiom, (h(b)=b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--rel-pruning-level=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains(&format!("file('{path_arg}', goal)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', rel)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', irr)")));
+        assert!(!printed.contains("g(a)"));
+        assert!(!printed.contains("h(b)"));
+        assert!(printed.contains("\n# Pruning successful!\n# SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
         let _guard = global_state_lock();
         let path = temp_path("proof-found");
@@ -6924,6 +7003,46 @@ mod tests {
         assert!(printed.contains("# Initial clauses in saturation        : 1\n"));
         assert!(printed.contains("# Processed clauses                    : 1\n"));
         assert!(printed.contains("# Termbank termtop insertions          : "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_statistics_count_clause_relevance_pruning() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-relevance-statistics");
+        std::fs::write(
+            &path,
+            "cnf(goal, negated_conjecture, (f(a)=a)).\n\
+             cnf(rel, axiom, (g(a)=a)).\n\
+             cnf(irr, axiom, (h(b)=b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--tstp-out",
+                "--no-generation",
+                "--print-statistics",
+                "--rel-pruning-level=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("# Parsed axioms                        : 3\n"));
+        assert!(printed.contains("# Removed by relevancy pruning/SinE    : 2\n"));
+        assert!(printed.contains("# Initial clauses                      : 1\n"));
+        assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
