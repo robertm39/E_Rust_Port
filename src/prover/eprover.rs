@@ -1649,21 +1649,30 @@ impl From<io::Error> for EProverError {
 
 enum ConfiguredOutput<'a, W: Write + ?Sized> {
     Writer(&'a mut W),
-    File(File),
+    File { file: File, stdout: &'a mut W },
 }
 
 impl<W: Write + ?Sized> Write for ConfiguredOutput<'_, W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         match self {
             Self::Writer(writer) => writer.write(buffer),
-            Self::File(file) => file.write(buffer),
+            Self::File { file, .. } => file.write(buffer),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
             Self::Writer(writer) => writer.flush(),
-            Self::File(file) => file.flush(),
+            Self::File { file, .. } => file.flush(),
+        }
+    }
+}
+
+impl<W: Write + ?Sized> ConfiguredOutput<'_, W> {
+    fn write_pcl_initial_marker(&mut self) -> io::Result<()> {
+        match self {
+            Self::Writer(writer) => writer.write_all(b"XX\n"),
+            Self::File { stdout, .. } => stdout.write_all(b"XX\n"),
         }
     }
 }
@@ -1681,7 +1690,7 @@ fn open_configured_output<'a, W: Write + ?Sized>(
 
     let path = Path::new(name);
     File::create(path)
-        .map(ConfiguredOutput::File)
+        .map(|file| ConfiguredOutput::File { file, stdout })
         .map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,
@@ -3700,7 +3709,10 @@ fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError
     Ok(())
 }
 
-fn run_prune_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
+fn run_prune_only<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     write_initial_clause_docs(output, config, &mut state)?;
@@ -3709,7 +3721,10 @@ fn run_prune_only(output: &mut impl Write, config: &EProverConfig) -> Result<(),
     Ok(())
 }
 
-fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u8, EProverError> {
+fn run_proof_search<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     let raw_clause_no = state.axioms().members();
@@ -3879,8 +3894,8 @@ fn load_configured_watchlist(
     Ok(())
 }
 
-fn write_initial_clause_docs(
-    output: &mut impl Write,
+fn write_initial_clause_docs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<(), EProverError> {
@@ -3889,51 +3904,51 @@ fn write_initial_clause_docs(
     }
 
     let (bank, axioms) = state.terms_and_axioms_mut();
-    let mut rendered = String::new();
     let mut ident = 0_i64;
     for clause in axioms.iter_mut() {
         ident = ident.saturating_add(1);
         clause.set_ident(ident);
-        write_initial_clause_doc(&mut rendered, config, bank, clause)?;
+        write_initial_clause_doc(output, config, bank, clause)?;
     }
-    output.write_all(rendered.as_bytes())?;
     Ok(())
 }
 
-fn write_initial_clause_doc(
-    output: &mut String,
+fn write_initial_clause_doc<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     bank: &TermBank,
     clause: &Clause,
-) -> Result<(), Diagnostic> {
+) -> Result<(), EProverError> {
     match effective_doc_output_format(config) {
         DocOutputFormat::Pcl => write_pcl_initial_clause_doc(output, config, bank, clause),
         DocOutputFormat::Tstp => write_tstp_initial_clause_doc(output, config, bank, clause),
         _ => {
-            output.push_str("# Output format not implemented.\n");
+            output.write_all(b"# Output format not implemented.\n")?;
             Ok(())
         }
     }
 }
 
-fn write_pcl_initial_clause_doc(
-    output: &mut String,
+fn write_pcl_initial_clause_doc<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     bank: &TermBank,
     clause: &Clause,
-) -> Result<(), Diagnostic> {
-    output.push_str("XX\n");
+) -> Result<(), EProverError> {
+    output.write_pcl_initial_marker()?;
+    let mut prefix = String::new();
     write_pcl_doc_step_start(
-        output,
+        &mut prefix,
         config,
         bank,
         clause,
         config.pcl_output.shell_level < 2,
     )
     .map_err(initial_doc_write_error)?;
-    output.push_str("XX\n");
-    output.push_str(&source_info_pcl_string(clause.info()));
-    output.push('\n');
+    output.write_all(prefix.as_bytes())?;
+    output.write_pcl_initial_marker()?;
+    output.write_all(source_info_pcl_string(clause.info()).as_bytes())?;
+    output.write_all(b"\n")?;
     Ok(())
 }
 
@@ -3962,14 +3977,15 @@ fn write_pcl_doc_step_start(
     output.write_str(" : ")
 }
 
-fn write_tstp_initial_clause_doc(
-    output: &mut String,
+fn write_tstp_initial_clause_doc<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     bank: &TermBank,
     clause: &Clause,
-) -> Result<(), Diagnostic> {
+) -> Result<(), EProverError> {
+    let mut rendered = String::new();
     clause_write_tstp_with_type_suffixes(
-        output,
+        &mut rendered,
         bank,
         clause,
         config.pcl_output.full_terms,
@@ -3977,8 +3993,14 @@ fn write_tstp_initial_clause_doc(
         crate::basics::simple_stuff::ProblemType::FirstOrder,
         config.encoding.print_types,
     )?;
-    writeln!(output, ", {}).", source_info_tstp_string(clause.info()))
-        .map_err(initial_doc_write_error)
+    writeln!(
+        &mut rendered,
+        ", {}).",
+        source_info_tstp_string(clause.info())
+    )
+    .map_err(initial_doc_write_error)?;
+    output.write_all(rendered.as_bytes())?;
+    Ok(())
 }
 
 const fn effective_doc_output_format(config: &EProverConfig) -> DocOutputFormat {
@@ -6399,6 +6421,45 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!("# Version: {VERSION}\n\n# No proof found!\n# SZS status Satisfiable\n")
         );
+        std::fs::remove_file(&input_path).unwrap();
+    }
+
+    #[test]
+    fn run_initial_pcl_docs_keep_c_stdout_markers_with_output_file() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("initial-doc-output-file");
+        let input_path = temp_path("initial-doc-output-input");
+        let _ = std::fs::remove_file(&output_path);
+        std::fs::write(&input_path, "p(a).\n").unwrap();
+        let output_arg = output_path.to_string_lossy().into_owned();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--lop-in",
+                "-o",
+                output_arg.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "XX\nXX\n");
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            format!(
+                "     1 : :[++p(a)] : initial(\"{input_arg}\", at_line_1_column_1)\n\n# Pruning successful!\n# SZS status Unknown\n"
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&output_path).unwrap();
         std::fs::remove_file(&input_path).unwrap();
     }
 
