@@ -156,7 +156,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - Plain `ClauseComputeLINormalform` behavior is ported in `src/clauses/rewrite.rs` as `clause_compute_li_normalform_plain`. It normalizes literal sides with the same limited-rewrite retry condition, recovers compact rewrite derivation entries with `term_compute_rw_sequence`, clears `CP_INITIAL` only when the derivation delta records rewrite steps, and propagates `CP_IS_SOS` from followed rewrite links.
 - Plain `ClauseSetComputeLINormalform` behavior is ported as `clause_set_compute_li_normalform_plain`. It preserves set iteration order, sums per-clause rewrite counts, and refreshes cached standard weight only on clauses with nonzero rewrite steps.
 
-### Change Later Candidates
+### Change-Later Observations
 
 - `ClauseLocalRW` and clause normal-form rewriting now preserve C's compact derivation stack shape with numeric operation codes. Replace those raw constants with a typed derivation-code module when the broader proof-object and proof-output port lands.
 - C does not directly refresh the cached clause weight after `ClauseLocalRW` unless `ClauseRemoveSuperfluousLiterals` removes something. Rust refreshes after any local rewrite to preserve the current Rust cached-weight invariant; revisit this when forward-contraction reference tests cover stale-weight observability.
