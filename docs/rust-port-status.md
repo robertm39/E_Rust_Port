@@ -28,6 +28,37 @@ Pending:
 - Higher-order CSU enumeration, lambda normalization, multi-CSU equality-factor stack order, and proof-documentation output for factoring.
 - Reusable fresh-variable-bank behavior may need a performance pass once stable clause/literal ownership is ported.
 
+## Paramodulation
+
+Rust files:
+
+- `src/clauses/paramodulation.rs`
+
+C source references:
+
+- `eprover/CLAUSES/ccl_paramod.c`
+- `eprover/CLAUSES/ccl_paramod.h`
+- `eprover/CONTROL/cco_paramodulation.c`
+- `eprover/CONTROL/cco_paramodulation.h`
+
+Implemented:
+
+- First-order `ComputeOverlap`, including MGU construction, ordered source-side rejection, substitution normalization before term-bank insertion, and first-order `TBTermPosReplace` rebuilding.
+- First-order `EqnOrderedParamod`, including target-side ordering rejection, positive trivial-paramodulant elimination, negative trivial-paramodulant retention for resolved-literal cleanup, and `EPIsPMIntoLit` marking.
+- First-order low-level `ClauseOrderedParamod` for explicit clause positions, including strict maximality rechecks after substitution, normalized copies excluding source/target literals, `EPFromClauseLit` and `EPIsPMIntoLit` flag flow, resolved-literal cleanup, and duplicate cleanup.
+
+Pending:
+
+- `ClausePosFirst/NextParamodInto`, `ClausePosFirst/NextParamodFromSide`, and clause-pair candidate iteration, including exact `no_top` behavior and non-equational/negative-overlap strategy gates.
+- `ComputeClauseClauseParamodulants`, `ComputeAllParamodulants`, unindexed/indexed control wrappers, generated-clause insertion, proof-depth/proof-size/TPTP/SOS metadata propagation, and `DCParamod` / `DCSimParamod` derivation entries.
+- Simultaneous and super-simultaneous ordered paramodulation, `TPPotentialParamod` marking, higher-order unification constraints, lambda normalization, and proof-documentation output.
+- The optional C `check_paramod_ordering_constraint` path remains disabled in C and unported in Rust.
+
+Change-later notes:
+
+- The C implementation encodes inference provenance through mutable literal flags (`EPIsPMIntoLit`, `EPFromClauseLit`) that selection heuristics later inspect. Rust currently preserves those flags for compatibility; a typed generated-literal metadata layer may be clearer after proof reconstruction is stable.
+- Fresh-variable-bank seeding is duplicated with factoring for now. It should become a shared helper once clause ownership and inference wrapper APIs settle.
+
 ## Disequality Decomposition
 
 Rust files:
@@ -138,6 +169,7 @@ Rust files:
 - `src/clauses/grounding.rs`
 - `src/clauses/mod.rs`
 - `src/clauses/overlap_index.rs`
+- `src/clauses/paramodulation.rs`
 - `src/clauses/propclauses.rs`
 - `src/clauses/relevance.rs`
 - `src/clauses/sine.rs`

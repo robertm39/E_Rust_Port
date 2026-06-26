@@ -116,7 +116,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for the first Rust explicit-position ordered-paramodulation slice on 2026-06-26.
 
 Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 
@@ -130,6 +130,14 @@ Source files reviewed: `CLAUSES/ccl_paramod.h`, `CLAUSES/ccl_paramod.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `ComputeOverlap` intentionally leaves the successful MGU active in the caller's substitution and backtracks only rejected overlaps. Rust code should make this lifetime explicit because later literal-list copying depends on dereferencing the same substitution.
+- `EqnOrderedParamod` drops positive trivial paramodulants but keeps negative trivial paramodulants so `EqnListRemoveResolved` can produce an empty clause. This is compatibility behavior, not an obvious simplification bug.
+- `ClauseOrderedParamod` depends on strict maximality rechecks after substitution, not only the precomputed `EPIsMaximal` flags used to enumerate candidates.
+- Generated literal flags have proof-search meaning: `EPIsPMIntoLit` survives on the new critical-pair literal, `EPFromClauseLit` marks literals copied from the source clause, and copied target-side literals have stale PM flags cleared.
+- The C candidate iterators are mutable cursor APIs over clause positions and term positions; replacing them with Rust iterators is reasonable later, but exact candidate order, `no_top`, and strategy-gate behavior should be tested first.
+- Change later: `ParamodOverlapNonEqLiterals` and `ParamodOverlapIntoNegativeLiterals` are process-wide C strategy switches. The Rust port should keep behavior compatible initially, then move them into explicit strategy/config state when the proof-control layer is consolidated.
+- Change later: simultaneous/super-simultaneous paramodulation uses mutable term flags such as `TPPotentialParamod`. This is efficient but fragile; after parity, consider isolating the marking state from shared terms to reduce accidental cross-inference coupling.
+- Change later: fresh-variable normalization and per-inference `VarBankResetVCounts` are allocation-sensitive. Rust should preserve the semantics first, then benchmark whether a shared fresh-variable helper or reusable bank materially improves performance.
 
 ### Porting Focus
 

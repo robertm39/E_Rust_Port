@@ -28,6 +28,7 @@ pub mod groundconstr;
 pub mod grounding;
 pub mod neweval;
 pub mod overlap_index;
+pub mod paramodulation;
 pub mod proofstate;
 pub mod propclauses;
 pub mod relevance;
