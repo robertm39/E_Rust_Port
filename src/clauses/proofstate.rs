@@ -583,6 +583,269 @@ impl ProofState {
         output
     }
 
+    /// Prints proof-state counters like C `ProofStateStatisticsPrint`.
+    ///
+    /// Formula-archive ownership and term-bank detail mode are not represented
+    /// here yet, so archived formulas remain zero and optional term-detail
+    /// lines stay with the later global proof-output integration.
+    ///
+    /// # Errors
+    ///
+    /// Returns any formatting error from `output`.
+    pub fn write_statistics(
+        &self,
+        output: &mut impl fmt::Write,
+        record_gc_selection: bool,
+    ) -> fmt::Result {
+        self.write_processed_statistics(output)?;
+        self.write_generation_statistics(output)?;
+        self.write_satcheck_statistics(output)?;
+        self.write_clause_set_statistics(output, record_gc_selection)
+    }
+
+    fn write_processed_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        let statistics = self.statistics();
+        writeln!(
+            output,
+            "# Initial clauses in saturation        : {}",
+            self.axioms.members()
+        )?;
+        writeln!(
+            output,
+            "# Processed clauses                    : {}",
+            statistics.processed_count
+        )?;
+        writeln!(
+            output,
+            "# ...of these trivial                  : {}",
+            statistics.proc_trivial_count
+        )?;
+        writeln!(
+            output,
+            "# ...subsumed                          : {}",
+            statistics.proc_forward_subsumed_count
+        )?;
+        writeln!(
+            output,
+            "# ...remaining for further processing  : {}",
+            statistics.proc_non_trivial_count
+        )?;
+        writeln!(
+            output,
+            "# Other redundant clauses eliminated   : {}",
+            statistics.other_redundant_count
+        )?;
+        writeln!(
+            output,
+            "# Clauses deleted for lack of memory   : {}",
+            statistics.non_redundant_deleted
+        )?;
+        writeln!(
+            output,
+            "# Backward-subsumed                    : {}",
+            statistics.backward_subsumed_count
+        )?;
+        writeln!(
+            output,
+            "# Backward-rewritten                   : {}",
+            statistics.backward_rewritten_count
+        )
+    }
+
+    fn write_generation_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        let statistics = self.statistics();
+        writeln!(
+            output,
+            "# Generated clauses                    : {}",
+            statistics
+                .generated_count
+                .wrapping_sub(statistics.backward_rewritten_count)
+        )?;
+        writeln!(
+            output,
+            "# ...of the previous two non-redundant : {}",
+            statistics.non_trivial_generated_count
+        )?;
+        writeln!(
+            output,
+            "# ...aggressively subsumed             : {}",
+            statistics.aggressive_forward_subsumed_count
+        )?;
+        writeln!(
+            output,
+            "# Contextual simplify-reflections      : {}",
+            statistics.context_sr_count
+        )?;
+        writeln!(
+            output,
+            "# Paramodulations                      : {}",
+            statistics.paramod_count
+        )?;
+        writeln!(
+            output,
+            "# Factorizations                       : {}",
+            statistics.factor_count
+        )?;
+        writeln!(
+            output,
+            "# NegExts                              : {}",
+            statistics.neg_ext_count
+        )?;
+        writeln!(
+            output,
+            "# Equation resolutions                 : {}",
+            statistics.resolv_count
+        )?;
+        writeln!(
+            output,
+            "# Disequality decompositions           : {}",
+            statistics.disequ_deco_count
+        )?;
+        writeln!(
+            output,
+            "# Total rewrite steps                  : {}",
+            statistics.rw_count
+        )?;
+        writeln!(
+            output,
+            "# ...of those cached                   : {}",
+            statistics.rw_count
+        )
+    }
+
+    fn write_satcheck_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        let statistics = self.statistics();
+        writeln!(
+            output,
+            "# Propositional unsat checks           : {}",
+            statistics.satcheck_count
+        )?;
+        writeln!(
+            output,
+            "#    Propositional check models        : {}",
+            statistics.satcheck_satisfiable
+        )?;
+        writeln!(
+            output,
+            "#    Propositional check unsatisfiable : {}",
+            statistics.satcheck_success
+        )?;
+        writeln!(
+            output,
+            "#    Propositional clauses             : {}",
+            statistics.satcheck_full_size
+        )?;
+        writeln!(
+            output,
+            "#    Propositional clauses after purity: {}",
+            statistics.satcheck_actual_size
+        )?;
+        writeln!(
+            output,
+            "#    Propositional unsat core size     : {}",
+            statistics.satcheck_core_size
+        )?;
+        writeln!(
+            output,
+            "#    Propositional preprocessing time  : {:.3}",
+            statistics.satcheck_preproc_time
+        )?;
+        writeln!(
+            output,
+            "#    Propositional encoding time       : {:.3}",
+            statistics.satcheck_encoding_time
+        )?;
+        writeln!(
+            output,
+            "#    Propositional solver time         : {:.3}",
+            statistics.satcheck_solver_time
+        )?;
+        writeln!(
+            output,
+            "#    Success case prop preproc time    : {:.3}",
+            statistics.satcheck_preproc_stime
+        )?;
+        writeln!(
+            output,
+            "#    Success case prop encoding time   : {:.3}",
+            statistics.satcheck_encoding_stime
+        )?;
+        writeln!(
+            output,
+            "#    Success case prop solver time     : {:.3}",
+            statistics.satcheck_solver_stime
+        )
+    }
+
+    fn write_clause_set_statistics(
+        &self,
+        output: &mut impl fmt::Write,
+        record_gc_selection: bool,
+    ) -> fmt::Result {
+        let statistics = self.statistics();
+        writeln!(
+            output,
+            "# Current number of processed clauses  : {}",
+            self.processed_cardinality()
+        )?;
+        writeln!(
+            output,
+            "#    Positive orientable unit clauses  : {}",
+            self.processed_pos_rules.members()
+        )?;
+        writeln!(
+            output,
+            "#    Positive unorientable unit clauses: {}",
+            self.processed_pos_eqns.members()
+        )?;
+        writeln!(
+            output,
+            "#    Negative unit clauses             : {}",
+            self.processed_neg_units.members()
+        )?;
+        writeln!(
+            output,
+            "#    Non-unit-clauses                  : {}",
+            self.processed_non_units.members()
+        )?;
+        writeln!(
+            output,
+            "# Current number of unprocessed clauses: {}",
+            self.unprocessed.members()
+        )?;
+        writeln!(
+            output,
+            "# ...number of literals in the above   : {}",
+            self.unprocessed.literals()
+        )?;
+        writeln!(output, "# Current number of archived formulas  : 0")?;
+        writeln!(
+            output,
+            "# Current number of archived clauses   : {}",
+            self.archive.members()
+        )?;
+        if record_gc_selection {
+            writeln!(
+                output,
+                "# Proof object given clauses           : {}",
+                statistics.gc_used_count
+            )?;
+            writeln!(
+                output,
+                "# Proof search given clauses           : {}",
+                statistics.gc_count
+            )?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn statistics_string(&self, record_gc_selection: bool) -> String {
+        let mut output = String::new();
+        let _ = self.write_statistics(&mut output, record_gc_selection);
+        output
+    }
+
     /// Initializes the preloaded watchlist clauses like the local clause-set
     /// portion of C `ProofStateInitWatchlist`.
     ///

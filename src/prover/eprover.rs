@@ -3579,7 +3579,8 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
 
 fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
-    parse_input_files_into_axioms(config, &mut state)?;
+    let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    let raw_clause_no = state.axioms().members();
     load_configured_watchlist(config, &mut state)?;
 
     let mut control = proof_control_from_config(config)?;
@@ -3613,18 +3614,21 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
         config.answer_limit,
     )?;
     write_saturated_output(output, config, &state)?;
+    write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
     Ok(saturate_outcome_exit_status(&outcome))
 }
 
 fn parse_input_files_into_axioms(
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-) -> Result<(), EProverError> {
+) -> Result<i64, EProverError> {
+    let mut parsed_total = 0_i64;
     for file in &config.files {
         let before = state.axioms().len();
         let mut parsed = ClauseSet::new();
         parse_clause_file(file, config.parse_format, state.terms_mut(), &mut parsed)?;
         let parsed_count = parsed.len();
+        parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
         state.axioms_mut().insert_set(&mut parsed);
         if config.flags.contains(EProverFlag::RequireNonempty) && parsed_count == 0 {
             return Err(Diagnostic::new(
@@ -3644,7 +3648,7 @@ fn parse_input_files_into_axioms(
         .into());
     }
 
-    Ok(())
+    Ok(parsed_total)
 }
 
 fn load_configured_watchlist(
@@ -3678,6 +3682,53 @@ fn write_saturated_output(
     )?;
     output.write_all(rendered.as_bytes())?;
     output.write_all(b"\n")?;
+    Ok(())
+}
+
+fn write_proof_statistics(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    parsed_ax_no: i64,
+    raw_clause_no: i64,
+) -> Result<(), EProverError> {
+    if config.output_level <= 1 && !config.flags.contains(EProverFlag::PrintStatistics) {
+        return Ok(());
+    }
+    writeln!(
+        output,
+        "# Parsed axioms                        : {parsed_ax_no}"
+    )?;
+    writeln!(output, "# Removed by relevancy pruning/SinE    : 0")?;
+    writeln!(
+        output,
+        "# Initial clauses                      : {raw_clause_no}"
+    )?;
+    writeln!(output, "# Removed in clause preprocessing      : 0")?;
+    output.write_all(
+        state
+            .statistics_string(config.flags.contains(EProverFlag::RecordGivenClauses))
+            .as_bytes(),
+    )?;
+    writeln!(output, "# Clause-clause subsumption calls (NU) : 0")?;
+    writeln!(output, "# Rec. Clause-clause subsumption calls : 0")?;
+    writeln!(output, "# Non-unit clause-clause subsumptions  : 0")?;
+    writeln!(output, "# Unit Clause-clause subsumption calls : 0")?;
+    writeln!(output, "# Rewrite failures with RHS unbound    : 0")?;
+    writeln!(output, "# BW rewrite match attempts            : 0")?;
+    writeln!(output, "# BW rewrite match successes           : 0")?;
+    writeln!(output, "# Condensation attempts                : 0")?;
+    writeln!(output, "# Condensation successes               : 0")?;
+    writeln!(
+        output,
+        "# Termbank termtop insertions          : {}",
+        state.terms().insertions()
+    )?;
+    writeln!(
+        output,
+        "# Search garbage collected termcells   : {}",
+        state.terms().recovered()
+    )?;
     Ok(())
 }
 
@@ -5865,6 +5916,38 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(printed.contains("# Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_statistics_when_requested() {
+        let _guard = global_test_lock();
+        let path = temp_path("proof-print-statistics");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("# Parsed axioms                        : 1\n"));
+        assert!(printed.contains("# Initial clauses in saturation        : 1\n"));
+        assert!(printed.contains("# Processed clauses                    : 1\n"));
+        assert!(printed.contains("# Termbank termtop insertions          : "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
