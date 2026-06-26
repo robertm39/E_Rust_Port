@@ -6478,10 +6478,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(
-            String::from_utf8(stdout).unwrap(),
-            "XX\n     1 : :[++p(a)] : XX\ninitial(unknown, at_line_1_column_1)\n\n# Pruning successful!\n# SZS status Unknown\n"
+        let expected = format!(
+            "XX\n     1 : :[++p(a)] : XX\ninitial(\"{path_arg}\", at_line_1_column_1)\n\n# Pruning successful!\n# SZS status Unknown\n"
         );
+        assert_eq!(String::from_utf8(stdout).unwrap(), expected);
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -6818,8 +6818,9 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        assert!(printed
-            .starts_with("XX\n     1 : :[++p(a)] : XX\ninitial(unknown, at_line_1_column_1)\n"));
+        let expected_prefix =
+            format!("XX\n     1 : :[++p(a)] : XX\ninitial(\"{path_arg}\", at_line_1_column_1)\n");
+        assert!(printed.starts_with(&expected_prefix));
         assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("# SZS status GaveUp\n"));
         assert!(printed.contains("# Parsed axioms                        : 1\n"));
@@ -6852,9 +6853,9 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        assert!(
-            printed.starts_with("cnf(c_0_1, axiom, (p(a)), file(unknown, at_line_1_column_1)).\n")
-        );
+        let expected_prefix =
+            format!("cnf(c_0_1, axiom, (p(a)), file('{path_arg}', at_line_1_column_1)).\n");
+        assert!(printed.starts_with(&expected_prefix));
         assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("# SZS status GaveUp\n"));
         assert!(printed.contains("# Parsed axioms                        : 1\n"));

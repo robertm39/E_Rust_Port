@@ -1261,6 +1261,7 @@ pub fn clause_parse_with_options(
     options: ClauseParseOptions,
 ) -> Result<Clause, Diagnostic> {
     apply_clause_parse_var_scope(bank, options);
+    let start_source = token_source_string(scanner.current_token().source_bytes());
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
     let mut type_ = CP_TYPE_AXIOM;
@@ -1280,7 +1281,7 @@ pub fn clause_parse_with_options(
     clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
     clause.set_info(Some(ClauseInfo::new(
         name.as_deref(),
-        None,
+        Some(start_source.as_str()),
         start_line,
         start_column,
     )));
@@ -2023,6 +2024,10 @@ fn tstp_write_error(_error: fmt::Error) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause")
 }
 
+fn token_source_string(source: &[u8]) -> String {
+    String::from_utf8_lossy(source).into_owned()
+}
+
 fn next_clause_ident() -> i64 {
     GLOBAL_CLAUSE_COUNTER
         .fetch_add(1, AtomicOrdering::SeqCst)
@@ -2482,6 +2487,10 @@ mod tests {
         );
         assert_eq!(parsed_rule.query_tptp_type(), CP_TYPE_AXIOM);
         assert!(parsed_rule.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+        assert_eq!(
+            parsed_rule.info().and_then(ClauseInfo::source),
+            Some("p(a) <- q(a), r(a). tail")
+        );
         assert_eq!(rule.current_token().literal(), "tail");
 
         let mut query = Scanner::from_user_string("?- goal(a).", false).unwrap();
