@@ -82,8 +82,11 @@ Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 - `ClauseContextualSimplifyReflect` first snapshots the clause literals into a stack, sets the cached weight to `ClauseStandardWeight`, then pops literals in stack order. For each literal it flips the sign, sorts by subsumption order, and removes the flipped literal only if the modified clause is subsumed by the set.
 - When a contextual subsumer is found, C inherits `CPIsSOS`, clears `CPInitial|CPLimitedRW`, removes the literal, documents the modification, and pushes a `DCContextSR` derivation entry. The Rust plain helper preserves the mutation/property changes and now records `DCContextSR` with a compact subsumer reference; proof documentation remains pending.
 - `ClauseSetFindContextSRClauses` flips and sorts the query for each literal and pushes every subsumed set clause, including duplicate pushes for the same clause if multiple flipped literals work.
-- Change-later candidate: C relies on raw `Eqn_p` stack entries remaining valid across literal-list sorting. Rust matches by literal properties and term handles while ignoring the mutable position field; revisit if duplicate literal identity becomes observable outside cleanup-normalized clauses.
-- Change-later candidate: C stores the raw contextual subsumer pointer in the derivation stack. Rust currently records a compact clause reference; replace it with a stable clause handle before proof-object traversal needs the full parent object.
+
+### Change-Later Observations
+
+- C relies on raw `Eqn_p` stack entries remaining valid across literal-list sorting. Rust matches by literal properties and term handles while ignoring the mutable position field; revisit if duplicate literal identity becomes observable outside cleanup-normalized clauses.
+- C stores the raw contextual subsumer pointer in the derivation stack. Rust currently records a compact clause reference; replace it with a stable clause handle before proof-object traversal needs the full parent object.
 
 ### Porting Focus
 
