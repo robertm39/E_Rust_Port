@@ -146,6 +146,7 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Change-later candidate: C CNF conversion relies on destructive formula mutation, shared term/formula structure, polarity markers, and side-effecting definition archives. Rust should mirror the observable clause output and proof metadata first, but the final clausifier should expose ownership and mutation phases explicitly so temporary bridges do not duplicate ad hoc fragments of this pipeline.
 
 ### Porting Focus
 

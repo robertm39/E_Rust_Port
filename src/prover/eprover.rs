@@ -10,18 +10,20 @@ use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
+use crate::basics::simple_stuff::ProblemType;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
-    clause_print_lop_format_string_with_options, clause_write_pcl_with_options,
+    clause_parse, clause_print_lop_format_string_with_options, clause_write_pcl_with_options,
     clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE,
-    CP_TYPE_QUESTION,
+    clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA,
+    CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
 };
-use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string};
+use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::eqn::EqnPrintOptions;
+use crate::clauses::eqn::{eqn_fof_parse, Eqn, EqnPrintOptions};
+use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
@@ -39,6 +41,7 @@ use crate::heuristics::proofcontrol::{
     SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::to_params::{self, OrderParmsCell};
+use crate::inout::basicparser::parse_skip_parenthesized_expr;
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
@@ -1150,11 +1153,16 @@ pub enum EProverFlag {
     FilterSaturated = 1 << 17,
     ResourceInfo = 1 << 18,
     ConjecturesAreQuestions = 1 << 19,
+    FormulaConjectureSeen = 1 << 20,
 }
 
 impl EProverFlags {
     pub fn set(&mut self, flag: EProverFlag) {
         self.bits |= flag as u32;
+    }
+
+    pub fn clear(&mut self, flag: EProverFlag) {
+        self.bits &= !(flag as u32);
     }
 
     #[must_use]
@@ -3658,12 +3666,15 @@ fn run_syntax_only(
     let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
     let mut clauses = ClauseSet::new();
 
+    config.flags.clear(EProverFlag::FormulaConjectureSeen);
     let files = config.files.clone();
     for file in &files {
         let before = clauses.len();
-        let detected_format =
-            parse_clause_file(file, config.parse_format, &mut bank, &mut clauses)?;
-        apply_auto_parse_output_side_effects(config, detected_format);
+        let parsed_file = parse_clause_file(file, config.parse_format, &mut bank, &mut clauses)?;
+        if parsed_file.formula_conjecture_seen {
+            config.flags.set(EProverFlag::FormulaConjectureSeen);
+        }
+        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         if config.flags.contains(EProverFlag::RequireNonempty) && clauses.len() == before {
             return Err(Diagnostic::new(
                 ErrorCode::INPUT_SEMANTIC_ERROR,
@@ -3853,6 +3864,7 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
 ) -> Result<(), EProverError> {
     write_proof_search_result(
         output,
+        config,
         outcome,
         state,
         inference_system_complete,
@@ -3924,13 +3936,17 @@ fn parse_input_files_into_axioms(
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
+    config.flags.clear(EProverFlag::FormulaConjectureSeen);
     let files = config.files.clone();
     for file in &files {
         let before = state.axioms().len();
         let mut parsed = ClauseSet::new();
-        let detected_format =
+        let parsed_file =
             parse_clause_file(file, config.parse_format, state.terms_mut(), &mut parsed)?;
-        apply_auto_parse_output_side_effects(config, detected_format);
+        if parsed_file.formula_conjecture_seen {
+            config.flags.set(EProverFlag::FormulaConjectureSeen);
+        }
+        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         let parsed_count = parsed.len();
         parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
         state.axioms_mut().insert_set(&mut parsed);
@@ -4325,15 +4341,21 @@ fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
 
 fn write_proof_search_result(
     output: &mut impl Write,
+    config: &EProverConfig,
     outcome: &SaturateOutcome,
     state: &crate::clauses::proofstate::ProofState,
     inference_system_complete: bool,
     assume_inference_system_complete: bool,
 ) -> Result<(), EProverError> {
+    let proof_success_status = if config.flags.contains(EProverFlag::FormulaConjectureSeen) {
+        "Theorem"
+    } else {
+        "Unsatisfiable"
+    };
     if state.statistics().answer_count > 0 {
         write_comment_line_after_blank(output, "Proof found!")?;
         if !state.statistics().status_reported {
-            write_tstp_status(output, "Unsatisfiable")?;
+            write_tstp_status(output, proof_success_status)?;
         }
         return Ok(());
     }
@@ -4342,7 +4364,7 @@ fn write_proof_search_result(
         SaturateOutcome::Returned { .. } => {
             write_comment_line_after_blank(output, "Proof found!")?;
             if !state.statistics().status_reported {
-                write_tstp_status(output, "Unsatisfiable")?;
+                write_tstp_status(output, proof_success_status)?;
             }
         }
         SaturateOutcome::Stopped {
@@ -4615,7 +4637,7 @@ fn parse_clause_file(
     parse_format: IoFormat,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
-) -> Result<IoFormat, Diagnostic> {
+) -> Result<ParsedClauseFile, Diagnostic> {
     let mut scanner = if file == "-" {
         let mut input = Vec::new();
         io::stdin().read_to_end(&mut input).map_err(|error| {
@@ -4630,11 +4652,12 @@ fn parse_clause_file(
     };
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
-    clauses.parse_list(
-        &mut scanner,
-        bank,
-        crate::basics::simple_stuff::ProblemType::FirstOrder,
-    )?;
+    let mut formula_conjecture_seen = false;
+    if detected_format == IoFormat::Tstp {
+        formula_conjecture_seen = parse_tstp_entry_list(&mut scanner, bank, clauses)?;
+    } else {
+        clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
+    }
     if !scanner.test_tok(TokenType::NO_TOKEN) {
         return Err(Diagnostic::new(
             ErrorCode::SYNTAX_ERROR,
@@ -4645,7 +4668,232 @@ fn parse_clause_file(
             ),
         ));
     }
-    Ok(detected_format)
+    Ok(ParsedClauseFile {
+        detected_format,
+        formula_conjecture_seen,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParsedClauseFile {
+    detected_format: IoFormat,
+    formula_conjecture_seen: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SimpleFofFormula {
+    Literal(Eqn),
+    Implication { antecedent: Eqn, consequent: Eqn },
+}
+
+fn parse_tstp_entry_list(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+) -> Result<bool, Diagnostic> {
+    let mut formula_conjecture_seen = false;
+    while !scanner.test_tok(TokenType::NO_TOKEN) {
+        let clause = if scanner.test_id("cnf") {
+            clause_parse(scanner, bank, ProblemType::FirstOrder)?
+        } else if scanner.test_id("fof") {
+            let parsed = parse_simple_fof_clause(scanner, bank)?;
+            formula_conjecture_seen |= parsed.formula_conjecture_seen;
+            parsed.clause
+        } else {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses and the atomic/universal-implication fof fragment",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            ));
+        };
+        clauses.insert(clause);
+    }
+    Ok(formula_conjecture_seen)
+}
+
+struct ParsedSimpleFofClause {
+    clause: Clause,
+    formula_conjecture_seen: bool,
+}
+
+fn parse_simple_fof_clause(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    bank.vars().clear_ext_names();
+    let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
+    let start_line = usize_to_i64(scanner.current_token().line());
+    let start_column = usize_to_i64(scanner.current_token().column());
+
+    scanner.accept_id("fof")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.check_id(
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist",
+    )?;
+    let role = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::IDENT)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    let mut clause_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
+    if formula_conjecture_seen {
+        clause_type = CP_TYPE_NEG_CONJECTURE;
+    }
+    let literals = simple_fof_formula_to_clause_literals(
+        parse_simple_fof_formula(scanner, bank)?,
+        formula_conjecture_seen,
+    )?;
+    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        tstp_skip_source(scanner)?;
+        if scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            scanner.check_tok(TokenType::OPEN_SQUARE)?;
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    let mut clause = Clause::alloc(literals);
+    clause.set_tptp_type(clause_type);
+    clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+    clause.set_info(Some(ClauseInfo::new(
+        Some(name.as_str()),
+        Some(start_source.as_str()),
+        start_line,
+        start_column,
+    )));
+    Ok(ParsedSimpleFofClause {
+        clause,
+        formula_conjecture_seen,
+    })
+}
+
+fn simple_fof_formula_to_clause_literals(
+    formula: SimpleFofFormula,
+    negate_as_conjecture: bool,
+) -> Result<EqnList, Diagnostic> {
+    match formula {
+        SimpleFofFormula::Literal(literal) => {
+            let mut literals = EqnList::from_vec(vec![literal]);
+            if negate_as_conjecture {
+                literals.negate_eqns();
+            }
+            Ok(literals)
+        }
+        SimpleFofFormula::Implication {
+            mut antecedent,
+            consequent,
+        } => {
+            if negate_as_conjecture {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "FOF conjecture implications require full clausification; the temporary parser only supports atomic conjectures",
+                ));
+            }
+            antecedent.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
+            Ok(EqnList::from_vec(vec![consequent, antecedent]))
+        }
+    }
+}
+
+fn parse_simple_fof_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<SimpleFofFormula, Diagnostic> {
+    parse_simple_fof_universal_prefix(scanner)?;
+    if scanner.test_tok(TokenType::EXIST_QUANTOR) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let formula = parse_simple_fof_formula(scanner, bank)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        return Ok(formula);
+    }
+
+    let antecedent = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+    if scanner.test_tok(TokenType::FOF_LR_IMPL) {
+        scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
+        let consequent = parse_simple_fof_literal(scanner, bank)?;
+        return Ok(SimpleFofFormula::Implication {
+            antecedent,
+            consequent,
+        });
+    }
+    if scanner.test_tok(TokenType::FOF_BIN_OP) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    Ok(SimpleFofFormula::Literal(antecedent))
+}
+
+fn parse_simple_fof_literal(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Eqn, Diagnostic> {
+    if scanner.test_tok(TokenType::EXIST_QUANTOR | TokenType::UNIV_QUANTOR) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+        if scanner.test_tok(TokenType::FOF_BIN_OP) {
+            return Err(simple_fof_unsupported_error(scanner));
+        }
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        Ok(literal)
+    } else {
+        eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)
+    }
+}
+
+fn parse_simple_fof_universal_prefix(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    while scanner.test_tok(TokenType::UNIV_QUANTOR) {
+        scanner.accept_tok(TokenType::UNIV_QUANTOR)?;
+        scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+        scanner.accept_tok(TokenType::NAME)?;
+        while scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            scanner.accept_tok(TokenType::NAME)?;
+        }
+        scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+        scanner.accept_tok(TokenType::COLON)?;
+    }
+    Ok(())
+}
+
+fn tstp_skip_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    if scanner.test_tok(TokenType::OPEN_SQUARE) {
+        parse_skip_parenthesized_expr(scanner)
+    } else {
+        scanner.accept_tok(TokenType::IDENTIFIER | TokenType::POS_INT)?;
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+        Ok(())
+    }
+}
+
+fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!(
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas and universally quantified atomic implications",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal()
+        ),
+    )
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_format: IoFormat) {
@@ -6902,6 +7150,37 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_supported_fof_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-fof");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, ![X]:(human(X) => mortal(X))).\n\
+             fof(fact, axiom, human(socrates)).\n\
+             fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_resources_info_prints_c_shaped_footer() {
         let _guard = global_state_lock();
         let path = temp_path("resources-info");
@@ -7088,6 +7367,30 @@ mod tests {
                 default_preprocessing_debug_line()
             )
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_theorem_for_fof_conjecture_refutation() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-conjecture");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, a=b).\n\
+             fof(goal, conjecture, a=b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -8049,6 +8352,29 @@ mod tests {
         assert!(error
             .message()
             .contains("Unexpected token after clause list"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_unsupported_fof_connective() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-unsupported");
+        std::fs::write(&path, "fof(test1, axiom, (p(a)&q(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("requires full clausification"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

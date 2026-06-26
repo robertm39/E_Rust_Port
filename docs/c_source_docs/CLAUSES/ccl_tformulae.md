@@ -205,6 +205,7 @@ Source files reviewed: `CLAUSES/ccl_tformulae.h`, `CLAUSES/ccl_tformulae.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Change-later candidate: the C TSTP/FOF parser encodes formulas as terms and shares scanner, term-bank, and formula-owner state across parsing, simplification, CNF conversion, and proof output. Rust should preserve the observable token flow first, but the final owner API should separate parsing from clausification enough to make unsupported fragments and source metadata explicit.
 
 ### Porting Focus
 
