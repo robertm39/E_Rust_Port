@@ -2,7 +2,8 @@ use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
-    CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
+    CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS,
+    CP_IS_S_INDEXED, CP_LIMITED_RW,
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
@@ -83,6 +84,20 @@ pub fn clause_is_orphaned_with(
     }
 
     false
+}
+
+pub fn clause_set_delete_orphans_with(
+    set: &mut ClauseSet,
+    mut parent_is_dead: impl FnMut(DerivationParentRef) -> bool,
+) -> i64 {
+    for clause in set.iter_mut() {
+        if clause_is_orphaned_with(clause, &mut parent_is_dead) {
+            clause.set_prop(CP_DELETE_CLAUSE);
+        } else {
+            clause.del_prop(CP_DELETE_CLAUSE);
+        }
+    }
+    set.delete_marked_entries()
 }
 
 fn derivation_parent_is_dead(
@@ -615,14 +630,15 @@ mod tests {
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
         clause_flip_literal_sign_index, clause_is_orphaned_with, clause_recognize_injectivity,
         clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
-        clause_remove_superfluous_literals, clause_set_canonize,
+        clause_remove_superfluous_literals, clause_set_canonize, clause_set_delete_orphans_with,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, pstack_clause_print_lop_string,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW, CP_TYPE_AXIOM,
+        CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW,
+        CP_TYPE_AXIOM,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -775,6 +791,48 @@ mod tests {
         assert!(!clause_is_orphaned_with(&child, |parent| {
             parent == DerivationParentRef::Clause(ClauseDerivationRef::new(82, 0))
         }));
+    }
+
+    #[test]
+    fn clause_set_delete_orphans_marks_deletes_and_clears_survivors_like_c() {
+        let mut dead_parent = Clause::alloc(EqnList::new());
+        dead_parent.set_ident(90);
+        let mut live_parent = Clause::alloc(EqnList::new());
+        live_parent.set_ident(91);
+
+        let mut orphan = Clause::alloc(EqnList::new());
+        orphan.set_ident(100);
+        clause_push_derivation(&mut orphan, DC_ORDERED_FACTOR, Some(&dead_parent), None);
+
+        let mut survivor = Clause::alloc(EqnList::new());
+        survivor.set_ident(101);
+        survivor.set_prop(CP_DELETE_CLAUSE);
+        clause_push_derivation(&mut survivor, DC_ORDERED_FACTOR, Some(&live_parent), None);
+
+        let mut set = ClauseSet::from_clauses([orphan, survivor]);
+
+        let deleted = clause_set_delete_orphans_with(&mut set, |parent| {
+            parent == DerivationParentRef::Clause(ClauseDerivationRef::new(90, 0))
+        });
+
+        assert_eq!(deleted, 1);
+        assert!(set.find_by_id(100).is_none());
+        let survivor = set.find_by_id(101).unwrap();
+        assert!(!survivor.query_prop(CP_DELETE_CLAUSE));
+    }
+
+    #[test]
+    fn clause_set_delete_orphans_preserves_non_orphan_counting() {
+        let mut parent = Clause::alloc(EqnList::new());
+        parent.set_ident(110);
+        let mut child = Clause::alloc(EqnList::new());
+        child.set_ident(111);
+        clause_push_derivation(&mut child, DC_ORDERED_FACTOR, Some(&parent), None);
+
+        let mut set = ClauseSet::from_clauses([child]);
+
+        assert_eq!(clause_set_delete_orphans_with(&mut set, |_| false), 0);
+        assert_eq!(set.find_by_id(111).map(Clause::ident), Some(111));
     }
 
     #[test]
