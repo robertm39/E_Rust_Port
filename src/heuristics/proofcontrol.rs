@@ -8,11 +8,14 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     clause_archive, clause_remove_ac_resolved, clause_remove_superfluous_literals,
+    clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::condensation::condense;
 use crate::clauses::context_sr::clause_contextual_simplify_reflect;
-use crate::clauses::derivation::{clause_push_derivation, DC_CNF_EVAL_GC, DC_CNF_QUOTE};
+use crate::clauses::derivation::{
+    clause_push_derivation, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+};
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::clause_er_normalize_var;
 use crate::clauses::fcvindexing::fv_index_pack_clause;
@@ -35,8 +38,8 @@ use crate::clauses::tautologies::clause_is_tautology;
 use crate::heuristics::axiomscan::clause_set_scan_ac;
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
-    hcb_clause_evaluate, hcb_clause_set_reweight, AcHandling, HeuristicParmsCell, SplitClassType,
-    SplitType,
+    hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight, AcHandling,
+    HeuristicParmsCell, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -187,6 +190,15 @@ pub struct ForwardContractOptions {
 pub struct ForwardContractCounts {
     pub subsumed: u64,
     pub trivial: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CleanupUnprocessedOutcome {
+    pub unsatisfiable: Option<Clause>,
+    pub orphaned_deleted: i64,
+    pub forward_contract_deleted: u64,
+    pub bad_deleted: i64,
+    pub term_gc_recovered: i64,
 }
 
 pub struct ProofControl {
@@ -1243,6 +1255,154 @@ pub fn proof_control_clause_set_filter_reweight(
     proof_control_clause_set_filter_reweigth(control, terms, set, count_eliminated)
 }
 
+/// Returns a Rust-side estimate for C `ProofStateStorage`.
+///
+/// The C macro is a byte estimate over selected clause sets plus `TBStorage`.
+/// Rust does not expose the C allocator cell sizes, so this keeps the same
+/// proof-state domains and uses maintained clause/literal/evaluation counts
+/// plus non-variable term-bank nodes as the currently available proxy.
+#[must_use]
+pub fn proof_state_storage_estimate(state: &ProofState) -> i64 {
+    [
+        clause_set_storage_estimate(state.unprocessed()),
+        clause_set_storage_estimate(state.processed_pos_rules()),
+        clause_set_storage_estimate(state.processed_pos_eqns()),
+        clause_set_storage_estimate(state.processed_neg_units()),
+        clause_set_storage_estimate(state.processed_non_units()),
+        clause_set_storage_estimate(state.archive()),
+        state.terms().non_var_term_nodes(),
+    ]
+    .into_iter()
+    .fold(0_i64, i64::saturating_add)
+}
+
+fn clause_set_storage_estimate(set: &ClauseSet) -> i64 {
+    let eval_slots = i64::try_from(set.eval_no()).unwrap_or(i64::MAX);
+    set.members()
+        .saturating_mul(1_i64.saturating_add(eval_slots))
+        .saturating_add(set.literals())
+}
+
+/// Applies the currently ported local effects of C
+/// `cleanup_unprocessed_clauses`.
+///
+/// This preserves the C gate order: orphan deletion, special forward
+/// contraction/reweighting, then delete-bad under the storage limit. The
+/// orphan check is supplied by the caller because the current derivation stack
+/// stores compact parent references rather than exact live C clause pointers.
+///
+/// # Errors
+///
+/// Returns diagnostics from forward contraction, HCB reweighting, or missing
+/// active-HCB state in the delete-bad branch.
+pub fn proof_state_cleanup_unprocessed_clauses_with(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    current_storage: i64,
+    mut parent_is_dead: impl FnMut(DerivationParentRef) -> bool,
+) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
+    let mut outcome = CleanupUnprocessedOutcome::default();
+    let back_simplified = state
+        .statistics()
+        .backward_subsumed_count
+        .saturating_add(state.statistics().backward_rewritten_count);
+    let orphan_delta = back_simplified.saturating_sub(state.statistics().filter_orphans_base);
+
+    if unsigned_delta_exceeds_limit(orphan_delta, control.heuristic_parms().filter_orphans_limit) {
+        let deleted = clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead);
+        outcome.orphaned_deleted += deleted;
+        state.statistics_mut().other_redundant_count += i64_to_u64_saturating(deleted);
+        state.statistics_mut().filter_orphans_base = back_simplified;
+    }
+
+    let processed_delta = state
+        .statistics()
+        .processed_count
+        .saturating_sub(state.statistics().forward_contract_base);
+    if unsigned_delta_exceeds_limit(
+        processed_delta,
+        control.heuristic_parms().forward_contract_limit,
+    ) {
+        let mut count_eliminated = 0;
+        let mut unprocessed = std::mem::take(state.unprocessed_mut());
+        let unsatisfiable = match proof_state_forward_contract_set(
+            state,
+            control,
+            &mut unprocessed,
+            false,
+            RewriteLevel::FullRewrite,
+            &mut count_eliminated,
+            true,
+        ) {
+            Ok(unsatisfiable) => unsatisfiable,
+            Err(err) => {
+                *state.unprocessed_mut() = unprocessed;
+                return Err(err);
+            }
+        };
+        *state.unprocessed_mut() = unprocessed;
+        outcome.forward_contract_deleted = count_eliminated;
+        state.statistics_mut().other_redundant_count += count_eliminated;
+
+        if let Some(empty) = unsatisfiable {
+            outcome.unsatisfiable = Some(empty);
+            return Ok(outcome);
+        }
+
+        let processed_count = state.statistics().processed_count;
+        state.statistics_mut().forward_contract_base = processed_count;
+        let mut unprocessed = std::mem::take(state.unprocessed_mut());
+        proof_control_clause_set_reweight(control, state.terms(), &mut unprocessed)?;
+        *state.unprocessed_mut() = unprocessed;
+    }
+
+    if current_storage > control.heuristic_parms().delete_bad_limit {
+        let target_size = state.unprocessed().members() / 2;
+        let deleted_orphans =
+            clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead);
+        outcome.orphaned_deleted += deleted_orphans;
+        state.statistics_mut().non_redundant_deleted += i64_to_u64_saturating(deleted_orphans);
+
+        let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "cleanup_unprocessed_clauses delete-bad requires initialized proof-control heuristic",
+            )
+        })?;
+        let active_hcb = control
+            .hcbs
+            .hcb(active_hcb_handle)
+            .ok_or_else(|| unknown_heuristic_handle("active"))?;
+        let bad_deleted =
+            hcb_clause_set_delete_bad_clauses(active_hcb, state.unprocessed_mut(), target_size);
+        outcome.bad_deleted = bad_deleted;
+        if bad_deleted != 0 {
+            state.set_state_is_complete(false);
+        }
+        outcome.term_gc_recovered = state.collect_term_garbage();
+    }
+
+    Ok(outcome)
+}
+
+/// Applies [`proof_state_cleanup_unprocessed_clauses_with`] using the current
+/// storage estimate and a conservative no-orphan predicate.
+///
+/// The default orphan predicate remains false until derivation parent records
+/// can identify exact live/dead proof-state clause handles instead of compact
+/// identifiers.
+///
+/// # Errors
+///
+/// Returns diagnostics from the underlying cleanup helper.
+pub fn proof_state_cleanup_unprocessed_clauses(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
+    let current_storage = proof_state_storage_estimate(state);
+    proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |_| false)
+}
+
 /// Applies C `ProofStateFilterUnprocessed` to the state-owned unprocessed set.
 ///
 /// # Errors
@@ -1356,6 +1516,10 @@ fn proof_state_filter_contract_step(
 
 fn i64_to_u64_saturating(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
+}
+
+fn unsigned_delta_exceeds_limit(delta: u64, limit: i64) -> bool {
+    limit >= 0 && delta > u64::try_from(limit).unwrap_or(u64::MAX)
 }
 
 fn usize_to_u64_saturating(value: usize) -> u64 {
@@ -1858,17 +2022,20 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 mod tests {
     use super::{
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_clause_set_filter_reweigth, proof_control_init,
-        proof_control_init_heuristics, proof_control_reset_sat_solver, proof_state_eval_clause_set,
-        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_subsumption, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
+        proof_control_alloc, proof_control_clause_set_filter_reweigth,
+        proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
+        proof_control_reset_sat_solver, proof_state_cleanup_unprocessed_clauses_with,
+        proof_state_eval_clause_set, proof_state_filter_unprocessed,
+        proof_state_forward_contract_clause, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
+        proof_state_forward_subsumption, proof_state_init, proof_state_init_ac_handling,
+        proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
         proof_state_queue_generated_clause_for_eval, proof_state_reset_processed,
-        select_inherited_literal, ForwardContractCounts, ForwardContractOptions,
-        LiteralSelectionOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_storage_estimate, select_inherited_literal, ForwardContractCounts,
+        ForwardContractOptions, LiteralSelectionOutcome, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1881,7 +2048,8 @@ mod tests {
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        ClauseDerivationRef, DerivationEntry, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+        clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_ORDERED_FACTOR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -2937,6 +3105,114 @@ mod tests {
         assert_eq!(set.members(), 1);
         let survivor = set.find_by_id(4_098).unwrap();
         assert!(survivor.evaluations().is_some());
+    }
+
+    #[test]
+    fn proof_state_cleanup_unprocessed_deletes_orphans_after_back_simplification_limit() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut parent = Clause::empty();
+        parent.set_ident(4_110);
+        let mut orphan = Clause::empty();
+        orphan.set_ident(4_111);
+        clause_push_derivation(&mut orphan, DC_ORDERED_FACTOR, Some(&parent), None);
+        let survivor = unit_clause_with_id(state.terms_mut(), "pc_cleanup_orphan_survivor", 4_112);
+        state.unprocessed_mut().insert(orphan);
+        state.unprocessed_mut().insert(survivor);
+        state.statistics_mut().backward_subsumed_count = 2;
+
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().filter_orphans_limit = 0;
+
+        let outcome =
+            proof_state_cleanup_unprocessed_clauses_with(&mut state, &mut control, 0, |parent| {
+                matches!(
+                    parent,
+                    DerivationParentRef::Clause(parent)
+                        if parent == ClauseDerivationRef::new(4_110, 0)
+                )
+            })
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(outcome.unsatisfiable.is_none());
+        assert_eq!(outcome.orphaned_deleted, 1);
+        assert_eq!(outcome.forward_contract_deleted, 0);
+        assert_eq!(state.unprocessed().members(), 1);
+        assert!(state.unprocessed().find_by_id(4_111).is_none());
+        assert_eq!(state.statistics().other_redundant_count, 1);
+        assert_eq!(state.statistics().filter_orphans_base, 2);
+    }
+
+    #[test]
+    fn proof_state_cleanup_unprocessed_forward_contracts_and_reweights() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (trivial, survivor) = {
+            let terms = state.terms_mut();
+            let same = typed_const(terms, "pc_cleanup_forward_same");
+            let mut trivial =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &same, &same, true)]));
+            trivial.set_ident(4_113);
+            let survivor = unit_clause_with_id(terms, "pc_cleanup_forward_survivor", 4_114);
+            (trivial, survivor)
+        };
+        state.unprocessed_mut().insert(trivial);
+        state.unprocessed_mut().insert(survivor);
+        state.statistics_mut().processed_count = 3;
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "CleanupForwardContractTest");
+        control.heuristic_parms_mut().forward_contract_limit = 0;
+
+        let outcome =
+            proof_state_cleanup_unprocessed_clauses_with(&mut state, &mut control, 0, |_| false)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(outcome.unsatisfiable.is_none());
+        assert_eq!(outcome.forward_contract_deleted, 1);
+        assert_eq!(state.unprocessed().members(), 1);
+        let survivor = state.unprocessed().find_by_id(4_114).unwrap();
+        assert!(survivor.evaluations().is_some());
+        assert_eq!(state.statistics().other_redundant_count, 1);
+        assert_eq!(state.statistics().forward_contract_base, 3);
+    }
+
+    #[test]
+    fn proof_state_cleanup_unprocessed_delete_bad_keeps_best_half_and_marks_incomplete() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (first, second) = {
+            let terms = state.terms_mut();
+            (
+                unit_clause_with_id(terms, "pc_cleanup_bad_first", 4_115),
+                unit_clause_with_id(terms, "pc_cleanup_bad_second", 4_116),
+            )
+        };
+        state.unprocessed_mut().insert(first);
+        state.unprocessed_mut().insert(second);
+
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "CleanupDeleteBadTest");
+        {
+            let mut unprocessed = std::mem::take(state.unprocessed_mut());
+            proof_control_clause_set_reweight(&mut control, state.terms(), &mut unprocessed)
+                .unwrap_or_else(|err| panic!("{err}"));
+            *state.unprocessed_mut() = unprocessed;
+        }
+        control.heuristic_parms_mut().delete_bad_limit = 0;
+        let current_storage = proof_state_storage_estimate(&state).max(1);
+
+        let outcome = proof_state_cleanup_unprocessed_clauses_with(
+            &mut state,
+            &mut control,
+            current_storage,
+            |_| false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.bad_deleted, 1);
+        assert_eq!(state.unprocessed().members(), 1);
+        assert!(!state.state_is_complete());
+        assert_eq!(state.statistics().non_redundant_deleted, 0);
+        assert!(outcome.term_gc_recovered >= 0);
     }
 
     #[test]

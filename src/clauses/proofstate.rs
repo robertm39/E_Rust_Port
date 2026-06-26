@@ -332,6 +332,10 @@ impl ProofState {
         self.state_is_complete
     }
 
+    pub const fn set_state_is_complete(&mut self, complete: bool) {
+        self.state_is_complete = complete;
+    }
+
     #[must_use]
     pub const fn has_interpreted_symbols(&self) -> bool {
         self.has_interpreted_symbols
@@ -401,6 +405,57 @@ impl ProofState {
         if let Some(watchlist) = self.watchlist.as_mut() {
             watchlist.clear();
         }
+    }
+
+    /// Marks proof-state clause terms and sweeps unreachable term-bank entries.
+    ///
+    /// C `TBGCCollect(state->terms)` marks registered clause/formula sets
+    /// through the term bank's GC admin. The current Rust proof state owns the
+    /// clause sets directly, so this marks every currently represented
+    /// proof-state clause owner before sweeping. Formula-set participation is
+    /// added when formula owners are ported.
+    pub fn collect_term_garbage(&mut self) -> i64 {
+        let Self {
+            terms,
+            axioms,
+            ax_archive,
+            processed_pos_rules,
+            processed_pos_eqns,
+            processed_neg_units,
+            processed_non_units,
+            unprocessed,
+            tmp_store,
+            eval_store,
+            archive,
+            watchlist,
+            definition_store,
+            ..
+        } = self;
+
+        for set in [
+            axioms,
+            ax_archive,
+            processed_pos_rules,
+            processed_pos_eqns,
+            processed_neg_units,
+            processed_non_units,
+            unprocessed,
+            tmp_store,
+            eval_store,
+            archive,
+            definition_store,
+        ] {
+            for clause in set.iter() {
+                clause.gc_mark_terms(terms);
+            }
+        }
+        if let Some(watchlist) = watchlist.as_ref() {
+            for clause in watchlist.iter() {
+                clause.gc_mark_terms(terms);
+            }
+        }
+
+        terms.gc_sweep()
     }
 
     /// Loads or disables the proof-state watchlist like C
