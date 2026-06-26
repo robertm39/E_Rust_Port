@@ -21,6 +21,7 @@ use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
 use crate::terms::termvars::VarBank;
@@ -32,7 +33,11 @@ pub const PARAMOD_OVERLAP_NON_EQ_LITERALS: bool = true;
 pub enum ParamodulationType {
     Plain,
     Simultaneous,
+    OrientedSimultaneous,
     SuperSimultaneous,
+    OrientedSuperSimultaneous,
+    DecreasingSimultaneous,
+    SizeDecreasingSimultaneous,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,7 +147,7 @@ pub fn compute_clause_clause_paramodulants(
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
-    if pm_type == ParamodulationType::SuperSimultaneous {
+    if is_super_paramodulation_type(pm_type) {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "super-simultaneous paramodulation wrappers are not ported yet",
@@ -1191,15 +1196,20 @@ fn compute_directed_clause_paramodulants(
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for pair in paramodulation_pair_positions(bank, source, target, no_top, pm_type) {
-        let paramodulant = match pm_type {
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, pair.source(), pm_type)?;
+        let paramodulant = match effective_pm_type {
             ParamodulationType::Plain => {
                 clause_ordered_paramod(bank, ocb, pair.source(), pair.target())?
             }
             ParamodulationType::Simultaneous => {
                 clause_ordered_sim_paramod(bank, ocb, pair.source(), pair.target())?
             }
-            ParamodulationType::SuperSimultaneous => {
-                unreachable!("super-simultaneous paramodulation is rejected by the caller");
+            ParamodulationType::OrientedSimultaneous
+            | ParamodulationType::SuperSimultaneous
+            | ParamodulationType::OrientedSuperSimultaneous
+            | ParamodulationType::DecreasingSimultaneous
+            | ParamodulationType::SizeDecreasingSimultaneous => {
+                unreachable!("per-source paramodulation mode must reduce to plain or simultaneous");
             }
         };
         let Some(mut paramodulant) = paramodulant else {
@@ -1209,7 +1219,7 @@ fn compute_directed_clause_paramodulants(
         update_paramodulant_info(&mut paramodulant, metadata_parent1, metadata_parent2);
         clause_push_derivation(
             &mut paramodulant,
-            paramodulation_derivation_code(pm_type),
+            paramodulation_derivation_code(effective_pm_type),
             Some(metadata_parent2),
             Some(source_parent),
         );
@@ -1247,6 +1257,74 @@ const fn paramodulation_derivation_code(pm_type: ParamodulationType) -> i64 {
     } else {
         DC_SIM_PARAMOD
     }
+}
+
+fn effective_paramodulation_type(
+    bank: &TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    pm_type: ParamodulationType,
+) -> Result<ParamodulationType, Diagnostic> {
+    match pm_type {
+        ParamodulationType::Plain => Ok(ParamodulationType::Plain),
+        ParamodulationType::Simultaneous => Ok(ParamodulationType::Simultaneous),
+        ParamodulationType::OrientedSimultaneous => {
+            let literal = from_pos
+                .literal()
+                .expect("paramodulation source position must select a literal");
+            if literal.is_oriented() {
+                Ok(ParamodulationType::Simultaneous)
+            } else {
+                Ok(ParamodulationType::Plain)
+            }
+        }
+        ParamodulationType::DecreasingSimultaneous => {
+            let max_side = from_pos
+                .get_side()
+                .expect("paramodulation source position must select a side");
+            let rep_side = from_pos
+                .get_other_side()
+                .expect("paramodulation source position must select an opposite side");
+            if to_greater(
+                ocb,
+                bank.signature(),
+                &max_side,
+                &rep_side,
+                DerefType::Always,
+                DerefType::Always,
+            ) {
+                Ok(ParamodulationType::Simultaneous)
+            } else {
+                Ok(ParamodulationType::Plain)
+            }
+        }
+        ParamodulationType::SizeDecreasingSimultaneous => {
+            let max_side = from_pos
+                .get_side()
+                .expect("paramodulation source position must select a side");
+            let rep_side = from_pos
+                .get_other_side()
+                .expect("paramodulation source position must select an opposite side");
+            if term_standard_weight(&max_side) > term_standard_weight(&rep_side) {
+                Ok(ParamodulationType::Simultaneous)
+            } else {
+                Ok(ParamodulationType::Plain)
+            }
+        }
+        ParamodulationType::SuperSimultaneous | ParamodulationType::OrientedSuperSimultaneous => {
+            Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "super-simultaneous paramodulation wrappers are not ported yet",
+            ))
+        }
+    }
+}
+
+const fn is_super_paramodulation_type(pm_type: ParamodulationType) -> bool {
+    matches!(
+        pm_type,
+        ParamodulationType::SuperSimultaneous | ParamodulationType::OrientedSuperSimultaneous
+    )
 }
 
 #[cfg(test)]

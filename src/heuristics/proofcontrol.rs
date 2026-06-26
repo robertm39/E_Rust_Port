@@ -2143,10 +2143,10 @@ pub fn proof_state_backward_simplify(
 /// Runs the currently ported generators from C `generate_new_clauses`.
 ///
 /// The available slice covers first-order equality factoring, equality
-/// resolution, disequality decomposition, and plain/ordinary-simultaneous
+/// resolution, disequality decomposition, and plain/non-super-simultaneous
 /// unindexed paramodulation, in the same order as the C helper. Higher-order
-/// generation, indexed paramodulation, and per-source/super-simultaneous
-/// paramodulation modes remain explicit staging diagnostics.
+/// generation, indexed paramodulation, and super-simultaneous paramodulation
+/// remain explicit staging diagnostics.
 ///
 /// # Errors
 ///
@@ -2267,14 +2267,19 @@ fn proof_state_unindexed_paramodulation_type(
     match pm_type {
         HcbParamodulationType::Plain => Ok(ClauseParamodulationType::Plain),
         HcbParamodulationType::Sim => Ok(ClauseParamodulationType::Simultaneous),
-        HcbParamodulationType::OrientedSim
-        | HcbParamodulationType::SuperSim
-        | HcbParamodulationType::OrientedSuperSim
-        | HcbParamodulationType::DecreasingSim
-        | HcbParamodulationType::SizeDecreasingSim => Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "selected-clause per-source or super-simultaneous paramodulation generation is not ported yet",
-        )),
+        HcbParamodulationType::OrientedSim => Ok(ClauseParamodulationType::OrientedSimultaneous),
+        HcbParamodulationType::DecreasingSim => {
+            Ok(ClauseParamodulationType::DecreasingSimultaneous)
+        }
+        HcbParamodulationType::SizeDecreasingSim => {
+            Ok(ClauseParamodulationType::SizeDecreasingSimultaneous)
+        }
+        HcbParamodulationType::SuperSim | HcbParamodulationType::OrientedSuperSim => {
+            Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "selected-clause super-simultaneous paramodulation generation is not ported yet",
+            ))
+        }
     }
 }
 
@@ -5260,6 +5265,44 @@ mod tests {
         let literal = &generated.literals().as_slice()[0];
         assert_eq!(literal.left(), &f_replacement);
         assert_eq!(literal.right(), &g_replacement);
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_computes_size_decreasing_simultaneous_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, partner, h_replacement, k_replacement) = {
+            let terms = state.terms_mut();
+            let source_arg = typed_const(terms, "pc_generate_size_sim_source_arg");
+            let replacement = typed_const(terms, "pc_generate_size_sim_replacement");
+            let f_source = typed_unary(terms, "pc_generate_size_sim_f", &source_arg);
+            let h_source = typed_unary(terms, "pc_generate_size_sim_h", &f_source);
+            let k_source = typed_unary(terms, "pc_generate_size_sim_k", &f_source);
+            let h_replacement = typed_unary(terms, "pc_generate_size_sim_h", &replacement);
+            let k_replacement = typed_unary(terms, "pc_generate_size_sim_k", &replacement);
+            let mut partner_lit = literal(terms, &f_source, &replacement, true);
+            let mut selected_lit = literal(terms, &h_source, &k_source, true);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_148);
+            (selected, partner, h_replacement, k_replacement)
+        };
+        state.processed_pos_eqns_mut().insert(partner);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().pm_type = HcbParamodulationType::SizeDecreasingSim;
+
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &selected)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 1);
+        let literal = &generated.literals().as_slice()[0];
+        assert_eq!(literal.left(), &h_replacement);
+        assert_eq!(literal.right(), &k_replacement);
     }
 
     #[test]
