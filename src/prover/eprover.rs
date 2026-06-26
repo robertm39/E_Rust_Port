@@ -3701,10 +3701,19 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
             processed_steps: outcome.processed_steps(),
         };
     }
-    write_proof_search_result(output, &outcome)?;
+    write_answer_outputs(output, &mut state)?;
+    write_proof_search_result(
+        output,
+        &outcome,
+        state.statistics().answer_count,
+        state.statistics().status_reported,
+    )?;
     write_saturated_output(output, config, &state)?;
     write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
-    Ok(saturate_outcome_exit_status(&outcome))
+    Ok(saturate_outcome_exit_status(
+        &outcome,
+        state.statistics().answer_count,
+    ))
 }
 
 fn run_presaturation_interreduction(
@@ -3805,11 +3814,23 @@ fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
 fn write_proof_search_result(
     output: &mut impl Write,
     outcome: &SaturateOutcome,
+    answer_count: i64,
+    status_reported: bool,
 ) -> Result<(), EProverError> {
+    if answer_count > 0 {
+        output.write_all(b"\n# Proof found!\n")?;
+        if !status_reported {
+            write_tstp_status(output, "Unsatisfiable")?;
+        }
+        return Ok(());
+    }
+
     match outcome {
         SaturateOutcome::Returned { .. } => {
             output.write_all(b"\n# Proof found!\n")?;
-            write_tstp_status(output, "Unsatisfiable")?;
+            if !status_reported {
+                write_tstp_status(output, "Unsatisfiable")?;
+            }
         }
         SaturateOutcome::Stopped {
             reason: SaturateStopReason::Saturated,
@@ -3829,6 +3850,16 @@ fn write_proof_search_result(
             output.write_all(b"\n# Failure: User resource limit exceeded!\n")?;
             write_tstp_status(output, "ResourceOut")?;
         }
+    }
+    Ok(())
+}
+
+fn write_answer_outputs(
+    output: &mut impl Write,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<(), EProverError> {
+    for answer_output in state.take_answer_outputs() {
+        output.write_all(answer_output.as_bytes())?;
     }
     Ok(())
 }
@@ -3904,7 +3935,10 @@ fn write_proof_statistics(
     Ok(())
 }
 
-const fn saturate_outcome_exit_status(outcome: &SaturateOutcome) -> u8 {
+const fn saturate_outcome_exit_status(outcome: &SaturateOutcome, answer_count: i64) -> u8 {
+    if answer_count > 0 {
+        return ErrorCode::PROOF_FOUND.exit_status();
+    }
     match outcome {
         SaturateOutcome::Returned { .. } => ErrorCode::PROOF_FOUND.exit_status(),
         SaturateOutcome::Stopped {
@@ -6145,6 +6179,31 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             "\n# Proof found!\n# SZS status Unsatisfiable\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_answer_tuple_before_final_banner() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-answer");
+        std::fs::write(&path, "$answer(ans(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "# SZS status Theorem\n# SZS answers Tuple [[a]|_]\n\n# Proof found!\n"
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

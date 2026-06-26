@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{clause_answer_output_string, Clause};
 use crate::clauses::clause_props::{CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::fcvindexing::{
@@ -105,6 +106,7 @@ pub struct ProofState {
     state_is_complete: bool,
     has_interpreted_symbols: bool,
     statistics: ProofStateStatistics,
+    answer_outputs: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -152,6 +154,7 @@ impl ProofState {
             state_is_complete: true,
             has_interpreted_symbols: false,
             statistics: ProofStateStatistics::default(),
+            answer_outputs: Vec::new(),
         })
     }
 
@@ -396,6 +399,27 @@ impl ProofState {
 
     pub fn statistics_mut(&mut self) -> &mut ProofStateStatistics {
         &mut self.statistics
+    }
+
+    pub fn record_answer_clause(&mut self, clause: &Clause) {
+        let Some(answer_output) = clause_answer_output_string(&self.terms, clause) else {
+            return;
+        };
+        if !self.statistics.status_reported {
+            self.answer_outputs
+                .push("# SZS status Theorem\n".to_owned());
+            self.statistics.status_reported = true;
+        }
+        self.answer_outputs.push(answer_output);
+    }
+
+    #[must_use]
+    pub fn answer_outputs(&self) -> &[String] {
+        &self.answer_outputs
+    }
+
+    pub fn take_answer_outputs(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.answer_outputs)
     }
 
     #[must_use]

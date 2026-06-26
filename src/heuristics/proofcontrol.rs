@@ -2488,6 +2488,7 @@ fn proof_state_process_clause_impl(
 
     let answer_detected = if packed.clause().is_sem_false() {
         state.statistics_mut().answer_count += 1;
+        state.record_answer_clause(packed.clause());
         true
     } else {
         false

@@ -11,7 +11,7 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausepos::RewriteSequenceEntry;
-use crate::clauses::eqn::{eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{eqn_tstp_string, eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_PSEUDO_LIT,
 };
@@ -497,6 +497,11 @@ impl Clause {
             self.recompute_lit_counts();
         }
         removed
+    }
+
+    #[must_use]
+    pub fn answer_output_string(&self, bank: &TermBank) -> Option<String> {
+        clause_answer_output_string(bank, self)
     }
 
     #[must_use]
@@ -1164,6 +1169,62 @@ impl Clause {
         }
         (positive, negative)
     }
+}
+
+#[must_use]
+pub fn clause_answer_output_string(bank: &TermBank, clause: &Clause) -> Option<String> {
+    if !clause.is_sem_false() || clause.is_empty() {
+        return None;
+    }
+
+    let mut output = String::from("# SZS answers Tuple [");
+    if clause.literal_number() > 1 {
+        output.push('(');
+    }
+    if let Some((first, rest)) = clause.literals().as_slice().split_first() {
+        output.push_str(&answer_literal_string(bank, first));
+        for literal in rest {
+            output.push('|');
+            output.push_str(&answer_literal_string(bank, literal));
+        }
+    }
+    if clause.literal_number() > 1 {
+        output.push(')');
+    }
+    output.push_str("|_]\n");
+    Some(output)
+}
+
+fn answer_literal_string(bank: &TermBank, literal: &Eqn) -> String {
+    let mut output = String::from("[");
+    if literal.query_prop(EP_PSEUDO_LIT)
+        && bank
+            .signature()
+            .is_simple_answer_pred(literal.left().f_code())
+        && literal
+            .left()
+            .argument(0)
+            .as_ref()
+            .is_some_and(|answer_term| answer_term.f_code() > 0)
+    {
+        let answer_term = literal
+            .left()
+            .argument(0)
+            .expect("checked answer literal must have an answer term");
+        for index in 0..answer_term.arity() {
+            if index != 0 {
+                output.push_str(", ");
+            }
+            let argument = answer_term
+                .argument(index)
+                .expect("answer tuple term must have initialized arguments");
+            let _ = bank.write_term(&mut output, &argument, true);
+        }
+    } else {
+        output.push_str(&eqn_tstp_string(bank, literal, true, false));
+    }
+    output.push(']');
+    output
 }
 
 #[must_use]
@@ -2508,6 +2569,26 @@ mod tests {
         assert_eq!(answer_clause.evaluate_answer_literals(&bank), 1);
         assert_eq!(answer_clause.literal_number(), 1);
         assert_eq!(answer_clause.positive_literal_count(), 1);
+    }
+
+    #[test]
+    fn answer_output_string_prints_szs_tuple_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "answer_a");
+        let b = typed_const(&mut bank, "answer_b");
+        let ans_a = typed_unary(&mut bank, "answer_payload_a", &a);
+        let ans_b = typed_unary(&mut bank, "answer_payload_b", &b);
+        let answer_a = answer_term(&mut bank, &ans_a);
+        let answer_b = answer_term(&mut bank, &ans_b);
+        let truth = bank.true_term().clone();
+        let literal_a = Eqn::alloc(answer_a, truth.clone(), &mut bank, true).unwrap();
+        let literal_b = Eqn::alloc(answer_b, truth, &mut bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![literal_a, literal_b]));
+
+        assert_eq!(
+            clause.answer_output_string(&bank).as_deref(),
+            Some("# SZS answers Tuple [([answer_a]|[answer_b])|_]\n")
+        );
     }
 
     #[test]
