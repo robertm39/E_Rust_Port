@@ -87,14 +87,15 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 
 ### Rust Port Status Notes
 
-- Rust now ports the first-order single-clause `ComputeEqRes` path used by destructive equality resolution, including MGU construction, C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, false-literal removal, duplicate removal, and negative-literal iteration with the default maximal-literal filter.
+- Rust now ports the first-order `ComputeEqRes` paths used by destructive equality resolution and all-resolvent generation, including MGU construction, C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, false-literal removal, duplicate removal, negative-literal iteration with an explicit maximal-literal filter, and insertion of first-order generated resolvents into a caller-owned clause set.
 - Higher-order CSU enumeration through the `res_cls` stack, `subst_is_ho` propagation, lambda normalization of copied resolvents, and proof-documentation/derivation pushes remain pending.
 
 ### Change-Later Observations
 
 - `build_resolvent` uses the caller-provided `freshvars` bank to normalize unbound variables before copying the resolvent. Rust currently creates a scratch fresh-variable bank and advances it beyond the clause's current variable codes so fresh variables do not alias original term-bank variables; replace this with proof-state-owned `freshvars` when that C owner is represented.
 - `EqResOnMaximalLiteralsOnly` is a mutable C global controlling the public literal iterators. Rust exposes the default-filter behavior as an explicit boolean argument for now; revisit the API once option/global-state ownership is centralized.
-- C `ComputeEqRes` returns either one clause or fills a result stack depending on whether `res_cls` is NULL. Rust currently implements the single-clause path only because generated-clause destructive ER uses that mode; keep the overloaded return/stack behavior in mind when general equality-resolvent generation is ported.
+- C `ComputeEqRes` returns either one clause or fills a result stack depending on whether `res_cls` is NULL. Rust separates these into single-resolvent and all-resolvent helpers so callers do not depend on a null-stack mode switch.
+- In the higher-order path, C pushes each CSU resolvent onto `res_cls` and `ComputeAllEqnResolvents` later pops that stack, reversing CSU enumeration order before insertion. First-order generation has at most one resolvent per literal; preserve or intentionally revise the reversal when HO enumeration is ported.
 
 ### Porting Focus
 

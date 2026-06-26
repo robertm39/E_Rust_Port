@@ -1,7 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
-use crate::clauses::clause_props::CP_NO_GENERATION;
+use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
@@ -130,6 +131,41 @@ fn is_eq_res_candidate(literal: &Eqn, maximal_only: bool) -> bool {
     literal.is_negative() && (!maximal_only || literal.is_maximal())
 }
 
+/// Computes all first-order equality resolvents and inserts them into `store`.
+///
+/// This mirrors C `ComputeAllEqnResolvents` for the first-order MGU path. Higher
+/// order CSU enumeration still belongs to a later slice, so higher-order problem
+/// type is rejected through [`compute_eq_res`].
+///
+/// # Errors
+///
+/// Returns diagnostics from [`compute_eq_res`].
+pub fn compute_all_eqn_resolvents(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    maximal_only: bool,
+) -> Result<i64, Diagnostic> {
+    let mut resolv_count = 0;
+    if clause.negative_literal_count() == 0 || clause.query_prop(CP_NO_GENERATION) {
+        return Ok(resolv_count);
+    }
+
+    let mut next = first_eq_res_literal_index(clause, maximal_only);
+    while let Some(index) = next {
+        next = next_eq_res_literal_index(clause, index, maximal_only);
+        if let Some(mut resolvent) = compute_eq_res(bank, clause, index)? {
+            resolv_count += 1;
+            resolvent.set_proof_depth(clause.proof_depth().saturating_add(1));
+            resolvent.set_proof_size(clause.proof_size().saturating_add(1));
+            resolvent.set_tptp_type(clause.query_tptp_type());
+            resolvent.set_prop(clause.give_props(CP_IS_SOS));
+            store.insert(resolvent);
+        }
+    }
+    Ok(resolv_count)
+}
+
 /// Performs C `ClauseERNormalizeVar` over one owned clause.
 ///
 /// The returned count is the number of destructive equality-resolution
@@ -178,11 +214,12 @@ pub fn clause_er_normalize_var(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_er_normalize_var, compute_eq_res, first_eq_res_literal_index,
-        next_eq_res_literal_index,
+        clause_er_normalize_var, compute_all_eqn_resolvents, compute_eq_res,
+        first_eq_res_literal_index, next_eq_res_literal_index,
     };
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
+    use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
@@ -308,6 +345,74 @@ mod tests {
         assert_eq!(next_eq_res_literal_index(&clause, 1, true), None);
         assert_eq!(first_eq_res_literal_index(&clause, false), Some(1));
         assert_eq!(next_eq_res_literal_index(&clause, 1, false), Some(2));
+    }
+
+    #[test]
+    fn compute_all_eqn_resolvents_inserts_metadata_copies() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let a = typed_const(&mut bank, "er_all_a");
+        let b = typed_const(&mut bank, "er_all_b");
+        let mut first_diseq = lit(&mut bank, &x, &a, false);
+        let mut second_diseq = lit(&mut bank, &y, &b, false);
+        first_diseq.set_prop(EP_IS_MAXIMAL);
+        second_diseq.set_prop(EP_IS_MAXIMAL);
+        let rest = lit(&mut bank, &x, &y, true);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![rest, first_diseq, second_diseq]));
+        clause.set_proof_depth(3);
+        clause.set_proof_size(5);
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        clause.set_prop(CP_IS_SOS);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_eqn_resolvents(&mut bank, &clause, &mut store, true).unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(store.members(), 2);
+        for resolvent in store.iter() {
+            assert_eq!(resolvent.proof_depth(), 4);
+            assert_eq!(resolvent.proof_size(), 6);
+            assert_eq!(resolvent.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+            assert!(resolvent.query_prop(CP_IS_SOS));
+            assert_eq!(resolvent.literal_number(), 2);
+        }
+    }
+
+    #[test]
+    fn compute_all_eqn_resolvents_honors_generation_and_maximal_gates() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let a = typed_const(&mut bank, "er_gate_a");
+        let b = typed_const(&mut bank, "er_gate_b");
+        let mut maximal = lit(&mut bank, &x, &a, false);
+        let non_maximal = lit(&mut bank, &y, &b, false);
+        maximal.set_prop(EP_IS_MAXIMAL);
+        let clause = Clause::alloc(EqnList::from_vec(vec![maximal, non_maximal]));
+
+        let mut maximal_store = ClauseSet::new();
+        assert_eq!(
+            compute_all_eqn_resolvents(&mut bank, &clause, &mut maximal_store, true).unwrap(),
+            1
+        );
+        assert_eq!(maximal_store.members(), 1);
+
+        let mut all_store = ClauseSet::new();
+        assert_eq!(
+            compute_all_eqn_resolvents(&mut bank, &clause, &mut all_store, false).unwrap(),
+            2
+        );
+        assert_eq!(all_store.members(), 2);
+
+        let mut blocked = clause.clone();
+        blocked.set_prop(CP_NO_GENERATION);
+        let mut blocked_store = ClauseSet::new();
+        assert_eq!(
+            compute_all_eqn_resolvents(&mut bank, &blocked, &mut blocked_store, false).unwrap(),
+            0
+        );
+        assert!(blocked_store.is_empty());
     }
 
     #[test]
