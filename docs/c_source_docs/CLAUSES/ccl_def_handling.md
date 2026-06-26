@@ -99,7 +99,7 @@ Source files reviewed: `CLAUSES/ccl_def_handling.h`, `CLAUSES/ccl_def_handling.c
 
 ### Rust Port Status Notes
 
-- Rust now ports the generated split-literal subset of `GenDefLit` for arity-zero fresh split definitions, including generated predicate typing, `FPClSplitDef`, `EPIsSplitLit`, and term-bank sharing.
+- Rust now ports the generated split-literal subset of `GenDefLit` for fresh split definitions, including arity-zero and split-variable-parameterized predicates, generated predicate typing, `FPClSplitDef`, `EPIsSplitLit`, and term-bank sharing.
 - `DefStore`, `GetFormulaDefinition`, `GetClauseDefinition`, `GetDefinitions` variant lookup/reuse, `def_archive`, and the formula/derivation output side effects remain pending.
 
 ### Change-Later Observations

@@ -1,12 +1,14 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_TYPE_MASK};
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_SPLIT_LIT;
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::signature::FP_CL_SPLIT_DEF;
+use crate::terms::simpletypes::alloc_arrow_type;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{DerefType, Term};
+use crate::terms::termtypes::{term_identity_id, DerefType, Term};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,9 +57,7 @@ pub fn clause_has_split_literal(clause: &Clause) -> bool {
 
 /// Generates a C `GenDefLit`-style split definition literal.
 ///
-/// This currently supports the arity-zero path used by ordinary
-/// `ClauseSplit`. General splitting with explicit shared variables is handled
-/// by a later slice.
+/// This is the arity-zero convenience wrapper used by ordinary `ClauseSplit`.
 ///
 /// # Errors
 ///
@@ -68,6 +68,25 @@ pub fn gen_ground_def_lit(
     pred: i64,
     positive: bool,
 ) -> Result<Eqn, Diagnostic> {
+    gen_def_lit(bank, pred, positive, &[])
+}
+
+/// Generates a C `GenDefLit`-style split definition literal.
+///
+/// `split_vars` are used as the arguments of the generated predicate. The
+/// ordinary `ClauseSplit` path passes an empty slice; `ClauseSplitGeneral` uses
+/// a non-empty slice for variables shared between split parts.
+///
+/// # Errors
+///
+/// Returns a diagnostic if signature type declaration or term-bank insertion
+/// fails.
+pub fn gen_def_lit(
+    bank: &mut TermBank,
+    pred: i64,
+    positive: bool,
+    split_vars: &[Term],
+) -> Result<Eqn, Diagnostic> {
     if pred <= 0 {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -76,10 +95,36 @@ pub fn gen_ground_def_lit(
     }
 
     let bool_type = bank.signature().type_bank().bool_type();
-    bank.signature_mut().declare_type(pred, bool_type.clone())?;
+    let mut split_var_types = Vec::with_capacity(split_vars.len());
+    for variable in split_vars {
+        let Some(type_) = variable.type_() else {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "split variable has no type",
+            ));
+        };
+        split_var_types.push(type_);
+    }
+    if bank.signature().get_type(pred).is_none() {
+        let pred_type = if split_var_types.is_empty() {
+            bool_type.clone()
+        } else {
+            split_var_types.push(bool_type.clone());
+            alloc_arrow_type(split_var_types)
+        };
+        bank.signature_mut().declare_type(pred, pred_type)?;
+    }
     bank.signature_mut().set_func_prop(pred, FP_CL_SPLIT_DEF);
 
-    let term = Term::const_cell_alloc(pred);
+    let term = if split_vars.is_empty() {
+        Term::const_cell_alloc(pred)
+    } else {
+        let term = Term::top_alloc(pred, split_vars.len());
+        for (index, variable) in split_vars.iter().enumerate() {
+            term.set_argument(index, variable.clone());
+        }
+        term
+    };
     term.set_type(Some(bool_type));
     let term = bank.insert(&term, DerefType::Never)?;
     let true_term = bank.true_term().clone();
@@ -101,8 +146,26 @@ pub fn gen_ground_def_lit(
 /// split-literal allocation.
 pub fn clause_split_fresh(
     bank: &mut TermBank,
+    clause: Clause,
+    how: ClauseSplitType,
+) -> Result<ClauseSplitOutcome, Diagnostic> {
+    clause_split_general_fresh(bank, clause, how, &[])
+}
+
+/// Performs the fresh-definition C `clause_split_general` path.
+///
+/// Variables in `split_vars` are treated as parameters shared by split parts and
+/// become arguments of the generated split predicates.
+///
+/// # Errors
+///
+/// Returns diagnostics from generated predicate typing, term-bank insertion, or
+/// split-literal allocation.
+pub fn clause_split_general_fresh(
+    bank: &mut TermBank,
     mut clause: Clause,
     how: ClauseSplitType,
+    split_vars: &[Term],
 ) -> Result<ClauseSplitOutcome, Diagnostic> {
     let lit_no = clause.literal_number();
     if lit_no <= 1 || clause_has_split_literal(&clause) {
@@ -110,7 +173,8 @@ pub fn clause_split_fresh(
     }
 
     let props = clause.give_props(CP_TYPE_MASK | CP_IS_SOS);
-    let mut lit_table = initialize_lit_table(clause.literals().as_slice(), how);
+    let ignored_vars = split_var_ids(split_vars);
+    let mut lit_table = initialize_lit_table(clause.literals().as_slice(), how, &ignored_vars);
     let mut part = 0;
 
     if how == ClauseSplitType::GroundOne && c_truthy_find_free_literal(&lit_table) {
@@ -128,17 +192,23 @@ pub fn clause_split_fresh(
 
     let mut split_clauses = Vec::with_capacity(part + 1);
     let mut residual_literals = Vec::with_capacity(part);
+    let arity = i32::try_from(split_vars.len()).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "split predicate arity does not fit C int",
+        )
+    })?;
     for part_index in 1..=part {
-        let pred = bank.signature_mut().get_new_predicate_code(0);
+        let pred = bank.signature_mut().get_new_predicate_code(arity);
         let mut clause_literals = Vec::with_capacity(lit_no + 1);
-        clause_literals.push(gen_ground_def_lit(bank, pred, true)?);
+        clause_literals.push(gen_def_lit(bank, pred, true, split_vars)?);
         clause_literals.extend(assemble_part_literals(&lit_table, part_index));
 
         let mut new_clause = Clause::alloc(EqnList::from_vec(clause_literals));
         new_clause.set_properties(props);
         split_clauses.push(new_clause);
 
-        residual_literals.push(gen_ground_def_lit(bank, pred, false)?);
+        residual_literals.push(gen_def_lit(bank, pred, false, split_vars)?);
     }
 
     residual_literals.reverse();
@@ -147,12 +217,133 @@ pub fn clause_split_fresh(
     Ok(ClauseSplitOutcome::Split(split_clauses))
 }
 
-fn initialize_lit_table(literals: &[Eqn], how: ClauseSplitType) -> Vec<LitSplitDesc> {
+/// Performs C `ClauseSplitGeneral` with fresh split definitions.
+///
+/// This first tries ordinary `ClauseSplit` with `SplitGroundOne`, then tries
+/// variable subsets of increasing cardinality while `tries` remains positive.
+///
+/// # Errors
+///
+/// Returns diagnostics from generated predicate typing, term-bank insertion, or
+/// split-literal allocation.
+pub fn clause_split_general_search_fresh(
+    bank: &mut TermBank,
+    clause: Clause,
+    tries: i64,
+) -> Result<ClauseSplitOutcome, Diagnostic> {
+    let mut clause = match clause_split_fresh(bank, clause, ClauseSplitType::GroundOne)? {
+        ClauseSplitOutcome::Split(clauses) => return Ok(ClauseSplitOutcome::Split(clauses)),
+        ClauseSplitOutcome::Unsplit(clause) => *clause,
+    };
+
+    let mut variables = BTreeMap::new();
+    let var_no = clause.collect_variables(&mut variables);
+    if var_no <= 2 {
+        return Ok(ClauseSplitOutcome::Unsplit(Box::new(clause)));
+    }
+
+    let vars = variables.into_values().collect::<Vec<_>>();
+    let mut set_size = 1;
+    let mut permutation = initialize_permute_stack(set_size);
+    let mut tries = tries;
+    while tries > 0 {
+        let split_vars = permutation
+            .iter()
+            .map(|index| vars[*index].clone())
+            .collect::<Vec<_>>();
+        match clause_split_general_fresh(
+            bank,
+            clause,
+            ClauseSplitType::GroundNone,
+            split_vars.as_slice(),
+        )? {
+            ClauseSplitOutcome::Split(clauses) => return Ok(ClauseSplitOutcome::Split(clauses)),
+            ClauseSplitOutcome::Unsplit(unsplit) => {
+                clause = *unsplit;
+            }
+        }
+
+        if !permute_stack_next(&mut permutation, vars.len()) {
+            if set_size == vars.len().saturating_sub(2) {
+                break;
+            }
+            set_size += 1;
+            permutation = initialize_permute_stack(set_size);
+        }
+        tries -= 1;
+    }
+    Ok(ClauseSplitOutcome::Unsplit(Box::new(clause)))
+}
+
+/// Splits all clauses from `from_set` into `to_set`, matching the fresh
+/// `ClauseSetSplitClauses` path.
+///
+/// Unsplit clauses are moved unchanged. The return value counts only clauses
+/// produced by successful splits, matching C.
+///
+/// # Errors
+///
+/// Returns diagnostics from generated predicate typing, term-bank insertion, or
+/// split-literal allocation.
+pub fn clause_set_split_clauses_fresh(
+    bank: &mut TermBank,
+    from_set: &mut ClauseSet,
+    to_set: &mut ClauseSet,
+    how: ClauseSplitType,
+) -> Result<i64, Diagnostic> {
+    let mut result = 0;
+    while let Some(clause) = from_set.extract_first() {
+        match clause_split_fresh(bank, clause, how)? {
+            ClauseSplitOutcome::Unsplit(clause) => to_set.insert(*clause),
+            ClauseSplitOutcome::Split(clauses) => {
+                result += usize_to_i64(clauses.len());
+                for clause in clauses {
+                    to_set.insert(clause);
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Splits all clauses from `from_set` into `to_set`, matching the fresh
+/// `ClauseSetSplitClausesGeneral` path.
+///
+/// # Errors
+///
+/// Returns diagnostics from generated predicate typing, term-bank insertion, or
+/// split-literal allocation.
+pub fn clause_set_split_clauses_general_fresh(
+    bank: &mut TermBank,
+    from_set: &mut ClauseSet,
+    to_set: &mut ClauseSet,
+    tries: i64,
+) -> Result<i64, Diagnostic> {
+    let mut result = 0;
+    while let Some(clause) = from_set.extract_first() {
+        match clause_split_general_search_fresh(bank, clause, tries)? {
+            ClauseSplitOutcome::Unsplit(clause) => to_set.insert(*clause),
+            ClauseSplitOutcome::Split(clauses) => {
+                result += usize_to_i64(clauses.len());
+                for clause in clauses {
+                    to_set.insert(clause);
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn initialize_lit_table(
+    literals: &[Eqn],
+    how: ClauseSplitType,
+    ignored_vars: &BTreeSet<usize>,
+) -> Vec<LitSplitDesc> {
     literals
         .iter()
         .cloned()
         .map(|literal| {
-            let varset = literal_varset(&literal);
+            let varset = literal_varset(&literal, ignored_vars);
             let part = usize::from(
                 matches!(
                     how,
@@ -168,10 +359,18 @@ fn initialize_lit_table(literals: &[Eqn], how: ClauseSplitType) -> Vec<LitSplitD
         .collect()
 }
 
-fn literal_varset(literal: &Eqn) -> BTreeSet<usize> {
+fn split_var_ids(split_vars: &[Term]) -> BTreeSet<usize> {
+    split_vars.iter().map(term_identity_id).collect()
+}
+
+fn literal_varset(literal: &Eqn, ignored_vars: &BTreeSet<usize>) -> BTreeSet<usize> {
     let mut variables = BTreeMap::new();
     let _ = literal.collect_variables(&mut variables);
-    variables.keys().copied().collect()
+    variables
+        .keys()
+        .filter(|identity| !ignored_vars.contains(identity))
+        .copied()
+        .collect()
 }
 
 fn find_free_literal(lit_table: &[LitSplitDesc]) -> Option<usize> {
@@ -218,13 +417,38 @@ fn assemble_part_literals(lit_table: &[LitSplitDesc], part: usize) -> Vec<Eqn> {
     literals
 }
 
+fn initialize_permute_stack(size: usize) -> Vec<usize> {
+    (0..size).collect()
+}
+
+fn permute_stack_next(permutation: &mut [usize], var_no: usize) -> bool {
+    let size = permutation.len();
+    for index in (0..size).rev() {
+        let limit = var_no - (size - index);
+        if permutation[index] < limit {
+            permutation[index] += 1;
+            for next in index + 1..size {
+                permutation[next] = permutation[next - 1] + 1;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_has_split_literal, clause_split_fresh, ClauseSplitOutcome, ClauseSplitType,
+        clause_has_split_literal, clause_split_fresh, clause_split_general_fresh,
+        clause_split_general_search_fresh, ClauseSplitOutcome, ClauseSplitType,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_TYPE_AXIOM};
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_SPLIT_LIT;
     use crate::clauses::eqnlist::EqnList;
@@ -379,6 +603,23 @@ mod tests {
     }
 
     #[test]
+    fn gen_def_lit_builds_parameterized_split_literal() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -2);
+        let pred = bank.signature_mut().get_new_predicate_code(1);
+
+        let literal =
+            super::gen_def_lit(&mut bank, pred, true, std::slice::from_ref(&variable)).unwrap();
+
+        assert!(literal.is_positive());
+        assert!(literal.query_prop(EP_IS_SPLIT_LIT));
+        assert!(literal.is_split_lit(&bank));
+        assert_eq!(literal.left().arity(), 1);
+        assert_eq!(literal.left().argument(0).as_ref(), Some(&variable));
+        assert_eq!(literal.right(), bank.true_term());
+    }
+
+    #[test]
     fn split_definition_literal_reuses_existing_constant_cell() {
         let mut bank = test_bank();
         let pred = bank.signature_mut().get_new_predicate_code(0);
@@ -388,5 +629,126 @@ mod tests {
         let second_term = bank.insert(&second_term, DerefType::Never).unwrap();
 
         assert_eq!(first.left(), &second_term);
+    }
+
+    #[test]
+    fn clause_split_general_fresh_uses_split_variables_as_parameters() {
+        let mut bank = test_bank();
+        let shared = typed_var(&bank, -2);
+        let left_var = typed_var(&bank, -4);
+        let right_var = typed_var(&bank, -6);
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &shared, &left_var, true),
+            lit(&mut bank, &shared, &right_var, true),
+        ]));
+
+        let unsplit =
+            clause_split_fresh(&mut bank, clause.clone(), ClauseSplitType::GroundFull).unwrap();
+        assert_eq!(unsplit.split_count(), 0);
+
+        let outcome = clause_split_general_fresh(
+            &mut bank,
+            clause,
+            ClauseSplitType::GroundNone,
+            std::slice::from_ref(&shared),
+        )
+        .unwrap();
+        let ClauseSplitOutcome::Split(clauses) = outcome else {
+            panic!("shared parameter should enable splitting");
+        };
+
+        assert_eq!(clauses.len(), 3);
+        assert_eq!(clauses[0].literals().as_slice()[0].left().arity(), 1);
+        assert_eq!(
+            clauses[0].literals().as_slice()[0].left().argument(0),
+            Some(shared.clone())
+        );
+        assert_eq!(clauses[2].literal_number(), 2);
+        assert!(clauses[2]
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| literal.left().arity() == 1));
+    }
+
+    #[test]
+    fn clause_split_general_search_fresh_finds_parameter_subset() {
+        let mut bank = test_bank();
+        let shared = typed_var(&bank, -2);
+        let left_var = typed_var(&bank, -4);
+        let right_var = typed_var(&bank, -6);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &shared, &left_var, true),
+            lit(&mut bank, &shared, &right_var, true),
+        ]));
+        clause.set_ident(7_002);
+
+        let outcome = clause_split_general_search_fresh(&mut bank, clause, 3).unwrap();
+        let ClauseSplitOutcome::Split(clauses) = outcome else {
+            panic!("search should find the shared parameter subset");
+        };
+
+        assert_eq!(clauses.len(), 3);
+        assert_eq!(clauses[2].ident(), 7_002);
+        assert_eq!(split_literal_count(&clauses[2], &bank), 2);
+    }
+
+    #[test]
+    fn clause_set_split_clauses_fresh_moves_split_and_unsplit_clauses() {
+        let mut bank = test_bank();
+        let left_var = typed_var(&bank, -2);
+        let right_var = typed_var(&bank, -4);
+        let first_const = typed_const(&mut bank, "split_set_first");
+        let second_const = typed_const(&mut bank, "split_set_second");
+        let third_const = typed_const(&mut bank, "split_set_third");
+        let fourth_const = typed_const(&mut bank, "split_set_fourth");
+        let split = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &left_var, &first_const, true),
+            lit(&mut bank, &right_var, &second_const, true),
+        ]));
+        let mut unsplit = Clause::alloc(EqnList::from_vec(vec![lit(
+            &mut bank,
+            &third_const,
+            &fourth_const,
+            true,
+        )]));
+        unsplit.set_ident(7_003);
+        let mut from_set = ClauseSet::from_clauses([split, unsplit]);
+        let mut to_set = ClauseSet::new();
+
+        let count = super::clause_set_split_clauses_fresh(
+            &mut bank,
+            &mut from_set,
+            &mut to_set,
+            ClauseSplitType::GroundFull,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert!(from_set.is_empty());
+        assert_eq!(to_set.members(), 4);
+        assert!(to_set.find_by_id(7_003).is_some());
+    }
+
+    #[test]
+    fn clause_set_split_clauses_general_fresh_uses_search() {
+        let mut bank = test_bank();
+        let shared = typed_var(&bank, -2);
+        let left_var = typed_var(&bank, -4);
+        let right_var = typed_var(&bank, -6);
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &shared, &left_var, true),
+            lit(&mut bank, &shared, &right_var, true),
+        ]));
+        let mut from_set = ClauseSet::from_clauses([clause]);
+        let mut to_set = ClauseSet::new();
+
+        let count =
+            super::clause_set_split_clauses_general_fresh(&mut bank, &mut from_set, &mut to_set, 3)
+                .unwrap();
+
+        assert_eq!(count, 3);
+        assert!(from_set.is_empty());
+        assert_eq!(to_set.members(), 3);
     }
 }
