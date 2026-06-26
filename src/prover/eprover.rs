@@ -3768,6 +3768,7 @@ fn run_proof_search<W: Write + ?Sized>(
         )?;
     }
     proof_state_init(&mut state, &mut control)?;
+    write_preprocessing_time(output, config)?;
     if config.flags.contains(EProverFlag::CnfOnly) {
         write_cnf_only_success(output)?;
         write_saturated_output(output, config, &state)?;
@@ -4183,6 +4184,22 @@ fn write_answer_outputs(
 
 fn write_tstp_status(output: &mut impl Write, status: &str) -> Result<(), EProverError> {
     writeln!(output, "# SZS status {status}")?;
+    Ok(())
+}
+
+fn write_preprocessing_time(
+    output: &mut impl Write,
+    config: &EProverConfig,
+) -> Result<(), EProverError> {
+    if !config.flags.contains(EProverFlag::ResourceInfo) {
+        return Ok(());
+    }
+    let usage = current_resource_usage();
+    writeln!(
+        output,
+        "# Preprocessing time       : {:.3} s",
+        usage.user_time_seconds + usage.system_time_seconds
+    )?;
     Ok(())
 }
 
@@ -6634,6 +6651,40 @@ mod tests {
         assert!(printed.contains("# System time              : "));
         assert!(printed.contains("# Total time               : "));
         assert!(printed.contains("# Maximum resident set size: "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_resources_info_prints_preprocessing_time() {
+        let _guard = global_state_lock();
+        let path = temp_path("resources-info-proof");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--resources-info", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let preproc = printed
+            .find("# Preprocessing time       : ")
+            .expect("preprocessing time line should be present");
+        let result = printed
+            .find("\n# No proof found!\n")
+            .expect("result banner should be present");
+        let footer = printed
+            .find("\n# -------------------------------------------------\n")
+            .expect("resource footer should be present");
+        assert!(preproc < result);
+        assert!(result < footer);
+        assert!(printed.contains("# Total time               : "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
