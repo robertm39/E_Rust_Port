@@ -132,6 +132,7 @@ pub struct EqnPrintOptions {
     pub full_equational_rep: bool,
     pub print_oriented: bool,
     pub higher_order_parentheses: bool,
+    pub print_types: bool,
 }
 
 impl EqnPrintOptions {
@@ -143,6 +144,7 @@ impl EqnPrintOptions {
             full_equational_rep: false,
             print_oriented: false,
             higher_order_parentheses: false,
+            print_types: false,
         }
     }
 
@@ -154,7 +156,14 @@ impl EqnPrintOptions {
             full_equational_rep: false,
             print_oriented: false,
             higher_order_parentheses: false,
+            print_types: false,
         }
+    }
+
+    #[must_use]
+    pub const fn with_print_types(mut self, print_types: bool) -> Self {
+        self.print_types = print_types;
+        self
     }
 }
 
@@ -169,6 +178,7 @@ pub struct EqnFofPrintOptions {
     pub output_format: IoFormat,
     pub pcl: bool,
     pub higher_order_parentheses: bool,
+    pub print_types: bool,
 }
 
 impl EqnFofPrintOptions {
@@ -178,6 +188,7 @@ impl EqnFofPrintOptions {
             output_format: IoFormat::Lop,
             pcl: false,
             higher_order_parentheses: false,
+            print_types: false,
         }
     }
 
@@ -187,6 +198,7 @@ impl EqnFofPrintOptions {
             output_format: IoFormat::Tptp,
             pcl: false,
             higher_order_parentheses: false,
+            print_types: false,
         }
     }
 
@@ -196,7 +208,14 @@ impl EqnFofPrintOptions {
             output_format: IoFormat::Tstp,
             pcl: false,
             higher_order_parentheses: false,
+            print_types: false,
         }
+    }
+
+    #[must_use]
+    pub const fn with_print_types(mut self, print_types: bool) -> Self {
+        self.print_types = print_types;
+        self
     }
 }
 
@@ -2045,17 +2064,27 @@ pub fn eqn_write(
         output.write_str(if positive { "++" } else { "--" })?;
         if eqn.is_equ_lit(bank) {
             write!(output, "{EQUAL_PREDICATE}(")?;
-            bank.write_term(output, eqn.left(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                options.print_types,
+            )?;
             output.write_str(", ")?;
-            bank.write_term(output, eqn.right(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.right(),
+                full_terms,
+                options.print_types,
+            )?;
             output.write_char(')')
         } else {
-            bank.write_term(output, eqn.left(), full_terms)
+            bank.write_term_with_type_suffixes(output, eqn.left(), full_terms, options.print_types)
         }
     } else if options.use_infix && (options.full_equational_rep || eqn.right() != bank.true_term())
     {
         write_ho_paren(output, '(', options)?;
-        bank.write_term(output, eqn.left(), full_terms)?;
+        bank.write_term_with_type_suffixes(output, eqn.left(), full_terms, options.print_types)?;
         if !positive {
             output.write_char('!')?;
         }
@@ -2064,7 +2093,7 @@ pub fn eqn_write(
         } else {
             "="
         })?;
-        bank.write_term(output, eqn.right(), full_terms)?;
+        bank.write_term_with_type_suffixes(output, eqn.right(), full_terms, options.print_types)?;
         write_ho_paren(output, ')', options)
     } else {
         if !positive {
@@ -2072,13 +2101,28 @@ pub fn eqn_write(
         }
         if eqn.right() != bank.true_term() || options.full_equational_rep {
             write!(output, "{EQUAL_PREDICATE}(")?;
-            bank.write_term(output, eqn.left(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                options.print_types,
+            )?;
             output.write_str(", ")?;
-            bank.write_term(output, eqn.right(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.right(),
+                full_terms,
+                options.print_types,
+            )?;
             output.write_char(')')
         } else {
             write_ho_paren(output, '(', options)?;
-            bank.write_term(output, eqn.left(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                options.print_types,
+            )?;
             write_ho_paren(output, ')', options)
         }
     }
@@ -2373,6 +2417,7 @@ pub fn eqn_write_fof(
     let options = EqnPrintOptions {
         output_format: fof_options.output_format,
         higher_order_parentheses: fof_options.higher_order_parentheses,
+        print_types: fof_options.print_types,
         ..EqnPrintOptions::default()
     };
 
@@ -2380,14 +2425,24 @@ pub fn eqn_write_fof(
         if eqn.is_equ_lit(bank) {
             write_ho_paren(output, '(', options)?;
             write_ho_paren(output, '(', options)?;
-            bank.write_term(output, eqn.left(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                fof_options.print_types,
+            )?;
             write_ho_paren(output, ')', options)?;
             if !positive {
                 output.write_char('!')?;
             }
             output.write_char('=')?;
             write_ho_paren(output, '(', options)?;
-            bank.write_term(output, eqn.right(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.right(),
+                full_terms,
+                fof_options.print_types,
+            )?;
             write_ho_paren(output, ')', options)?;
             write_ho_paren(output, ')', options)
         } else {
@@ -2395,7 +2450,12 @@ pub fn eqn_write_fof(
                 output.write_char('~')?;
             }
             write_ho_paren(output, '(', options)?;
-            bank.write_term(output, eqn.left(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                fof_options.print_types,
+            )?;
             write_ho_paren(output, ')', options)
         }
     } else {
@@ -2404,12 +2464,27 @@ pub fn eqn_write_fof(
         }
         if eqn.is_equ_lit(bank) {
             write!(output, "{EQUAL_PREDICATE}(")?;
-            bank.write_term(output, eqn.left(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                fof_options.print_types,
+            )?;
             output.write_str(", ")?;
-            bank.write_term(output, eqn.right(), full_terms)?;
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.right(),
+                full_terms,
+                fof_options.print_types,
+            )?;
             output.write_char(')')
         } else {
-            bank.write_term(output, eqn.left(), full_terms)
+            bank.write_term_with_type_suffixes(
+                output,
+                eqn.left(),
+                full_terms,
+                fof_options.print_types,
+            )
         }
     }
 }
@@ -2428,22 +2503,40 @@ pub fn eqn_write_tstp(
     full_terms: bool,
     print_oriented: bool,
 ) -> fmt::Result {
+    eqn_write_tstp_with_type_suffixes(output, bank, eqn, full_terms, print_oriented, false)
+}
+
+/// Writes the C `EqnTSTPPrint` shape with optional `TermPrintTypes` suffixes.
+///
+/// # Panics
+///
+/// Panics if the literal's equational-property bit and right-hand `$true`
+/// shape are inconsistent, or if a printed term has an uninitialized argument
+/// or missing type, matching the C preconditions.
+pub fn eqn_write_tstp_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    eqn: &Eqn,
+    full_terms: bool,
+    print_oriented: bool,
+    print_types: bool,
+) -> fmt::Result {
     if eqn.is_prop_false() {
         return output.write_str("$false");
     }
     if eqn.is_equ_lit(bank) {
-        bank.write_term(output, eqn.left(), full_terms)?;
+        bank.write_term_with_type_suffixes(output, eqn.left(), full_terms, print_types)?;
         if print_oriented && eqn.is_oriented() {
             output.write_str(if eqn.is_negative() { "!->" } else { "->" })?;
         } else {
             output.write_str(if eqn.is_negative() { "!=" } else { "=" })?;
         }
-        bank.write_term(output, eqn.right(), full_terms)
+        bank.write_term_with_type_suffixes(output, eqn.right(), full_terms, print_types)
     } else {
         if eqn.is_negative() {
             output.write_char('~')?;
         }
-        bank.write_term(output, eqn.left(), full_terms)
+        bank.write_term_with_type_suffixes(output, eqn.left(), full_terms, print_types)
     }
 }
 

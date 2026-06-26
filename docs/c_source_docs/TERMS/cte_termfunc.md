@@ -250,6 +250,7 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 ### Compatibility Notes
 
 - `TermPrintDbg` is a macro: in first-order mode it is just `TermPrintFO`, while higher-order mode dispatches to `TermPrintDbgHO`, which prints space-separated application without interpreted-symbol pretty-printing. Rust exposes this as a problem-type-explicit term-bank debug writer so callers do not need to read process-global `problemType`.
+- `TermPrintTypes` is a process-global formatting switch consulted by the full conventional term printers after the term body and after every recursively printed argument, yielding suffixes such as `f(a:$i):$i`. The compact term-bank abbreviation printer does not consult this switch. Rust now keeps typed output as an explicit term/equation print option for supported full-term clause output; avoid reintroducing a global switch except as an executable-compatibility shim.
 
 ### Porting Focus
 

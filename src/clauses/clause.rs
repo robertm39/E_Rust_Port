@@ -1653,6 +1653,15 @@ pub fn clause_write_tptp_format(
     bank: &TermBank,
     clause: &Clause,
 ) -> fmt::Result {
+    clause_write_tptp_format_with_options(output, bank, clause, EqnPrintOptions::tptp())
+}
+
+pub fn clause_write_tptp_format_with_options(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    options: EqnPrintOptions,
+) -> fmt::Result {
     write!(
         output,
         "input_clause({},{},[",
@@ -1661,14 +1670,23 @@ pub fn clause_write_tptp_format(
     )?;
     clause
         .literals()
-        .write_print(output, bank, ",", false, true, EqnPrintOptions::tptp())?;
+        .write_print(output, bank, ",", false, true, options)?;
     output.write_str("]).")
 }
 
 #[must_use]
 pub fn clause_print_tptp_format_string(bank: &TermBank, clause: &Clause) -> String {
+    clause_print_tptp_format_string_with_options(bank, clause, EqnPrintOptions::tptp())
+}
+
+#[must_use]
+pub fn clause_print_tptp_format_string_with_options(
+    bank: &TermBank,
+    clause: &Clause,
+    options: EqnPrintOptions,
+) -> String {
     let mut output = String::new();
-    let _ = clause_write_tptp_format(&mut output, bank, clause);
+    let _ = clause_write_tptp_format_with_options(&mut output, bank, clause, options);
     output
 }
 
@@ -1679,13 +1697,36 @@ pub fn clause_write_tstp_core(
     full_terms: bool,
     print_oriented: bool,
 ) -> fmt::Result {
+    clause_write_tstp_core_with_type_suffixes(
+        output,
+        bank,
+        clause,
+        full_terms,
+        print_oriented,
+        false,
+    )
+}
+
+pub fn clause_write_tstp_core_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    print_oriented: bool,
+    print_types: bool,
+) -> fmt::Result {
     output.write_char('(')?;
     if clause.is_empty() {
         output.write_str("$false")?;
     } else {
-        clause
-            .literals()
-            .write_tstp_print(output, bank, "|", full_terms, print_oriented)?;
+        clause.literals().write_tstp_print_with_type_suffixes(
+            output,
+            bank,
+            "|",
+            full_terms,
+            print_oriented,
+            print_types,
+        )?;
     }
     output.write_char(')')
 }
@@ -1722,6 +1763,35 @@ pub fn clause_write_tstp(
     complete: bool,
     problem_type: ProblemType,
 ) -> Result<(), Diagnostic> {
+    clause_write_tstp_with_type_suffixes(
+        output,
+        bank,
+        clause,
+        full_terms,
+        complete,
+        problem_type,
+        false,
+    )
+}
+
+/// Writes the C `ClauseTSTPPrint` shape with optional term type suffixes.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`clause_write_tstp`].
+///
+/// # Panics
+///
+/// Panics if any literal or term violates the C printing preconditions.
+pub fn clause_write_tstp_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    complete: bool,
+    problem_type: ProblemType,
+    print_types: bool,
+) -> Result<(), Diagnostic> {
     let is_untyped = clause.is_untyped();
     write!(
         output,
@@ -1733,8 +1803,15 @@ pub fn clause_write_tstp(
     .map_err(tstp_write_error)?;
 
     if clause.is_empty() || (is_untyped && problem_type != ProblemType::HigherOrder) {
-        clause_write_tstp_core(output, bank, clause, full_terms, false)
-            .map_err(tstp_write_error)?;
+        clause_write_tstp_core_with_type_suffixes(
+            output,
+            bank,
+            clause,
+            full_terms,
+            false,
+            print_types,
+        )
+        .map_err(tstp_write_error)?;
     } else {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,

@@ -4,8 +4,8 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::{
     clause_parse_with_options, clause_print_lop_format_string,
-    clause_print_lop_format_string_with_options, clause_print_tptp_format_string,
-    clause_starts_maybe, clause_write_tstp, Clause, ClauseParseOptions,
+    clause_print_lop_format_string_with_options, clause_print_tptp_format_string_with_options,
+    clause_starts_maybe, clause_write_tstp_with_type_suffixes, Clause, ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_CONJECTURE,
@@ -239,9 +239,20 @@ impl ClauseSet {
 
     #[must_use]
     pub fn print_tptp_format_string(&self, bank: &TermBank) -> String {
+        self.print_tptp_format_string_with_options(bank, EqnPrintOptions::tptp())
+    }
+
+    #[must_use]
+    pub fn print_tptp_format_string_with_options(
+        &self,
+        bank: &TermBank,
+        options: EqnPrintOptions,
+    ) -> String {
         let mut output = String::new();
         for clause in &self.clauses {
-            output.push_str(&clause_print_tptp_format_string(bank, clause));
+            output.push_str(&clause_print_tptp_format_string_with_options(
+                bank, clause, options,
+            ));
             output.push('\n');
         }
         output
@@ -261,8 +272,33 @@ impl ClauseSet {
         full_terms: bool,
         problem_type: ProblemType,
     ) -> Result<(), Diagnostic> {
+        self.write_tstp_with_type_suffixes(output, bank, full_terms, problem_type, false)
+    }
+
+    /// Writes the C `ClauseSetTSTPPrint` shape with optional term type suffixes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any clause reaches an unported
+    /// `ClauseTSTPPrint` branch or if the formatter fails.
+    pub fn write_tstp_with_type_suffixes(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        print_types: bool,
+    ) -> Result<(), Diagnostic> {
         for clause in &self.clauses {
-            clause_write_tstp(output, bank, clause, full_terms, true, problem_type)?;
+            clause_write_tstp_with_type_suffixes(
+                output,
+                bank,
+                clause,
+                full_terms,
+                true,
+                problem_type,
+                print_types,
+            )?;
             output
                 .write_str("\n")
                 .map_err(clause_set_tstp_write_error)?;
@@ -282,8 +318,29 @@ impl ClauseSet {
         full_terms: bool,
         problem_type: ProblemType,
     ) -> Result<String, Diagnostic> {
+        self.tstp_print_string_with_type_suffixes(bank, full_terms, problem_type, false)
+    }
+
+    /// Returns the C `ClauseSetTSTPPrint` shape with optional term type suffixes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic under the same conditions as [`Self::write_tstp`].
+    pub fn tstp_print_string_with_type_suffixes(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        print_types: bool,
+    ) -> Result<String, Diagnostic> {
         let mut output = String::new();
-        self.write_tstp(&mut output, bank, full_terms, problem_type)?;
+        self.write_tstp_with_type_suffixes(
+            &mut output,
+            bank,
+            full_terms,
+            problem_type,
+            print_types,
+        )?;
         Ok(output)
     }
 

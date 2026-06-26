@@ -188,8 +188,32 @@ impl TermBank {
         term: &Term,
         full_terms: bool,
     ) -> fmt::Result {
+        self.write_term_with_type_suffixes(output, term, full_terms, false)
+    }
+
+    /// Writes a term with optional `TermPrintTypes`-style suffixes.
+    ///
+    /// C appends type suffixes only on the conventional full-term printer; the
+    /// compact DAG printer keeps its abbreviation-only shape.
+    ///
+    /// # Panics
+    ///
+    /// Panics if typed output is requested for a term without a known type, or
+    /// if a non-constant term has an uninitialized argument, matching the C
+    /// term-printer preconditions.
+    pub fn write_term_with_type_suffixes(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        full_terms: bool,
+        print_types: bool,
+    ) -> fmt::Result {
         if full_terms {
-            self.write_plain_term(output, term)
+            if print_types {
+                self.write_plain_term_with_type_suffixes(output, term)
+            } else {
+                self.write_plain_term(output, term)
+            }
         } else {
             self.write_term_compact(output, term)
         }
@@ -318,6 +342,24 @@ impl TermBank {
         Ok(())
     }
 
+    fn write_plain_term_with_type_suffixes(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+    ) -> fmt::Result {
+        if term.is_free_var() {
+            write!(output, "{}", var_print_string(term.f_code()))?;
+        } else if term.is_db_var() {
+            write!(output, "db({})", term.f_code())?;
+        } else {
+            self.write_symbol(output, term.f_code())?;
+            if !term.is_const() {
+                self.write_plain_arg_list_with_type_suffixes(output, term)?;
+            }
+        }
+        self.write_type_suffix(output, term)
+    }
+
     fn write_plain_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
         write!(output, "(")?;
         for index in 0..term.arity() {
@@ -330,6 +372,38 @@ impl TermBank {
             self.write_plain_term(output, &arg)?;
         }
         write!(output, ")")
+    }
+
+    fn write_plain_arg_list_with_type_suffixes(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+    ) -> fmt::Result {
+        write!(output, "(")?;
+        for index in 0..term.arity() {
+            if index != 0 {
+                write!(output, ",")?;
+            }
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            self.write_plain_term_with_type_suffixes(output, &arg)?;
+        }
+        write!(output, ")")
+    }
+
+    fn write_type_suffix(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        let type_ = term
+            .type_()
+            .expect("typed term printing requires a known term type");
+        let mut rendered = Vec::new();
+        self.sig
+            .type_bank()
+            .print_tstp(&mut rendered, &type_, problem_type())
+            .map_err(|_| fmt::Error)?;
+        let rendered = String::from_utf8(rendered).map_err(|_| fmt::Error)?;
+        output.write_char(':')?;
+        output.write_str(&rendered)
     }
 
     fn write_ho_debug_term(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {

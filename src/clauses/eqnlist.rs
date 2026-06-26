@@ -3,7 +3,7 @@ use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn::{
-    eqn_parse, eqn_write, eqn_write_deref, eqn_write_tstp, Eqn, EqnPrintOptions,
+    eqn_parse, eqn_write, eqn_write_deref, eqn_write_tstp_with_type_suffixes, Eqn, EqnPrintOptions,
 };
 use crate::clauses::eqn_props::{
     EqnProperties, EP_IS_MAXIMAL, EP_IS_POSITIVE, EP_IS_STRICTLY_MAXIMAL,
@@ -336,12 +336,50 @@ impl EqnList {
         full_terms: bool,
         print_oriented: bool,
     ) -> fmt::Result {
+        self.write_tstp_print_with_type_suffixes(
+            output,
+            bank,
+            sep,
+            full_terms,
+            print_oriented,
+            false,
+        )
+    }
+
+    /// Writes the C `EqnListTSTPPrint` shape with optional term type suffixes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any literal or term violates the C printing preconditions.
+    pub fn write_tstp_print_with_type_suffixes(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        sep: &str,
+        full_terms: bool,
+        print_oriented: bool,
+        print_types: bool,
+    ) -> fmt::Result {
         let mut iter = self.literals.iter();
         if let Some(first) = iter.next() {
-            eqn_write_tstp(output, bank, first, full_terms, print_oriented)?;
+            eqn_write_tstp_with_type_suffixes(
+                output,
+                bank,
+                first,
+                full_terms,
+                print_oriented,
+                print_types,
+            )?;
             for literal in iter {
                 output.write_str(sep)?;
-                eqn_write_tstp(output, bank, literal, full_terms, print_oriented)?;
+                eqn_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    literal,
+                    full_terms,
+                    print_oriented,
+                    print_types,
+                )?;
             }
         }
         Ok(())

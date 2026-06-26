@@ -337,6 +337,7 @@ impl EquationPrintConfig {
             full_equational_rep: self.full_equational_rep,
             print_oriented: self.print_oriented,
             higher_order_parentheses: false,
+            print_types: false,
         }
     }
 }
@@ -3652,13 +3653,19 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
     if config.flags.contains(EProverFlag::PrintFormulas) {
         match config.output_format {
             IoFormat::Tptp => {
-                output.write_all(clauses.print_tptp_format_string(&bank).as_bytes())?;
+                let options = EqnPrintOptions::tptp().with_print_types(config.encoding.print_types);
+                output.write_all(
+                    clauses
+                        .print_tptp_format_string_with_options(&bank, options)
+                        .as_bytes(),
+                )?;
             }
             IoFormat::Tstp => {
-                let rendered = clauses.tstp_print_string(
+                let rendered = clauses.tstp_print_string_with_type_suffixes(
                     &bank,
                     true,
                     crate::basics::simple_stuff::ProblemType::FirstOrder,
+                    config.encoding.print_types,
                 )?;
                 output.write_all(rendered.as_bytes())?;
             }
@@ -3668,7 +3675,8 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
                     true,
                     config
                         .equation_print
-                        .into_eqn_print_options(config.output_format),
+                        .into_eqn_print_options(config.output_format)
+                        .with_print_types(config.encoding.print_types),
                 );
                 output.write_all(rendered.as_bytes())?;
             }
@@ -3970,7 +3978,8 @@ fn write_saturated_output(
         config.output_format,
         config
             .equation_print
-            .into_eqn_print_options(config.output_format),
+            .into_eqn_print_options(config.output_format)
+            .with_print_types(config.encoding.print_types),
     )?;
     output.write_all(rendered.as_bytes())?;
     output.write_all(b"\n")?;
@@ -6895,6 +6904,56 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(String::from_utf8(stdout).unwrap(), "equal(a, b) <- .\n");
         assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_honors_print_types() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-print-types");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--lop-in",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:$i):$o <- .\n");
+        assert!(stderr.is_empty());
+
+        let mut tptp_stdout = Vec::new();
+        let mut tptp_stderr = Vec::new();
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--lop-in",
+                "--tptp-out",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut tptp_stdout,
+            &mut tptp_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(tptp_stdout).unwrap();
+        assert!(printed.starts_with("input_clause(i_0_"));
+        assert!(printed.ends_with(",axiom,[++p(a:$i):$o]).\n"));
+        assert!(tptp_stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 
