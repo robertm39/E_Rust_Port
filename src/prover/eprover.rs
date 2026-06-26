@@ -3567,6 +3567,11 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
 
+    if config.flags.contains(EProverFlag::PruneOnly) {
+        run_prune_only(&mut output, config)?;
+        return Ok(ErrorCode::NO_ERROR.exit_status());
+    }
+
     let status = run_proof_search(&mut output, config)?;
     output.flush()?;
     Ok(status)
@@ -3639,6 +3644,14 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
 
 fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError> {
     output.write_all(b"\n# Parsing successful!\n")?;
+    write_tstp_status(output, "Unknown")?;
+    Ok(())
+}
+
+fn run_prune_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
+    let mut state = proof_state_alloc(config.free_symbol_properties)?;
+    let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    output.write_all(b"\n# Pruning successful!\n")?;
     write_tstp_status(output, "Unknown")?;
     Ok(())
 }
@@ -6226,6 +6239,31 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             "\n# Parsing successful!\n# SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_prints_success_for_supported_clause_files() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-only");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--prune", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Pruning successful!\n# SZS status Unknown\n"
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
