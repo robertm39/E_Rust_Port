@@ -158,6 +158,11 @@ impl ProofState {
         (terms, unprocessed)
     }
 
+    pub fn terms_and_archive_mut(&mut self) -> (&mut TermBank, &mut ClauseSet) {
+        let Self { terms, archive, .. } = self;
+        (terms, archive)
+    }
+
     pub fn terms_and_processed_sets_mut(&mut self) -> (&mut TermBank, ProofStateProcessedSets<'_>) {
         let Self {
             terms,

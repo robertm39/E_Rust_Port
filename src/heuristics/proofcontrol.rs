@@ -6,7 +6,9 @@ use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_LIMITED_RW,
     CP_NO_GENERATION, CP_SUBSUMES_WATCH,
 };
-use crate::clauses::clausefunc::{clause_remove_ac_resolved, clause_remove_superfluous_literals};
+use crate::clauses::clausefunc::{
+    clause_archive, clause_remove_ac_resolved, clause_remove_superfluous_literals,
+};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::condensation::condense;
 use crate::clauses::context_sr::clause_contextual_simplify_reflect;
@@ -745,8 +747,10 @@ fn proof_state_reset_processed_clause<E>(
 where
     E: FnMut(&TermBank, &mut Clause),
 {
-    let mut requeued = handle.flat_copy(state.terms_mut())?;
-    state.archive_mut().insert(handle);
+    let mut requeued = {
+        let (terms, archive) = state.terms_and_archive_mut();
+        clause_archive(archive, handle, terms)?
+    };
     evaluate(state.terms(), &mut requeued);
     requeued.del_prop(CP_IS_ORIENTED);
 
@@ -1840,6 +1844,7 @@ mod tests {
         CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
         EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_SELECTED, EP_IS_SPLIT_LIT,
@@ -2382,6 +2387,17 @@ mod tests {
             let requeued = state.unprocessed().find_by_id(ident).unwrap();
             assert!(requeued.query_prop(CP_IS_PROCESSED));
             assert!(!requeued.query_prop(CP_IS_ORIENTED));
+            assert_eq!(
+                requeued
+                    .derivation()
+                    .map(crate::basics::pstacks::PStack::as_slice),
+                Some(
+                    &[
+                        DerivationEntry::Operation(DC_CNF_QUOTE),
+                        DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, 0)),
+                    ][..]
+                )
+            );
             let evaluations = requeued.evaluations().expect("requeued copy is evaluated");
             assert_eq!(evaluations.eval_no(), 1);
             assert_eq!(
