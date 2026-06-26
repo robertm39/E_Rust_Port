@@ -1,6 +1,9 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
-use crate::clauses::clausecpos::{clause_cpos_split, CompactPos};
+use crate::clauses::clausecpos::{
+    clause_cpos_first_lit, clause_cpos_next_lit, clause_cpos_split, CompactPos,
+};
+use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::termbanks::TermBank;
@@ -61,10 +64,52 @@ pub fn clause_dis_eq_decomposition(
     Ok(Clause::alloc(literals))
 }
 
+/// Computes all C `ComputeDisEqDecompositions` results for one clause.
+///
+/// The wrapper scans literal compact positions in C order and inserts every
+/// eligible decomposition into `store`.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`clause_dis_eq_decomposition`].
+pub fn compute_dis_eq_decompositions(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    diseq_decomposition: i64,
+    diseq_decomp_maxarity: i64,
+) -> Result<i64, Diagnostic> {
+    let mut count = 0;
+    let literal_count = i64::try_from(clause.literal_number()).unwrap_or(i64::MAX);
+    if literal_count > diseq_decomposition {
+        return Ok(count);
+    }
+
+    let mut litpos = 0;
+    let mut current = clause_cpos_first_lit(clause, &mut litpos);
+    while let Some((literal_index, literal)) = current {
+        let arity = i64::try_from(literal.left().arity()).unwrap_or(i64::MAX);
+        if literal.is_equ_lit(bank)
+            && literal.is_negative()
+            && literal.left().f_code() == literal.right().f_code()
+            && arity <= diseq_decomp_maxarity
+            && arity != 0
+        {
+            let new_clause = clause_dis_eq_decomposition(bank, clause, litpos)?;
+            store.insert(new_clause);
+            count += 1;
+        }
+        current = clause_cpos_next_lit(clause, literal_index, &mut litpos);
+    }
+
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::clause_dis_eq_decomposition;
+    use super::{clause_dis_eq_decomposition, compute_dis_eq_decompositions};
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::Signature;
@@ -175,5 +220,82 @@ mod tests {
         let clause = Clause::alloc(EqnList::from_vec(vec![diseq]));
 
         let _ = clause_dis_eq_decomposition(&mut bank, &clause, 1);
+    }
+
+    #[test]
+    fn compute_dis_eq_decompositions_inserts_eligible_decompositions_in_literal_order() {
+        let mut bank = test_bank();
+        let first_left_arg = typed_const(&mut bank, "all_a");
+        let first_right_arg = typed_const(&mut bank, "all_b");
+        let second_left_arg = typed_const(&mut bank, "all_c");
+        let second_right_arg = typed_const(&mut bank, "all_d");
+        let third_left_arg = typed_const(&mut bank, "all_e");
+        let third_right_arg = typed_const(&mut bank, "all_f");
+        let g_code = binary_code(&mut bank, "all_g");
+        let h_code = binary_code(&mut bank, "all_h");
+        let first_left =
+            typed_binary_with_code(&mut bank, g_code, &first_left_arg, &first_right_arg);
+        let first_right =
+            typed_binary_with_code(&mut bank, g_code, &second_left_arg, &second_right_arg);
+        let second_left =
+            typed_binary_with_code(&mut bank, h_code, &first_left_arg, &third_left_arg);
+        let second_right =
+            typed_binary_with_code(&mut bank, h_code, &second_left_arg, &third_right_arg);
+        let first_diseq = eqn(&mut bank, &first_left, &first_right, false);
+        let second_diseq = eqn(&mut bank, &second_left, &second_right, false);
+        let rest = eqn(&mut bank, &first_left_arg, &second_right_arg, true);
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            first_diseq,
+            rest.clone(),
+            second_diseq,
+        ]));
+        let mut store = ClauseSet::new();
+
+        let count = compute_dis_eq_decompositions(&mut bank, &clause, &mut store, 3, 2).unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(store.members(), 2);
+        assert!(store
+            .iter()
+            .all(|clause| clause.literals().as_slice()[0] == rest));
+        assert!(store.iter().any(|clause| {
+            clause.literals().as_slice().iter().any(|literal| {
+                literal.left() == &first_right_arg && literal.right() == &second_right_arg
+            })
+        }));
+        assert!(store.iter().any(|clause| {
+            clause.literals().as_slice().iter().any(|literal| {
+                literal.left() == &third_left_arg && literal.right() == &third_right_arg
+            })
+        }));
+    }
+
+    #[test]
+    fn compute_dis_eq_decompositions_honors_size_and_arity_gates() {
+        let mut bank = test_bank();
+        let left_first = typed_const(&mut bank, "gate_a");
+        let left_second = typed_const(&mut bank, "gate_b");
+        let right_first = typed_const(&mut bank, "gate_c");
+        let right_second = typed_const(&mut bank, "gate_d");
+        let function_code = binary_code(&mut bank, "gate_f");
+        let left = typed_binary_with_code(&mut bank, function_code, &left_first, &left_second);
+        let right = typed_binary_with_code(&mut bank, function_code, &right_first, &right_second);
+        let diseq = eqn(&mut bank, &left, &right, false);
+        let rest = eqn(&mut bank, &left_first, &right_second, true);
+        let clause = Clause::alloc(EqnList::from_vec(vec![diseq, rest]));
+
+        let mut size_blocked = ClauseSet::new();
+        assert_eq!(
+            compute_dis_eq_decompositions(&mut bank, &clause, &mut size_blocked, 1, 2).unwrap(),
+            0
+        );
+        assert!(size_blocked.is_empty());
+
+        let mut arity_blocked = ClauseSet::new();
+        assert_eq!(
+            compute_dis_eq_decompositions(&mut bank, &clause, &mut arity_blocked, 2, 1).unwrap(),
+            0
+        );
+        assert!(arity_blocked.is_empty());
     }
 }

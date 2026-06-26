@@ -28,6 +28,29 @@ Pending:
 - Higher-order CSU enumeration, lambda normalization, multi-CSU equality-factor stack order, and derivation/proof-output side effects for factoring.
 - Reusable fresh-variable-bank behavior may need a performance pass once stable clause/literal ownership is ported.
 
+## Disequality Decomposition
+
+Rust files:
+
+- `src/clauses/diseq_decomp.rs`
+
+C source references:
+
+- `eprover/CLAUSES/ccl_diseq_decomp.c`
+- `eprover/CLAUSES/ccl_diseq_decomp.h`
+- `eprover/CONTROL/cco_diseq_decomp.c`
+- `eprover/CONTROL/cco_diseq_decomp.h`
+
+Implemented:
+
+- `ClauseDisEqDecomposition`, including compact-position selection, residual literal copy, reversed argument-pair disequality generation, and resolved/duplicate cleanup.
+- `ComputeDisEqDecompositions`, including the literal-count threshold, negative equational top-symbol/arity gates, max-arity gate, clause-set insertion, and generated count.
+
+Pending:
+
+- Derivation-stack side effects for `DCDisEqDecompose`.
+- Full `generate_new_clauses` integration with equality factoring, equality resolution, disequality decomposition, and paramodulation.
+
 ## Initial Crate And CLI Foundation
 
 Rust files:
