@@ -2421,6 +2421,41 @@ pub fn proof_state_process_clause(
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
+    proof_state_process_clause_impl(state, control, answer_limit, None)
+}
+
+/// Processes one selected clause using caller-owned global indices.
+///
+/// This mirrors the C `ProcessClause` tail that inserts the survivor into
+/// `state->gindices` before watchlist simplification and selected-clause
+/// generation. The caller keeps ownership of the indices until Rust has a
+/// proof-session owner that can safely hold both `ProofState` and
+/// `GlobalIndices`.
+///
+/// # Errors
+///
+/// Returns diagnostics from selection, contraction, answer-literal evaluation,
+/// replacement inferences, backward simplification, processed insertion, global
+/// indexed generation, or generated-clause reinsertion.
+pub fn proof_state_process_clause_with_global_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    proof_state_process_clause_impl(state, control, answer_limit, Some(indices))
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "C-compatible ProcessClause staging keeps the selected-clause phases in order"
+)]
+fn proof_state_process_clause_impl(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
     };
@@ -2491,6 +2526,15 @@ pub fn proof_state_process_clause(
 
     let processed_ident = clause.ident();
     let class = proof_state_insert_processed_clause(state, clause, clause_date)?;
+    if let Some(indices) = indices.as_deref_mut() {
+        proof_state_global_index_processed_clause(
+            state,
+            indices,
+            class,
+            processed_ident,
+            control.heuristic_parms().lambda_demod,
+        )?;
+    }
     if control.heuristic_parms().watchlist_simplify {
         let processed_clause =
             proof_state_processed_clause_by_class(state, class, processed_ident).cloned();
@@ -2510,7 +2554,16 @@ pub fn proof_state_process_clause(
                     "processed clause disappeared before selected-clause generation",
                 )
             })?;
-        proof_state_generate_new_clauses(state, control, &processed_clause)?
+        if let Some(indices) = indices.as_deref() {
+            proof_state_generate_new_clauses_with_global_indices(
+                state,
+                control,
+                &processed_clause,
+                indices,
+            )?
+        } else {
+            proof_state_generate_new_clauses(state, control, &processed_clause)?
+        }
     };
 
     if control.heuristic_parms().detsort_tmpset {
@@ -2527,6 +2580,30 @@ pub fn proof_state_process_clause(
         generation,
         generated_empty,
     })
+}
+
+fn proof_state_global_index_processed_clause(
+    state: &mut ProofState,
+    indices: &mut GlobalIndices<'_>,
+    class: ProcessedClauseClass,
+    ident: i64,
+    lambda_demod: bool,
+) -> Result<(), Diagnostic> {
+    let (terms, sets) = state.terms_and_processed_sets_mut();
+    let clause = match class {
+        ProcessedClauseClass::PositiveRule => sets.pos_rules.find_by_id_mut(ident),
+        ProcessedClauseClass::PositiveEquation => sets.pos_eqns.find_by_id_mut(ident),
+        ProcessedClauseClass::NegativeUnit => sets.neg_units.find_by_id_mut(ident),
+        ProcessedClauseClass::NonUnit => sets.non_units.find_by_id_mut(ident),
+    }
+    .ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "processed clause disappeared before global-index insertion",
+        )
+    })?;
+    indices.insert_clause(clause, terms, lambda_demod);
+    Ok(())
 }
 
 fn proof_state_processed_clause_by_class(
@@ -3409,13 +3486,14 @@ mod tests {
         proof_state_init_indexing, proof_state_init_with_global_indices,
         proof_state_insert_new_clauses, proof_state_insert_processed_clause,
         proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_process_clause, proof_state_queue_generated_clause_for_eval,
-        proof_state_replacing_inferences, proof_state_reset_processed, proof_state_saturate,
-        proof_state_simplify_watchlist, proof_state_storage_estimate, select_inherited_literal,
-        BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
-        GenerateNewClausesOutcome, LiteralSelectionOutcome, ProcessClauseOutcome,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_process_clause, proof_state_process_clause_with_global_indices,
+        proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
+        proof_state_reset_processed, proof_state_saturate, proof_state_simplify_watchlist,
+        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
+        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
+        LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
+        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SaturateOutcome, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -5225,6 +5303,48 @@ mod tests {
         };
         assert_eq!(generation.paramodulants, 0);
         assert_eq!(state.statistics().paramod_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_global_indices_generates_indexed_paramodulants() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, mut indexed_partner) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_process_idx_pm_source");
+            let replacement = typed_const(terms, "pc_process_idx_pm_replacement");
+            let rhs = typed_const(terms, "pc_process_idx_pm_rhs");
+            let f_source = typed_unary(terms, "pc_process_idx_pm_f", &source);
+            let mut selected_lit = literal(terms, &source, &replacement, true);
+            let mut partner_lit = literal(terms, &f_source, &rhs, true);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_151);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            (selected, partner)
+        };
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_partner, state.terms(), false);
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "ProcessClauseIndexedParamodTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause_with_global_indices(
+            &mut state,
+            &mut control,
+            1,
+            &mut indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { generation, .. } = outcome else {
+            panic!("indexed paramodulation should process the selected clause");
+        };
+        assert_eq!(generation.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.unprocessed().members(), 1);
     }
 
     #[test]
