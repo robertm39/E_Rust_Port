@@ -2,9 +2,12 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
+use crate::clauses::clause_props::{tptp_types_combine, CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausepos::ClausePos;
+use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{clause_push_derivation, DC_PARAMOD};
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::{EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_PM_INTO_LIT};
+use crate::clauses::eqn_props::{EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT};
 use crate::clauses::eqnlist::EqnList;
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
@@ -112,6 +115,102 @@ pub fn paramodulation_pair_positions(
         }
     }
     pairs
+}
+
+/// Computes all currently ported plain first-order paramodulants between two
+/// clauses and inserts them into `store`.
+///
+/// `parent_alias` carries the source-parent metadata for C callers that
+/// paramodulate from a temporary clause view but document the original parent.
+///
+/// # Errors
+///
+/// Returns diagnostics from the low-level paramodulation constructor. Only
+/// plain paramodulation is currently supported.
+pub fn compute_clause_clause_paramodulants(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    with: &Clause,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+) -> Result<i64, Diagnostic> {
+    if pm_type != ParamodulationType::Plain {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "simultaneous paramodulation wrappers are not ported yet",
+        ));
+    }
+
+    debug_assert!(clause.literals().query_prop_number(EP_IS_MAXIMAL) != 0);
+    debug_assert_eq!(
+        clause.literals().query_prop_number(EP_IS_MAXIMAL),
+        parent_alias.literals().query_prop_number(EP_IS_MAXIMAL)
+    );
+    debug_assert!(with.literals().query_prop_number(EP_IS_MAXIMAL) != 0);
+
+    if clause.query_prop(CP_NO_GENERATION) || with.query_prop(CP_NO_GENERATION) {
+        return Ok(0);
+    }
+
+    let mut paramod_count = compute_directed_clause_paramodulants(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        with,
+        store,
+        false,
+        parent_alias,
+        with,
+    )?;
+
+    if !std::ptr::eq(parent_alias, with) {
+        paramod_count += compute_directed_clause_paramodulants(
+            bank,
+            ocb,
+            with,
+            with,
+            clause,
+            store,
+            true,
+            with,
+            parent_alias,
+        )?;
+    }
+
+    Ok(paramod_count)
+}
+
+/// Computes all currently ported plain first-order paramodulants between one
+/// clause and every clause in `with_set`.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`compute_clause_clause_paramodulants`].
+pub fn compute_all_paramodulants(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    with_set: &ClauseSet,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    for with in with_set.iter() {
+        paramod_count += compute_clause_clause_paramodulants(
+            bank,
+            ocb,
+            clause,
+            parent_alias,
+            with,
+            store,
+            pm_type,
+        )?;
+    }
+    Ok(paramod_count)
 }
 
 /// Computes the first-order C `ComputeOverlap` replacement term.
@@ -616,15 +715,79 @@ fn mark_potential_paramod_terms_from_position(position: &ClausePos) {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper keeps source, target, and metadata parents explicit"
+)]
+fn compute_directed_clause_paramodulants(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    source: &Clause,
+    source_parent: &Clause,
+    target: &Clause,
+    store: &mut ClauseSet,
+    no_top: bool,
+    metadata_parent1: &Clause,
+    metadata_parent2: &Clause,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    for pair in
+        paramodulation_pair_positions(bank, source, target, no_top, ParamodulationType::Plain)
+    {
+        let Some(mut paramodulant) =
+            clause_ordered_paramod(bank, ocb, pair.source(), pair.target())?
+        else {
+            continue;
+        };
+        paramod_count += 1;
+        update_paramodulant_info(&mut paramodulant, metadata_parent1, metadata_parent2);
+        clause_push_derivation(
+            &mut paramodulant,
+            DC_PARAMOD,
+            Some(metadata_parent2),
+            Some(source_parent),
+        );
+        store.insert(paramodulant);
+    }
+    Ok(paramod_count)
+}
+
+fn update_paramodulant_info(child: &mut Clause, parent1: &Clause, parent2: &Clause) {
+    child.set_proof_size(
+        parent1
+            .proof_size()
+            .saturating_add(parent2.proof_size())
+            .saturating_add(1),
+    );
+    child.set_proof_depth(
+        parent1
+            .proof_depth()
+            .max(parent2.proof_depth())
+            .saturating_add(1),
+    );
+    child.set_tptp_type(parent1.query_tptp_type());
+    child.set_prop(parent1.give_props(CP_IS_SOS) | parent2.give_props(CP_IS_SOS));
+    if !std::ptr::eq(parent1, parent2) {
+        child.set_tptp_type(tptp_types_combine(
+            child.query_tptp_type(),
+            parent2.query_tptp_type(),
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_ordered_paramod, paramod_from_side_positions, paramod_into_positions,
-        paramodulation_pair_positions, ParamodulationType,
+        clause_ordered_paramod, compute_all_paramodulants, compute_clause_clause_paramodulants,
+        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
+        ParamodulationType,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausepos::ClausePos;
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_PARAMOD};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
         EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT,
@@ -807,6 +970,133 @@ mod tests {
         assert_eq!(pairs[1].source().side(), EqnSide::RightSide);
         assert_eq!(pairs[1].target().literal_index(), Some(0));
         assert!(!pairs[1].target().is_top());
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_inserts_plain_metadata() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_cc_source_left");
+        let source_right = typed_const(&mut bank, "pm_cc_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_cc_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_cc_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let f_of_replacement = typed_unary(&mut bank, f_code, &source_right);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        source.set_proof_depth(2);
+        source.set_proof_size(7);
+        source.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        source.set_prop(CP_IS_SOS);
+        target.set_proof_depth(5);
+        target.set_proof_size(11);
+        target.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(store.members(), 1);
+        let stored = store.iter().next().expect("one paramodulant inserted");
+        assert_eq!(stored.proof_depth(), 6);
+        assert_eq!(stored.proof_size(), 19);
+        assert_eq!(stored.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert!(stored.query_prop(CP_IS_SOS));
+        assert_eq!(stored.literal_number(), 1);
+        assert_eq!(stored.literals().as_slice()[0].left(), &f_of_replacement);
+        assert_eq!(stored.literals().as_slice()[0].right(), &target_rhs);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_honors_no_generation_gate() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_gate_source_left");
+        let source_right = typed_const(&mut bank, "pm_gate_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_gate_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_gate_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        source.set_prop(CP_NO_GENERATION);
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn compute_all_paramodulants_iterates_with_set() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_all_source_left");
+        let source_right = typed_const(&mut bank, "pm_all_source_right");
+        let first_rhs = typed_const(&mut bank, "pm_all_first_rhs");
+        let second_rhs = typed_const(&mut bank, "pm_all_second_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_all_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut first_target = lit(&mut bank, &f_of_source, &first_rhs, true);
+        let mut second_target = lit(&mut bank, &f_of_source, &second_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut first_target);
+        maximal_oriented(&mut second_target);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let with_set = ClauseSet::from_clauses([
+            Clause::alloc(EqnList::from_vec(vec![first_target])),
+            Clause::alloc(EqnList::from_vec(vec![second_target])),
+        ]);
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &with_set,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(store.members(), 2);
     }
 
     #[test]

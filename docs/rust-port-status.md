@@ -47,10 +47,11 @@ Implemented:
 - First-order `EqnOrderedParamod`, including target-side ordering rejection, positive trivial-paramodulant elimination, negative trivial-paramodulant retention for resolved-literal cleanup, and `EPIsPMIntoLit` marking.
 - First-order low-level `ClauseOrderedParamod` for explicit clause positions, including strict maximality rechecks after substitution, normalized copies excluding source/target literals, `EPFromClauseLit` and `EPIsPMIntoLit` flag flow, resolved-literal cleanup, and duplicate cleanup.
 - First-order paramodulation source/target/pair candidate enumeration matching `ClausePosFirst/NextParamodFromSide`, `ClausePosFirst/NextParamodInto`, and `ClausePosFirst/NextParamodPair` cursor order for the plain path, including selected-source rejection, positive-root `no_top` skipping, target-variable skipping, and non-equational predicate-root skipping for free-variable sources.
+- Plain first-order unindexed `ComputeClauseClauseParamodulants` and `ComputeAllParamodulants`, including `CPNoGeneration` gates, first/reverse direction order with reverse `no_top`, generated-clause insertion into a caller store, proof-depth/proof-size/TPTP/SOS metadata propagation, and `DCParamod` derivation entries on generated clauses.
 
 Pending:
 
-- `ComputeClauseClauseParamodulants`, `ComputeAllParamodulants`, unindexed/indexed control wrappers, generated-clause insertion, proof-depth/proof-size/TPTP/SOS metadata propagation, and `DCParamod` / `DCSimParamod` derivation entries.
+- Proof-control integration for selected-clause generation, indexed control wrappers, and negative-unit strategy gating.
 - Simultaneous and super-simultaneous ordered paramodulation, `TPPotentialParamod` marking, higher-order unification constraints, lambda normalization, and proof-documentation output.
 - The optional C `check_paramod_ordering_constraint` path remains disabled in C and unported in Rust.
 

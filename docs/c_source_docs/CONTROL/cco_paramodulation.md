@@ -101,7 +101,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for the first Rust plain unindexed wrapper slice on 2026-06-26.
 
 Source files reviewed: `CONTROL/cco_paramodulation.h`, `CONTROL/cco_paramodulation.c`.
 
@@ -114,6 +114,16 @@ Source files reviewed: `CONTROL/cco_paramodulation.h`, `CONTROL/cco_paramodulati
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `ComputeClauseClauseParamodulants` first paramodulates from `clause` into `with` with top target positions allowed, then, when the parents are distinct, paramodulates from `with` into `clause` with positive top target positions suppressed. This direction/no-top order is part of the generated-clause stream.
+- `parent_alias` is metadata, not necessarily the same object used for source positions. The Rust wrapper preserves this split so temporary source views can still document the original parent.
+- `update_clause_info` combines proof size, proof depth, TPTP type, and SOS flags from the two real parents before insertion into the caller store.
+- Rust now ports the plain first-order unindexed wrapper path with `DCParamod` derivation entries on generated child clauses. Indexed wrappers, simultaneous variants, higher-order substitutions, and proof-documentation output remain pending.
+
+### Change-Later Observations
+
+- In the unindexed C wrapper, the two `ClausePushDerivation` calls pass `clause` rather than the freshly created `paramod` child. That looks inconsistent with the surrounding metadata update and other inference wrappers. Rust records the derivation on the generated child; keep this as a C/Rust reference-test target before changing C or compatibility expectations.
+- `variable_paramod` selects plain, simultaneous, or super-simultaneous construction through `sim_paramod_q`, while the indexed path may decide a different simultaneous mode for each source position. Rust currently rejects non-plain wrapper requests explicitly; the later simultaneous port should test both unindexed and indexed mode-selection paths.
+- The C wrapper takes a reusable `VarBank_p freshvars` from outside this unit and resets/uses it through lower constructors. Rust low-level constructors seed a local fresh-variable bank; revisit reusable-bank performance once wrapper ownership and selected-clause integration are stable.
 
 ### Porting Focus
 
