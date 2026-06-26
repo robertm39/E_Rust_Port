@@ -1669,11 +1669,14 @@ impl<W: Write + ?Sized> Write for ConfiguredOutput<'_, W> {
 }
 
 impl<W: Write + ?Sized> ConfiguredOutput<'_, W> {
-    fn write_pcl_initial_marker(&mut self) -> io::Result<()> {
+    fn write_stdout_side_channel(&mut self, buffer: &[u8]) -> io::Result<()> {
         match self {
-            Self::Writer(writer) => writer.write_all(b"XX\n"),
-            Self::File { stdout, .. } => stdout.write_all(b"XX\n"),
+            Self::Writer(writer) | Self::File { stdout: writer, .. } => writer.write_all(buffer),
         }
+    }
+
+    fn write_pcl_initial_marker(&mut self) -> io::Result<()> {
+        self.write_stdout_side_channel(b"XX\n")
     }
 }
 
@@ -3722,6 +3725,7 @@ fn run_prune_only<W: Write + ?Sized>(
 ) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    write_preprocessing_config_debug_line(output, config)?;
     write_initial_clause_docs(output, config, &mut state)?;
     output.write_all(b"\n# Pruning successful!\n")?;
     write_tstp_status(output, "Unknown")?;
@@ -3735,6 +3739,7 @@ fn run_proof_search<W: Write + ?Sized>(
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     let raw_clause_no = state.axioms().members();
+    write_preprocessing_config_debug_line(output, config)?;
     if config.search.completeness.incomplete {
         state.set_state_is_complete(false);
     }
@@ -3887,6 +3892,25 @@ fn parse_input_files_into_axioms(
     }
 
     Ok(parsed_total)
+}
+
+fn write_preprocessing_config_debug_line<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+) -> Result<(), EProverError> {
+    output.write_stdout_side_channel(preprocessing_config_debug_line(config).as_bytes())?;
+    Ok(())
+}
+
+fn preprocessing_config_debug_line(config: &EProverConfig) -> String {
+    let ho_preprocessing = &config.search.inference.higher_order_preprocessing;
+    format!(
+        "# (lift_lambdas = {}, lambda_to_forall = {},unroll_only_formulas = {}, sine = {})\n",
+        i32::from(config.search.support.lift_lambdas),
+        i32::from(ho_preprocessing.lambda_to_forall),
+        i32::from(ho_preprocessing.unroll_only_formulas),
+        config.sine.as_deref().unwrap_or("(null)")
+    )
 }
 
 fn load_configured_watchlist(
@@ -4307,11 +4331,12 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, fv_index_params_from_config, heuristic_parms_from_config,
-        order_parms_from_config, process_options, proof_control_from_config, run, run_config,
-        AcHandling, DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
-        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
+        order_parms_from_config, preprocessing_config_debug_line, process_options,
+        proof_control_from_config, run, run_config, AcHandling, DocOutputFormat, EProverAction,
+        EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
+        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
+        PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
+        LPO_RECURSION_LIMIT_WARNING, MEGA,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -4339,6 +4364,10 @@ mod tests {
             .join(format!("eprover-{name}-{}.out", std::process::id()))
     }
 
+    fn default_preprocessing_debug_line() -> String {
+        preprocessing_config_debug_line(&EProverConfig::default())
+    }
+
     fn run_config_from<I, S>(argv: I) -> Box<EProverConfig>
     where
         I: IntoIterator<Item = S>,
@@ -4348,6 +4377,27 @@ mod tests {
             panic!("expected run config");
         };
         config
+    }
+
+    #[test]
+    fn preprocessing_config_debug_line_preserves_c_shape() {
+        assert_eq!(
+            default_preprocessing_debug_line(),
+            "# (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = (null))\n"
+        );
+
+        let config = run_config_from([
+            "eprover",
+            "--lift-lambdas=false",
+            "--cnf-lambda-to-forall=false",
+            "--unroll-formulas-only=false",
+            "--sine=Auto",
+        ]);
+
+        assert_eq!(
+            preprocessing_config_debug_line(&config),
+            "# (lift_lambdas = 0, lambda_to_forall = 0,unroll_only_formulas = 0, sine = Auto)\n"
+        );
     }
 
     #[test]
@@ -6425,12 +6475,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(stdout.is_empty());
+        let debug_line = default_preprocessing_debug_line();
+        assert_eq!(std::str::from_utf8(&stdout).unwrap(), debug_line);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             format!("# Version: {VERSION}\n\n# No proof found!\n# SZS status Satisfiable\n")
         );
         std::fs::remove_file(&path).unwrap();
+        stdout.clear();
 
         let status = run(
             ["eprover", "--print-version", "-o", "-", input_arg.as_str()],
@@ -6442,7 +6494,9 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            format!("# Version: {VERSION}\n\n# No proof found!\n# SZS status Satisfiable\n")
+            format!(
+                "# Version: {VERSION}\n{debug_line}\n# No proof found!\n# SZS status Satisfiable\n"
+            )
         );
         std::fs::remove_file(&input_path).unwrap();
     }
@@ -6474,7 +6528,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert_eq!(String::from_utf8(stdout).unwrap(), "XX\nXX\n");
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("{}XX\nXX\n", default_preprocessing_debug_line())
+        );
         assert_eq!(
             std::fs::read_to_string(&output_path).unwrap(),
             format!(
@@ -6563,7 +6620,8 @@ mod tests {
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let expected = format!(
-            "XX\n     1 : :[++p(a)] : XX\ninitial(\"{path_arg}\", at_line_1_column_1)\n\n# Pruning successful!\n# SZS status Unknown\n"
+            "{}XX\n     1 : :[++p(a)] : XX\ninitial(\"{path_arg}\", at_line_1_column_1)\n\n# Pruning successful!\n# SZS status Unknown\n",
+            default_preprocessing_debug_line()
         );
         assert_eq!(String::from_utf8(stdout).unwrap(), expected);
         assert!(stderr.is_empty());
@@ -6588,7 +6646,8 @@ mod tests {
 
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let expected = format!(
-            "cnf(c_0_1, axiom, (p(a)), file('{path_arg}', c1)).\n\n# Pruning successful!\n# SZS status Unknown\n"
+            "{}cnf(c_0_1, axiom, (p(a)), file('{path_arg}', c1)).\n\n# Pruning successful!\n# SZS status Unknown\n",
+            default_preprocessing_debug_line()
         );
         assert_eq!(String::from_utf8(stdout).unwrap(), expected);
         assert!(stderr.is_empty());
@@ -6614,7 +6673,10 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Proof found!\n# SZS status Unsatisfiable\n"
+            format!(
+                "{}\n# Proof found!\n# SZS status Unsatisfiable\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6639,7 +6701,10 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "# SZS status Theorem\n# SZS answers Tuple [[a]|_]\n\n# Proof found!\n"
+            format!(
+                "{}# SZS status Theorem\n# SZS answers Tuple [[a]|_]\n\n# Proof found!\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6664,7 +6729,10 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# No proof found!\n# SZS status Satisfiable\n"
+            format!(
+                "{}\n# No proof found!\n# SZS status Satisfiable\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6689,7 +6757,10 @@ mod tests {
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
+            format!(
+                "{}\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6714,7 +6785,10 @@ mod tests {
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
+            format!(
+                "{}\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6744,7 +6818,10 @@ mod tests {
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Failure: Out of unprocessed clauses!\n# SZS status GaveUp\n"
+            format!(
+                "{}\n# Failure: Out of unprocessed clauses!\n# SZS status GaveUp\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6774,9 +6851,10 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        assert!(printed.starts_with(
-            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
-        ));
+        assert!(printed.starts_with(&format!(
+            "{}\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n",
+            default_preprocessing_debug_line()
+        )));
         assert!(printed.contains("# Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
         assert!(stderr.is_empty());
@@ -6838,7 +6916,10 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(printed.starts_with("\n# No proof found!\n# SZS status Satisfiable\n"));
+        assert!(printed.starts_with(&format!(
+            "{}\n# No proof found!\n# SZS status Satisfiable\n",
+            default_preprocessing_debug_line()
+        )));
         assert!(printed.contains("# Parsed axioms                        : 1\n"));
         assert!(printed.contains("# Initial clauses in saturation        : 1\n"));
         assert!(printed.contains("# Processed clauses                    : 1\n"));
@@ -6871,7 +6952,10 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "# Presaturation interreduction done\n\n# No proof found!\n# SZS status Satisfiable\n"
+            format!(
+                "{}# Presaturation interreduction done\n\n# No proof found!\n# SZS status Satisfiable\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6927,8 +7011,10 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        let expected_prefix =
-            format!("XX\n     1 : :[++p(a)] : XX\ninitial(\"{path_arg}\", at_line_1_column_1)\n");
+        let expected_prefix = format!(
+            "{}XX\n     1 : :[++p(a)] : XX\ninitial(\"{path_arg}\", at_line_1_column_1)\n",
+            default_preprocessing_debug_line()
+        );
         assert!(printed.starts_with(&expected_prefix));
         assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("# SZS status GaveUp\n"));
@@ -6962,8 +7048,10 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        let expected_prefix =
-            format!("cnf(c_0_1, axiom, (p(a)), file('{path_arg}', at_line_1_column_1)).\n");
+        let expected_prefix = format!(
+            "{}cnf(c_0_1, axiom, (p(a)), file('{path_arg}', at_line_1_column_1)).\n",
+            default_preprocessing_debug_line()
+        );
         assert!(printed.starts_with(&expected_prefix));
         assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("# SZS status GaveUp\n"));
@@ -6997,7 +7085,10 @@ mod tests {
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Failure: User resource limit exceeded!\n# SZS status ResourceOut\n"
+            format!(
+                "{}\n# Failure: User resource limit exceeded!\n# SZS status ResourceOut\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -7025,7 +7116,10 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Proof found!\n# SZS status Unsatisfiable\n"
+            format!(
+                "{}\n# Proof found!\n# SZS status Unsatisfiable\n",
+                default_preprocessing_debug_line()
+            )
         );
         std::fs::remove_file(&path).unwrap();
     }
@@ -7058,7 +7152,10 @@ mod tests {
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Watchlist is empty!\n# SZS status ResourceOut\n"
+            format!(
+                "{}\n# Watchlist is empty!\n# SZS status ResourceOut\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
@@ -7093,7 +7190,10 @@ mod tests {
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
+            format!(
+                "{}\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n",
+                default_preprocessing_debug_line()
+            )
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
@@ -7125,7 +7225,10 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            default_preprocessing_debug_line()
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
     }
