@@ -129,6 +129,10 @@ Source files reviewed: `BASICS/clb_error.h`, `BASICS/clb_error.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change-Later Observations
+
+- `PrintRusage` sums `getrusage(RUSAGE_SELF)` and `getrusage(RUSAGE_CHILDREN)` user/system times, then prints raw maximum resident set size under a "pages" label. Rust now has the C-shaped footer through the safe process-clock abstraction, but native process counters, child-process aggregation, and exact per-target resident-set units should be revisited when the final resource-limit/signal abstraction is completed.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

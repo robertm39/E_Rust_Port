@@ -15,6 +15,13 @@ pub enum RLimResult {
     Success = 2,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResourceUsage {
+    pub user_time_seconds: f64,
+    pub system_time_seconds: f64,
+    pub max_resident_pages: u64,
+}
+
 impl RLimResult {
     #[must_use]
     pub const fn c_value(self) -> i32 {
@@ -69,6 +76,30 @@ pub fn get_sec_time() -> i64 {
 #[must_use]
 pub fn get_sec_time_mod() -> i64 {
     get_sec_time() % 1_000
+}
+
+#[must_use]
+pub fn format_resource_usage(usage: ResourceUsage) -> String {
+    format!(
+        "\n# -------------------------------------------------\n\
+         # User time                : {:.3} s\n\
+         # System time              : {:.3} s\n\
+         # Total time               : {:.3} s\n\
+         # Maximum resident set size: {} pages\n",
+        usage.user_time_seconds,
+        usage.system_time_seconds,
+        usage.user_time_seconds + usage.system_time_seconds,
+        usage.max_resident_pages
+    )
+}
+
+#[must_use]
+pub fn current_resource_usage() -> ResourceUsage {
+    ResourceUsage {
+        user_time_seconds: fallback_user_time_seconds(),
+        system_time_seconds: 0.0,
+        max_resident_pages: 0,
+    }
 }
 
 #[must_use]
@@ -173,12 +204,18 @@ pub fn secure_fclose_io(file: File) -> io::Result<()> {
     file.flush()
 }
 
+#[allow(clippy::cast_precision_loss)]
+fn fallback_user_time_seconds() -> f64 {
+    get_usec_clock() as f64 / 1_000_000.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        get_core_number, get_msec_time, get_sec_time, get_sec_time_mod, get_soft_rlimit,
-        get_system_page_size, get_system_phys_memory, get_usec_clock, get_usec_time, secure_fclose,
-        secure_fopen, set_memory_limit, set_soft_rlimit, stride_memory, RLimResult,
+        current_resource_usage, format_resource_usage, get_core_number, get_msec_time,
+        get_sec_time, get_sec_time_mod, get_soft_rlimit, get_system_page_size,
+        get_system_phys_memory, get_usec_clock, get_usec_time, secure_fclose, secure_fopen,
+        set_memory_limit, set_soft_rlimit, stride_memory, RLimResult, ResourceUsage,
         DEFAULT_PAGE_SIZE,
     };
     use crate::basics::error::ErrorCode;
@@ -222,6 +259,28 @@ mod tests {
         assert!(get_core_number() >= 1);
         assert_eq!(get_system_page_size(), DEFAULT_PAGE_SIZE);
         assert!(get_system_phys_memory() >= -1);
+    }
+
+    #[test]
+    fn resource_usage_prints_c_shaped_footer() {
+        let usage = ResourceUsage {
+            user_time_seconds: 1.25,
+            system_time_seconds: 0.5,
+            max_resident_pages: 42,
+        };
+
+        assert_eq!(
+            format_resource_usage(usage),
+            "\n# -------------------------------------------------\n\
+             # User time                : 1.250 s\n\
+             # System time              : 0.500 s\n\
+             # Total time               : 1.750 s\n\
+             # Maximum resident set size: 42 pages\n"
+        );
+
+        let current = current_resource_usage();
+        assert!(current.user_time_seconds >= 0.0);
+        assert!(current.system_time_seconds >= 0.0);
     }
 
     #[test]

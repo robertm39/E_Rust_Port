@@ -4,7 +4,9 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
-use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
+use crate::basics::os_wrapper::{
+    current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
+};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clausesets::ClauseSet;
@@ -3569,8 +3571,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
 
     if config.print_strategy.is_some() {
         run_print_strategy(&mut output, config)?;
-        output.flush()?;
-        return Ok(ErrorCode::NO_ERROR.exit_status());
+        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.flags.contains(EProverFlag::SyntaxOnly) {
@@ -3578,15 +3579,26 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         if !config.flags.contains(EProverFlag::PrintFormulas) {
             write_syntax_only_success(&mut output)?;
         }
-        return Ok(ErrorCode::NO_ERROR.exit_status());
+        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.flags.contains(EProverFlag::PruneOnly) {
         run_prune_only(&mut output, config)?;
-        return Ok(ErrorCode::NO_ERROR.exit_status());
+        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     let status = run_proof_search(&mut output, config)?;
+    finish_run_config(&mut output, config, status)
+}
+
+fn finish_run_config(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    status: u8,
+) -> Result<u8, EProverError> {
+    if config.flags.contains(EProverFlag::ResourceInfo) {
+        output.write_all(format_resource_usage(current_resource_usage()).as_bytes())?;
+    }
     output.flush()?;
     Ok(status)
 }
@@ -6267,6 +6279,40 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             "\n# Parsing successful!\n# SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_resources_info_prints_c_shaped_footer() {
+        let _guard = global_state_lock();
+        let path = temp_path("resources-info");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--syntax-only",
+                "--lop-in",
+                "--resources-info",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("\n# Parsing successful!\n# SZS status Unknown\n"));
+        assert!(printed.contains("\n# -------------------------------------------------\n"));
+        assert!(printed.contains("# User time                : "));
+        assert!(printed.contains("# System time              : "));
+        assert!(printed.contains("# Total time               : "));
+        assert!(printed.contains("# Maximum resident set size: "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
