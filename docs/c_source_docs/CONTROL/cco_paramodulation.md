@@ -117,13 +117,15 @@ Source files reviewed: `CONTROL/cco_paramodulation.h`, `CONTROL/cco_paramodulati
 - `ComputeClauseClauseParamodulants` first paramodulates from `clause` into `with` with top target positions allowed, then, when the parents are distinct, paramodulates from `with` into `clause` with positive top target positions suppressed. This direction/no-top order is part of the generated-clause stream.
 - `parent_alias` is metadata, not necessarily the same object used for source positions. The Rust wrapper preserves this split so temporary source views can still document the original parent.
 - `update_clause_info` combines proof size, proof depth, TPTP type, and SOS flags from the two real parents before insertion into the caller store.
-- Rust now ports the plain first-order unindexed wrapper path with `DCParamod` derivation entries on generated child clauses. Indexed wrappers, simultaneous variants, higher-order substitutions, and proof-documentation output remain pending.
+- Rust now ports the plain first-order unindexed wrapper path and the reusable plain indexed wrapper path with `DCParamod` derivation entries on generated child clauses. Proof-control indexed wiring, simultaneous variants, higher-order substitutions, and proof-documentation output remain pending.
 
 ### Change-Later Observations
 
 - In the unindexed C wrapper, the two `ClausePushDerivation` calls pass `clause` rather than the freshly created `paramod` child. That looks inconsistent with the surrounding metadata update and other inference wrappers. Rust records the derivation on the generated child; keep this as a C/Rust reference-test target before changing C or compatibility expectations.
 - `variable_paramod` selects plain, simultaneous, or super-simultaneous construction through `sim_paramod_q`, while the indexed path may decide a different simultaneous mode for each source position. Rust currently rejects non-plain wrapper requests explicitly; the later simultaneous port should test both unindexed and indexed mode-selection paths.
 - The C wrapper takes a reusable `VarBank_p freshvars` from outside this unit and resets/uses it through lower constructors. Rust low-level constructors seed a local fresh-variable bank; revisit reusable-bank performance once wrapper ownership and selected-clause integration are stable.
+- `ComputeAllParamodulantsIndexed` omits the unindexed wrapper's explicit `CPNoGeneration` parent/candidate gate. Rust mirrors that shape for compatibility; verify whether globally indexed no-generation clauses can occur before deciding whether to clean this up after parity is secured.
+- Rust can exercise indexed paramodulation with overlap indexes tied to a cloned signature, but proof-control needs a proof-session owner that can hold global indexes tied to the term-bank signature while still mutating the term bank during generation.
 
 ### Porting Focus
 

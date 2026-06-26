@@ -276,6 +276,36 @@ impl<'sig> GlobalIndices<'sig> {
             .and_then(|index| index.find(f_code))
     }
 
+    #[must_use]
+    pub const fn pm_from_index(&self) -> Option<&OverlapIndex<'sig>> {
+        self.pm_from_index.as_ref()
+    }
+
+    #[must_use]
+    pub const fn pm_into_index(&self) -> Option<&OverlapIndex<'sig>> {
+        self.pm_into_index.as_ref()
+    }
+
+    #[must_use]
+    pub const fn pm_negp_index(&self) -> Option<&OverlapIndex<'sig>> {
+        self.pm_negp_index.as_ref()
+    }
+
+    #[must_use]
+    pub fn pm_paramodulation_indexes(
+        &self,
+    ) -> Option<(
+        &OverlapIndex<'sig>,
+        &OverlapIndex<'sig>,
+        &OverlapIndex<'sig>,
+    )> {
+        Some((
+            self.pm_into_index.as_ref()?,
+            self.pm_negp_index.as_ref()?,
+            self.pm_from_index.as_ref()?,
+        ))
+    }
+
     /// # Panics
     ///
     /// Panics if `clause` is already marked as globally indexed.

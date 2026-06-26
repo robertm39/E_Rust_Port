@@ -3,12 +3,18 @@ use crate::basics::partial_orderings::CompareResult;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{tptp_types_combine, CP_IS_SOS, CP_NO_GENERATION};
+use crate::clauses::clausecpos::unpack_clause_pos;
 use crate::clauses::clausepos::ClausePos;
+use crate::clauses::clausepos_tree::clause_key;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_PARAMOD};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT};
 use crate::clauses::eqnlist::EqnList;
+use crate::clauses::overlap_index::{
+    clause_collect_from_terms_pos, clause_collect_into_terms_pos, OverlapIndex,
+};
+use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_mgu_complete;
@@ -211,6 +217,234 @@ pub fn compute_all_paramodulants(
         )?;
     }
     Ok(paramod_count)
+}
+
+/// Computes all currently ported plain first-order paramodulants between one
+/// selected clause and clauses stored in the global paramodulation indexes.
+///
+/// This mirrors C `ComputeAllParamodulantsIndexed`: source-side positions of
+/// `clause` are queried against the into/negative-predicate indexes, then
+/// target positions of `clause` are queried against the from-index while
+/// skipping positive top-level targets already covered by the first pass.
+///
+/// `parent_alias` carries metadata for C callers that paramodulate from a
+/// temporary selected-clause copy but document the original selected clause.
+///
+/// # Errors
+///
+/// Returns diagnostics from the low-level paramodulation constructor. Only
+/// plain paramodulation is currently supported.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible wrapper mirrors ComputeAllParamodulantsIndexed inputs"
+)]
+pub fn compute_all_paramodulants_indexed(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    into_index: &OverlapIndex<'_>,
+    negp_index: &OverlapIndex<'_>,
+    from_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+) -> Result<i64, Diagnostic> {
+    if pm_type != ParamodulationType::Plain {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "simultaneous indexed paramodulation wrappers are not ported yet",
+        ));
+    }
+
+    let mut paramod_count = compute_into_paramodulants_indexed(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        into_index,
+        negp_index,
+        store,
+    )?;
+    paramod_count +=
+        compute_from_paramodulants_indexed(bank, ocb, clause, parent_alias, from_index, store)?;
+    Ok(paramod_count)
+}
+
+fn compute_into_paramodulants_indexed(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    into_index: &OverlapIndex<'_>,
+    negp_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    let mut positions = Vec::new();
+    let _ = clause_collect_from_terms_pos(clause, &mut positions);
+
+    for entry in positions.iter().rev() {
+        let from_pos = unpack_clause_pos(entry.pos(), clause.clone());
+        paramod_count += compute_from_position_into_index(
+            bank,
+            ocb,
+            &from_pos,
+            entry.term(),
+            negp_index,
+            store,
+            parent_alias,
+        )?;
+        if from_pos
+            .literal()
+            .expect("indexed from position must select a literal")
+            .is_equ_lit(bank)
+        {
+            paramod_count += compute_from_position_into_index(
+                bank,
+                ocb,
+                &from_pos,
+                entry.term(),
+                into_index,
+                store,
+                parent_alias,
+            )?;
+        }
+    }
+
+    Ok(paramod_count)
+}
+
+fn compute_from_paramodulants_indexed(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    from_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    let mut positions = Vec::new();
+    let _ = clause_collect_into_terms_pos(clause, &mut positions);
+
+    for entry in positions.iter().rev() {
+        let into_pos = unpack_clause_pos(entry.pos(), clause.clone());
+        let into_literal = into_pos
+            .literal()
+            .expect("indexed into position must select a literal");
+        if into_literal.is_negative() || !into_pos.is_top() {
+            paramod_count += compute_indexed_sources_into_position(
+                bank,
+                ocb,
+                entry.term(),
+                &into_pos,
+                from_index,
+                store,
+                parent_alias,
+            )?;
+        }
+    }
+
+    Ok(paramod_count)
+}
+
+fn compute_from_position_into_index(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    overlap_term: &Term,
+    index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    for occurrence in unifiable_occurrences(index, overlap_term) {
+        paramod_count += compute_from_position_into_occurrence(
+            bank,
+            ocb,
+            from_pos,
+            occurrence,
+            store,
+            parent_alias,
+        )?;
+    }
+    Ok(paramod_count)
+}
+
+fn compute_from_position_into_occurrence(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    occurrence: &SubtermOcc,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    for into_clause_pos in occurrence.position_clauses().entries() {
+        for into_cpos in into_clause_pos.positions() {
+            let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
+            let Some(mut paramodulant) = clause_ordered_paramod(bank, ocb, from_pos, &into_pos)?
+            else {
+                continue;
+            };
+            paramod_count += 1;
+            update_paramodulant_info(&mut paramodulant, into_clause_pos.clause(), parent_alias);
+            clause_push_derivation(
+                &mut paramodulant,
+                DC_PARAMOD,
+                Some(into_clause_pos.clause()),
+                Some(parent_alias),
+            );
+            store.insert(paramodulant);
+        }
+    }
+    Ok(paramod_count)
+}
+
+fn compute_indexed_sources_into_position(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    overlap_term: &Term,
+    into_pos: &ClausePos,
+    from_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    let parent_key = clause_key(parent_alias);
+    for occurrence in unifiable_occurrences(from_index, overlap_term) {
+        for from_clause_pos in occurrence.position_clauses().entries() {
+            if from_clause_pos.clause_key() == parent_key {
+                continue;
+            }
+            for from_cpos in from_clause_pos.positions() {
+                let from_pos = unpack_clause_pos(*from_cpos, from_clause_pos.clause().clone());
+                let Some(mut paramodulant) =
+                    clause_ordered_paramod(bank, ocb, &from_pos, into_pos)?
+                else {
+                    continue;
+                };
+                paramod_count += 1;
+                update_paramodulant_info(&mut paramodulant, from_clause_pos.clause(), parent_alias);
+                clause_push_derivation(
+                    &mut paramodulant,
+                    DC_PARAMOD,
+                    Some(parent_alias),
+                    Some(from_clause_pos.clause()),
+                );
+                store.insert(paramodulant);
+            }
+        }
+    }
+    Ok(paramod_count)
+}
+
+fn unifiable_occurrences<'index>(
+    index: &'index OverlapIndex<'_>,
+    term: &Term,
+) -> Vec<&'index SubtermOcc> {
+    let mut occurrences = Vec::new();
+    let _ = index.find_unifiable_occurrences(term, &mut occurrences);
+    occurrences
 }
 
 /// Computes the first-order C `ComputeOverlap` replacement term.
@@ -778,9 +1012,9 @@ fn update_paramodulant_info(child: &mut Clause, parent1: &Clause, parent2: &Clau
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_ordered_paramod, compute_all_paramodulants, compute_clause_clause_paramodulants,
-        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
-        ParamodulationType,
+        clause_ordered_paramod, compute_all_paramodulants, compute_all_paramodulants_indexed,
+        compute_clause_clause_paramodulants, paramod_from_side_positions, paramod_into_positions,
+        paramodulation_pair_positions, ParamodulationType,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
@@ -794,6 +1028,7 @@ mod tests {
         EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
     };
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::global_indices::GlobalIndices;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
@@ -1097,6 +1332,123 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(store.members(), 2);
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_queries_into_index() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_idx_into_source_left");
+        let source_right = typed_const(&mut bank, "pm_idx_into_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_idx_into_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_idx_into_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let f_of_replacement = typed_unary(&mut bank, f_code, &source_right);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        source.set_proof_depth(3);
+        source.set_proof_size(5);
+        target.set_proof_depth(4);
+        target.set_proof_size(8);
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut target, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(store.members(), 1);
+        let stored = store.iter().next().expect("one indexed paramodulant");
+        assert_eq!(stored.proof_depth(), 5);
+        assert_eq!(stored.proof_size(), 14);
+        assert_eq!(stored.literal_number(), 1);
+        assert_eq!(stored.literals().as_slice()[0].left(), &f_of_replacement);
+        assert_eq!(stored.literals().as_slice()[0].right(), &target_rhs);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_queries_from_index_for_non_top_targets() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_idx_from_source_left");
+        let source_right = typed_const(&mut bank, "pm_idx_from_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_idx_from_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_idx_from_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let f_of_replacement = typed_unary(&mut bank, f_code, &source_right);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut indexed_source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let selected = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        indexed_source.set_proof_depth(6);
+        indexed_source.set_proof_size(10);
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_source, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &selected,
+            &selected,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(store.members(), 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one indexed reverse paramodulant");
+        assert_eq!(stored.proof_depth(), 7);
+        assert_eq!(stored.proof_size(), 11);
+        assert_eq!(stored.literal_number(), 1);
+        assert_eq!(stored.literals().as_slice()[0].left(), &f_of_replacement);
+        assert_eq!(stored.literals().as_slice()[0].right(), &target_rhs);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&selected)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&indexed_source)),
+            ]
+        );
     }
 
     #[test]
