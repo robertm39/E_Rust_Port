@@ -3704,7 +3704,7 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
             processed_steps: outcome.processed_steps(),
         };
     }
-    let inference_system_complete = proof_search_inference_system_complete(&control);
+    let inference_system_complete = proof_search_inference_system_complete(&state, &control);
     write_answer_outputs(output, &mut state)?;
     write_proof_search_result(
         output,
@@ -4010,9 +4010,16 @@ fn saturate_outcome_exit_status(
     }
 }
 
-fn proof_search_inference_system_complete(control: &ProofControl) -> bool {
+fn proof_search_inference_system_complete(
+    state: &crate::clauses::proofstate::ProofState,
+    control: &ProofControl,
+) -> bool {
     let heuristic = control.heuristic_parms();
-    heuristic.selection_strategy != NO_GENERATION
+    !state
+        .terms()
+        .signature()
+        .has_unimplemented_interpreted_symbols()
+        && heuristic.selection_strategy != NO_GENERATION
         && heuristic.order_params.lit_cmp != i64::from(to_params::LiteralCmp::TfoEqMax.c_value())
         && heuristic.enable_eq_factoring
         && heuristic.enable_neg_unit_paramod
@@ -6310,6 +6317,31 @@ mod tests {
 
         let status = run(
             ["eprover", "--lop-in", "--no-generation", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Clause set closed under restricted calculus!\n# SZS status GaveUp\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_unimplemented_interpreted_symbol_as_restricted_calculus() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-interpreted-calculus");
+        std::fs::write(&path, "$foo.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
