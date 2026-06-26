@@ -1903,15 +1903,20 @@ pub fn clause_write_pcl(
     clause: &Clause,
     full_terms: bool,
 ) -> fmt::Result {
+    clause_write_pcl_with_options(output, bank, clause, full_terms, EqnPrintOptions::tptp())
+}
+
+pub fn clause_write_pcl_with_options(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    options: EqnPrintOptions,
+) -> fmt::Result {
     output.write_char('[')?;
-    clause.literals().write_print(
-        output,
-        bank,
-        ",",
-        false,
-        full_terms,
-        EqnPrintOptions::tptp(),
-    )?;
+    clause
+        .literals()
+        .write_print(output, bank, ",", false, full_terms, options)?;
     output.write_char(']')
 }
 

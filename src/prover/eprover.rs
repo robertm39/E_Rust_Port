@@ -1,4 +1,5 @@
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -9,6 +10,13 @@ use crate::basics::os_wrapper::{
 };
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clause::{
+    clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
+};
+use crate::clauses::clause_props::{
+    FormulaProperties, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+};
+use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::fcvindexing::FvIndexParams;
@@ -3695,6 +3703,7 @@ fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError
 fn run_prune_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
+    write_initial_clause_docs(output, config, &mut state)?;
     output.write_all(b"\n# Pruning successful!\n")?;
     write_tstp_status(output, "Unknown")?;
     Ok(())
@@ -3708,6 +3717,7 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
         state.set_state_is_complete(false);
     }
     load_configured_watchlist(config, &mut state)?;
+    write_initial_clause_docs(output, config, &mut state)?;
 
     let mut control = proof_control_from_config(config)?;
     let mut params = control.heuristic_parms().clone();
@@ -3867,6 +3877,131 @@ fn load_configured_watchlist(
     };
     state.load_watchlist(proof_state_source, config.parse_format)?;
     Ok(())
+}
+
+fn write_initial_clause_docs(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<(), EProverError> {
+    if config.output_level < 2 {
+        return Ok(());
+    }
+
+    let (bank, axioms) = state.terms_and_axioms_mut();
+    let mut rendered = String::new();
+    let mut ident = 0_i64;
+    for clause in axioms.iter_mut() {
+        ident = ident.saturating_add(1);
+        clause.set_ident(ident);
+        write_initial_clause_doc(&mut rendered, config, bank, clause)?;
+    }
+    output.write_all(rendered.as_bytes())?;
+    Ok(())
+}
+
+fn write_initial_clause_doc(
+    output: &mut String,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+) -> Result<(), Diagnostic> {
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => write_pcl_initial_clause_doc(output, config, bank, clause),
+        DocOutputFormat::Tstp => write_tstp_initial_clause_doc(output, config, bank, clause),
+        _ => {
+            output.push_str("# Output format not implemented.\n");
+            Ok(())
+        }
+    }
+}
+
+fn write_pcl_initial_clause_doc(
+    output: &mut String,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+) -> Result<(), Diagnostic> {
+    output.push_str("XX\n");
+    write_pcl_doc_step_start(
+        output,
+        config,
+        bank,
+        clause,
+        config.pcl_output.shell_level < 2,
+    )
+    .map_err(initial_doc_write_error)?;
+    output.push_str("XX\n");
+    output.push_str(&source_info_pcl_string(clause.info()));
+    output.push('\n');
+    Ok(())
+}
+
+fn write_pcl_doc_step_start(
+    output: &mut String,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    print_clause: bool,
+) -> fmt::Result {
+    if config.pcl_output.compact {
+        write!(output, "{}:", clause.ident())?;
+    } else {
+        write!(output, "{:6} : ", clause.ident())?;
+    }
+    write!(output, "{}:", pcl_type_string(clause.query_tptp_type()))?;
+    if print_clause {
+        clause_write_pcl_with_options(
+            output,
+            bank,
+            clause,
+            config.pcl_output.full_terms,
+            EqnPrintOptions::tptp().with_print_types(config.encoding.print_types),
+        )?;
+    }
+    output.write_str(" : ")
+}
+
+fn write_tstp_initial_clause_doc(
+    output: &mut String,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+) -> Result<(), Diagnostic> {
+    clause_write_tstp_with_type_suffixes(
+        output,
+        bank,
+        clause,
+        config.pcl_output.full_terms,
+        false,
+        crate::basics::simple_stuff::ProblemType::FirstOrder,
+        config.encoding.print_types,
+    )?;
+    writeln!(output, ", {}).", source_info_tstp_string(clause.info()))
+        .map_err(initial_doc_write_error)
+}
+
+const fn effective_doc_output_format(config: &EProverConfig) -> DocOutputFormat {
+    match config.doc_output_format {
+        DocOutputFormat::NoFormat => DocOutputFormat::Pcl,
+        format => format,
+    }
+}
+
+const fn pcl_type_string(type_: FormulaProperties) -> &'static str {
+    match type_ {
+        CP_TYPE_CONJECTURE => "conj",
+        CP_TYPE_QUESTION => "que",
+        CP_TYPE_NEG_CONJECTURE => "neg",
+        _ => "",
+    }
+}
+
+fn initial_doc_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "failed to write initial clause documentation",
+    )
 }
 
 fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
@@ -6345,7 +6480,7 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "\n# Pruning successful!\n# SZS status Unknown\n"
+            "XX\n     1 : :[++p(a)] : XX\ninitial(unknown, at_line_1_column_1)\n\n# Pruning successful!\n# SZS status Unknown\n"
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -6655,6 +6790,74 @@ mod tests {
         assert!(printed.contains("# SZS status Unknown\n"));
         assert!(printed.contains("# Unprocessed non-unit clauses:\n"));
         assert!(!printed.contains("# Processed clauses                    :"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_prints_initial_clause_docs_in_default_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-docs-pcl");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--output-level=2",
+                "--no-generation",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed
+            .starts_with("XX\n     1 : :[++p(a)] : XX\ninitial(unknown, at_line_1_column_1)\n"));
+        assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
+        assert!(printed.contains("# SZS status GaveUp\n"));
+        assert!(printed.contains("# Parsed axioms                        : 1\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_prints_initial_clause_docs_in_tstp() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-docs-tstp");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--no-generation",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(
+            printed.starts_with("cnf(c_0_1, axiom, (p(a)), file(unknown, at_line_1_column_1)).\n")
+        );
+        assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
+        assert!(printed.contains("# SZS status GaveUp\n"));
+        assert!(printed.contains("# Parsed axioms                        : 1\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

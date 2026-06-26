@@ -239,6 +239,7 @@ Source files reviewed: `CLAUSES/ccl_inferencedoc.h`, `CLAUSES/ccl_inferencedoc.c
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- The PCL `print_initial` branch contains unconditional `printf("XX\n")` debug markers around `pcl_print_start`, and those writes target stdout rather than the passed documentation stream. Keep this accidental behavior visible for compatibility; a future cleanup should decide whether to remove the markers or make all proof-documentation output use one stream.
 
 ### Porting Focus
 
