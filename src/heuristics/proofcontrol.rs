@@ -288,6 +288,7 @@ pub enum SaturateReturnReason {
     ReplacingInference,
     GeneratedClause,
     Cleanup,
+    Filter,
     SatCheck,
 }
 

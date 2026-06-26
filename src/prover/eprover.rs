@@ -19,8 +19,9 @@ use crate::heuristics::new_autoschedule::{
     strategies_print_predefined_string,
 };
 use crate::heuristics::proofcontrol::{
-    proof_control_init, proof_state_init, proof_state_reset_processed, proof_state_saturate,
-    ProofControl, SaturateOutcome, SaturateStopReason,
+    proof_control_init, proof_state_filter_unprocessed, proof_state_init,
+    proof_state_reset_processed, proof_state_saturate, ProofControl, SaturateOutcome,
+    SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::commandline::{
@@ -3678,7 +3679,7 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
     } else {
         None
     };
-    let outcome = if let Some(outcome) = presat_outcome {
+    let mut outcome = if let Some(outcome) = presat_outcome {
         outcome
     } else {
         proof_state_saturate(
@@ -3693,6 +3694,13 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
             config.answer_limit,
         )?
     };
+    if let Some(filtered_empty) = filter_saturated_unprocessed(config, &mut state, &mut control)? {
+        outcome = SaturateOutcome::Returned {
+            clause: Box::new(filtered_empty),
+            reason: SaturateReturnReason::Filter,
+            processed_steps: outcome.processed_steps(),
+        };
+    }
     write_proof_search_result(output, &outcome)?;
     write_saturated_output(output, config, &state)?;
     write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
@@ -3726,6 +3734,18 @@ fn run_presaturation_interreduction(
         proof_state_reset_processed(state, control)?;
         Ok(None)
     }
+}
+
+fn filter_saturated_unprocessed(
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<crate::clauses::clause::Clause>, EProverError> {
+    if !config.flags.contains(EProverFlag::FilterSaturated) {
+        return Ok(None);
+    }
+    proof_state_filter_unprocessed(state, control, &config.filter_saturated_descriptor)
+        .map_err(Into::into)
 }
 
 fn parse_input_files_into_axioms(
@@ -3940,8 +3960,8 @@ fn parse_clause_file(
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, fv_index_params_from_config, heuristic_parms_from_config,
-        order_parms_from_config, process_options, proof_control_from_config, run, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        order_parms_from_config, process_options, proof_control_from_config, run, run_config,
+        AcHandling, DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
         ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
         ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
         WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
@@ -6304,6 +6324,33 @@ mod tests {
             "\n# Failure: User resource limit exceeded!\n# SZS status ResourceOut\n"
         );
         assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_config_filter_saturated_can_promote_unprocessed_empty_clause_to_proof() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-filter-saturated");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+
+        let mut config = EProverConfig {
+            files: vec![path_arg],
+            parse_format: IoFormat::Lop,
+            step_limit: 0,
+            filter_saturated_descriptor: "n".to_owned(),
+            ..EProverConfig::default()
+        };
+        config.flags.set(EProverFlag::FilterSaturated);
+
+        let status = run_config(&mut stdout, &config).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n# Proof found!\n# SZS status Unsatisfiable\n"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
