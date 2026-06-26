@@ -2143,10 +2143,10 @@ pub fn proof_state_backward_simplify(
 /// Runs the currently ported generators from C `generate_new_clauses`.
 ///
 /// The available slice covers first-order equality factoring, equality
-/// resolution, disequality decomposition, and plain unindexed paramodulation,
-/// in the same order as the C helper. Higher-order generation, indexed
-/// paramodulation, and simultaneous paramodulation remain explicit staging
-/// diagnostics.
+/// resolution, disequality decomposition, and plain/ordinary-simultaneous
+/// unindexed paramodulation, in the same order as the C helper. Higher-order
+/// generation, indexed paramodulation, and per-source/super-simultaneous
+/// paramodulation modes remain explicit staging diagnostics.
 ///
 /// # Errors
 ///
@@ -2169,7 +2169,7 @@ pub fn proof_state_generate_new_clauses(
     let diseq_decomp_maxarity = control.heuristic_parms().diseq_decomp_maxarity;
     let should_paramodulate = proof_state_generation_runs_paramodulation(control, clause);
     let pm_type = if should_paramodulate {
-        Some(proof_state_plain_paramodulation_type(
+        Some(proof_state_unindexed_paramodulation_type(
             control.heuristic_parms().pm_type,
         )?)
     } else {
@@ -2231,7 +2231,7 @@ pub fn proof_state_generate_new_clauses(
                     "selected-clause generation requires initialized proof-control ordering",
                 ));
             };
-            outcome.paramodulants = compute_plain_selected_paramodulants(
+            outcome.paramodulants = compute_unindexed_selected_paramodulants(
                 terms,
                 ocb,
                 source_for_paramod,
@@ -2261,24 +2261,24 @@ fn proof_state_generation_runs_paramodulation(control: &ProofControl, clause: &C
             || !clause.is_negative())
 }
 
-fn proof_state_plain_paramodulation_type(
+fn proof_state_unindexed_paramodulation_type(
     pm_type: HcbParamodulationType,
 ) -> Result<ClauseParamodulationType, Diagnostic> {
     match pm_type {
         HcbParamodulationType::Plain => Ok(ClauseParamodulationType::Plain),
-        HcbParamodulationType::Sim
-        | HcbParamodulationType::OrientedSim
+        HcbParamodulationType::Sim => Ok(ClauseParamodulationType::Simultaneous),
+        HcbParamodulationType::OrientedSim
         | HcbParamodulationType::SuperSim
         | HcbParamodulationType::OrientedSuperSim
         | HcbParamodulationType::DecreasingSim
         | HcbParamodulationType::SizeDecreasingSim => Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
-            "selected-clause simultaneous paramodulation generation is not ported yet",
+            "selected-clause per-source or super-simultaneous paramodulation generation is not ported yet",
         )),
     }
 }
 
-fn compute_plain_selected_paramodulants(
+fn compute_unindexed_selected_paramodulants(
     terms: &mut TermBank,
     ocb: &mut OrderControlBlock,
     source_for_paramod: &Clause,
@@ -3369,7 +3369,8 @@ mod tests {
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::heuristics::hcb::{
-        AcHandling, GroundingStrategy, HeuristicParmsCell, SplitClassType, SplitType,
+        AcHandling, GroundingStrategy, HeuristicParmsCell,
+        ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
         HCB_DEFAULT_HEURISTIC,
     };
     use crate::heuristics::litselection::{
@@ -5221,6 +5222,44 @@ mod tests {
             .left()
             .argument(0)
             .is_some_and(|arg| arg == replacement));
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_computes_simultaneous_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, partner, f_replacement, g_replacement) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_sim_source");
+            let replacement = typed_const(terms, "pc_generate_sim_replacement");
+            let f_source = typed_unary(terms, "pc_generate_sim_f", &source);
+            let g_source = typed_unary(terms, "pc_generate_sim_g", &source);
+            let f_replacement = typed_unary(terms, "pc_generate_sim_f", &replacement);
+            let g_replacement = typed_unary(terms, "pc_generate_sim_g", &replacement);
+            let mut partner_lit = literal(terms, &source, &replacement, true);
+            let mut selected_lit = literal(terms, &f_source, &g_source, true);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_147);
+            (selected, partner, f_replacement, g_replacement)
+        };
+        state.processed_pos_eqns_mut().insert(partner);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().pm_type = HcbParamodulationType::Sim;
+
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &selected)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 1);
+        let literal = &generated.literals().as_slice()[0];
+        assert_eq!(literal.left(), &f_replacement);
+        assert_eq!(literal.right(), &g_replacement);
     }
 
     #[test]
