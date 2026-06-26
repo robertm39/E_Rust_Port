@@ -15,7 +15,8 @@ use crate::clauses::clause::{
     clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+    FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE,
+    CP_TYPE_QUESTION,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string};
 use crate::clauses::clausesets::ClauseSet;
@@ -3729,7 +3730,7 @@ fn run_prune_only<W: Write + ?Sized>(
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     write_preprocessing_config_debug_line(output, config)?;
     let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
-    write_initial_clause_docs(output, config, &mut state)?;
+    let _next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
     output.write_all(b"\n# Pruning successful!\n")?;
     write_tstp_status(output, "Unknown")?;
     Ok(())
@@ -3748,7 +3749,7 @@ fn run_proof_search<W: Write + ?Sized>(
         state.set_state_is_complete(false);
     }
     load_configured_watchlist(config, &mut state)?;
-    write_initial_clause_docs(output, config, &mut state)?;
+    let next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
 
     let mut control = proof_control_from_config(config)?;
     let mut params = control.heuristic_parms().clone();
@@ -3811,7 +3812,7 @@ fn run_proof_search<W: Write + ?Sized>(
         };
     }
     let inference_system_complete = proof_search_inference_system_complete(&state, &control);
-    write_answer_outputs(output, &mut state)?;
+    write_proof_search_side_outputs(output, config, &mut state, &outcome, next_doc_ident)?;
     write_proof_search_result(
         output,
         &outcome,
@@ -3838,6 +3839,20 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     ))
+}
+
+fn write_proof_search_side_outputs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    outcome: &SaturateOutcome,
+    next_doc_ident: i64,
+) -> Result<(), EProverError> {
+    write_answer_outputs(output, state)?;
+    if let SaturateOutcome::Returned { clause, .. } = outcome {
+        write_proof_success_doc(output, config, state.terms(), clause, next_doc_ident)?;
+    }
+    Ok(())
 }
 
 fn run_presaturation_interreduction(
@@ -3970,9 +3985,9 @@ fn write_initial_clause_docs<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-) -> Result<(), EProverError> {
+) -> Result<i64, EProverError> {
     if config.output_level < 2 {
-        return Ok(());
+        return Ok(1);
     }
 
     let (bank, axioms) = state.terms_and_axioms_mut();
@@ -3982,7 +3997,7 @@ fn write_initial_clause_docs<W: Write + ?Sized>(
         clause.set_ident(ident);
         write_initial_clause_doc(output, config, bank, clause)?;
     }
-    Ok(())
+    Ok(ident.saturating_add(1))
 }
 
 fn write_initial_clause_doc<W: Write + ?Sized>(
@@ -4096,6 +4111,95 @@ fn initial_doc_write_error(_error: fmt::Error) -> Diagnostic {
         ErrorCode::OTHER_ERROR,
         "failed to write initial clause documentation",
     )
+}
+
+fn proof_doc_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "failed to write proof clause documentation",
+    )
+}
+
+fn write_proof_success_doc(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+) -> Result<(), EProverError> {
+    if config.output_level < 2 {
+        return Ok(());
+    }
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => {
+            write_pcl_proof_success_doc(output, config, bank, clause, doc_ident)
+        }
+        DocOutputFormat::Tstp => {
+            write_tstp_proof_success_doc(output, config, bank, clause, doc_ident)
+        }
+        _ => {
+            output.write_all(b"# Output format not implemented.\n")?;
+            Ok(())
+        }
+    }
+}
+
+fn proof_success_doc_clause(clause: &Clause, doc_ident: i64) -> (Clause, i64) {
+    let old_id = clause.ident();
+    let mut quoted = clause.clone();
+    quoted.del_prop(CP_INPUT_FORMULA);
+    quoted.set_ident(doc_ident);
+    (quoted, old_id)
+}
+
+fn write_pcl_proof_success_doc(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+) -> Result<(), EProverError> {
+    let (quoted, old_id) = proof_success_doc_clause(clause, doc_ident);
+    let mut rendered = String::new();
+    write_pcl_doc_step_start(
+        &mut rendered,
+        config,
+        bank,
+        &quoted,
+        config.pcl_output.shell_level < 1,
+    )
+    .map_err(proof_doc_write_error)?;
+    write!(&mut rendered, "{old_id}").map_err(proof_doc_write_error)?;
+    if config.pcl_output.compact {
+        rendered.push_str(":'proof'\n");
+    } else {
+        rendered.push_str(" : 'proof'\n");
+    }
+    output.write_all(rendered.as_bytes())?;
+    Ok(())
+}
+
+fn write_tstp_proof_success_doc(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+) -> Result<(), EProverError> {
+    let (quoted, old_id) = proof_success_doc_clause(clause, doc_ident);
+    let mut rendered = String::new();
+    clause_write_tstp_with_type_suffixes(
+        &mut rendered,
+        bank,
+        &quoted,
+        config.pcl_output.full_terms,
+        false,
+        crate::basics::simple_stuff::ProblemType::FirstOrder,
+        config.encoding.print_types,
+    )?;
+    writeln!(&mut rendered, ", c_0_{old_id},['proof']).").map_err(proof_doc_write_error)?;
+    output.write_all(rendered.as_bytes())?;
+    Ok(())
 }
 
 fn write_cnf_only_success(output: &mut impl Write) -> Result<(), EProverError> {
@@ -7246,6 +7350,30 @@ mod tests {
     }
 
     #[test]
+    fn run_output_level_two_prints_proof_clause_doc_in_default_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-success-docs-pcl");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--output-level=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("\n     2 : :[] : 1 : 'proof'\n\n# Proof found!\n"));
+        assert!(printed.contains("# SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_prints_initial_clause_docs_in_tstp() {
         let _guard = global_state_lock();
         let path = temp_path("proof-initial-docs-tstp");
@@ -7278,6 +7406,38 @@ mod tests {
         assert!(printed.contains("\n# Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("# SZS status GaveUp\n"));
         assert!(printed.contains("# Parsed axioms                        : 1\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_prints_proof_clause_doc_in_tstp() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-success-docs-tstp");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--tstp-out",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(
+            printed.contains("\ncnf(c_0_2, plain, ($false), c_0_1,['proof']).\n\n# Proof found!\n")
+        );
+        assert!(printed.contains("# SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
