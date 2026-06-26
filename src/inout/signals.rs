@@ -206,20 +206,12 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
+    use crate::test_support::global_state_lock;
     use std::fs::File;
-    use std::sync::{Mutex, OnceLock};
-
-    fn signal_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        match LOCK.get_or_init(|| Mutex::new(())).lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
 
     #[test]
     fn default_globals_match_c_initializers() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
 
         assert_eq!(schedule_time_limit(), 0);
@@ -234,7 +226,7 @@ mod tests {
 
     #[test]
     fn setters_update_global_signal_state() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
 
         assert_eq!(set_schedule_time_limit(10), 0);
@@ -256,7 +248,7 @@ mod tests {
 
     #[test]
     fn setup_records_system_limit_shape_without_installing_raw_handler() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
         let _ = set_system_time_limit(123);
 
@@ -271,7 +263,7 @@ mod tests {
 
     #[test]
     fn soft_cpu_signal_marks_time_up_and_computes_next_limit() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
         let _ = set_time_limit_is_soft(true);
         let _ = set_hard_time_limit(75);
@@ -288,7 +280,7 @@ mod tests {
 
     #[test]
     fn hard_cpu_signal_reports_silent_or_diagnostic_timeout() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
         let _ = set_silent_time_out(true);
 
@@ -315,7 +307,7 @@ mod tests {
 
     #[test]
     fn termination_signal_cleans_temp_files_once() {
-        let _signal_guard = signal_test_lock();
+        let _signal_guard = global_state_lock();
         let _temp_guard = temp_file_test_lock();
         reset_signal_state_for_tests();
         let path = std::env::current_dir()
@@ -347,7 +339,7 @@ mod tests {
 
     #[test]
     fn scheduler_sigterm_handler_counts_only_sigterm() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
 
         assert!(!e_sig_term_sched_handler(SIGINT_COMPAT));
@@ -359,7 +351,7 @@ mod tests {
 
     #[test]
     fn unexpected_signals_are_reported_as_continuable() {
-        let _guard = signal_test_lock();
+        let _guard = global_state_lock();
         reset_signal_state_for_tests();
 
         assert_eq!(

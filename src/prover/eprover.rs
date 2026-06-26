@@ -13,13 +13,14 @@ use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
 use crate::heuristics::clausesetfeatures::proof_state_print_selective_string;
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
+use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
     get_heuristic_with_name, heuristic_parms_strategy_print_string,
     strategies_print_predefined_string,
 };
 use crate::heuristics::proofcontrol::{
-    proof_control_init, proof_state_init, proof_state_saturate, ProofControl, SaturateOutcome,
-    SaturateStopReason,
+    proof_control_init, proof_state_init, proof_state_reset_processed, proof_state_saturate,
+    ProofControl, SaturateOutcome, SaturateStopReason,
 };
 use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::commandline::{
@@ -3672,21 +3673,59 @@ fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u
         write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
-    let outcome = proof_state_saturate(
-        &mut state,
-        &mut control,
-        config.step_limit,
-        config.processed_set_limit,
-        config.unprocessed_limit,
-        config.total_clause_set_limit,
-        config.generated_limit,
-        config.term_bank_insert_limit,
-        config.answer_limit,
-    )?;
+    let presat_outcome = if control.heuristic_parms().presat_interreduction {
+        run_presaturation_interreduction(output, &mut state, &mut control)?
+    } else {
+        None
+    };
+    let outcome = if let Some(outcome) = presat_outcome {
+        outcome
+    } else {
+        proof_state_saturate(
+            &mut state,
+            &mut control,
+            config.step_limit,
+            config.processed_set_limit,
+            config.unprocessed_limit,
+            config.total_clause_set_limit,
+            config.generated_limit,
+            config.term_bank_insert_limit,
+            config.answer_limit,
+        )?
+    };
     write_proof_search_result(output, &outcome)?;
     write_saturated_output(output, config, &state)?;
     write_proof_statistics(output, config, &state, parsed_ax_no, raw_clause_no)?;
     Ok(saturate_outcome_exit_status(&outcome))
+}
+
+fn run_presaturation_interreduction(
+    output: &mut impl Write,
+    state: &mut crate::clauses::proofstate::ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<SaturateOutcome>, EProverError> {
+    let selection_strategy = control.heuristic_parms().selection_strategy.clone();
+    NO_GENERATION.clone_into(&mut control.heuristic_parms_mut().selection_strategy);
+    let outcome = proof_state_saturate(
+        state,
+        control,
+        i64::MAX,
+        i64::MAX,
+        i64::MAX,
+        i64::MAX,
+        i64::MAX,
+        i64::MAX,
+        i64::MAX,
+    );
+    control.heuristic_parms_mut().selection_strategy = selection_strategy;
+    let outcome = outcome?;
+    output.write_all(b"# Presaturation interreduction done\n")?;
+    if matches!(outcome, SaturateOutcome::Returned { .. }) {
+        Ok(Some(outcome))
+    } else {
+        proof_state_reset_processed(state, control)?;
+        Ok(None)
+    }
 }
 
 fn parse_input_files_into_axioms(
@@ -3924,12 +3963,7 @@ mod tests {
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
     use crate::terms::termtypes::RewriteLevel;
-    use std::sync::{Mutex, OnceLock};
-
-    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
+    use crate::test_support::global_state_lock;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::current_dir()
@@ -5799,6 +5833,7 @@ mod tests {
 
     #[test]
     fn run_print_strategy_prints_current_parameters_without_input() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -5814,6 +5849,7 @@ mod tests {
 
     #[test]
     fn run_print_strategy_prints_predefined_names_without_input() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -5834,6 +5870,7 @@ mod tests {
 
     #[test]
     fn run_print_strategy_validates_selected_strategy_before_all_names() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -5859,6 +5896,7 @@ mod tests {
 
     #[test]
     fn run_print_strategy_prints_named_predefined_strategy_without_input() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -5882,7 +5920,7 @@ mod tests {
 
     #[test]
     fn run_applies_verbose_option_to_global_gate() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         set_verbose_level(0);
         let path = temp_path("verbose");
         std::fs::write(&path, "").unwrap();
@@ -5905,7 +5943,7 @@ mod tests {
 
     #[test]
     fn run_rejects_verbose_values_outside_c_int_range() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         set_verbose_level(0);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -5924,7 +5962,7 @@ mod tests {
 
     #[test]
     fn run_applies_cpu_limit_options_to_signal_state() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
         let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
         let _ = set_schedule_time_limit(0);
@@ -5959,7 +5997,7 @@ mod tests {
 
     #[test]
     fn run_applies_output_level_options_to_global_gate() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let _ = set_output_level(1);
         let silent_path = temp_path("silent");
         let output_path = temp_path("output-level");
@@ -5996,7 +6034,7 @@ mod tests {
 
     #[test]
     fn run_print_info_uses_configured_output_target() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("print-info");
         let input_path = temp_path("print-info-input");
         let _ = std::fs::remove_file(&path);
@@ -6044,6 +6082,7 @@ mod tests {
 
     #[test]
     fn run_syntax_only_parses_supported_lop_clause_files() {
+        let _guard = global_state_lock();
         let path = temp_path("syntax-only");
         std::fs::write(&path, "p(a).\nq(a) <- p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6068,7 +6107,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("proof-found");
         std::fs::write(&path, "a!=a.\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6093,7 +6132,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_reports_saturated_clause_set_as_satisfiable() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("proof-saturated");
         std::fs::write(&path, "p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6118,7 +6157,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_prints_requested_saturated_sections() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("proof-print-saturated");
         std::fs::write(&path, "a=b.\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6149,7 +6188,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_prints_statistics_when_requested() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("proof-print-statistics");
         std::fs::write(&path, "p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6181,8 +6220,39 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_runs_presaturation_interreduction() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-presaturation");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--presat-simplify=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "# Presaturation interreduction done\n\n# No proof found!\n# SZS status Satisfiable\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_cnf_only_prints_initialized_clause_state_without_saturation() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("proof-cnf-only");
         std::fs::write(&path, "p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6208,7 +6278,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_reports_resource_status_when_step_limit_fires() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let path = temp_path("proof-step-limit");
         std::fs::write(&path, "p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6239,7 +6309,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_loads_dynamic_watchlist_file() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let input_path = temp_path("proof-dynamic-watch-input");
         let watch_path = temp_path("proof-dynamic-watch-list");
         std::fs::write(&input_path, "p(a).\n").unwrap();
@@ -6274,7 +6344,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_static_watchlist_keeps_matched_file_clause() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let input_path = temp_path("proof-static-watch-input");
         let watch_path = temp_path("proof-static-watch-list");
         std::fs::write(&input_path, "p(a).\n").unwrap();
@@ -6309,7 +6379,7 @@ mod tests {
 
     #[test]
     fn run_proof_search_reports_missing_watchlist_file() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         let input_path = temp_path("proof-missing-watch-input");
         let watch_path = temp_path("proof-missing-watch-list");
         let _ = std::fs::remove_file(&watch_path);
@@ -6339,6 +6409,7 @@ mod tests {
 
     #[test]
     fn run_emits_lpo_recursion_limit_warning_like_c() {
+        let _guard = global_state_lock();
         let old_limit = lpo_recursion_depth_limit();
         let path = temp_path("syntax-lpo-warning");
         std::fs::write(&path, "p(a).\n").unwrap();
@@ -6375,6 +6446,7 @@ mod tests {
 
     #[test]
     fn run_print_formulas_renders_parsed_lop_clauses() {
+        let _guard = global_state_lock();
         let path = temp_path("print-formulas");
         std::fs::write(&path, "p(a).\nq(a) <- p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6399,6 +6471,7 @@ mod tests {
 
     #[test]
     fn run_syntax_only_rejects_trailing_tokens_after_clause_list() {
+        let _guard = global_state_lock();
         let path = temp_path("syntax-junk");
         std::fs::write(&path, "p(a). )").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -6423,6 +6496,7 @@ mod tests {
 
     #[test]
     fn run_syntax_only_observes_error_on_empty() {
+        let _guard = global_state_lock();
         let path = temp_path("syntax-empty");
         std::fs::write(&path, "").unwrap();
         let path_arg = path.to_string_lossy().into_owned();

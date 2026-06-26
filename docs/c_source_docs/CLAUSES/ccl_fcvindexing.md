@@ -129,6 +129,7 @@ Source files reviewed: `CLAUSES/ccl_fcvindexing.h`, `CLAUSES/ccl_fcvindexing.c`.
 
 - `FVIndexPrint` accepts an `out` stream, but `FVIndexPrint`, `fv_index_print`, and `print_clauses` write the root marker, alternatives, and leaf newlines to `stderr` while clause text is written to `out`. Rust's pure string renderer intentionally returns the combined human-readable tree; exact mixed-stream behavior should be handled only if a compatibility test observes it.
 - Final-leaf clause lines are indented one level deeper than the final node level because `print_clauses` receives `level+1`. Rust preserves this visible indentation in the LOP-backed tree renderer.
+- `FVIndexInsert` stores raw `Clause_p` pointers in the final-node `PTree`, and `FVIndexDelete` deletes by that same pointer after recomputing the vector. Rust FV indexes store owned/cloned clause snapshots, so the port keys leaves by the clause identifier to survive safe value moves through `ClauseSet`; replace this with stable typed clause handles once long-lived shared clause ownership is available.
 
 ### Porting Focus
 

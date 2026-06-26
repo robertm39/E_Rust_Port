@@ -1628,6 +1628,8 @@ mod tests {
         assert_eq!(extracted.ident(), ident);
         assert!(!extracted.query_prop(CP_IS_S_INDEXED));
         assert_eq!(set.fv_anchor().unwrap().index().clause_count(), 0);
+        assert_eq!(set.fv_anchor().unwrap().count_nodes(true, true), 1);
+        assert_eq!(set.fv_anchor().unwrap().count_nodes(true, false), 1);
     }
 
     #[test]

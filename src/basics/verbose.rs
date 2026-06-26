@@ -123,16 +123,11 @@ mod tests {
         verbose_enabled, verbose_level, verbout, verbout10, verbout2, verbout_arg, verbout_arg2,
         verbout_arg_message, verbout_message,
     };
-    use std::sync::{Mutex, OnceLock};
-
-    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
+    use crate::test_support::global_state_lock;
 
     #[test]
     fn global_level_uses_c_threshold_rules() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         set_verbose_level(0);
         assert_eq!(verbose_level(), 0);
         assert!(!verbose_enabled());
@@ -156,7 +151,7 @@ mod tests {
 
     #[test]
     fn closure_helpers_execute_only_when_matching_c_macro_would_execute() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         set_verbose_level(1);
         assert_eq!(verbose(|| 3), Some(3));
         assert_eq!(verbose2(|| 4), None);
@@ -179,7 +174,7 @@ mod tests {
 
     #[test]
     fn output_helpers_write_and_flush_only_when_enabled() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         set_verbose_level(0);
         let mut output = Vec::new();
         assert!(!verbout(&mut output, "eprover", "quiet").unwrap());

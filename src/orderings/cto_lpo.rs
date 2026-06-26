@@ -750,6 +750,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn signature() -> Signature {
         let mut signature = Signature::new(TypeBank::new());
@@ -903,6 +904,7 @@ mod tests {
 
     #[test]
     fn lpo_recursion_limit_global_matches_c_default() {
+        let _guard = global_state_lock();
         assert_eq!(DEFAULT_LPO_RECURSION_DEPTH_LIMIT, 1_000);
         let old = lpo_recursion_depth_limit();
         set_lpo_recursion_depth_limit(7);

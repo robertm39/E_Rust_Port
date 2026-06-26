@@ -1,6 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
-use crate::clauses::clausepos_tree::clause_key;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::freqvectors::{
     bill_features_collect_alloc, bill_plus_features_collect_alloc, fv_pack_clause,
@@ -352,7 +351,7 @@ pub struct FvIndex {
     final_node: bool,
     clause_count: i64,
     successors: BTreeMap<i64, FvIndex>,
-    clauses: BTreeMap<usize, Clause>,
+    clauses: BTreeMap<i64, Clause>,
 }
 
 impl FvIndex {
@@ -377,7 +376,7 @@ impl FvIndex {
     }
 
     #[must_use]
-    pub const fn clauses(&self) -> &BTreeMap<usize, Clause> {
+    pub const fn clauses(&self) -> &BTreeMap<i64, Clause> {
         &self.clauses
     }
 
@@ -456,7 +455,7 @@ impl FvIndex {
     fn insert_vector_clause(
         &mut self,
         vector: &FreqVector,
-        clause_identity: usize,
+        clause_identity: i64,
         clause: Clause,
     ) -> bool {
         let mut node = self;
@@ -490,7 +489,7 @@ impl FvIndex {
             next.clause_count -= 1;
             node = next;
         }
-        node.clauses.remove(&clause_key(clause)).is_some()
+        node.clauses.remove(&fv_clause_key(clause)).is_some()
     }
 
     fn write_debug(&self, output: &mut String, level: usize) {
@@ -587,7 +586,7 @@ impl FvIndexAnchor {
             .expect("FV-index insertion requires a packed frequency vector")
             .clone();
         clause_subsume_order_sort_lits(packed.clause_mut(), bank);
-        let clause_identity = clause_key(packed.clause());
+        let clause_identity = fv_clause_key(packed.clause());
         let before_nodes = self.index.count_nodes(false, false);
         let inserted =
             self.index
@@ -631,6 +630,10 @@ pub fn fv_index_pack_clause(clause: Clause, anchor: Option<&FvIndexAnchor>) -> F
         Some(anchor) => fv_pack_clause(clause, anchor.perm_vector(), Some(anchor.cspec())),
         None => fv_pack_clause(clause, None, None),
     }
+}
+
+fn fv_clause_key(clause: &Clause) -> i64 {
+    clause.ident()
 }
 
 #[cfg(test)]
@@ -981,6 +984,23 @@ mod tests {
             .index()
             .get_next_non_empty_node(first_value)
             .is_none());
+    }
+
+    #[test]
+    fn delete_uses_clause_identity_after_value_moves() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let second = typed_const(&mut bank, "b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)], 31);
+        let mut anchor = ac_anchor(usize::try_from(second.f_code()).unwrap() + 1);
+        let mut packed = fv_index_pack_clause(clause, Some(&anchor));
+        let moved_clause = packed.clause().clone();
+
+        assert!(anchor.insert(&mut packed, &bank));
+        assert!(anchor.delete(&moved_clause));
+        assert_eq!(anchor.index().clause_count(), 0);
+        assert_eq!(anchor.count_nodes(true, true), 1);
+        assert_eq!(anchor.count_nodes(true, false), 1);
     }
 
     #[test]

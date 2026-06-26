@@ -205,13 +205,8 @@ mod tests {
         reset_output_for_tests, set_output_level, OutputDestination, STDOUT_FILENO_COMPAT,
     };
     use crate::basics::error::ErrorCode;
+    use crate::test_support::global_state_lock;
     use std::io::Write;
-    use std::sync::{Mutex, OnceLock};
-
-    fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::current_dir()
@@ -222,7 +217,7 @@ mod tests {
 
     #[test]
     fn output_level_defaults_to_one_and_gates_outprint() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_output_for_tests();
 
         assert_eq!(output_level(), 1);
@@ -236,7 +231,7 @@ mod tests {
 
     #[test]
     fn init_output_sets_stdout_compatibility_fd() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_output_for_tests();
         open_global_out(Some(&temp_path("init"))).unwrap();
 
@@ -247,7 +242,7 @@ mod tests {
 
     #[test]
     fn out_open_writes_files_and_dash_means_stdout() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_output_for_tests();
         let path = temp_path("file");
 
@@ -263,7 +258,7 @@ mod tests {
 
     #[test]
     fn out_open_reports_file_errors() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_output_for_tests();
         let error = out_open(Some(std::path::Path::new("target"))).unwrap_err();
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
@@ -271,7 +266,7 @@ mod tests {
 
     #[test]
     fn global_output_writes_to_selected_file_and_resets_on_close() {
-        let _guard = global_test_lock();
+        let _guard = global_state_lock();
         reset_output_for_tests();
         let path = temp_path("global");
 
