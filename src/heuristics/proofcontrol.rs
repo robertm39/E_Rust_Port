@@ -12,6 +12,7 @@ use crate::clauses::clausefunc::{
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::condensation::condense;
 use crate::clauses::context_sr::clause_contextual_simplify_reflect;
+use crate::clauses::derivation::{clause_push_derivation, DC_CNF_QUOTE};
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::clause_er_normalize_var;
 use crate::clauses::fcvindexing::fv_index_pack_clause;
@@ -554,6 +555,7 @@ pub fn proof_state_init_axioms(
             watchlist_removed += watchlist_outcome.removed;
 
             hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut new);
+            clause_push_derivation(&mut new, DC_CNF_QUOTE, Some(&source), None);
             if prefer_initial {
                 let Some(evaluations) = new.evaluations_mut() else {
                     return Err(Diagnostic::new(
@@ -2228,8 +2230,30 @@ mod tests {
         let copied_axiom = state.unprocessed().find_by_id(axiom_id).unwrap();
         assert!(copied_axiom.query_prop(CP_INITIAL));
         assert!(!copied_axiom.query_prop(CP_IS_SOS));
+        assert_eq!(
+            copied_axiom
+                .derivation()
+                .map(crate::basics::pstacks::PStack::as_slice),
+            Some(
+                &[
+                    DerivationEntry::Operation(DC_CNF_QUOTE),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(axiom_id, 0)),
+                ][..]
+            )
+        );
         let copied_conjecture = state.unprocessed().find_by_id(conjecture_id).unwrap();
         assert!(copied_conjecture.query_prop(CP_INITIAL | CP_IS_SOS));
+        assert_eq!(
+            copied_conjecture
+                .derivation()
+                .map(crate::basics::pstacks::PStack::as_slice),
+            Some(
+                &[
+                    DerivationEntry::Operation(DC_CNF_QUOTE),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(conjecture_id, 0)),
+                ][..]
+            )
+        );
         for clause in state.unprocessed().iter() {
             let evaluations = clause.evaluations().expect("copy is evaluated");
             assert_eq!(evaluations.eval_no(), 1);
