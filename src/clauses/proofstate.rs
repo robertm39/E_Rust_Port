@@ -73,6 +73,15 @@ pub struct ProofStateProcessedSets<'a> {
     pub non_units: &'a mut ClauseSet,
 }
 
+#[derive(Debug)]
+pub struct ProofStateGenerationContext<'a> {
+    pub processed_pos_rules: &'a ClauseSet,
+    pub processed_pos_eqns: &'a ClauseSet,
+    pub processed_neg_units: &'a ClauseSet,
+    pub processed_non_units: &'a ClauseSet,
+    pub tmp_store: &'a mut ClauseSet,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProofState {
     terms: TermBank,
@@ -188,6 +197,30 @@ impl ProofState {
                 pos_eqns: processed_pos_eqns,
                 neg_units: processed_neg_units,
                 non_units: processed_non_units,
+            },
+        )
+    }
+
+    pub fn terms_and_generation_context_mut(
+        &mut self,
+    ) -> (&mut TermBank, ProofStateGenerationContext<'_>) {
+        let Self {
+            terms,
+            processed_pos_rules,
+            processed_pos_eqns,
+            processed_neg_units,
+            processed_non_units,
+            tmp_store,
+            ..
+        } = self;
+        (
+            terms,
+            ProofStateGenerationContext {
+                processed_pos_rules,
+                processed_pos_eqns,
+                processed_neg_units,
+                processed_non_units,
+                tmp_store,
             },
         )
     }

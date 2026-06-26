@@ -30,7 +30,10 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
-use crate::clauses::proofstate::ProofState;
+use crate::clauses::paramodulation::{
+    compute_all_paramodulants, ParamodulationType as ClauseParamodulationType,
+};
+use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
 use crate::clauses::rewrite::find_rewritable_clauses;
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
 use crate::clauses::splitting::{
@@ -48,7 +51,8 @@ use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
     hcb_single_weight_clause_select, hcb_standard_clause_select, AcHandling, GroundingStrategy,
-    HcbSelectFunction, HeuristicParmsCell, SplitClassType, SplitType,
+    HcbSelectFunction, HeuristicParmsCell, ParamodulationType as HcbParamodulationType,
+    SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -246,6 +250,7 @@ pub struct GenerateNewClausesOutcome {
     pub equality_factors: u64,
     pub equality_resolvents: u64,
     pub disequality_decompositions: u64,
+    pub paramodulants: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2138,10 +2143,10 @@ pub fn proof_state_backward_simplify(
 /// Runs the currently ported generators from C `generate_new_clauses`.
 ///
 /// The available slice covers first-order equality factoring, equality
-/// resolution, and disequality decomposition, in the same order as the C
-/// helper. Higher-order generation and paramodulation remain explicit staging
-/// diagnostics; the latter is checked before mutation because it is required
-/// for most generation-enabled clauses.
+/// resolution, disequality decomposition, and plain unindexed paramodulation,
+/// in the same order as the C helper. Higher-order generation, indexed
+/// paramodulation, and simultaneous paramodulation remain explicit staging
+/// diagnostics.
 ///
 /// # Errors
 ///
@@ -2158,66 +2163,170 @@ pub fn proof_state_generate_new_clauses(
             "higher-order selected-clause generation is not ported yet",
         ));
     }
-    if proof_state_generation_requires_paramodulation(control, clause) {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "selected-clause paramodulation generation is not ported yet",
-        ));
-    }
-
     let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
+    let enable_neg_unit_paramod = control.heuristic_parms().enable_neg_unit_paramod;
     let diseq_decomposition = control.heuristic_parms().diseq_decomposition;
     let diseq_decomp_maxarity = control.heuristic_parms().diseq_decomp_maxarity;
-    let mut tmp_store = std::mem::take(state.tmp_store_mut());
+    let should_paramodulate = proof_state_generation_runs_paramodulation(control, clause);
+    let pm_type = if should_paramodulate {
+        Some(proof_state_plain_paramodulation_type(
+            control.heuristic_parms().pm_type,
+        )?)
+    } else {
+        None
+    };
+    let source_for_paramod = if should_paramodulate {
+        Some(clause.copy_disjoint(state.terms_mut())?)
+    } else {
+        None
+    };
+
     let result = (|| {
         let mut outcome = GenerateNewClausesOutcome::default();
-
-        if enable_eq_factoring {
-            let ocb = control.ocb.as_mut().ok_or_else(|| {
+        let needs_ocb = enable_eq_factoring || should_paramodulate;
+        let mut ocb = if needs_ocb {
+            Some(control.ocb.as_mut().ok_or_else(|| {
                 Diagnostic::new(
                     ErrorCode::OTHER_ERROR,
-                    "equality factoring requires initialized proof-control ordering",
+                    "selected-clause generation requires initialized proof-control ordering",
                 )
-            })?;
-            let count =
-                compute_all_equality_factors(state.terms_mut(), ocb, clause, &mut tmp_store)?;
+            })?)
+        } else {
+            None
+        };
+        let (terms, mut generation) = state.terms_and_generation_context_mut();
+
+        if enable_eq_factoring {
+            let Some(ocb) = ocb.as_mut() else {
+                return Err(Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "selected-clause generation requires initialized proof-control ordering",
+                ));
+            };
+            let count = compute_all_equality_factors(terms, ocb, clause, generation.tmp_store)?;
             outcome.equality_factors = i64_to_u64_saturating(count);
         }
 
         let count = compute_all_eqn_resolvents(
-            state.terms_mut(),
+            terms,
             clause,
-            &mut tmp_store,
+            generation.tmp_store,
             EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
         )?;
         outcome.equality_resolvents = i64_to_u64_saturating(count);
 
         let count = compute_dis_eq_decompositions(
-            state.terms_mut(),
+            terms,
             clause,
-            &mut tmp_store,
+            generation.tmp_store,
             diseq_decomposition,
             diseq_decomp_maxarity,
         )?;
         outcome.disequality_decompositions = i64_to_u64_saturating(count);
 
+        if let (Some(pm_type), Some(source_for_paramod)) = (pm_type, source_for_paramod.as_ref()) {
+            let Some(ocb) = ocb.as_mut() else {
+                return Err(Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "selected-clause generation requires initialized proof-control ordering",
+                ));
+            };
+            outcome.paramodulants = compute_plain_selected_paramodulants(
+                terms,
+                ocb,
+                source_for_paramod,
+                clause,
+                &mut generation,
+                enable_neg_unit_paramod,
+                pm_type,
+            )?;
+        }
+
         Ok(outcome)
     })();
-    *state.tmp_store_mut() = tmp_store;
 
     let outcome = result?;
     let statistics = state.statistics_mut();
     statistics.factor_count += outcome.equality_factors;
     statistics.resolv_count += outcome.equality_resolvents;
     statistics.disequ_deco_count += outcome.disequality_decompositions;
+    statistics.paramod_count += outcome.paramodulants;
     Ok(outcome)
 }
 
-fn proof_state_generation_requires_paramodulation(control: &ProofControl, clause: &Clause) -> bool {
+fn proof_state_generation_runs_paramodulation(control: &ProofControl, clause: &Clause) -> bool {
     !clause.query_prop(CP_NO_GENERATION)
         && (control.heuristic_parms().enable_neg_unit_paramod
             || !clause.is_unit()
             || !clause.is_negative())
+}
+
+fn proof_state_plain_paramodulation_type(
+    pm_type: HcbParamodulationType,
+) -> Result<ClauseParamodulationType, Diagnostic> {
+    match pm_type {
+        HcbParamodulationType::Plain => Ok(ClauseParamodulationType::Plain),
+        HcbParamodulationType::Sim
+        | HcbParamodulationType::OrientedSim
+        | HcbParamodulationType::SuperSim
+        | HcbParamodulationType::OrientedSuperSim
+        | HcbParamodulationType::DecreasingSim
+        | HcbParamodulationType::SizeDecreasingSim => Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "selected-clause simultaneous paramodulation generation is not ported yet",
+        )),
+    }
+}
+
+fn compute_plain_selected_paramodulants(
+    terms: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    source_for_paramod: &Clause,
+    parent_alias: &Clause,
+    generation: &mut ProofStateGenerationContext<'_>,
+    enable_neg_unit_paramod: bool,
+    pm_type: ClauseParamodulationType,
+) -> Result<u64, Diagnostic> {
+    let tmp_store = &mut *generation.tmp_store;
+    let mut count = compute_all_paramodulants(
+        terms,
+        ocb,
+        source_for_paramod,
+        parent_alias,
+        generation.processed_pos_rules,
+        tmp_store,
+        pm_type,
+    )?;
+    count += compute_all_paramodulants(
+        terms,
+        ocb,
+        source_for_paramod,
+        parent_alias,
+        generation.processed_pos_eqns,
+        tmp_store,
+        pm_type,
+    )?;
+    if enable_neg_unit_paramod && !parent_alias.is_negative() {
+        count += compute_all_paramodulants(
+            terms,
+            ocb,
+            source_for_paramod,
+            parent_alias,
+            generation.processed_neg_units,
+            tmp_store,
+            pm_type,
+        )?;
+    }
+    count += compute_all_paramodulants(
+        terms,
+        ocb,
+        source_for_paramod,
+        parent_alias,
+        generation.processed_non_units,
+        tmp_store,
+        pm_type,
+    )?;
+    Ok(i64_to_u64_saturating(count))
 }
 
 /// Processes one selected clause through the currently ported C `ProcessClause`.
@@ -5021,18 +5130,26 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_process_clause_rejects_unported_paramodulation_generation() {
+    fn proof_state_process_clause_allows_plain_paramodulation_generation_without_partners() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
-        init_fifo_hcb(&mut control, &state, "ProcessClauseRejectGenerationTest");
+        init_fifo_hcb(
+            &mut control,
+            &state,
+            "ProcessClausePlainParamodNoPartnersTest",
+        );
         control.set_ocb(kbo_ocb(state.terms()));
         let clause = unit_clause_with_id(state.terms_mut(), "pc_process_paramod_needed", 4_143);
         queue_unprocessed_for_process(&mut state, &mut control, clause);
 
-        let error = proof_state_process_clause(&mut state, &mut control, 1).unwrap_err();
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.to_string().contains("paramodulation generation"));
+        let ProcessClauseOutcome::Processed { generation, .. } = outcome else {
+            panic!("plain paramodulation should not reject without partner clauses");
+        };
+        assert_eq!(generation.paramodulants, 0);
+        assert_eq!(state.statistics().paramod_count, 0);
     }
 
     #[test]
@@ -5061,11 +5178,49 @@ mod tests {
                 equality_factors: 0,
                 equality_resolvents: 1,
                 disequality_decompositions: 0,
+                paramodulants: 0,
             }
         );
         assert_eq!(state.statistics().resolv_count, 1);
         assert_eq!(state.tmp_store().members(), 1);
         assert!(state.tmp_store().iter().next().unwrap().is_empty());
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_computes_plain_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, partner, replacement, rhs) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_pm_source");
+            let replacement = typed_const(terms, "pc_generate_pm_replacement");
+            let rhs = typed_const(terms, "pc_generate_pm_rhs");
+            let f_of_source = typed_unary(terms, "pc_generate_pm_f", &source);
+            let mut partner_lit = literal(terms, &source, &replacement, true);
+            let mut selected_lit = literal(terms, &f_of_source, &rhs, true);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_146);
+            (selected, partner, replacement, rhs)
+        };
+        state.processed_pos_eqns_mut().insert(partner);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &selected)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 1);
+        assert_eq!(generated.literals().as_slice()[0].right(), &rhs);
+        assert!(generated.literals().as_slice()[0]
+            .left()
+            .argument(0)
+            .is_some_and(|arg| arg == replacement));
     }
 
     #[test]
