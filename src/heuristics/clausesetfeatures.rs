@@ -1,15 +1,16 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
-use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::clausesets::{eq_axioms_print_string, ClauseSet};
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
+use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausefeatures::{
     clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
     clause_count_unorientable_literals, clause_count_variable_set, clause_line_print_string,
     clause_line_string, clause_tptp_depth_info_add,
 };
 use crate::inout::basicparser::{parse_float, parse_int, parse_plain_filename};
-use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::simpletypes::{type_get_order, type_has_bool, var_order};
@@ -816,6 +817,134 @@ pub fn clause_set_print_non_units_default_string(
     print_info: bool,
 ) -> String {
     clause_set_print_filtered_default_string(bank, set, print_info, |clause| !clause.is_unit())
+}
+
+/// Returns the C `ProofStatePrintSelective` shape for the currently ported
+/// clause and equality-axiom output helpers.
+///
+/// # Errors
+///
+/// Returns diagnostics for invalid descriptor characters, type-declaration
+/// rendering failures, or equality-axiom output formats that are not yet
+/// supported by the lower-level equality printer.
+pub fn proof_state_print_selective_string(
+    state: &ProofState,
+    descriptor: &str,
+    print_info: bool,
+    output_format: IoFormat,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    for current in descriptor.bytes() {
+        match current {
+            b't' => {
+                if problem_type() == ProblemType::HigherOrder || !state.axioms().is_untyped() {
+                    output.push_str("# Type declarations:\n");
+                    output.push_str(&type_decls_tstp_string(state)?);
+                }
+            }
+            b'e' => {
+                output.push_str("# Processed positive unit clauses:\n");
+                output.push_str(&clause_set_print_pos_units_default_string(
+                    state.terms(),
+                    state.processed_pos_rules(),
+                    print_info,
+                ));
+                output.push_str(&clause_set_print_pos_units_default_string(
+                    state.terms(),
+                    state.processed_pos_eqns(),
+                    print_info,
+                ));
+                output.push('\n');
+            }
+            b'i' => {
+                output.push_str("# Processed negative unit clauses:\n");
+                output.push_str(&clause_set_print_neg_units_default_string(
+                    state.terms(),
+                    state.processed_neg_units(),
+                    print_info,
+                ));
+                output.push('\n');
+            }
+            b'g' => {
+                output.push_str("# Processed non-unit clauses:\n");
+                output.push_str(&clause_set_print_non_units_default_string(
+                    state.terms(),
+                    state.processed_non_units(),
+                    print_info,
+                ));
+                output.push('\n');
+            }
+            b'E' => {
+                output.push_str("# Unprocessed positive unit clauses:\n");
+                output.push_str(&clause_set_print_pos_units_default_string(
+                    state.terms(),
+                    state.unprocessed(),
+                    print_info,
+                ));
+                output.push('\n');
+            }
+            b'I' => {
+                output.push_str("# Unprocessed negative unit clauses:\n");
+                output.push_str(&clause_set_print_neg_units_default_string(
+                    state.terms(),
+                    state.unprocessed(),
+                    print_info,
+                ));
+                output.push('\n');
+            }
+            b'G' => {
+                output.push_str("# Unprocessed non-unit clauses:\n");
+                output.push_str(&clause_set_print_non_units_default_string(
+                    state.terms(),
+                    state.unprocessed(),
+                    print_info,
+                ));
+                output.push('\n');
+            }
+            b'a' | b'A' => {
+                if clause_set_is_equational(state.terms(), state.axioms()) {
+                    output.push_str("# Equality axioms:\n");
+                    output.push_str(&eq_axioms_print_string(
+                        state.terms().signature(),
+                        output_format,
+                        current == b'a',
+                    )?);
+                } else {
+                    output.push_str("# No equality axioms required.\n");
+                }
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    format!(
+                        "Illegal character '{}' in proof-state print descriptor",
+                        char::from(current)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn type_decls_tstp_string(state: &ProofState) -> Result<String, Diagnostic> {
+    let mut output = Vec::new();
+    state
+        .terms()
+        .signature()
+        .print_type_decls_tstp(&mut output, problem_type())
+        .map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                format!("Failed to print type declarations: {error}"),
+            )
+        })?;
+    String::from_utf8(output).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            format!("Type declaration output was not valid UTF-8: {error}"),
+        )
+    })
 }
 
 pub fn spec_features_parse(

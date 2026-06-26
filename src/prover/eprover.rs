@@ -11,6 +11,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
+use crate::heuristics::clausesetfeatures::proof_state_print_selective_string;
 use crate::heuristics::hcb::{self, HeuristicParmsCell};
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_init, proof_state_saturate, ProofControl, SaturateOutcome,
@@ -3528,7 +3529,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
 
-    let status = run_proof_search(config)?;
+    let status = run_proof_search(&mut output, config)?;
     output.flush()?;
     Ok(status)
 }
@@ -3576,7 +3577,7 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
     Ok(())
 }
 
-fn run_proof_search(config: &EProverConfig) -> Result<u8, EProverError> {
+fn run_proof_search(output: &mut impl Write, config: &EProverConfig) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     parse_input_files_into_axioms(config, &mut state)?;
     load_configured_watchlist(config, &mut state)?;
@@ -3611,6 +3612,7 @@ fn run_proof_search(config: &EProverConfig) -> Result<u8, EProverError> {
         config.term_bank_insert_limit,
         config.answer_limit,
     )?;
+    write_saturated_output(output, config, &state)?;
     Ok(saturate_outcome_exit_status(&outcome))
 }
 
@@ -3657,6 +3659,25 @@ fn load_configured_watchlist(
         WatchlistSource::File(path) => ProofStateWatchlistSource::File(Path::new(path)),
     };
     state.load_watchlist(proof_state_source, config.parse_format)?;
+    Ok(())
+}
+
+fn write_saturated_output(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+) -> Result<(), EProverError> {
+    if !config.flags.contains(EProverFlag::PrintSaturated) {
+        return Ok(());
+    }
+    let rendered = proof_state_print_selective_string(
+        state,
+        &config.saturated_output_descriptor,
+        config.flags.contains(EProverFlag::PrintSaturatedInfo),
+        config.output_format,
+    )?;
+    output.write_all(rendered.as_bytes())?;
+    output.write_all(b"\n")?;
     Ok(())
 }
 
@@ -5814,6 +5835,36 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_requested_saturated_sections() {
+        let _guard = global_test_lock();
+        let path = temp_path("proof-print-saturated");
+        std::fs::write(&path, "a=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--print-saturated=e",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("# Processed positive unit clauses:\n"));
+        assert!(printed.lines().any(|line| line.ends_with("<- .")));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
