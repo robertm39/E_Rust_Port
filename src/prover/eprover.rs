@@ -3648,7 +3648,14 @@ fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<()
                 output.write_all(rendered.as_bytes())?;
             }
             IoFormat::Auto | IoFormat::Lop => {
-                output.write_all(clauses.print_lop_string(&bank, true).as_bytes())?;
+                let rendered = clauses.print_lop_string_with_options(
+                    &bank,
+                    true,
+                    config
+                        .equation_print
+                        .into_eqn_print_options(config.output_format),
+                );
+                output.write_all(rendered.as_bytes())?;
             }
         }
     }
@@ -6810,6 +6817,34 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             "p(a) <- .\nq(a) <- p(a).\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_honors_lop_equation_print_options() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-eqn-options");
+        std::fs::write(&path, "a=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--lop-in",
+                "--eqn-no-infix",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "equal(a, b) <- .\n");
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

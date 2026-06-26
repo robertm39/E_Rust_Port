@@ -3,13 +3,15 @@ use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::{
-    clause_parse_with_options, clause_print_lop_format_string, clause_starts_maybe,
-    clause_write_tstp, Clause, ClauseParseOptions,
+    clause_parse_with_options, clause_print_lop_format_string,
+    clause_print_lop_format_string_with_options, clause_starts_maybe, clause_write_tstp, Clause,
+    ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_CONJECTURE,
 };
 use crate::clauses::clausepos::ClausePos;
+use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EqnSide;
 use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
 use crate::clauses::freqvectors::{
@@ -204,9 +206,21 @@ impl ClauseSet {
 
     #[must_use]
     pub fn print_lop_string(&self, bank: &TermBank, full_terms: bool) -> String {
+        self.print_lop_string_with_options(bank, full_terms, EqnPrintOptions::default())
+    }
+
+    #[must_use]
+    pub fn print_lop_string_with_options(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        options: EqnPrintOptions,
+    ) -> String {
         let mut output = String::new();
         for clause in &self.clauses {
-            output.push_str(&clause_print_lop_format_string(bank, clause, full_terms));
+            output.push_str(&clause_print_lop_format_string_with_options(
+                bank, clause, full_terms, options,
+            ));
             output.push('\n');
         }
         output
