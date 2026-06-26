@@ -3566,6 +3566,7 @@ or show the set unsatisfiable.\n\n"
 }
 
 fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EProverError> {
+    let mut runtime_config = config.clone();
     let verbose = i32::try_from(config.verbose).map_err(|_| {
         Diagnostic::new(
             ErrorCode::USAGE_ERROR,
@@ -3593,19 +3594,19 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     }
 
     if config.flags.contains(EProverFlag::SyntaxOnly) {
-        run_syntax_only(&mut output, config)?;
-        if !config.flags.contains(EProverFlag::PrintFormulas) {
+        run_syntax_only(&mut output, &mut runtime_config)?;
+        if !runtime_config.flags.contains(EProverFlag::PrintFormulas) {
             write_syntax_only_success(&mut output)?;
         }
         return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
     if config.flags.contains(EProverFlag::PruneOnly) {
-        run_prune_only(&mut output, config)?;
+        run_prune_only(&mut output, &mut runtime_config)?;
         return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
-    let status = run_proof_search(&mut output, config)?;
+    let status = run_proof_search(&mut output, &mut runtime_config)?;
     finish_run_config(&mut output, config, status)
 }
 
@@ -3643,13 +3644,19 @@ fn run_print_strategy(output: &mut impl Write, config: &EProverConfig) -> Result
     Ok(())
 }
 
-fn run_syntax_only(output: &mut impl Write, config: &EProverConfig) -> Result<(), EProverError> {
+fn run_syntax_only(
+    output: &mut impl Write,
+    config: &mut EProverConfig,
+) -> Result<(), EProverError> {
     let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
     let mut clauses = ClauseSet::new();
 
-    for file in &config.files {
+    let files = config.files.clone();
+    for file in &files {
         let before = clauses.len();
-        parse_clause_file(file, config.parse_format, &mut bank, &mut clauses)?;
+        let detected_format =
+            parse_clause_file(file, config.parse_format, &mut bank, &mut clauses)?;
+        apply_auto_parse_output_side_effects(config, detected_format);
         if config.flags.contains(EProverFlag::RequireNonempty) && clauses.len() == before {
             return Err(Diagnostic::new(
                 ErrorCode::INPUT_SEMANTIC_ERROR,
@@ -3711,7 +3718,7 @@ fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError
 
 fn run_prune_only<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    config: &EProverConfig,
+    config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
@@ -3723,7 +3730,7 @@ fn run_prune_only<W: Write + ?Sized>(
 
 fn run_proof_search<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    config: &EProverConfig,
+    config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
@@ -3847,14 +3854,17 @@ fn filter_saturated_unprocessed(
 }
 
 fn parse_input_files_into_axioms(
-    config: &EProverConfig,
+    config: &mut EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
-    for file in &config.files {
+    let files = config.files.clone();
+    for file in &files {
         let before = state.axioms().len();
         let mut parsed = ClauseSet::new();
-        parse_clause_file(file, config.parse_format, state.terms_mut(), &mut parsed)?;
+        let detected_format =
+            parse_clause_file(file, config.parse_format, state.terms_mut(), &mut parsed)?;
+        apply_auto_parse_output_side_effects(config, detected_format);
         let parsed_count = parsed.len();
         parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
         state.axioms_mut().insert_set(&mut parsed);
@@ -4248,7 +4258,7 @@ fn parse_clause_file(
     parse_format: IoFormat,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
-) -> Result<(), Diagnostic> {
+) -> Result<IoFormat, Diagnostic> {
     let mut scanner = if file == "-" {
         let mut input = Vec::new();
         io::stdin().read_to_end(&mut input).map_err(|error| {
@@ -4262,6 +4272,7 @@ fn parse_clause_file(
         Scanner::from_file_following_includes(Path::new(file), false, "include")?
     };
     scanner.set_format(parse_format);
+    let detected_format = scanner.format();
     clauses.parse_list(
         &mut scanner,
         bank,
@@ -4277,7 +4288,19 @@ fn parse_clause_file(
             ),
         ));
     }
-    Ok(())
+    Ok(detected_format)
+}
+
+fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_format: IoFormat) {
+    if config.parse_format == IoFormat::Auto && detected_format == IoFormat::Tstp {
+        config.output_format = IoFormat::Tstp;
+        if config.doc_output_format == DocOutputFormat::NoFormat {
+            config.doc_output_format = DocOutputFormat::Tstp;
+        }
+    }
+    if config.doc_output_format == DocOutputFormat::NoFormat {
+        config.doc_output_format = DocOutputFormat::Pcl;
+    }
 }
 
 #[cfg(test)]
@@ -6548,6 +6571,31 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_auto_tstp_input_uses_tstp_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-auto-tstp");
+        std::fs::write(&path, "cnf(c1, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--prune", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let expected = format!(
+            "cnf(c_0_1, axiom, (p(a)), file('{path_arg}', c1)).\n\n# Pruning successful!\n# SZS status Unknown\n"
+        );
+        assert_eq!(String::from_utf8(stdout).unwrap(), expected);
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
         let _guard = global_state_lock();
         let path = temp_path("proof-found");
@@ -7249,6 +7297,31 @@ mod tests {
         assert!(printed.starts_with("input_clause(i_0_"));
         assert!(printed.ends_with(",axiom,[++equal(a, b)]).\n"));
         assert!(!printed.starts_with("cnf("));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_auto_tstp_input_uses_tstp_output() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-auto-tstp");
+        std::fs::write(&path, "cnf(c1, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (p(a))).\n"));
+        assert!(!printed.contains("<-"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
