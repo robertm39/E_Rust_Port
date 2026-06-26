@@ -11,7 +11,8 @@ use crate::basics::os_wrapper::{
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
-    clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
+    clause_print_lop_format_string_with_options, clause_write_pcl_with_options,
+    clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
@@ -3771,7 +3772,7 @@ fn run_proof_search<W: Write + ?Sized>(
     write_preprocessing_time(output, config)?;
     if config.flags.contains(EProverFlag::CnfOnly) {
         write_cnf_only_success(output)?;
-        write_saturated_output(output, config, &state)?;
+        write_saturated_output(output, config, &state, None)?;
         write_proof_statistics(
             output,
             config,
@@ -3818,7 +3819,11 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     )?;
-    write_saturated_output(output, config, &state)?;
+    let saturated_success = match &outcome {
+        SaturateOutcome::Returned { clause, .. } => Some(clause.as_ref()),
+        SaturateOutcome::Stopped { .. } => None,
+    };
+    write_saturated_output(output, config, &state, saturated_success)?;
     write_proof_statistics(
         output,
         config,
@@ -4207,19 +4212,32 @@ fn write_saturated_output(
     output: &mut impl Write,
     config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
+    success: Option<&Clause>,
 ) -> Result<(), EProverError> {
     if !config.flags.contains(EProverFlag::PrintSaturated) {
         return Ok(());
+    }
+    let eqn_print_options = config
+        .equation_print
+        .into_eqn_print_options(config.output_format)
+        .with_print_types(config.encoding.print_types);
+    if let Some(success) = success {
+        output.write_all(b"# Saturated system contains the empty clause:\n")?;
+        let rendered = clause_print_lop_format_string_with_options(
+            state.terms(),
+            success,
+            true,
+            eqn_print_options,
+        );
+        output.write_all(rendered.as_bytes())?;
+        output.write_all(b"\n\n")?;
     }
     let rendered = proof_state_print_selective_string(
         state,
         &config.saturated_output_descriptor,
         config.flags.contains(EProverFlag::PrintSaturatedInfo),
         config.output_format,
-        config
-            .equation_print
-            .into_eqn_print_options(config.output_format)
-            .with_print_types(config.encoding.print_types),
+        eqn_print_options,
     )?;
     output.write_all(rendered.as_bytes())?;
     output.write_all(b"\n")?;
@@ -6987,6 +7005,40 @@ mod tests {
         )));
         assert!(printed.contains("# Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_saturated_success_clause_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-print-saturated-success");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--print-saturated=e",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.starts_with(&format!(
+            "{}\n# Proof found!\n# SZS status Unsatisfiable\n",
+            default_preprocessing_debug_line()
+        )));
+        assert!(printed.contains(
+            "# Saturated system contains the empty clause:\n <- .\n\n# Processed positive unit clauses:\n"
+        ));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
