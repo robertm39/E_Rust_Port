@@ -43,8 +43,8 @@ use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
-    hcb_single_weight_clause_select, hcb_standard_clause_select, AcHandling, HcbSelectFunction,
-    HeuristicParmsCell, SplitClassType, SplitType,
+    hcb_single_weight_clause_select, hcb_standard_clause_select, AcHandling, GroundingStrategy,
+    HcbSelectFunction, HeuristicParmsCell, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -54,6 +54,7 @@ use crate::heuristics::litselection::{
 use crate::heuristics::to_autoselect::to_select_ordering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::signals::time_is_up;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
@@ -261,6 +262,55 @@ pub enum ProcessClauseOutcome {
         backward: BackwardSimplificationOutcome,
         generated_empty: Option<Clause>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SaturateReturnReason {
+    ProcessClause(ProcessClauseReturnReason),
+    ReplacingInference,
+    GeneratedClause,
+    Cleanup,
+    SatCheck,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SaturateStopReason {
+    TimeLimit,
+    Saturated,
+    StepLimit,
+    ProcessedLimit,
+    UnprocessedLimit,
+    TotalLimit,
+    GeneratedLimit,
+    TermBankInsertionLimit,
+    WatchlistEmpty,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SaturateOutcome {
+    Returned {
+        clause: Box<Clause>,
+        reason: SaturateReturnReason,
+        processed_steps: i64,
+    },
+    Stopped {
+        reason: SaturateStopReason,
+        processed_steps: i64,
+    },
+}
+
+impl SaturateOutcome {
+    #[must_use]
+    pub const fn processed_steps(&self) -> i64 {
+        match self {
+            Self::Returned {
+                processed_steps, ..
+            }
+            | Self::Stopped {
+                processed_steps, ..
+            } => *processed_steps,
+        }
+    }
 }
 
 pub struct ProofControl {
@@ -2198,6 +2248,196 @@ pub fn proof_state_process_clause(
     })
 }
 
+/// Runs the currently ported C `Saturate` loop.
+///
+/// This preserves the C loop gate order, delegates each iteration to
+/// [`proof_state_process_clause`], runs `cleanup_unprocessed_clauses` after
+/// non-returning clauses, and stops when the local limit checks fail. The
+/// generated-inference path is still limited by `proof_state_process_clause` to
+/// C `NoGeneration`; the SAT-check branch reports an explicit diagnostic when
+/// enabled and due because `SATCheck` itself is not ported yet.
+///
+/// # Errors
+///
+/// Returns diagnostics from clause processing, cleanup, or an enabled due
+/// SAT-check.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+pub fn proof_state_saturate(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+) -> Result<SaturateOutcome, Diagnostic> {
+    let mut processed_steps = 0_i64;
+
+    loop {
+        if let Some(reason) = proof_state_saturate_stop_reason(
+            state,
+            step_limit,
+            proc_limit,
+            unproc_limit,
+            total_limit,
+            generated_limit,
+            tb_insert_limit,
+            processed_steps,
+        ) {
+            return Ok(SaturateOutcome::Stopped {
+                reason,
+                processed_steps,
+            });
+        }
+
+        processed_steps = processed_steps.saturating_add(1);
+        match proof_state_process_clause(state, control, answer_limit)? {
+            ProcessClauseOutcome::NoClause => {
+                return Ok(SaturateOutcome::Stopped {
+                    reason: SaturateStopReason::Saturated,
+                    processed_steps,
+                });
+            }
+            ProcessClauseOutcome::ContractedAway => {}
+            ProcessClauseOutcome::Returned { clause, reason } => {
+                return Ok(SaturateOutcome::Returned {
+                    clause: Box::new(clause),
+                    reason: SaturateReturnReason::ProcessClause(reason),
+                    processed_steps,
+                });
+            }
+            ProcessClauseOutcome::Replaced { empty } => {
+                if let Some(clause) = empty {
+                    return Ok(SaturateOutcome::Returned {
+                        clause: Box::new(clause),
+                        reason: SaturateReturnReason::ReplacingInference,
+                        processed_steps,
+                    });
+                }
+            }
+            ProcessClauseOutcome::Processed {
+                generated_empty, ..
+            } => {
+                if let Some(clause) = generated_empty {
+                    return Ok(SaturateOutcome::Returned {
+                        clause: Box::new(clause),
+                        reason: SaturateReturnReason::GeneratedClause,
+                        processed_steps,
+                    });
+                }
+            }
+        }
+
+        let cleanup = proof_state_cleanup_unprocessed_clauses(state, control)?;
+        if let Some(clause) = cleanup.unsatisfiable {
+            return Ok(SaturateOutcome::Returned {
+                clause: Box::new(clause),
+                reason: SaturateReturnReason::Cleanup,
+                processed_steps,
+            });
+        }
+
+        proof_state_saturate_sat_check_gate(state, control)?;
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Matches the C Saturate while-condition layout"
+)]
+fn proof_state_saturate_stop_reason(
+    state: &ProofState,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    processed_steps: i64,
+) -> Option<SaturateStopReason> {
+    if time_is_up() {
+        return Some(SaturateStopReason::TimeLimit);
+    }
+    if state.unprocessed().is_empty() {
+        return Some(SaturateStopReason::Saturated);
+    }
+    if step_limit <= processed_steps {
+        return Some(SaturateStopReason::StepLimit);
+    }
+    if proc_limit <= state.processed_cardinality() {
+        return Some(SaturateStopReason::ProcessedLimit);
+    }
+    if unproc_limit <= state.unprocessed_cardinality() {
+        return Some(SaturateStopReason::UnprocessedLimit);
+    }
+    if total_limit <= state.cardinality() {
+        return Some(SaturateStopReason::TotalLimit);
+    }
+    if !c_signed_long_gt_unsigned_long(generated_limit, proof_state_generated_limit_counter(state))
+    {
+        return Some(SaturateStopReason::GeneratedLimit);
+    }
+    if !c_signed_long_gt_unsigned_long(tb_insert_limit, state.terms().insertions()) {
+        return Some(SaturateStopReason::TermBankInsertionLimit);
+    }
+    if state.watchlist_active() && state.watchlist().is_some_and(ClauseSet::is_empty) {
+        return Some(SaturateStopReason::WatchlistEmpty);
+    }
+    None
+}
+
+fn proof_state_generated_limit_counter(state: &ProofState) -> u64 {
+    state
+        .statistics()
+        .generated_count
+        .wrapping_sub(state.statistics().backward_rewritten_count)
+}
+
+fn c_signed_long_gt_unsigned_long(left: i64, right: u64) -> bool {
+    i64_as_c_unsigned_long(left) > right
+}
+
+fn c_unsigned_long_ge_signed_long(left: u64, right: i64) -> bool {
+    left >= i64_as_c_unsigned_long(right)
+}
+
+fn i64_as_c_unsigned_long(value: i64) -> u64 {
+    u64::from_ne_bytes(value.to_ne_bytes())
+}
+
+fn proof_state_saturate_sat_check_gate(
+    state: &ProofState,
+    control: &ProofControl,
+) -> Result<(), Diagnostic> {
+    let params = control.heuristic_parms();
+    if params.sat_check_grounding == GroundingStrategy::NoGrounding {
+        return Ok(());
+    }
+
+    let due = state.cardinality() >= params.sat_check_size_limit
+        || c_unsigned_long_ge_signed_long(
+            state.statistics().proc_non_trivial_count,
+            params.sat_check_step_limit,
+        )
+        || c_unsigned_long_ge_signed_long(
+            state.terms().insertions(),
+            params.sat_check_ttinsert_limit,
+        );
+    if !due {
+        return Ok(());
+    }
+
+    Err(Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "Saturate SATCheck is not ported yet",
+    ))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessedSetSlot {
     PosRules,
@@ -2885,11 +3125,12 @@ mod tests {
         proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_to_tmp_store, proof_state_process_clause,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_simplify_watchlist, proof_state_storage_estimate,
-        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
-        ForwardContractOptions, LiteralSelectionOutcome, ProcessClauseOutcome,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_reset_processed, proof_state_saturate, proof_state_simplify_watchlist,
+        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
+        ForwardContractCounts, ForwardContractOptions, LiteralSelectionOutcome,
+        ProcessClauseOutcome, ProcessedClauseClass, ProofStateWatchlistOutcome,
+        ReplacingInferenceOutcome, SaturateOutcome, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2915,14 +3156,16 @@ mod tests {
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::global_indices_null;
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
-    use crate::clauses::proofstate::{proof_state_alloc, ProofState};
+    use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::heuristics::hcb::{
-        AcHandling, HeuristicParmsCell, SplitClassType, SplitType, HCB_DEFAULT_HEURISTIC,
+        AcHandling, GroundingStrategy, HeuristicParmsCell, SplitClassType, SplitType,
+        HCB_DEFAULT_HEURISTIC,
     };
     use crate::heuristics::litselection::{
         NO_GENERATION, SELECT_NEGATIVE_LITERALS, SELECT_UNLESS_POS_MAX,
     };
     use crate::heuristics::to_params::TermOrdering;
+    use crate::inout::scanner::IoFormat;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::alloc_arrow_type;
@@ -4686,6 +4929,138 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(error.to_string().contains("generated inference production"));
+    }
+
+    #[test]
+    fn proof_state_saturate_processes_until_unprocessed_empty() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let first = unit_clause_with_id(state.terms_mut(), "pc_saturate_first", 4_137);
+        let second = unit_clause_with_id(state.terms_mut(), "pc_saturate_second", 4_138);
+        queue_unprocessed_for_process(&mut state, &mut control, first);
+        queue_unprocessed_for_process(&mut state, &mut control, second);
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::Saturated,
+                processed_steps: 2,
+            }
+        );
+        assert_eq!(state.statistics().processed_count, 2);
+        assert!(state.unprocessed().is_empty());
+        assert_eq!(state.processed_cardinality(), 2);
+    }
+
+    #[test]
+    fn proof_state_saturate_stops_at_step_limit_after_iteration() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let first = unit_clause_with_id(state.terms_mut(), "pc_saturate_step_first", 4_139);
+        let second = unit_clause_with_id(state.terms_mut(), "pc_saturate_step_second", 4_140);
+        queue_unprocessed_for_process(&mut state, &mut control, first);
+        queue_unprocessed_for_process(&mut state, &mut control, second);
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            1,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::StepLimit,
+                processed_steps: 1,
+            }
+        );
+        assert_eq!(state.statistics().processed_count, 1);
+        assert_eq!(state.unprocessed().members(), 1);
+    }
+
+    #[test]
+    fn proof_state_saturate_stops_on_active_empty_watchlist_only() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state
+            .load_watchlist(WatchlistSource::Inline, IoFormat::Lop)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(state.watchlist_active());
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_saturate_watch", 4_141);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::WatchlistEmpty,
+                processed_steps: 0,
+            }
+        );
+        assert_eq!(state.statistics().processed_count, 0);
+        assert_eq!(state.unprocessed().members(), 1);
+    }
+
+    #[test]
+    fn proof_state_saturate_rejects_due_sat_check_branch() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_saturate_satcheck", 4_142);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        control.heuristic_parms_mut().sat_check_grounding = GroundingStrategy::GlobalMin;
+        control.heuristic_parms_mut().sat_check_step_limit = 1;
+
+        let error = proof_state_saturate(
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.to_string().contains("SATCheck"));
     }
 
     #[test]

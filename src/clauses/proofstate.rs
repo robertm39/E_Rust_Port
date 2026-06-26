@@ -88,6 +88,7 @@ pub struct ProofState {
     eval_store: ClauseSet,
     archive: ClauseSet,
     watchlist: Option<ClauseSet>,
+    watchlist_activation: WatchlistActivation,
     definition_store: ClauseSet,
     fvi_initialized: bool,
     fvi_cspec: Option<FvCollect>,
@@ -95,6 +96,13 @@ pub struct ProofState {
     state_is_complete: bool,
     has_interpreted_symbols: bool,
     statistics: ProofStateStatistics,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum WatchlistActivation {
+    #[default]
+    Inactive,
+    Active,
 }
 
 impl ProofState {
@@ -127,6 +135,7 @@ impl ProofState {
             eval_store: ClauseSet::new(),
             archive: ClauseSet::new(),
             watchlist: Some(ClauseSet::new()),
+            watchlist_activation: WatchlistActivation::Inactive,
             definition_store: ClauseSet::new(),
             fvi_initialized: false,
             fvi_cspec: None,
@@ -295,11 +304,17 @@ impl ProofState {
         self.watchlist.as_ref()
     }
 
+    #[must_use]
+    pub const fn watchlist_active(&self) -> bool {
+        matches!(self.watchlist_activation, WatchlistActivation::Active)
+    }
+
     pub fn watchlist_mut(&mut self) -> Option<&mut ClauseSet> {
         self.watchlist.as_mut()
     }
 
     pub fn discard_watchlist(&mut self) -> Option<ClauseSet> {
+        self.watchlist_activation = WatchlistActivation::Inactive;
         self.watchlist.take()
     }
 
@@ -476,6 +491,7 @@ impl ProofState {
     ) -> Result<i64, Diagnostic> {
         if source == WatchlistSource::Disabled {
             self.watchlist = None;
+            self.watchlist_activation = WatchlistActivation::Inactive;
             return Ok(0);
         }
 
@@ -502,6 +518,7 @@ impl ProofState {
         };
 
         activate_watchlist(watchlist, terms);
+        self.watchlist_activation = WatchlistActivation::Active;
         Ok(parsed)
     }
 
