@@ -65,12 +65,12 @@ pub struct ProofStateStatistics {
     pub gc_used_count: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct ProofStateProcessedSets<'a> {
-    pub pos_rules: &'a ClauseSet,
-    pub pos_eqns: &'a ClauseSet,
-    pub neg_units: &'a ClauseSet,
-    pub non_units: &'a ClauseSet,
+    pub pos_rules: &'a mut ClauseSet,
+    pub pos_eqns: &'a mut ClauseSet,
+    pub neg_units: &'a mut ClauseSet,
+    pub non_units: &'a mut ClauseSet,
 }
 
 #[derive(Clone, Debug)]

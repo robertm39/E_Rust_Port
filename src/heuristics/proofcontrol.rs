@@ -1,6 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_LIMITED_RW,
@@ -52,7 +53,7 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::RewriteLevel;
+use crate::terms::termtypes::{RewriteLevel, TP_IS_REWRITABLE};
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -209,6 +210,15 @@ pub enum ReplacingInferenceOutcome {
     /// The selected clause was consumed and any produced clauses were routed
     /// through `insert_new_clauses`.
     Replaced { empty: Option<Clause> },
+}
+
+/// Destination selected by C's processed-clause insertion tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessedClauseClass {
+    PositiveRule,
+    PositiveEquation,
+    NegativeUnit,
+    NonUnit,
 }
 
 pub struct ProofControl {
@@ -902,7 +912,7 @@ pub fn proof_state_forward_modify_clause(
     let mut rw_steps = 0_i64;
     let trivial = {
         let (terms, processed_sets) = state.terms_and_processed_sets_mut();
-        let demodulators = [processed_sets.pos_rules, processed_sets.pos_eqns];
+        let demodulators: [&ClauseSet; 2] = [&*processed_sets.pos_rules, &*processed_sets.pos_eqns];
         loop {
             let steps = clause_compute_li_normalform_plain(
                 terms,
@@ -1767,6 +1777,80 @@ pub fn proof_state_replacing_inferences(
     Ok(ReplacingInferenceOutcome::Survivor(clause))
 }
 
+/// Normalizes and inserts a surviving selected clause into a processed set.
+///
+/// This ports the local processed-set insertion tail of C `ProcessClause`:
+/// normalize variables, stamp the clause date, set `CPLimitedRW`, classify the
+/// clause as a positive rule/equation, negative unit, or non-unit, and insert it
+/// through the processed set's FV index when present. Global-index insertion,
+/// watchlist simplification, and generation remain separate proof-session
+/// responsibilities.
+///
+/// # Errors
+///
+/// Returns diagnostics from variable normalization.
+pub fn proof_state_insert_processed_clause(
+    state: &mut ProofState,
+    mut clause: Clause,
+    clause_date: SysDate,
+) -> Result<ProcessedClauseClass, Diagnostic> {
+    let fresh_vars = state.terms().vars().clone();
+    clause.normalize_vars(state.terms_mut(), &fresh_vars)?;
+    clause.set_date(clause_date);
+    clause.set_prop(CP_LIMITED_RW);
+    clause.set_weight(clause.standard_weight());
+
+    let class = if clause.is_demodulator() {
+        debug_assert_eq!(clause.negative_literal_count(), 0);
+        let is_rule = clause
+            .literals()
+            .as_slice()
+            .first()
+            .is_some_and(crate::clauses::eqn::Eqn::is_oriented);
+        if is_rule {
+            if let Some(literal) = clause.literals().as_slice().first() {
+                literal.left().set_prop(TP_IS_REWRITABLE);
+            }
+            ProcessedClauseClass::PositiveRule
+        } else {
+            ProcessedClauseClass::PositiveEquation
+        }
+    } else if clause.is_unit() {
+        debug_assert_eq!(clause.negative_literal_count(), 1);
+        ProcessedClauseClass::NegativeUnit
+    } else {
+        ProcessedClauseClass::NonUnit
+    };
+
+    let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+    match class {
+        ProcessedClauseClass::PositiveRule => {
+            processed_sets.pos_rules.set_date(clause_date);
+            processed_sets
+                .pos_rules
+                .indexed_insert_clause_owned(clause, terms);
+        }
+        ProcessedClauseClass::PositiveEquation => {
+            processed_sets.pos_eqns.set_date(clause_date);
+            processed_sets
+                .pos_eqns
+                .indexed_insert_clause_owned(clause, terms);
+        }
+        ProcessedClauseClass::NegativeUnit => {
+            processed_sets
+                .neg_units
+                .indexed_insert_clause_owned(clause, terms);
+        }
+        ProcessedClauseClass::NonUnit => {
+            processed_sets
+                .non_units
+                .indexed_insert_clause_owned(clause, terms);
+        }
+    }
+
+    Ok(class)
+}
+
 fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
     let params = control.heuristic_parms();
     if params.split_aggressive
@@ -2110,10 +2194,11 @@ mod tests {
         proof_state_forward_subsumption, proof_state_init, proof_state_init_ac_handling,
         proof_state_init_global_indices, proof_state_init_indexing,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_storage_estimate, select_inherited_literal,
-        ForwardContractCounts, ForwardContractOptions, LiteralSelectionOutcome,
+        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
+        proof_state_move_to_tmp_store, proof_state_queue_generated_clause_for_eval,
+        proof_state_replacing_inferences, proof_state_reset_processed,
+        proof_state_storage_estimate, select_inherited_literal, ForwardContractCounts,
+        ForwardContractOptions, LiteralSelectionOutcome, ProcessedClauseClass,
         ReplacingInferenceOutcome, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
@@ -2122,8 +2207,8 @@ mod tests {
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_LIMITED_RW,
-        CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
+        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED,
+        CP_LIMITED_RW, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -2150,7 +2235,7 @@ mod tests {
     use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, RewriteLevel, Term};
+    use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -3851,6 +3936,91 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(state.tmp_store().is_empty());
         assert_eq!(state.statistics().generated_count, 0);
+    }
+
+    #[test]
+    fn proof_state_insert_processed_clause_indexes_oriented_rule() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        let date = SysDate::from_raw(17);
+        let (clause, lhs) = {
+            let terms = state.terms_mut();
+            let lhs = typed_const(terms, "pc_processed_rule_lhs");
+            let rhs = typed_const(terms, "pc_processed_rule_rhs");
+            let mut literal = literal(terms, &lhs, &rhs, true);
+            literal.set_prop(EP_IS_ORIENTED);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+            clause.set_ident(4_088);
+            (clause, lhs)
+        };
+
+        let class = proof_state_insert_processed_clause(&mut state, clause, date)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(class, ProcessedClauseClass::PositiveRule);
+        assert!(lhs.query_prop(TP_IS_REWRITABLE));
+        assert_eq!(state.processed_pos_rules().members(), 1);
+        assert_eq!(state.processed_pos_rules().date(), date);
+        let stored = state.processed_pos_rules().find_by_id(4_088).unwrap();
+        assert_eq!(stored.date(), date);
+        assert!(stored.query_prop(CP_LIMITED_RW));
+        assert!(stored.query_prop(CP_IS_S_INDEXED));
+        assert_eq!(stored.weight(), stored.standard_weight());
+        assert!(state.processed_pos_eqns().is_empty());
+        assert!(state.processed_neg_units().is_empty());
+        assert!(state.processed_non_units().is_empty());
+    }
+
+    #[test]
+    fn proof_state_insert_processed_clause_classifies_non_rule_sets() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let date = SysDate::from_raw(23);
+        let (positive_equation, negative_unit, non_unit) = {
+            let terms = state.terms_mut();
+            let positive_equation =
+                unit_clause_with_id(terms, "pc_processed_positive_equation", 4_089);
+            let mut negative_unit = negative_clause(terms);
+            negative_unit.set_ident(4_090);
+            let left = typed_const(terms, "pc_processed_non_unit_left");
+            let right = typed_const(terms, "pc_processed_non_unit_right");
+            let guard = typed_const(terms, "pc_processed_non_unit_guard");
+            let mut non_unit = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left, &right, true),
+                literal(terms, &guard, &right, false),
+            ]));
+            non_unit.set_ident(4_091);
+            (positive_equation, negative_unit, non_unit)
+        };
+
+        let positive_class =
+            proof_state_insert_processed_clause(&mut state, positive_equation, date)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let negative_class = proof_state_insert_processed_clause(&mut state, negative_unit, date)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let non_unit_class = proof_state_insert_processed_clause(&mut state, non_unit, date)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(positive_class, ProcessedClauseClass::PositiveEquation);
+        assert_eq!(negative_class, ProcessedClauseClass::NegativeUnit);
+        assert_eq!(non_unit_class, ProcessedClauseClass::NonUnit);
+        assert_eq!(state.processed_pos_eqns().members(), 1);
+        assert_eq!(state.processed_pos_eqns().date(), date);
+        assert_eq!(state.processed_neg_units().members(), 1);
+        assert_eq!(state.processed_non_units().members(), 1);
+        assert!(state.processed_pos_rules().is_empty());
+        for ident in [4_089, 4_090, 4_091] {
+            let found = state
+                .processed_pos_eqns()
+                .find_by_id(ident)
+                .or_else(|| state.processed_neg_units().find_by_id(ident))
+                .or_else(|| state.processed_non_units().find_by_id(ident))
+                .unwrap();
+            assert_eq!(found.date(), date);
+            assert!(found.query_prop(CP_LIMITED_RW));
+            assert_eq!(found.weight(), found.standard_weight());
+        }
     }
 
     #[test]
