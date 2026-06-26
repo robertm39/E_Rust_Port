@@ -31,7 +31,8 @@ use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::paramodulation::{
-    compute_all_paramodulants, ParamodulationType as ClauseParamodulationType,
+    compute_all_paramodulants, compute_all_paramodulants_indexed,
+    ParamodulationType as ClauseParamodulationType,
 };
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
 use crate::clauses::rewrite::find_rewritable_clauses;
@@ -2156,6 +2157,36 @@ pub fn proof_state_generate_new_clauses(
     control: &mut ProofControl,
     clause: &Clause,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    proof_state_generate_new_clauses_impl(state, control, clause, None)
+}
+
+/// Runs the ported first-order selected-clause generators with caller-owned
+/// global indices.
+///
+/// This mirrors C's indexed paramodulation branch when `indices` has
+/// paramodulation indexes initialized. The current `ProofState` cannot own
+/// `GlobalIndices` directly without a self-reference, so this entry point keeps
+/// the index owner explicit until a proof-session owner is introduced.
+///
+/// # Errors
+///
+/// Returns diagnostics from generator helpers, missing ordering state, or an
+/// unported generation branch that would be reached in C.
+pub fn proof_state_generate_new_clauses_with_global_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    indices: &GlobalIndices<'_>,
+) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    proof_state_generate_new_clauses_impl(state, control, clause, Some(indices))
+}
+
+fn proof_state_generate_new_clauses_impl(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    indices: Option<&GlobalIndices<'_>>,
+) -> Result<GenerateNewClausesOutcome, Diagnostic> {
     if problem_type() == ProblemType::HigherOrder {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -2230,7 +2261,7 @@ pub fn proof_state_generate_new_clauses(
                     "selected-clause generation requires initialized proof-control ordering",
                 ));
             };
-            outcome.paramodulants = compute_unindexed_selected_paramodulants(
+            outcome.paramodulants = compute_selected_paramodulants(
                 terms,
                 ocb,
                 source_for_paramod,
@@ -2238,6 +2269,7 @@ pub fn proof_state_generate_new_clauses(
                 &mut generation,
                 enable_neg_unit_paramod,
                 pm_type,
+                indices,
             )?;
         }
 
@@ -2275,6 +2307,48 @@ fn proof_state_unindexed_paramodulation_type(
         HcbParamodulationType::OrientedSuperSim => {
             ClauseParamodulationType::OrientedSuperSimultaneous
         }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "selected-clause generator keeps term bank, store context, and optional global indexes explicit"
+)]
+fn compute_selected_paramodulants(
+    terms: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    source_for_paramod: &Clause,
+    parent_alias: &Clause,
+    generation: &mut ProofStateGenerationContext<'_>,
+    enable_neg_unit_paramod: bool,
+    pm_type: ClauseParamodulationType,
+    indices: Option<&GlobalIndices<'_>>,
+) -> Result<u64, Diagnostic> {
+    if let Some((into_index, negp_index, from_index)) =
+        indices.and_then(GlobalIndices::pm_paramodulation_indexes)
+    {
+        let count = compute_all_paramodulants_indexed(
+            terms,
+            ocb,
+            source_for_paramod,
+            parent_alias,
+            into_index,
+            negp_index,
+            from_index,
+            generation.tmp_store,
+            pm_type,
+        )?;
+        Ok(i64_to_u64_saturating(count))
+    } else {
+        compute_unindexed_selected_paramodulants(
+            terms,
+            ocb,
+            source_for_paramod,
+            parent_alias,
+            generation,
+            enable_neg_unit_paramod,
+            pm_type,
+        )
     }
 }
 
@@ -3330,18 +3404,18 @@ mod tests {
         proof_state_filter_unprocessed, proof_state_forward_contract_clause,
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
         proof_state_forward_modify_clause, proof_state_forward_subsumption,
-        proof_state_generate_new_clauses, proof_state_init, proof_state_init_ac_handling,
-        proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_process_clause,
-        proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_saturate, proof_state_simplify_watchlist,
-        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
-        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
-        LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
-        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SaturateOutcome, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
+        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
+        proof_state_init_indexing, proof_state_init_with_global_indices,
+        proof_state_insert_new_clauses, proof_state_insert_processed_clause,
+        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
+        proof_state_process_clause, proof_state_queue_generated_clause_for_eval,
+        proof_state_replacing_inferences, proof_state_reset_processed, proof_state_saturate,
+        proof_state_simplify_watchlist, proof_state_storage_estimate, select_inherited_literal,
+        BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
+        GenerateNewClausesOutcome, LiteralSelectionOutcome, ProcessClauseOutcome,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SaturateOutcome, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -3365,7 +3439,7 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexParams};
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
-    use crate::clauses::global_indices::global_indices_null;
+    use crate::clauses::global_indices::{global_indices_null, GlobalIndices};
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::heuristics::hcb::{
@@ -5219,6 +5293,51 @@ mod tests {
         assert_eq!(generated.literal_number(), 1);
         assert_eq!(generated.literals().as_slice()[0].right(), &rhs);
         assert!(generated.literals().as_slice()[0]
+            .left()
+            .argument(0)
+            .is_some_and(|arg| arg == replacement));
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_with_global_indices_uses_indexed_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, mut indexed_partner, replacement, rhs) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_idx_pm_source");
+            let replacement = typed_const(terms, "pc_generate_idx_pm_replacement");
+            let rhs = typed_const(terms, "pc_generate_idx_pm_rhs");
+            let f_source = typed_unary(terms, "pc_generate_idx_pm_f", &source);
+            let mut selected_lit = literal(terms, &source, &replacement, true);
+            let mut partner_lit = literal(terms, &f_source, &rhs, true);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_150);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            (selected, partner, replacement, rhs)
+        };
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_partner, state.terms(), false);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let outcome = proof_state_generate_new_clauses_with_global_indices(
+            &mut state,
+            &mut control,
+            &selected,
+            &indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 1);
+        let literal = &generated.literals().as_slice()[0];
+        assert_eq!(literal.right(), &rhs);
+        assert!(literal
             .left()
             .argument(0)
             .is_some_and(|arg| arg == replacement));
