@@ -67,6 +67,7 @@ use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL,
 };
+use crate::terms::simpletypes::Type;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, RewriteDemodulator, RewriteLevel, Term};
@@ -4920,6 +4921,7 @@ struct ParsedClauseFile {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum SimpleFofFormula {
+    Truth(bool),
     Literal(Eqn),
     Implication {
         antecedents: Vec<SimpleFofFormula>,
@@ -5401,6 +5403,7 @@ fn simple_fof_formula_collect_variables(
     variables: &mut BTreeMap<usize, Term>,
 ) {
     match formula {
+        SimpleFofFormula::Truth(_) => {}
         SimpleFofFormula::Literal(literal) => {
             literal.collect_variables(variables);
         }
@@ -5438,7 +5441,7 @@ fn simple_fof_formula_collect_bound_variable_ids(
     variables: &mut BTreeSet<usize>,
 ) {
     match formula {
-        SimpleFofFormula::Literal(_) => {}
+        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => {}
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
@@ -5518,6 +5521,14 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     match formula {
+        SimpleFofFormula::Truth(value) => {
+            let is_true = if negate_as_conjecture { !value } else { value };
+            if is_true {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![EqnList::new()])
+            }
+        }
         SimpleFofFormula::Literal(literal) => {
             let mut literals = EqnList::from_vec(vec![literal]);
             if negate_as_conjecture {
@@ -5730,7 +5741,7 @@ fn simple_fof_formulas_contain_existential(formulas: &[SimpleFofFormula]) -> boo
 
 fn simple_fof_formula_contains_existential(formula: &SimpleFofFormula) -> bool {
     match formula {
-        SimpleFofFormula::Literal(_) => false,
+        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => false,
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
@@ -5758,7 +5769,7 @@ fn simple_fof_formulas_contain_quantifier(formulas: &[SimpleFofFormula]) -> bool
 
 fn simple_fof_formula_contains_quantifier(formula: &SimpleFofFormula) -> bool {
     match formula {
-        SimpleFofFormula::Literal(_) => false,
+        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => false,
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
@@ -5789,7 +5800,7 @@ fn simple_fof_formula_contains_unsupported_existential_body_quantifier(
     formula: &SimpleFofFormula,
 ) -> bool {
     match formula {
-        SimpleFofFormula::Literal(_) => false,
+        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => false,
         SimpleFofFormula::Universal { formulas, .. }
         | SimpleFofFormula::Existential { formulas, .. }
         | SimpleFofFormula::Conjunction(formulas)
@@ -5871,6 +5882,10 @@ fn simple_fof_literal_formulas(literals: Vec<Eqn>) -> Vec<SimpleFofFormula> {
         formulas.push(SimpleFofFormula::Literal(literal));
     }
     formulas
+}
+
+fn simple_fof_truth_formula(value: bool) -> Vec<SimpleFofFormula> {
+    vec![SimpleFofFormula::Truth(value)]
 }
 
 fn simple_fof_equivalence_to_clause_literal_lists(
@@ -6105,6 +6120,9 @@ fn parse_simple_fof_primary_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if scanner.test_id("$distinct") {
+        return parse_simple_fof_distinct_formula(scanner, bank);
+    }
     if scanner.test_tok(TokenType::EXIST_QUANTOR) {
         return parse_simple_fof_existential_formula(scanner, bank);
     }
@@ -6120,6 +6138,8 @@ fn parse_simple_fof_primary_formula(
         scanner.accept_tok(TokenType::TILDE_SIGN)?;
         let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
         vec![SimpleFofFormula::Negation(formulas)]
+    } else if scanner.test_id("$distinct") {
+        parse_simple_fof_distinct_formula(scanner, bank)?
     } else {
         let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
         simple_fof_literal_formulas(vec![literal])
@@ -6214,6 +6234,8 @@ fn parse_simple_fof_existential_formula(
             return Err(simple_fof_existential_requires_full_cnf_error());
         }
         formulas
+    } else if scanner.test_id("$distinct") {
+        parse_simple_fof_distinct_formula(scanner, bank)?
     } else {
         if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::OPEN_BRACKET) {
             return Err(simple_fof_unsupported_error(scanner));
@@ -6233,6 +6255,69 @@ fn parse_simple_fof_existential_formula(
     }
 
     Ok(vec![SimpleFofFormula::Existential { bound, formulas }])
+}
+
+fn parse_simple_fof_distinct_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    scanner.accept_id("$distinct")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let mut args = Vec::new();
+    args.push(parse_simple_fof_distinct_constant(scanner, bank, None)?);
+    let expected_type = args[0].type_();
+    while scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        args.push(parse_simple_fof_distinct_constant(
+            scanner,
+            bank,
+            expected_type.as_ref(),
+        )?);
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+    if args.len() < 2 {
+        return Ok(simple_fof_truth_formula(true));
+    }
+
+    let mut disequalities = Vec::new();
+    for left_index in 0..args.len() {
+        for right_index in (left_index + 1)..args.len() {
+            disequalities.push(Eqn::alloc(
+                args[left_index].clone(),
+                args[right_index].clone(),
+                bank,
+                false,
+            )?);
+        }
+    }
+    Ok(simple_fof_literal_formulas(disequalities))
+}
+
+fn parse_simple_fof_distinct_constant(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    expected_type: Option<&Type>,
+) -> Result<Term, Diagnostic> {
+    let source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
+    let line = scanner.current_token().line();
+    let column = scanner.current_token().column();
+    let term = bank.parse_term_with_distinct_checks(scanner)?;
+    if term.is_free_var() || term.arity() != 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!("{source}:{line}:{column}: constant expected in $distinct argument list"),
+        ));
+    }
+    if expected_type.is_some_and(|type_| term.type_().as_ref() != Some(type_)) {
+        return Err(Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            format!(
+                "{source}:{line}:{column}: All $distinct arguments have to be constants of the same type"
+            ),
+        ));
+    }
+    Ok(term)
 }
 
 fn parse_simple_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -9160,6 +9245,30 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-distinct");
+        std::fs::write(
+            &path,
+            "fof(distinct, axiom, $distinct(a,b)).\n\
+             fof(equal, axiom, a=b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_conjunction_with_existential_conjunct() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjunction-existential-conjunct");
@@ -12024,6 +12133,56 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_expands_fof_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-fof-distinct");
+        std::fs::write(&path, "fof(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains(", axiom, (a!=b)).\n"));
+        assert!(printed.contains(", axiom, (a!=c)).\n"));
+        assert!(printed.contains(", axiom, (b!=c)).\n"));
+        assert_eq!(printed.matches("cnf(i_0_").count(), 3);
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_negates_fof_distinct_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-fof-distinct-conjecture");
+        std::fs::write(&path, "fof(goal, conjecture, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", negated_conjecture, (a=b|a=c|b=c)).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_uses_old_tptp_output_when_requested() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tptp-out");
@@ -12749,6 +12908,63 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             "\n% Parsing successful!\n% SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_fof_distinct_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-distinct");
+        std::fs::write(&path, "fof(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_fof_distinct_mixed_argument_types() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-distinct-mixed-types");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(b_type, type, b: $i).\n\
+             fof(test1, axiom, $distinct(a,b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+        assert!(error
+            .message()
+            .contains("All $distinct arguments have to be constants of the same type"));
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
