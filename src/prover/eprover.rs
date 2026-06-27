@@ -3863,11 +3863,18 @@ fn simple_fof_preload_app_encoded_formula(
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
         } => {
             simple_fof_preload_app_encoded_formulas(antecedents, bank)?;
             simple_fof_preload_app_encoded_formulas(consequents, bank)?;
         }
-        SimpleFofFormula::Equivalence { left, right } => {
+        SimpleFofFormula::Equivalence { left, right }
+        | SimpleFofFormula::Xor { left, right }
+        | SimpleFofFormula::Nand { left, right }
+        | SimpleFofFormula::Nor { left, right } => {
             simple_fof_preload_app_encoded_formulas(left, bank)?;
             simple_fof_preload_app_encoded_formulas(right, bank)?;
         }
@@ -3933,8 +3940,21 @@ fn simple_fof_write_app_encoded_formula(
             antecedents,
             consequents,
         } => simple_fof_write_app_encoded_binary(output, bank, antecedents, "=>", consequents),
+        SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => simple_fof_write_app_encoded_binary(output, bank, consequents, "<=", antecedents),
         SimpleFofFormula::Equivalence { left, right } => {
             simple_fof_write_app_encoded_binary(output, bank, left, "<=>", right)
+        }
+        SimpleFofFormula::Xor { left, right } => {
+            simple_fof_write_app_encoded_binary(output, bank, left, "<~>", right)
+        }
+        SimpleFofFormula::Nand { left, right } => {
+            simple_fof_write_app_encoded_binary(output, bank, left, "~&", right)
+        }
+        SimpleFofFormula::Nor { left, right } => {
+            simple_fof_write_app_encoded_binary(output, bank, left, "~|", right)
         }
         SimpleFofFormula::Conjunction(formulas) => {
             simple_fof_write_app_encoded_chain(output, bank, formulas, "&")
@@ -5274,7 +5294,23 @@ enum SimpleFofFormula {
         antecedents: Vec<SimpleFofFormula>,
         consequents: Vec<SimpleFofFormula>,
     },
+    ReverseImplication {
+        antecedents: Vec<SimpleFofFormula>,
+        consequents: Vec<SimpleFofFormula>,
+    },
     Equivalence {
+        left: Vec<SimpleFofFormula>,
+        right: Vec<SimpleFofFormula>,
+    },
+    Xor {
+        left: Vec<SimpleFofFormula>,
+        right: Vec<SimpleFofFormula>,
+    },
+    Nand {
+        left: Vec<SimpleFofFormula>,
+        right: Vec<SimpleFofFormula>,
+    },
+    Nor {
         left: Vec<SimpleFofFormula>,
         right: Vec<SimpleFofFormula>,
     },
@@ -5924,11 +5960,18 @@ fn simple_fof_formula_collect_variables(
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
         } => {
             simple_fof_formulas_collect_variables(antecedents, variables);
             simple_fof_formulas_collect_variables(consequents, variables);
         }
-        SimpleFofFormula::Equivalence { left, right } => {
+        SimpleFofFormula::Equivalence { left, right }
+        | SimpleFofFormula::Xor { left, right }
+        | SimpleFofFormula::Nand { left, right }
+        | SimpleFofFormula::Nor { left, right } => {
             simple_fof_formulas_collect_variables(left, variables);
             simple_fof_formulas_collect_variables(right, variables);
         }
@@ -5959,11 +6002,18 @@ fn simple_fof_formula_collect_bound_variable_ids(
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
         } => {
             simple_fof_formulas_collect_bound_variable_ids(antecedents, variables);
             simple_fof_formulas_collect_bound_variable_ids(consequents, variables);
         }
-        SimpleFofFormula::Equivalence { left, right } => {
+        SimpleFofFormula::Equivalence { left, right }
+        | SimpleFofFormula::Xor { left, right }
+        | SimpleFofFormula::Nand { left, right }
+        | SimpleFofFormula::Nor { left, right } => {
             simple_fof_formulas_collect_bound_variable_ids(left, variables);
             simple_fof_formulas_collect_bound_variable_ids(right, variables);
         }
@@ -6028,6 +6078,29 @@ fn simple_fof_extend_universal_dependencies(
     dependencies
 }
 
+fn simple_fof_truth_to_clause_literal_lists(
+    value: bool,
+    negate_as_conjecture: bool,
+) -> Vec<EqnList> {
+    let is_true = if negate_as_conjecture { !value } else { value };
+    if is_true {
+        Vec::new()
+    } else {
+        vec![EqnList::new()]
+    }
+}
+
+fn simple_fof_literal_to_clause_literal_lists(
+    literal: Eqn,
+    negate_as_conjecture: bool,
+) -> Vec<EqnList> {
+    let mut literals = EqnList::from_vec(vec![literal]);
+    if negate_as_conjecture {
+        literals.negate_eqns();
+    }
+    vec![literals]
+}
+
 fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
     formula: SimpleFofFormula,
     negate_as_conjecture: bool,
@@ -6035,22 +6108,19 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     match formula {
-        SimpleFofFormula::Truth(value) => {
-            let is_true = if negate_as_conjecture { !value } else { value };
-            if is_true {
-                Ok(Vec::new())
-            } else {
-                Ok(vec![EqnList::new()])
-            }
-        }
-        SimpleFofFormula::Literal(literal) => {
-            let mut literals = EqnList::from_vec(vec![literal]);
-            if negate_as_conjecture {
-                literals.negate_eqns();
-            }
-            Ok(vec![literals])
-        }
+        SimpleFofFormula::Truth(value) => Ok(simple_fof_truth_to_clause_literal_lists(
+            value,
+            negate_as_conjecture,
+        )),
+        SimpleFofFormula::Literal(literal) => Ok(simple_fof_literal_to_clause_literal_lists(
+            literal,
+            negate_as_conjecture,
+        )),
         SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
             antecedents,
             consequents,
         } => simple_fof_implication_formula_to_clause_literal_lists(
@@ -6069,6 +6139,27 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 bank,
             )
         }
+        SimpleFofFormula::Xor { left, right } => simple_fof_xor_formula_to_clause_literal_lists(
+            left,
+            right,
+            negate_as_conjecture,
+            universal_dependencies,
+            bank,
+        ),
+        SimpleFofFormula::Nand { left, right } => simple_fof_nand_formula_to_clause_literal_lists(
+            left,
+            right,
+            negate_as_conjecture,
+            universal_dependencies,
+            bank,
+        ),
+        SimpleFofFormula::Nor { left, right } => simple_fof_nor_formula_to_clause_literal_lists(
+            left,
+            right,
+            negate_as_conjecture,
+            universal_dependencies,
+            bank,
+        ),
         SimpleFofFormula::Conjunction(formulas) => {
             simple_fof_conjunction_formula_to_clause_literal_lists(
                 formulas,
@@ -6155,6 +6246,59 @@ fn simple_fof_equivalence_formula_to_clause_literal_lists(
     } else {
         simple_fof_equivalence_to_clause_literal_lists(left, right, universal_dependencies, bank)
     }
+}
+
+fn simple_fof_xor_formula_to_clause_literal_lists(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+    negate_as_conjecture: bool,
+    universal_dependencies: &[Term],
+    bank: &mut TermBank,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    if negate_as_conjecture {
+        simple_fof_equivalence_to_clause_literal_lists(left, right, universal_dependencies, bank)
+    } else {
+        simple_fof_negated_equivalence_to_clause_literal_lists(
+            left,
+            right,
+            universal_dependencies,
+            bank,
+        )
+    }
+}
+
+fn simple_fof_nand_formula_to_clause_literal_lists(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+    negate_as_conjecture: bool,
+    universal_dependencies: &[Term],
+    bank: &mut TermBank,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    let mut conjuncts = left;
+    conjuncts.extend(right);
+    simple_fof_conjunction_formula_to_clause_literal_lists(
+        conjuncts,
+        !negate_as_conjecture,
+        universal_dependencies,
+        bank,
+    )
+}
+
+fn simple_fof_nor_formula_to_clause_literal_lists(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+    negate_as_conjecture: bool,
+    universal_dependencies: &[Term],
+    bank: &mut TermBank,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    let mut disjuncts = simple_fof_formulas_to_disjuncts(left);
+    disjuncts.extend(simple_fof_formulas_to_disjuncts(right));
+    simple_fof_disjunction_formula_to_clause_literal_lists(
+        disjuncts,
+        !negate_as_conjecture,
+        universal_dependencies,
+        bank,
+    )
 }
 
 fn simple_fof_conjunction_formula_to_clause_literal_lists(
@@ -6442,7 +6586,7 @@ fn parse_simple_old_tptp_fof_formula(
     if scanner.test_tok(TokenType::FOF_RL_IMPL) {
         scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
         let antecedents = parse_simple_old_tptp_fof_formula(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Implication {
+        return Ok(vec![SimpleFofFormula::ReverseImplication {
             antecedents,
             consequents: formulas,
         }]);
@@ -6458,30 +6602,26 @@ fn parse_simple_old_tptp_fof_formula(
     if scanner.test_tok(TokenType::FOF_XOR) {
         scanner.accept_tok(TokenType::FOF_XOR)?;
         let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Negation(vec![
-            SimpleFofFormula::Equivalence {
-                left: formulas,
-                right,
-            },
-        ])]);
+        return Ok(vec![SimpleFofFormula::Xor {
+            left: formulas,
+            right,
+        }]);
     }
     if scanner.test_tok(TokenType::FOF_NAND) {
         scanner.accept_tok(TokenType::FOF_NAND)?;
-        let mut conjuncts = formulas;
-        conjuncts.extend(parse_simple_old_tptp_fof_formula(scanner, bank)?);
-        return Ok(vec![SimpleFofFormula::Negation(vec![
-            SimpleFofFormula::Conjunction(conjuncts),
-        ])]);
+        let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Nand {
+            left: formulas,
+            right,
+        }]);
     }
     if scanner.test_tok(TokenType::FOF_NOR) {
         scanner.accept_tok(TokenType::FOF_NOR)?;
-        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
-        disjuncts.extend(simple_fof_formulas_to_disjuncts(
-            parse_simple_old_tptp_fof_formula(scanner, bank)?,
-        ));
-        return Ok(vec![SimpleFofFormula::Negation(vec![
-            SimpleFofFormula::Disjunction(disjuncts),
-        ])]);
+        let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Nor {
+            left: formulas,
+            right,
+        }]);
     }
     if scanner.test_tok(TokenType::FOF_AND) {
         scanner.accept_tok(TokenType::FOF_AND)?;
@@ -6605,7 +6745,7 @@ fn parse_simple_fof_connective_formulas(
     if scanner.test_tok(TokenType::FOF_RL_IMPL) {
         scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
         let antecedents = parse_simple_fof_implication_operand(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Implication {
+        return Ok(vec![SimpleFofFormula::ReverseImplication {
             antecedents,
             consequents: formulas,
         }]);
@@ -6621,30 +6761,26 @@ fn parse_simple_fof_connective_formulas(
     if scanner.test_tok(TokenType::FOF_XOR) {
         scanner.accept_tok(TokenType::FOF_XOR)?;
         let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Negation(vec![
-            SimpleFofFormula::Equivalence {
-                left: formulas,
-                right,
-            },
-        ])]);
+        return Ok(vec![SimpleFofFormula::Xor {
+            left: formulas,
+            right,
+        }]);
     }
     if scanner.test_tok(TokenType::FOF_NAND) {
         scanner.accept_tok(TokenType::FOF_NAND)?;
-        let mut conjuncts = formulas;
-        conjuncts.extend(parse_simple_fof_equivalence_operand(scanner, bank)?);
-        return Ok(vec![SimpleFofFormula::Negation(vec![
-            SimpleFofFormula::Conjunction(conjuncts),
-        ])]);
+        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Nand {
+            left: formulas,
+            right,
+        }]);
     }
     if scanner.test_tok(TokenType::FOF_NOR) {
         scanner.accept_tok(TokenType::FOF_NOR)?;
-        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
-        disjuncts.extend(simple_fof_formulas_to_disjuncts(
-            parse_simple_fof_equivalence_operand(scanner, bank)?,
-        ));
-        return Ok(vec![SimpleFofFormula::Negation(vec![
-            SimpleFofFormula::Disjunction(disjuncts),
-        ])]);
+        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Nor {
+            left: formulas,
+            right,
+        }]);
     }
     if scanner.test_tok(TokenType::FOF_BIN_OP) {
         return Err(simple_fof_unsupported_error(scanner));
@@ -9119,6 +9255,39 @@ mod tests {
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(!printed.contains("skip_true"));
         assert!(printed.contains("tff(show_false, axiom, "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_preserves_supported_binary_operator_spelling() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-binary-operators");
+        std::fs::write(
+            &path,
+            "fof(reverse, axiom, (p(a)<=q(a))).\n\
+             fof(xor, axiom, (p(a)<~>q(a))).\n\
+             fof(nand, axiom, (p(a)~&q(a))).\n\
+             fof(nor, axiom, (p(a)~|q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("<="));
+        assert!(printed.contains("<~>"));
+        assert!(printed.contains("~&"));
+        assert!(printed.contains("~|"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
