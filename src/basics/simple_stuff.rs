@@ -253,9 +253,13 @@ pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
     }
 }
 
+pub fn reset_problem_type() {
+    *lock_or_recover(problem_type_cell()) = ProblemType::NotInitialized;
+}
+
 #[cfg(test)]
 fn reset_problem_type_for_tests() {
-    *lock_or_recover(problem_type_cell()) = ProblemType::NotInitialized;
+    reset_problem_type();
 }
 
 #[cfg(test)]

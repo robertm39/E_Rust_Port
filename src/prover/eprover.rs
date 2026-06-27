@@ -11,7 +11,7 @@ use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
-use crate::basics::simple_stuff::ProblemType;
+use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
@@ -95,6 +95,21 @@ struct IoRunGuard;
 impl Drop for IoRunGuard {
     fn drop(&mut self) {
         exit_io();
+    }
+}
+
+struct ProblemTypeRunGuard;
+
+impl ProblemTypeRunGuard {
+    fn new() -> Self {
+        reset_problem_type();
+        Self
+    }
+}
+
+impl Drop for ProblemTypeRunGuard {
+    fn drop(&mut self) {
+        reset_problem_type();
     }
 }
 const DEFAULT_MAX_UNIF_STEPS: i64 = 256;
@@ -1817,6 +1832,7 @@ where
 {
     init_io(PROGRAM_NAME);
     let _io_guard = IoRunGuard;
+    let _problem_type_guard = ProblemTypeRunGuard::new();
     match process_options(argv)? {
         EProverAction::Help => {
             stdout.write_all(print_help().as_bytes())?;
@@ -5187,6 +5203,7 @@ fn parse_clause_file(
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
+    set_problem_type(ProblemType::FirstOrder)?;
     let mut scanner = if file == "-" {
         let mut input = Vec::new();
         io::stdin().read_to_end(&mut input).map_err(|error| {
@@ -12211,6 +12228,44 @@ mod tests {
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir_all(&tptp_root).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_bounded_boo_include_uses_first_order_index_state() {
+        let _guard = global_state_lock();
+        let tptp_root = std::env::current_dir()
+            .unwrap()
+            .join("eprover")
+            .join("EXAMPLE_PROBLEMS")
+            .join("TPTP");
+        let _env = set_env_var("TPTP", &tptp_root.to_string_lossy());
+        let path = tptp_root.join("BOO006-1.p");
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                path_arg.as_str(),
+                "--auto",
+                "--silent",
+                "--processed-clauses-limit=5",
+                "--memory-limit=2048",
+                "--detsort-rw",
+                "--detsort-new",
+                "--proof-object=1",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed
+            .contains("\n% Failure: User resource limit exceeded!\n% SZS status ResourceOut\n"));
+        assert!(stderr.is_empty());
     }
 
     #[test]

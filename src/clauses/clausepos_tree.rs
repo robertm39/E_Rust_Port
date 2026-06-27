@@ -6,7 +6,7 @@ use std::fmt::{self, Write};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClauseTPos {
-    clause_key: usize,
+    clause_key: i64,
     clause: Clause,
     positions: BTreeSet<CompactPos>,
 }
@@ -22,7 +22,7 @@ impl ClauseTPos {
     }
 
     #[must_use]
-    pub const fn clause_key(&self) -> usize {
+    pub const fn clause_key(&self) -> i64 {
         self.clause_key
     }
 
@@ -88,7 +88,7 @@ impl ClauseTPos {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClauseTPosTree {
-    entries: BTreeMap<usize, ClauseTPos>,
+    entries: BTreeMap<i64, ClauseTPos>,
 }
 
 impl ClauseTPosTree {
@@ -157,8 +157,8 @@ pub fn cmp_clause_tpos_cells(left: &ClauseTPos, right: &ClauseTPos) -> i32 {
 }
 
 #[must_use]
-pub fn clause_key(clause: &Clause) -> usize {
-    std::ptr::from_ref(clause) as usize
+pub const fn clause_key(clause: &Clause) -> i64 {
+    clause.ident()
 }
 
 #[cfg(test)]

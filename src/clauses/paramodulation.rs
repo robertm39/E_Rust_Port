@@ -535,20 +535,33 @@ fn indexed_effective_paramodulation_type(
     overlap_term: &Term,
     pm_type: ParamodulationType,
 ) -> Option<ParamodulationType> {
-    if pm_type == ParamodulationType::DecreasingSimultaneous {
-        let from_term = from_pos
-            .get_side()
-            .expect("indexed source position must select a side");
-        let mut subst = Substitution::new();
-        if !subst_mgu_complete(&from_term, overlap_term, &mut subst) {
-            return None;
-        }
-        let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
+    let from_literal = from_pos
+        .literal()
+        .expect("indexed source position must select a literal");
+    let from_term = from_pos
+        .get_side()
+        .expect("indexed source position must select a side");
+    let from_other = from_pos
+        .get_other_side()
+        .expect("indexed source position must select an opposite side");
+    let mut subst = Substitution::new();
+    if !subst_mgu_complete(&from_term, overlap_term, &mut subst)
+        || (!from_literal.is_oriented()
+            && to_greater(
+                ocb,
+                bank.signature(),
+                &from_other,
+                &from_term,
+                DerefType::Always,
+                DerefType::Always,
+            ))
+    {
         subst.backtrack();
-        Some(effective)
-    } else {
-        Some(effective_paramodulation_type(bank, ocb, from_pos, pm_type))
+        return None;
     }
+    let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
+    subst.backtrack();
+    Some(effective)
 }
 
 fn clause_ordered_paramod_by_type(
@@ -835,16 +848,6 @@ pub fn clause_ordered_paramod(
         !from_literal.is_oriented() || from.side() == EqnSide::LeftSide,
         "oriented paramodulation source can only use its left side"
     );
-    assert!(
-        !from
-            .get_side()
-            .expect("paramodulation source position must select a side")
-            .is_free_var()
-            || into_literal.is_equ_lit(bank)
-            || !into.is_top(),
-        "free-variable source side cannot paramodulate into non-equational top positions"
-    );
-
     let freshvars = fresh_var_bank_for_clauses(bank, from_clause, into_clause);
     let mut subst = Substitution::new();
     let result = clause_ordered_paramod_with_subst(
@@ -954,17 +957,6 @@ fn clause_ordered_sim_paramod_variant(
         !from_literal.is_oriented() || from.side() == EqnSide::LeftSide,
         "oriented simultaneous paramodulation source can only use its left side"
     );
-    assert!(
-        !from
-            .get_side()
-            .expect("simultaneous paramodulation source position must select a side")
-            .is_free_var()
-            || problem_type() == ProblemType::HigherOrder
-            || into_literal.is_equ_lit(bank)
-            || !into.is_top(),
-        "free-variable source side cannot paramodulate into non-equational top positions"
-    );
-
     if problem_type() == ProblemType::HigherOrder {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,

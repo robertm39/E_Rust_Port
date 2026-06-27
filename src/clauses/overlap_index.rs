@@ -689,6 +689,59 @@ mod tests {
         assert!(!index.delete_pos(&clause, 0, Some(&left)));
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "regression exercises cloned clause values passing through a by-value helper"
+    )]
+    fn insert_position_by_value(
+        index: &mut OverlapIndex<'_>,
+        clause: Clause,
+        term: &Term,
+        pos: i64,
+    ) {
+        assert!(index.insert_pos(&clause, pos, Some(term)));
+    }
+
+    #[test]
+    fn direct_position_insert_keys_cloned_clause_payloads_by_stable_identity() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "oi_stable_a");
+        let b = typed_const(&mut bank, "oi_stable_b");
+        let c = typed_const(&mut bank, "oi_stable_c");
+        let left = typed_unary(&mut bank, "oi_stable_f", &a);
+        let first = singleton_clause(eqn(&mut bank, &left, &b, true), 40);
+        let second = singleton_clause(eqn(&mut bank, &left, &c, true), 41);
+        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+
+        insert_position_by_value(&mut index, first.clone(), &left, 0);
+        insert_position_by_value(&mut index, second.clone(), &left, 2);
+
+        let occurrence = index.find_occurrence(&left).unwrap();
+        assert_eq!(occurrence.position_clauses().len(), 2);
+        assert_eq!(
+            occurrence
+                .position_clauses()
+                .find(&first)
+                .unwrap()
+                .positions()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert_eq!(
+            occurrence
+                .position_clauses()
+                .find(&second)
+                .unwrap()
+                .positions()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
     #[test]
     fn clause_insert_delete_uses_collected_into_and_from_terms() {
         let mut bank = test_bank();

@@ -11,8 +11,8 @@ use std::fmt::{self, Write};
 pub struct SubtermOcc {
     term_key: usize,
     term: Term,
-    rw_rest: BTreeMap<usize, Clause>,
-    rw_full: BTreeMap<usize, Clause>,
+    rw_rest: BTreeMap<i64, Clause>,
+    rw_full: BTreeMap<i64, Clause>,
     clauses: ClauseTPosTree,
 }
 
@@ -39,12 +39,12 @@ impl SubtermOcc {
     }
 
     #[must_use]
-    pub const fn restricted_clauses(&self) -> &BTreeMap<usize, Clause> {
+    pub const fn restricted_clauses(&self) -> &BTreeMap<i64, Clause> {
         &self.rw_rest
     }
 
     #[must_use]
-    pub const fn full_clauses(&self) -> &BTreeMap<usize, Clause> {
+    pub const fn full_clauses(&self) -> &BTreeMap<i64, Clause> {
         &self.rw_full
     }
 
@@ -227,7 +227,7 @@ pub fn cmp_subterm_cells(left: &SubtermOcc, right: &SubtermOcc) -> i32 {
     }
 }
 
-fn store_clause(target: &mut BTreeMap<usize, Clause>, clause: &Clause) -> bool {
+fn store_clause(target: &mut BTreeMap<i64, Clause>, clause: &Clause) -> bool {
     match target.entry(clause_key(clause)) {
         Entry::Occupied(_) => false,
         Entry::Vacant(entry) => {

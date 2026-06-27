@@ -119,4 +119,12 @@ Source files reviewed: `BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- C stores `problemType` as process-global state and parser paths set it as first-order or higher-order syntax is observed. Rust now sets the same global for supported first-order executable parsing so lower-level ordering, indexing, and inference helpers see C-shaped state during a run.
+
+### Change Later Candidates
+
+- `problemType` is convenient C global state but awkward for repeated in-process Rust runs and future parallel solving. Rust resets it around executable `run()` calls for isolation; replace that shim with an explicit proof-session/parser context once the full first-order and higher-order parser owners are wired.
 <!-- END MANUAL REVIEW: c_source_docs -->

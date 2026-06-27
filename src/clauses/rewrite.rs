@@ -958,7 +958,7 @@ fn find_rewritable_clauses_indexed_direction<'idx>(
     ocb: &mut OrderControlBlock,
     index: &'idx SubtermIndex<'_>,
     results: &mut Vec<&'idx Clause>,
-    seen: &mut BTreeSet<usize>,
+    seen: &mut BTreeSet<i64>,
     new_demod: &Clause,
     left: &Term,
     right: &Term,
@@ -985,7 +985,7 @@ fn term_find_rw_clauses_indexed<'idx>(
     ocb: &mut OrderControlBlock,
     occurrence: &'idx SubtermOcc,
     results: &mut Vec<&'idx Clause>,
-    seen: &mut BTreeSet<usize>,
+    seen: &mut BTreeSet<i64>,
     new_demod: &Clause,
     left: &Term,
     right: &Term,
@@ -1033,8 +1033,8 @@ fn term_find_rw_clauses_indexed<'idx>(
 
 fn push_indexed_clause_map<'idx>(
     results: &mut Vec<&'idx Clause>,
-    seen: &mut BTreeSet<usize>,
-    clauses: &'idx BTreeMap<usize, Clause>,
+    seen: &mut BTreeSet<i64>,
+    clauses: &'idx BTreeMap<i64, Clause>,
 ) -> i64 {
     let mut count = 0;
     for (key, clause) in clauses {

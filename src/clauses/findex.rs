@@ -7,7 +7,7 @@ use std::collections::{btree_map::Entry, BTreeMap};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FIndex {
-    index: BTreeMap<FunCode, BTreeMap<usize, Clause>>,
+    index: BTreeMap<FunCode, BTreeMap<i64, Clause>>,
     plist_clause_index: BTreeMap<FunCode, BTreeMap<usize, PListHandle>>,
 }
 
@@ -27,7 +27,7 @@ impl FIndex {
     }
 
     #[must_use]
-    pub fn bucket(&self, f_code: FunCode) -> Option<&BTreeMap<usize, Clause>> {
+    pub fn bucket(&self, f_code: FunCode) -> Option<&BTreeMap<i64, Clause>> {
         self.index.get(&f_code)
     }
 

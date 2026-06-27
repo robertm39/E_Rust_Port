@@ -128,7 +128,7 @@ Source files reviewed: `CLAUSES/ccl_overlap_index.h`, `CLAUSES/ccl_overlap_index
 
 ### Compatibility Notes
 
-- Rust currently ports the fingerprint-index wrapper shape, direct compact-position insert/delete, clause occurrence deletion, into/from term collection, and the split normal-term versus negative-atom into-index helpers.
+- Rust currently ports the fingerprint-index wrapper shape, direct compact-position insert/delete, clause occurrence deletion, into/from term collection, stable clause-identifier keys for cloned clause snapshots in occurrence payloads, and the split normal-term versus negative-atom into-index helpers.
 - Into-term collectors count every non-variable occurrence visited but store terms in a pointer-identity set, so the returned count can exceed the number of stored unique terms. Rust preserves that count-versus-storage split.
 - Into-position collection skips descent under lambda terms, while the non-position into-term collector recurses through all arguments. Rust mirrors that asymmetry.
 - `term_collect_into_terms2` and `term_collect_into_terms_pos2` send only the top negative non-equational atom term to the `natoms` collection; its subterms are collected into the normal term collection. Rust preserves that top-only split.
@@ -137,6 +137,6 @@ Source files reviewed: `CLAUSES/ccl_overlap_index.h`, `CLAUSES/ccl_overlap_index
 ### Change Later Candidates
 
 - `ClauseCollectIntoTerms2` depends on `EqnIsEquLit(lit)` through the literal's owning term bank in C. Rust has no equation back-pointer yet, so the split collectors take an explicit `&TermBank`; replace this with a typed owner handle once clause/literal ownership can provide the bank safely.
-- The overlap index stores cloned clause snapshots under pointer-identity clause keys. As with other current clause-position trees, replace cloned payloads with stable clause handles before long-lived proof-state indexes depend on clause movement, cloning, or deletion order.
+- C overlap indexes group occurrence positions by raw clause pointer. Rust cannot use borrowed wrapper addresses for cloned clause values, so it uses stable clause identifiers for current cloned snapshots; replace cloned payloads with stable clause handles before long-lived proof-state indexes depend on deletion order or duplicate identifiers.
 - The C debug printers expose pointer addresses and tree shape. Rust keeps the indexed data and compact positions but does not recreate byte-identical debug tree output; add it only if diagnostics or reference-output tests require it.
 <!-- END MANUAL REVIEW: c_source_docs -->
