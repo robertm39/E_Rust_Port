@@ -5750,72 +5750,6 @@ fn simple_fof_existential_scope_to_clause_literal_lists(
     }
 }
 
-fn simple_fof_formulas_contain_quantifier(formulas: &[SimpleFofFormula]) -> bool {
-    formulas.iter().any(simple_fof_formula_contains_quantifier)
-}
-
-fn simple_fof_formula_contains_quantifier(formula: &SimpleFofFormula) -> bool {
-    match formula {
-        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => false,
-        SimpleFofFormula::Implication {
-            antecedents,
-            consequents,
-        } => {
-            simple_fof_formulas_contain_quantifier(antecedents)
-                || simple_fof_formulas_contain_quantifier(consequents)
-        }
-        SimpleFofFormula::Equivalence { left, right } => {
-            simple_fof_formulas_contain_quantifier(left)
-                || simple_fof_formulas_contain_quantifier(right)
-        }
-        SimpleFofFormula::Conjunction(formulas)
-        | SimpleFofFormula::Disjunction(formulas)
-        | SimpleFofFormula::Negation(formulas) => simple_fof_formulas_contain_quantifier(formulas),
-        SimpleFofFormula::Universal { .. } | SimpleFofFormula::Existential { .. } => true,
-    }
-}
-
-fn simple_fof_formulas_contain_unsupported_existential_body_quantifier(
-    formulas: &[SimpleFofFormula],
-) -> bool {
-    formulas
-        .iter()
-        .any(simple_fof_formula_contains_unsupported_existential_body_quantifier)
-}
-
-fn simple_fof_formula_contains_unsupported_existential_body_quantifier(
-    formula: &SimpleFofFormula,
-) -> bool {
-    match formula {
-        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => false,
-        SimpleFofFormula::Universal { formulas, .. }
-        | SimpleFofFormula::Existential { formulas, .. }
-        | SimpleFofFormula::Conjunction(formulas)
-        | SimpleFofFormula::Disjunction(formulas) => {
-            simple_fof_formulas_contain_unsupported_existential_body_quantifier(formulas)
-        }
-        SimpleFofFormula::Negation(formulas) => simple_fof_formulas_contain_quantifier(formulas),
-        SimpleFofFormula::Implication {
-            antecedents,
-            consequents,
-        } => {
-            simple_fof_formulas_contain_quantifier(antecedents)
-                || simple_fof_formulas_contain_quantifier(consequents)
-        }
-        SimpleFofFormula::Equivalence { left, right } => {
-            simple_fof_formulas_contain_quantifier(left)
-                || simple_fof_formulas_contain_quantifier(right)
-        }
-    }
-}
-
-fn simple_fof_existential_requires_full_cnf_error() -> Diagnostic {
-    Diagnostic::new(
-        ErrorCode::SYNTAX_ERROR,
-        "FOF existential formula requires full clausification outside a supported atomic or parenthesized context",
-    )
-}
-
 fn simple_fof_implication_to_clause_literal_lists(
     antecedents: Vec<SimpleFofFormula>,
     consequents: Vec<SimpleFofFormula>,
@@ -6225,18 +6159,11 @@ fn parse_simple_fof_existential_formula(
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
         let formulas = parse_simple_fof_connective_formulas(scanner, bank)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-        if simple_fof_formulas_contain_unsupported_existential_body_quantifier(&formulas) {
-            return Err(simple_fof_existential_requires_full_cnf_error());
-        }
         formulas
     } else if scanner
         .test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::TILDE_SIGN)
     {
-        let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
-        if simple_fof_formulas_contain_unsupported_existential_body_quantifier(&formulas) {
-            return Err(simple_fof_existential_requires_full_cnf_error());
-        }
-        formulas
+        parse_simple_fof_primary_formula(scanner, bank)?
     } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
         formulas
     } else if scanner.test_id("$distinct") {
@@ -6401,7 +6328,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies in direct positive or negated contexts, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -9538,6 +9465,30 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_existential_negated_universal_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-existential-negated-universal-body");
+        std::fs::write(
+            &path,
+            "fof(negated_all, axiom, ?[X]:(~![Y]:p(X,Y))).\n\
+             fof(all_p, axiom, ![A,B]:p(A,B)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -13041,6 +12992,54 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_negated_universal_in_existential_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-existential-negated-universal-body");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:(~![Y]:p(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (~p(esk1_0,esk2_0))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_quantified_implication_operand_in_existential_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-existential-quantified-implication");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:(p(X)=>![Y]:q(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (q(esk1_0,X2)|~p(esk1_0))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_skolemizes_existential_consequent_in_implication() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-implication-existential-consequent");
@@ -13792,7 +13791,13 @@ mod tests {
     fn run_syntax_only_parses_nested_existential_in_parenthesized_existential_body() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-existential-nested-existential");
-        std::fs::write(&path, "fof(test1, axiom, ?[X]:(?[Y]:p(X,Y))).\n").unwrap();
+        std::fs::write(
+            &path,
+            "fof(test1, axiom, ?[X]:(?[Y]:p(X,Y))).\n\
+             fof(test2, axiom, ?[X]:(~![Y]:q(X,Y))).\n\
+             fof(test3, axiom, ?[X]:(r(X)=>![Y]:s(X,Y))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
