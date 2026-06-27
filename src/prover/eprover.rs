@@ -11,6 +11,7 @@ use crate::basics::os_wrapper::{
 };
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::simple_stuff::ProblemType;
+use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
     clause_parse, clause_print_lop_format_string_with_options, clause_write_pcl_with_options,
@@ -52,7 +53,9 @@ use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
 use crate::inout::output::set_output_level;
-use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
+use crate::inout::scanner::{
+    token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
+};
 use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
@@ -4806,13 +4809,13 @@ fn parse_clause_file(
         })?;
         Scanner::from_file_content("-", input, false)?
     } else {
-        Scanner::from_file_following_includes(Path::new(file), false, "include")?
+        Scanner::from_file(Path::new(file), false)?
     };
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
     let mut formula_conjecture_seen = false;
     if detected_format == IoFormat::Tstp {
-        formula_conjecture_seen = parse_tstp_entry_list(&mut scanner, bank, clauses)?;
+        formula_conjecture_seen = parse_tstp_entry_list(&mut scanner, bank, clauses, None)?;
     } else {
         clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
     }
@@ -4857,17 +4860,31 @@ fn parse_tstp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
+    selectors: Option<&StrTree<i64, i64>>,
 ) -> Result<bool, Diagnostic> {
     let mut formula_conjecture_seen = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            clauses.insert(clause);
+            if tstp_entry_selected(clause.info().and_then(ClauseInfo::name), selectors) {
+                clauses.insert(clause);
+            }
         } else if scanner.test_id("fof") {
             let parsed = parse_simple_fof_clause(scanner, bank)?;
-            formula_conjecture_seen |= parsed.formula_conjecture_seen;
-            for clause in parsed.clauses {
-                clauses.insert(clause);
+            if tstp_entry_selected(Some(parsed.name.as_str()), selectors) {
+                formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                for clause in parsed.clauses {
+                    clauses.insert(clause);
+                }
+            }
+        } else if scanner.test_id("include") {
+            let mut include_selectors = StrTree::new();
+            let skip_includes = StrTree::new();
+            if let Some(mut included) =
+                scanner.parse_include(&mut include_selectors, &skip_includes)?
+            {
+                formula_conjecture_seen |=
+                    parse_tstp_entry_list(&mut included, bank, clauses, Some(&include_selectors))?;
             }
         } else {
             return Err(Diagnostic::new(
@@ -4883,7 +4900,21 @@ fn parse_tstp_entry_list(
     Ok(formula_conjecture_seen)
 }
 
+fn tstp_entry_selected(name: Option<&str>, selectors: Option<&StrTree<i64, i64>>) -> bool {
+    let Some(selectors) = selectors else {
+        return true;
+    };
+    if selectors.is_empty() {
+        return true;
+    }
+    if selectors.find(EMPTY_INCLUDE_SELECTOR_SENTINEL).is_some() {
+        return false;
+    }
+    name.is_some_and(|name| selectors.find(name).is_some())
+}
+
 struct ParsedSimpleFofClause {
+    name: String,
     clauses: Vec<Clause>,
     formula_conjecture_seen: bool,
 }
@@ -4946,6 +4977,7 @@ fn parse_simple_fof_clause(
         clauses.push(clause);
     }
     Ok(ParsedSimpleFofClause {
+        name,
         clauses,
         formula_conjecture_seen,
     })
@@ -8366,6 +8398,101 @@ mod tests {
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_follows_tstp_include_without_selector() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-fof-include-all-inc");
+        let path = temp_path("proof-fof-include-all-main");
+        std::fs::write(&include_path, "fof(fact, axiom, p(a)).\n").unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}').\nfof(goal, conjecture, p(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_honors_tstp_include_name_selector() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-fof-include-selected-inc");
+        let path = temp_path("proof-fof-include-selected-main");
+        std::fs::write(
+            &include_path,
+            "fof(selected, axiom, p(a)).\n\
+             fof(unselected, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}',[selected]).\nfof(goal, conjecture, p(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_filters_unselected_tstp_include_entries() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-fof-include-filter-inc");
+        let path = temp_path("proof-fof-include-filter-main");
+        std::fs::write(
+            &include_path,
+            "fof(selected, axiom, p(a)).\n\
+             fof(unselected, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}',[selected]).\nfof(goal, conjecture, q(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
     }
 
     #[test]
