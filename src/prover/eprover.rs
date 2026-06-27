@@ -22,11 +22,17 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{
+    op_has_arg1, op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef,
+    DerivationEntry,
+};
 use crate::clauses::eqn::{eqn_fof_parse, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
-use crate::clauses::proofstate::{proof_state_alloc, WatchlistSource as ProofStateWatchlistSource};
+use crate::clauses::proofstate::{
+    proof_state_alloc, ProofState, WatchlistSource as ProofStateWatchlistSource,
+};
 use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::heuristics::clausesetfeatures::proof_state_print_selective_string;
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
@@ -56,7 +62,7 @@ use crate::terms::signature::{
     FP_IS_RATIONAL,
 };
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::RewriteLevel;
+use crate::terms::termtypes::{RewriteDemodulator, RewriteLevel};
 use crate::terms::typebanks::TypeBank;
 
 const MEGA: u64 = 1_048_576;
@@ -4347,11 +4353,7 @@ fn write_proof_search_result(
     inference_system_complete: bool,
     assume_inference_system_complete: bool,
 ) -> Result<(), EProverError> {
-    let proof_success_status = if config.flags.contains(EProverFlag::FormulaConjectureSeen) {
-        "Theorem"
-    } else {
-        "Unsatisfiable"
-    };
+    let proof_success_status = proof_success_status(config, outcome, state);
     if state.statistics().answer_count > 0 {
         write_comment_line_after_blank(output, "Proof found!")?;
         if !state.statistics().status_reported {
@@ -4391,6 +4393,155 @@ fn write_proof_search_result(
         }
     }
     Ok(())
+}
+
+fn proof_success_status(
+    config: &EProverConfig,
+    outcome: &SaturateOutcome,
+    state: &ProofState,
+) -> &'static str {
+    if !config.flags.contains(EProverFlag::FormulaConjectureSeen) {
+        return "Unsatisfiable";
+    }
+
+    match outcome {
+        SaturateOutcome::Returned { clause, .. } => {
+            if proof_tree_has_conjecture(state, clause) {
+                "Theorem"
+            } else {
+                "ContradictoryAxioms"
+            }
+        }
+        SaturateOutcome::Stopped { .. } => "Theorem",
+    }
+}
+
+fn proof_tree_has_conjecture(state: &ProofState, root: &Clause) -> bool {
+    if root.is_conjecture() {
+        return true;
+    }
+
+    let mut pending = direct_clause_parent_refs(root);
+    let mut seen = vec![(root.ident(), root.query_csscpa_source())];
+    while let Some(parent_ref) = pending.pop() {
+        let key = clause_derivation_ref_key(parent_ref);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+
+        let Some(parent) = proof_state_find_clause_by_ref(state, parent_ref) else {
+            continue;
+        };
+        if parent.is_conjecture() {
+            return true;
+        }
+        pending.extend(direct_clause_parent_refs(parent));
+    }
+    false
+}
+
+fn direct_clause_parent_refs(clause: &Clause) -> Vec<ClauseDerivationRef> {
+    let Some(derivation) = clause.derivation() else {
+        return Vec::new();
+    };
+
+    let entries = derivation.as_slice();
+    let mut parents = Vec::new();
+    let mut index = 0;
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+
+        collect_direct_clause_parent_arg(
+            entries,
+            &mut index,
+            op_has_cnf_arg1(op),
+            op_has_arg1(op),
+            &mut parents,
+        );
+        collect_direct_clause_parent_arg(
+            entries,
+            &mut index,
+            op_has_cnf_arg2(op),
+            op_has_arg2(op),
+            &mut parents,
+        );
+    }
+    parents
+}
+
+fn collect_direct_clause_parent_arg(
+    entries: &[DerivationEntry],
+    index: &mut usize,
+    is_clause_parent: bool,
+    has_arg: bool,
+    parents: &mut Vec<ClauseDerivationRef>,
+) {
+    if is_clause_parent {
+        if let Some(entry) = entries.get(*index) {
+            match entry {
+                DerivationEntry::ClauseParent(parent) => parents.push(*parent),
+                DerivationEntry::Demodulator(demodulator) => {
+                    parents.extend(demodulator_clause_refs(*demodulator));
+                }
+                DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {}
+            }
+        }
+        *index += 1;
+    } else if has_arg {
+        *index += 1;
+    }
+}
+
+fn proof_state_find_clause_by_ref(
+    state: &ProofState,
+    parent_ref: ClauseDerivationRef,
+) -> Option<&Clause> {
+    [
+        state.axioms(),
+        state.ax_archive(),
+        state.processed_pos_rules(),
+        state.processed_pos_eqns(),
+        state.processed_neg_units(),
+        state.processed_non_units(),
+        state.unprocessed(),
+        state.tmp_store(),
+        state.eval_store(),
+        state.archive(),
+    ]
+    .into_iter()
+    .find_map(|set| clause_set_find_clause_by_ref(set, parent_ref))
+}
+
+fn clause_set_find_clause_by_ref(
+    set: &ClauseSet,
+    parent_ref: ClauseDerivationRef,
+) -> Option<&Clause> {
+    let parent_key = clause_derivation_ref_key(parent_ref);
+    set.iter().find(|clause| {
+        clause.ident() == parent_key.0
+            && (parent_key.1 == 0 || clause.query_csscpa_source() == parent_key.1)
+    })
+}
+
+fn demodulator_clause_refs(demodulator: RewriteDemodulator) -> Vec<ClauseDerivationRef> {
+    let id = demodulator.id();
+    let mut refs = Vec::with_capacity(2);
+    if let Ok(ident) = i64::try_from(id) {
+        refs.push(ClauseDerivationRef::new(ident, 0));
+    }
+    if let Ok(negative_ident) = i64::try_from(1_i128 - id as i128) {
+        refs.push(ClauseDerivationRef::new(negative_ident, 0));
+    }
+    refs
+}
+
+const fn clause_derivation_ref_key(parent_ref: ClauseDerivationRef) -> (i64, u64) {
+    (parent_ref.ident(), parent_ref.source())
 }
 
 fn write_saturated_final_result(
@@ -4709,7 +4860,7 @@ fn parse_tstp_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses and the temporary atomic/universal-implication/conjunction fof fragment",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses and the temporary atomic/connective-fragment fof bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -7753,6 +7904,55 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_contradictory_axioms_when_fof_conjecture_is_unused() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unused-conjecture");
+        std::fs::write(
+            &path,
+            "fof(pos, axiom, p(a)).\n\
+             fof(neg, axiom, ~p(a)).\n\
+             fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status ContradictoryAxioms\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_keeps_explicit_fof_negated_conjecture_unsatisfiable() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-explicit-negated-conjecture");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, p(a)).\n\
+             fof(goal, negated_conjecture, ~p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
