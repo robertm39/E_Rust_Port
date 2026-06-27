@@ -4892,6 +4892,7 @@ enum SimpleFofFormula {
     Conjunction(Vec<SimpleFofFormula>),
     Disjunction(Vec<SimpleFofFormula>),
     Negation(Vec<SimpleFofFormula>),
+    Existential(Vec<SimpleFofFormula>),
 }
 
 fn parse_tstp_entry_list(
@@ -5069,6 +5070,9 @@ fn simple_fof_formulas_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
 ) -> Result<Vec<EqnList>, Diagnostic> {
+    if formulas.len() > 1 && simple_fof_formulas_contain_existential(&formulas) {
+        return Err(simple_fof_existential_requires_full_cnf_error());
+    }
     if negate_as_conjecture && formulas.len() > 1 {
         return simple_fof_negated_conjunction_to_clause_literal_lists(formulas);
     }
@@ -5127,6 +5131,11 @@ fn simple_fof_formula_to_clause_literal_lists(
             antecedents,
             consequents,
         } => {
+            if simple_fof_formulas_contain_existential(&antecedents)
+                || simple_fof_formulas_contain_existential(&consequents)
+            {
+                return Err(simple_fof_existential_requires_full_cnf_error());
+            }
             if negate_as_conjecture {
                 simple_fof_negated_implication_to_clause_literal_lists(antecedents, consequents)
             } else {
@@ -5134,6 +5143,11 @@ fn simple_fof_formula_to_clause_literal_lists(
             }
         }
         SimpleFofFormula::Equivalence { left, right } => {
+            if simple_fof_formulas_contain_existential(&left)
+                || simple_fof_formulas_contain_existential(&right)
+            {
+                return Err(simple_fof_existential_requires_full_cnf_error());
+            }
             if negate_as_conjecture {
                 simple_fof_negated_equivalence_to_clause_literal_lists(left, right)
             } else {
@@ -5141,15 +5155,60 @@ fn simple_fof_formula_to_clause_literal_lists(
             }
         }
         SimpleFofFormula::Conjunction(formulas) => {
+            if simple_fof_formulas_contain_existential(&formulas) {
+                return Err(simple_fof_existential_requires_full_cnf_error());
+            }
             simple_fof_formulas_to_clause_literal_lists(formulas, negate_as_conjecture)
         }
         SimpleFofFormula::Disjunction(disjuncts) => {
+            if simple_fof_formulas_contain_existential(&disjuncts) {
+                return Err(simple_fof_existential_requires_full_cnf_error());
+            }
             simple_fof_disjunction_to_clause_literal_lists(disjuncts, negate_as_conjecture)
         }
         SimpleFofFormula::Negation(formulas) => {
             simple_fof_formulas_to_clause_literal_lists(formulas, !negate_as_conjecture)
         }
+        SimpleFofFormula::Existential(formulas) => {
+            if negate_as_conjecture {
+                simple_fof_formulas_to_clause_literal_lists(formulas, true)
+            } else {
+                Err(simple_fof_existential_requires_full_cnf_error())
+            }
+        }
     }
+}
+
+fn simple_fof_formulas_contain_existential(formulas: &[SimpleFofFormula]) -> bool {
+    formulas.iter().any(simple_fof_formula_contains_existential)
+}
+
+fn simple_fof_formula_contains_existential(formula: &SimpleFofFormula) -> bool {
+    match formula {
+        SimpleFofFormula::Literal(_) => false,
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        } => {
+            simple_fof_formulas_contain_existential(antecedents)
+                || simple_fof_formulas_contain_existential(consequents)
+        }
+        SimpleFofFormula::Equivalence { left, right } => {
+            simple_fof_formulas_contain_existential(left)
+                || simple_fof_formulas_contain_existential(right)
+        }
+        SimpleFofFormula::Conjunction(formulas)
+        | SimpleFofFormula::Disjunction(formulas)
+        | SimpleFofFormula::Negation(formulas) => simple_fof_formulas_contain_existential(formulas),
+        SimpleFofFormula::Existential(_) => true,
+    }
+}
+
+fn simple_fof_existential_requires_full_cnf_error() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        "FOF existential formula requires full clausification outside a supported atomic negated context",
+    )
 }
 
 fn simple_fof_implication_to_clause_literal_lists(
@@ -5358,6 +5417,9 @@ fn parse_simple_fof_primary_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if scanner.test_tok(TokenType::EXIST_QUANTOR) {
+        return parse_simple_fof_existential_atomic_formula(scanner, bank);
+    }
     parse_simple_fof_universal_prefix(scanner)?;
     if scanner.test_tok(TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
@@ -5400,6 +5462,47 @@ fn parse_simple_fof_universal_prefix(scanner: &mut Scanner) -> Result<(), Diagno
     Ok(())
 }
 
+fn parse_simple_fof_existential_atomic_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    scanner.accept_tok(TokenType::EXIST_QUANTOR)?;
+    scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+    scanner.accept_tok(TokenType::NAME)?;
+    while scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        scanner.accept_tok(TokenType::NAME)?;
+    }
+    scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+    scanner.accept_tok(TokenType::COLON)?;
+
+    let parenthesized = scanner.test_tok(TokenType::OPEN_BRACKET);
+    if parenthesized {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    }
+    if scanner.test_tok(
+        TokenType::UNIV_QUANTOR
+            | TokenType::EXIST_QUANTOR
+            | TokenType::FOF_BIN_OP
+            | TokenType::TILDE_SIGN
+            | TokenType::OPEN_BRACKET,
+    ) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+
+    let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+    if scanner.test_tok(TokenType::FOF_BIN_OP) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    if parenthesized {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+
+    Ok(vec![SimpleFofFormula::Existential(
+        simple_fof_literal_formulas(vec![literal]),
+    )])
+}
+
 fn tstp_skip_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
     if scanner.test_tok(TokenType::OPEN_SQUARE) {
         parse_skip_parenthesized_expr(scanner)
@@ -5416,7 +5519,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified implications, equivalences, XORs, NANDs, and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas in a negated context, universally quantified implications, equivalences, XORs, NANDs, and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -8146,6 +8249,30 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_existential_conjecture_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-existential-conjecture");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, ?[X]:p(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_contradictory_axioms_when_fof_conjecture_is_unused() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-unused-conjecture");
@@ -10682,6 +10809,31 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("requires full clausification"));
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_supported_fof_existential_conjecture_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-existential-conjecture");
+        std::fs::write(&path, "fof(goal, conjecture, ?[X]:(p(X))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
