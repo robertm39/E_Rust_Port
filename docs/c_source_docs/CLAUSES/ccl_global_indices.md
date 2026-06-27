@@ -123,6 +123,7 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 
 - `GlobalIndicesReset` frees and reinitializes indexes but does not clear `CPIsGlobalIndexed` on any clauses; C callers reset after freeing clause sets. Rust mirrors the index reset and should keep clause-flag cleanup explicit if reset is ever exposed with live clauses.
 - Global indices in C store raw pointers to optional subterm, overlap, and extension indexes against the proof-state signature. Rust uses a borrowed-signature shell for now; later proof-state integration should avoid self-referential ownership, likely by moving the signature behind an explicit shared proof-session handle.
+- Indexed clause occurrences are keyed by live clause identity in C, so delete must happen before a clause is extracted, archived, or moved out of its owning set. Rust's caller-owned wrappers preserve that ordering; a future stable-handle index can make the lifecycle less pointer-shaped after compatibility is secured.
 - Rust global-index clause insert/delete take an explicit `&TermBank` so the overlap split helper can distinguish equational literals until equations have a typed owner-bank back-pointer.
 - C uses process-global `problemType` during initialization, so the same argument list can allocate different index sets depending on earlier parser/control state. Rust's explicit `ProblemType` initializer is easier to audit; keep proof-state construction responsible for passing the C-equivalent value once full input classification is wired.
 <!-- END MANUAL REVIEW: c_source_docs -->

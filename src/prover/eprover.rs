@@ -33,6 +33,7 @@ use crate::clauses::eqn::{eqn_fof_parse, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
+use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::proofstate::{
     proof_state_alloc, ProofState, WatchlistSource as ProofStateWatchlistSource,
 };
@@ -46,8 +47,8 @@ use crate::heuristics::new_autoschedule::{
 };
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_filter_unprocessed, proof_state_init,
-    proof_state_reset_processed, proof_state_saturate, ProofControl, SaturateOutcome,
-    SaturateReturnReason, SaturateStopReason,
+    proof_state_reset_processed_with_global_indices, proof_state_saturate_with_global_indices,
+    ProofControl, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::basicparser::parse_skip_parenthesized_expr;
@@ -3810,25 +3811,17 @@ fn run_proof_search<W: Write + ?Sized>(
         )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
+    let index_signature = state.terms().signature().clone();
+    let mut global_indices = proof_search_global_indices(&index_signature, &control);
     let presat_outcome = if control.heuristic_parms().presat_interreduction {
-        run_presaturation_interreduction(output, &mut state, &mut control)?
+        run_presaturation_interreduction(output, &mut state, &mut control, &mut global_indices)?
     } else {
         None
     };
     let mut outcome = if let Some(outcome) = presat_outcome {
         outcome
     } else {
-        proof_state_saturate(
-            &mut state,
-            &mut control,
-            config.step_limit,
-            config.processed_set_limit,
-            config.unprocessed_limit,
-            config.total_clause_set_limit,
-            config.generated_limit,
-            config.term_bank_insert_limit,
-            config.answer_limit,
-        )?
+        run_main_saturation(config, &mut state, &mut control, &mut global_indices)?
     };
     if let Some(filtered_empty) = filter_saturated_unprocessed(config, &mut state, &mut control)? {
         outcome = SaturateOutcome::Returned {
@@ -3866,6 +3859,41 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     ))
+}
+
+fn run_main_saturation(
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<SaturateOutcome, EProverError> {
+    Ok(proof_state_saturate_with_global_indices(
+        state,
+        control,
+        config.step_limit,
+        config.processed_set_limit,
+        config.unprocessed_limit,
+        config.total_clause_set_limit,
+        config.generated_limit,
+        config.term_bank_insert_limit,
+        config.answer_limit,
+        indices,
+    )?)
+}
+
+fn proof_search_global_indices<'sig>(
+    signature: &'sig Signature,
+    control: &ProofControl,
+) -> GlobalIndices<'sig> {
+    let params = control.heuristic_parms();
+    GlobalIndices::new_for_problem(
+        signature,
+        params.rw_bw_index_type.as_str(),
+        params.pm_from_index_type.as_str(),
+        params.pm_into_index_type.as_str(),
+        params.ext_rules_max_depth,
+        ProblemType::FirstOrder,
+    )
 }
 
 fn write_proof_search_result_outputs<W: Write + ?Sized>(
@@ -3908,10 +3936,11 @@ fn run_presaturation_interreduction(
     output: &mut impl Write,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
+    indices: &mut GlobalIndices<'_>,
 ) -> Result<Option<SaturateOutcome>, EProverError> {
     let selection_strategy = control.heuristic_parms().selection_strategy.clone();
     NO_GENERATION.clone_into(&mut control.heuristic_parms_mut().selection_strategy);
-    let outcome = proof_state_saturate(
+    let outcome = proof_state_saturate_with_global_indices(
         state,
         control,
         i64::MAX,
@@ -3921,6 +3950,7 @@ fn run_presaturation_interreduction(
         i64::MAX,
         i64::MAX,
         i64::MAX,
+        indices,
     );
     control.heuristic_parms_mut().selection_strategy = selection_strategy;
     let outcome = outcome?;
@@ -3928,7 +3958,7 @@ fn run_presaturation_interreduction(
     if matches!(outcome, SaturateOutcome::Returned { .. }) {
         Ok(Some(outcome))
     } else {
-        proof_state_reset_processed(state, control)?;
+        proof_state_reset_processed_with_global_indices(state, control, indices)?;
         Ok(None)
     }
 }
@@ -10418,6 +10448,40 @@ mod tests {
         )));
         assert!(printed.contains("% Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_with_configured_global_pm_indexes() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-global-pm-indexes");
+        std::fs::write(&path, "a=b.\nf(a)!=f(b).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--pm-from-index=FP1",
+                "--pm-into-index=FP1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

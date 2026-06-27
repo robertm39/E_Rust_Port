@@ -4,8 +4,8 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
-    CP_INITIAL, CP_IS_DEAD, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_LIMITED_RW,
-    CP_NO_GENERATION, CP_SUBSUMES_WATCH,
+    CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
+    CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
 };
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_remove_ac_resolved,
@@ -933,6 +933,32 @@ pub fn proof_state_reset_processed(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<i64, Diagnostic> {
+    proof_state_reset_processed_impl(state, control, None)
+}
+
+/// Moves all processed clauses back to `unprocessed`, deleting any
+/// caller-owned global-index entries before the clauses move.
+///
+/// This matches the indexed C `ProofStateResetProcessed` path where
+/// `GlobalIndicesDeleteClause` runs while the processed-set clause still has
+/// its original address-shaped identity.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_reset_processed`].
+pub fn proof_state_reset_processed_with_global_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<i64, Diagnostic> {
+    proof_state_reset_processed_impl(state, control, Some(indices))
+}
+
+fn proof_state_reset_processed_impl(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+) -> Result<i64, Diagnostic> {
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -941,6 +967,7 @@ pub fn proof_state_reset_processed(
     })?;
     let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
     let record_gc_selection = control.record_gc_selection();
+    let lambda_demod = control.heuristic_parms.lambda_demod;
     let mut reset = 0;
 
     {
@@ -954,31 +981,39 @@ pub fn proof_state_reset_processed(
 
         reset += proof_state_reset_processed_set_by(
             state,
+            ProcessedSetSlot::PosRules,
             prefer_initial,
             record_gc_selection,
-            |state| state.processed_pos_rules_mut().extract_first(),
             &mut evaluate,
+            indices.as_deref_mut(),
+            lambda_demod,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
+            ProcessedSetSlot::PosEqns,
             prefer_initial,
             record_gc_selection,
-            |state| state.processed_pos_eqns_mut().extract_first(),
             &mut evaluate,
+            indices.as_deref_mut(),
+            lambda_demod,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
+            ProcessedSetSlot::NegUnits,
             prefer_initial,
             record_gc_selection,
-            |state| state.processed_neg_units_mut().extract_first(),
             &mut evaluate,
+            indices.as_deref_mut(),
+            lambda_demod,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
+            ProcessedSetSlot::NonUnits,
             prefer_initial,
             record_gc_selection,
-            |state| state.processed_non_units_mut().extract_first(),
             &mut evaluate,
+            indices,
+            lambda_demod,
         )?;
     }
 
@@ -987,16 +1022,29 @@ pub fn proof_state_reset_processed(
 
 fn proof_state_reset_processed_set_by<E>(
     state: &mut ProofState,
+    slot: ProcessedSetSlot,
     prefer_initial: bool,
     record_gc_selection: bool,
-    mut extract_first: impl FnMut(&mut ProofState) -> Option<Clause>,
     evaluate: &mut E,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> Result<i64, Diagnostic>
 where
     E: FnMut(&TermBank, &mut Clause),
 {
     let mut reset = 0;
-    while let Some(handle) = extract_first(state) {
+    while !processed_set_by_slot(state, slot).is_empty() {
+        if let Some(indices) = indices.as_deref_mut() {
+            proof_state_delete_first_global_indexed_clause_from_slot(
+                state,
+                slot,
+                indices,
+                lambda_demod,
+            );
+        }
+        let Some(handle) = processed_set_mut_by_slot(state, slot).extract_first() else {
+            continue;
+        };
         proof_state_reset_processed_clause(
             state,
             handle,
@@ -1050,28 +1098,72 @@ where
 /// or reevaluated.
 #[must_use]
 pub fn proof_state_move_to_tmp_store(state: &mut ProofState, _control: &ProofControl) -> i64 {
+    proof_state_move_to_tmp_store_impl(state, None, false)
+}
+
+/// Moves processed clauses into `tmp_store`, deleting caller-owned global-index
+/// entries before each original clause moves out of its processed set.
+#[must_use]
+pub fn proof_state_move_to_tmp_store_with_global_indices(
+    state: &mut ProofState,
+    control: &ProofControl,
+    indices: &mut GlobalIndices<'_>,
+) -> i64 {
+    proof_state_move_to_tmp_store_impl(state, Some(indices), control.heuristic_parms().lambda_demod)
+}
+
+fn proof_state_move_to_tmp_store_impl(
+    state: &mut ProofState,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
+) -> i64 {
     let mut moved = 0;
-    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
-        state.processed_pos_rules_mut().extract_first()
-    });
-    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
-        state.processed_pos_eqns_mut().extract_first()
-    });
-    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
-        state.processed_neg_units_mut().extract_first()
-    });
-    moved += proof_state_move_processed_set_to_tmp_by(state, |state| {
-        state.processed_non_units_mut().extract_first()
-    });
+    moved += proof_state_move_processed_set_to_tmp_by(
+        state,
+        ProcessedSetSlot::PosRules,
+        indices.as_deref_mut(),
+        lambda_demod,
+    );
+    moved += proof_state_move_processed_set_to_tmp_by(
+        state,
+        ProcessedSetSlot::PosEqns,
+        indices.as_deref_mut(),
+        lambda_demod,
+    );
+    moved += proof_state_move_processed_set_to_tmp_by(
+        state,
+        ProcessedSetSlot::NegUnits,
+        indices.as_deref_mut(),
+        lambda_demod,
+    );
+    moved += proof_state_move_processed_set_to_tmp_by(
+        state,
+        ProcessedSetSlot::NonUnits,
+        indices,
+        lambda_demod,
+    );
     moved
 }
 
 fn proof_state_move_processed_set_to_tmp_by(
     state: &mut ProofState,
-    mut extract_first: impl FnMut(&mut ProofState) -> Option<Clause>,
+    slot: ProcessedSetSlot,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> i64 {
     let mut moved = 0;
-    while let Some(mut handle) = extract_first(state) {
+    while !processed_set_by_slot(state, slot).is_empty() {
+        if let Some(indices) = indices.as_deref_mut() {
+            proof_state_delete_first_global_indexed_clause_from_slot(
+                state,
+                slot,
+                indices,
+                lambda_demod,
+            );
+        }
+        let Some(mut handle) = processed_set_mut_by_slot(state, slot).extract_first() else {
+            continue;
+        };
         handle.del_prop(CP_IS_ORIENTED);
         state.tmp_store_mut().insert(handle);
         moved += 1;
@@ -2116,12 +2208,48 @@ pub fn proof_state_backward_simplify(
     clause: &Clause,
     clause_date: &mut SysDate,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
+    proof_state_backward_simplify_impl(state, control, clause, clause_date, None)
+}
+
+/// Runs backward simplification while maintaining caller-owned global indices.
+///
+/// C deletes processed clauses from `state->gindices` before moving rewritten
+/// or unit/context-simplified clauses into `tmp_store`, or before archiving
+/// backward-subsumed clauses. This variant preserves that order for the
+/// explicit Rust index owner.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_backward_simplify`].
+pub fn proof_state_backward_simplify_with_global_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    clause_date: &mut SysDate,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<BackwardSimplificationOutcome, Diagnostic> {
+    proof_state_backward_simplify_impl(state, control, clause, clause_date, Some(indices))
+}
+
+fn proof_state_backward_simplify_impl(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    clause_date: &mut SysDate,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+) -> Result<BackwardSimplificationOutcome, Diagnostic> {
     let mut outcome = BackwardSimplificationOutcome::default();
 
     let old_lit_count = state.tmp_store().literals();
     let old_clause_count = state.tmp_store().members();
-    outcome.min_rw_detected =
-        proof_state_eliminate_backward_rewritten_clauses(state, control, clause, clause_date)?;
+    let lambda_demod = control.heuristic_parms().lambda_demod;
+    outcome.min_rw_detected = proof_state_eliminate_backward_rewritten_clauses(
+        state,
+        control,
+        clause,
+        clause_date,
+        indices.as_deref_mut(),
+    )?;
     let rewritten_lits = state.tmp_store().literals() - old_lit_count;
     let rewritten = state.tmp_store().members() - old_clause_count;
     outcome.rewritten_literals = i64_to_u64_saturating(rewritten_lits);
@@ -2132,10 +2260,21 @@ pub fn proof_state_backward_simplify(
         statistics.backward_rewritten_count += outcome.rewritten;
     }
 
-    outcome.subsumed = proof_state_eliminate_backward_subsumed_clauses(state, clause);
+    outcome.subsumed = proof_state_eliminate_backward_subsumed_clauses(
+        state,
+        clause,
+        indices.as_deref_mut(),
+        lambda_demod,
+    );
     state.statistics_mut().backward_subsumed_count += outcome.subsumed;
-    outcome.unit_simplified = proof_state_eliminate_unit_simplified_clauses(state, clause)?;
-    outcome.context_sr = proof_state_eliminate_context_sr_clauses(state, control, clause)?;
+    outcome.unit_simplified = proof_state_eliminate_unit_simplified_clauses(
+        state,
+        clause,
+        indices.as_deref_mut(),
+        lambda_demod,
+    )?;
+    outcome.context_sr =
+        proof_state_eliminate_context_sr_clauses(state, control, clause, indices, lambda_demod)?;
 
     outcome.tmp_store_marked = state.tmp_store().members();
     state.tmp_store_mut().set_prop(CP_IS_IR_VICTIM);
@@ -2523,7 +2662,17 @@ fn proof_state_process_clause_impl(
     let watchlist = proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod);
 
     let mut clause_date = proof_state_demodulator_date(state, RewriteLevel::FullRewrite);
-    let backward = proof_state_backward_simplify(state, control, &clause, &mut clause_date)?;
+    let backward = if let Some(indices) = indices.as_deref_mut() {
+        proof_state_backward_simplify_with_global_indices(
+            state,
+            control,
+            &clause,
+            &mut clause_date,
+            indices,
+        )?
+    } else {
+        proof_state_backward_simplify(state, control, &clause, &mut clause_date)?
+    };
 
     let processed_ident = clause.ident();
     let class = proof_state_insert_processed_clause(state, clause, clause_date)?;
@@ -2914,6 +3063,7 @@ fn proof_state_eliminate_backward_rewritten_clauses(
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
+    mut indices: Option<&mut GlobalIndices<'_>>,
 ) -> Result<bool, Diagnostic> {
     if !clause.is_demodulator() {
         return Ok(false);
@@ -2935,6 +3085,7 @@ fn proof_state_eliminate_backward_rewritten_clauses(
     }
 
     let mut min_rw = false;
+    let lambda_demod = control.heuristic_parms().lambda_demod;
     for slot in [
         ProcessedSetSlot::PosRules,
         ProcessedSetSlot::PosEqns,
@@ -2953,7 +3104,7 @@ fn proof_state_eliminate_backward_rewritten_clauses(
             rewritable_ids_in_set(terms, ocb, set, clause, *clause_date)?
         };
         min_rw = min_rw || found;
-        move_simplified_ids_from_slot(state, slot, ids)?;
+        move_simplified_ids_from_slot(state, slot, ids, indices.as_deref_mut(), lambda_demod)?;
     }
 
     if control.heuristic_parms().detsort_bw_rw {
@@ -2978,23 +3129,59 @@ fn rewritable_ids_in_set(
 fn proof_state_eliminate_backward_subsumed_clauses(
     state: &mut ProofState,
     subsumer: &Clause,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> u64 {
     let mut removed = 0;
     if subsumer.is_unit() {
         if subsumer.positive_literal_count() != 0 {
             if !subsumer.is_rw_rule() {
-                removed +=
-                    remove_subsumed_ids_from_slot(state, ProcessedSetSlot::PosRules, subsumer);
-                removed +=
-                    remove_subsumed_ids_from_slot(state, ProcessedSetSlot::PosEqns, subsumer);
+                removed += remove_subsumed_ids_from_slot(
+                    state,
+                    ProcessedSetSlot::PosRules,
+                    subsumer,
+                    indices.as_deref_mut(),
+                    lambda_demod,
+                );
+                removed += remove_subsumed_ids_from_slot(
+                    state,
+                    ProcessedSetSlot::PosEqns,
+                    subsumer,
+                    indices.as_deref_mut(),
+                    lambda_demod,
+                );
             }
-            removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NonUnits, subsumer);
+            removed += remove_subsumed_ids_from_slot(
+                state,
+                ProcessedSetSlot::NonUnits,
+                subsumer,
+                indices.as_deref_mut(),
+                lambda_demod,
+            );
         } else {
-            removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NegUnits, subsumer);
-            removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NonUnits, subsumer);
+            removed += remove_subsumed_ids_from_slot(
+                state,
+                ProcessedSetSlot::NegUnits,
+                subsumer,
+                indices.as_deref_mut(),
+                lambda_demod,
+            );
+            removed += remove_subsumed_ids_from_slot(
+                state,
+                ProcessedSetSlot::NonUnits,
+                subsumer,
+                indices.as_deref_mut(),
+                lambda_demod,
+            );
         }
     } else {
-        removed += remove_subsumed_ids_from_slot(state, ProcessedSetSlot::NonUnits, subsumer);
+        removed += remove_subsumed_ids_from_slot(
+            state,
+            ProcessedSetSlot::NonUnits,
+            subsumer,
+            indices,
+            lambda_demod,
+        );
     }
     removed
 }
@@ -3003,6 +3190,8 @@ fn remove_subsumed_ids_from_slot(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     subsumer: &Clause,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> u64 {
     let ids = {
         let set = processed_set_by_slot(state, slot);
@@ -3010,6 +3199,15 @@ fn remove_subsumed_ids_from_slot(
     };
     let mut removed = 0;
     for id in ids.into_iter().rev() {
+        if let Some(indices) = indices.as_deref_mut() {
+            proof_state_delete_global_indexed_clause_by_id_from_slot(
+                state,
+                slot,
+                id,
+                indices,
+                lambda_demod,
+            );
+        }
         let Some(clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
             continue;
         };
@@ -3038,17 +3236,43 @@ fn subsumed_ids_in_set(set: &ClauseSet, subsumer: &Clause, terms: &TermBank) -> 
 fn proof_state_eliminate_unit_simplified_clauses(
     state: &mut ProofState,
     simplifier: &Clause,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> Result<u64, Diagnostic> {
     if simplifier.is_rw_rule() || !simplifier.is_unit() {
         return Ok(0);
     }
 
-    let mut moved = move_unit_simplified_from_slot(state, ProcessedSetSlot::NonUnits, simplifier)?;
+    let mut moved = move_unit_simplified_from_slot(
+        state,
+        ProcessedSetSlot::NonUnits,
+        simplifier,
+        indices.as_deref_mut(),
+        lambda_demod,
+    )?;
     if simplifier.is_positive() {
-        moved += move_unit_simplified_from_slot(state, ProcessedSetSlot::NegUnits, simplifier)?;
+        moved += move_unit_simplified_from_slot(
+            state,
+            ProcessedSetSlot::NegUnits,
+            simplifier,
+            indices.as_deref_mut(),
+            lambda_demod,
+        )?;
     } else {
-        moved += move_unit_simplified_from_slot(state, ProcessedSetSlot::PosRules, simplifier)?;
-        moved += move_unit_simplified_from_slot(state, ProcessedSetSlot::PosEqns, simplifier)?;
+        moved += move_unit_simplified_from_slot(
+            state,
+            ProcessedSetSlot::PosRules,
+            simplifier,
+            indices.as_deref_mut(),
+            lambda_demod,
+        )?;
+        moved += move_unit_simplified_from_slot(
+            state,
+            ProcessedSetSlot::PosEqns,
+            simplifier,
+            indices,
+            lambda_demod,
+        )?;
     }
     Ok(moved)
 }
@@ -3057,6 +3281,8 @@ fn move_unit_simplified_from_slot(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     simplifier: &Clause,
+    indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> Result<u64, Diagnostic> {
     let ids = {
         let set = processed_set_by_slot(state, slot);
@@ -3065,7 +3291,7 @@ fn move_unit_simplified_from_slot(
             .map(Clause::ident)
             .collect::<Vec<_>>()
     };
-    move_simplified_ids_from_slot(state, slot, ids)
+    move_simplified_ids_from_slot(state, slot, ids, indices, lambda_demod)
 }
 
 fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
@@ -3092,6 +3318,8 @@ fn proof_state_eliminate_context_sr_clauses(
     state: &mut ProofState,
     control: &ProofControl,
     simplifier: &Clause,
+    indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> Result<u64, Diagnostic> {
     if !control.heuristic_parms().backward_context_sr {
         return Ok(0);
@@ -3116,16 +3344,33 @@ fn proof_state_eliminate_context_sr_clauses(
         }
     };
 
-    move_simplified_ids_from_slot(state, ProcessedSetSlot::NonUnits, ids)
+    move_simplified_ids_from_slot(
+        state,
+        ProcessedSetSlot::NonUnits,
+        ids,
+        indices,
+        lambda_demod,
+    )
 }
 
 fn move_simplified_ids_from_slot(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     ids: Vec<i64>,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+    lambda_demod: bool,
 ) -> Result<u64, Diagnostic> {
     let mut moved = 0;
     for id in ids.into_iter().rev() {
+        if let Some(indices) = indices.as_deref_mut() {
+            proof_state_delete_global_indexed_clause_by_id_from_slot(
+                state,
+                slot,
+                id,
+                indices,
+                lambda_demod,
+            );
+        }
         let Some(clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
             continue;
         };
@@ -3178,6 +3423,18 @@ fn processed_set_from_bundle<'a>(
     }
 }
 
+fn processed_set_mut_from_bundle(
+    sets: crate::clauses::proofstate::ProofStateProcessedSets<'_>,
+    slot: ProcessedSetSlot,
+) -> &mut ClauseSet {
+    match slot {
+        ProcessedSetSlot::PosRules => sets.pos_rules,
+        ProcessedSetSlot::PosEqns => sets.pos_eqns,
+        ProcessedSetSlot::NegUnits => sets.neg_units,
+        ProcessedSetSlot::NonUnits => sets.non_units,
+    }
+}
+
 fn processed_set_by_slot(state: &ProofState, slot: ProcessedSetSlot) -> &ClauseSet {
     match slot {
         ProcessedSetSlot::PosRules => state.processed_pos_rules(),
@@ -3193,6 +3450,44 @@ fn processed_set_mut_by_slot(state: &mut ProofState, slot: ProcessedSetSlot) -> 
         ProcessedSetSlot::PosEqns => state.processed_pos_eqns_mut(),
         ProcessedSetSlot::NegUnits => state.processed_neg_units_mut(),
         ProcessedSetSlot::NonUnits => state.processed_non_units_mut(),
+    }
+}
+
+fn proof_state_delete_first_global_indexed_clause_from_slot(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    indices: &mut GlobalIndices<'_>,
+    lambda_demod: bool,
+) {
+    let (terms, sets) = state.terms_and_processed_sets_mut();
+    let set = processed_set_mut_from_bundle(sets, slot);
+    if let Some(clause) = set.iter_mut().next() {
+        proof_state_delete_global_indexed_clause(indices, terms, clause, lambda_demod);
+    }
+}
+
+fn proof_state_delete_global_indexed_clause_by_id_from_slot(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    ident: i64,
+    indices: &mut GlobalIndices<'_>,
+    lambda_demod: bool,
+) {
+    let (terms, sets) = state.terms_and_processed_sets_mut();
+    let set = processed_set_mut_from_bundle(sets, slot);
+    if let Some(clause) = set.find_by_id_mut(ident) {
+        proof_state_delete_global_indexed_clause(indices, terms, clause, lambda_demod);
+    }
+}
+
+fn proof_state_delete_global_indexed_clause(
+    indices: &mut GlobalIndices<'_>,
+    bank: &TermBank,
+    clause: &mut Clause,
+    lambda_demod: bool,
+) {
+    if clause.query_prop(CP_IS_GLOBAL_INDEXED) {
+        indices.delete_clause(clause, bank, lambda_demod);
     }
 }
 
@@ -3565,15 +3860,16 @@ mod tests {
         proof_state_init_indexing, proof_state_init_with_global_indices,
         proof_state_insert_new_clauses, proof_state_insert_processed_clause,
         proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_process_clause, proof_state_process_clause_with_global_indices,
+        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
+        proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_saturate,
-        proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
-        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
-        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
-        LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
-        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SaturateOutcome, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_reset_processed, proof_state_reset_processed_with_global_indices,
+        proof_state_saturate, proof_state_saturate_with_global_indices,
+        proof_state_simplify_watchlist, proof_state_storage_estimate, select_inherited_literal,
+        BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
+        GenerateNewClausesOutcome, LiteralSelectionOutcome, ProcessClauseOutcome,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SaturateOutcome, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -3581,8 +3877,8 @@ mod tests {
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED,
-        CP_LIMITED_RW, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
+        CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS,
+        CP_IS_S_INDEXED, CP_LIMITED_RW, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -3775,6 +4071,21 @@ mod tests {
         let mut clause = unit_clause_with_id(bank, stem, ident);
         clause.set_prop(CP_IS_PROCESSED | CP_IS_ORIENTED);
         clause
+    }
+
+    fn processed_indexed_unit_clause(
+        bank: &mut TermBank,
+        stem: &str,
+        ident: i64,
+    ) -> (Clause, Term) {
+        let left = typed_const(bank, &format!("{stem}_left"));
+        let right = typed_const(bank, &format!("{stem}_right"));
+        let mut literal = literal(bank, &left, &right, true);
+        literal.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(ident);
+        clause.set_prop(CP_IS_PROCESSED | CP_IS_ORIENTED);
+        (clause, left)
     }
 
     fn init_fifo_hcb(control: &mut super::ProofControl, state: &ProofState, name: &str) {
@@ -4270,6 +4581,42 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_reset_processed_with_global_indices_deletes_entries_before_requeue() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, indexed_term) =
+            processed_indexed_unit_clause(state.terms_mut(), "pc_reset_global_idx", 4_044);
+        state.processed_pos_rules_mut().insert(clause);
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        {
+            let (terms, sets) = state.terms_and_processed_sets_mut();
+            let clause = sets.pos_rules.find_by_id_mut(4_044).unwrap();
+            indices.insert_clause(clause, terms, false);
+        }
+        assert!(indices.find_pm_from_occurrence(&indexed_term).is_some());
+        assert!(state
+            .processed_pos_rules()
+            .find_by_id(4_044)
+            .unwrap()
+            .query_prop(CP_IS_GLOBAL_INDEXED));
+
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "ResetProcessedGlobalIdxTest");
+        let reset =
+            proof_state_reset_processed_with_global_indices(&mut state, &mut control, &mut indices)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(reset, 1);
+        assert!(indices.find_pm_from_occurrence(&indexed_term).is_none());
+        assert!(state.processed_pos_rules().is_empty());
+        assert_eq!(state.archive().members(), 1);
+        let archived = state.archive().find_by_id(4_044).unwrap();
+        assert!(!archived.query_prop(CP_IS_GLOBAL_INDEXED));
+        let requeued = state.unprocessed().find_by_id(4_044).unwrap();
+        assert!(!requeued.query_prop(CP_IS_GLOBAL_INDEXED));
+    }
+
+    #[test]
     fn proof_state_move_to_tmp_store_moves_originals_without_reevaluation() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (rule, equation, negative, non_unit) = {
@@ -4314,6 +4661,33 @@ mod tests {
         }
         let moved_rule = state.tmp_store().find_by_id(4_050).unwrap();
         assert_eq!(moved_rule.evaluations().unwrap().eval(0).priority(), 123);
+    }
+
+    #[test]
+    fn proof_state_move_to_tmp_store_with_global_indices_deletes_entries_before_move() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, indexed_term) =
+            processed_indexed_unit_clause(state.terms_mut(), "pc_move_global_idx", 4_054);
+        state.processed_pos_eqns_mut().insert(clause);
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        {
+            let (terms, sets) = state.terms_and_processed_sets_mut();
+            let clause = sets.pos_eqns.find_by_id_mut(4_054).unwrap();
+            indices.insert_clause(clause, terms, false);
+        }
+        assert!(indices.find_pm_from_occurrence(&indexed_term).is_some());
+
+        let control = proof_control_alloc();
+        let moved =
+            proof_state_move_to_tmp_store_with_global_indices(&mut state, &control, &mut indices);
+
+        assert_eq!(moved, 1);
+        assert!(indices.find_pm_from_occurrence(&indexed_term).is_none());
+        assert!(state.processed_pos_eqns().is_empty());
+        let moved = state.tmp_store().find_by_id(4_054).unwrap();
+        assert!(moved.query_prop(CP_IS_PROCESSED));
+        assert!(!moved.query_prop(CP_IS_ORIENTED | CP_IS_GLOBAL_INDEXED));
     }
 
     #[test]
