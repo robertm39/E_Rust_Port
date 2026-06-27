@@ -4375,6 +4375,7 @@ fn write_proof_search_result(
         } => {
             write_saturated_final_result(
                 output,
+                config,
                 state,
                 inference_system_complete,
                 assume_inference_system_complete,
@@ -4546,6 +4547,7 @@ const fn clause_derivation_ref_key(parent_ref: ClauseDerivationRef) -> (i64, u64
 
 fn write_saturated_final_result(
     output: &mut impl Write,
+    config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
     inference_system_complete: bool,
     assume_inference_system_complete: bool,
@@ -4561,7 +4563,12 @@ fn write_saturated_final_result(
         write_tstp_status(output, "GaveUp")?;
     } else if state.state_is_complete() && inference_system_complete {
         write_comment_line_after_blank(output, "No proof found!")?;
-        write_tstp_status(output, "Satisfiable")?;
+        let saturated_status = if config.flags.contains(EProverFlag::FormulaConjectureSeen) {
+            "CounterSatisfiable"
+        } else {
+            "Satisfiable"
+        };
+        write_tstp_status(output, saturated_status)?;
     } else {
         write_comment_line_after_blank(output, "Failure: Out of unprocessed clauses!")?;
         write_tstp_status(output, "GaveUp")?;
@@ -8223,6 +8230,57 @@ mod tests {
             &mut stderr,
         )
         .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status Satisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_saturated_fof_conjecture_as_counter_satisfiable() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-counter-satisfiable");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_saturated_explicit_negated_conjecture_as_satisfiable() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-negated-conjecture-satisfiable");
+        std::fs::write(&path, "fof(goal, negated_conjecture, ~q(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
