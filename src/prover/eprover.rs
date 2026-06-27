@@ -3793,24 +3793,26 @@ fn run_app_encode<W: Write + ?Sized>(
 ) -> Result<(), EProverError> {
     let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
     let mut formulas = Vec::new();
+    let mut saw_any_input_owner = false;
     let mut saw_any_formula_owner = false;
 
     let files = config.files.clone();
     for file in &files {
         let parsed_file = parse_app_encode_file(file, config.parse_format, &mut bank)?;
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
-        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.saw_formula_owner {
+        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.saw_input_owner {
             return Err(Diagnostic::new(
                 ErrorCode::INPUT_SEMANTIC_ERROR,
                 format!("Input file {file} did not contain any clauses"),
             )
             .into());
         }
+        saw_any_input_owner |= parsed_file.saw_input_owner;
         saw_any_formula_owner |= parsed_file.saw_formula_owner;
         formulas.extend(parsed_file.formulas);
     }
 
-    if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_formula_owner {
+    if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_input_owner {
         return Err(Diagnostic::new(
             ErrorCode::INPUT_SEMANTIC_ERROR,
             "Input did not contain any clauses",
@@ -5270,7 +5272,7 @@ fn parse_app_encode_file(
     };
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
-    let (saw_formula_owner, formulas) = match detected_format {
+    let (saw_input_owner, saw_formula_owner, formulas) = match detected_format {
         IoFormat::Tstp => parse_tstp_app_encode_entry_list(&mut scanner, bank)?,
         IoFormat::Tptp => parse_tptp_app_encode_entry_list(&mut scanner, bank)?,
         _ => {
@@ -5296,6 +5298,7 @@ fn parse_app_encode_file(
     }
     Ok(ParsedAppEncodeFile {
         detected_format,
+        saw_input_owner,
         saw_formula_owner,
         formulas,
     })
@@ -5310,6 +5313,7 @@ struct ParsedClauseFile {
 #[derive(Clone, Debug)]
 struct ParsedAppEncodeFile {
     detected_format: IoFormat,
+    saw_input_owner: bool,
     saw_formula_owner: bool,
     formulas: Vec<SimpleAppEncodedFormula>,
 }
@@ -5365,11 +5369,16 @@ enum SimpleFofFormula {
 fn parse_tptp_app_encode_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<(bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
+) -> Result<(bool, bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
     let mut formulas = Vec::new();
+    let mut saw_input_owner = false;
     let mut saw_formula_owner = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        if scanner.test_id("input_formula") {
+        if scanner.test_id("input_clause") {
+            saw_input_owner = true;
+            let _clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+        } else if scanner.test_id("input_formula") {
+            saw_input_owner = true;
             saw_formula_owner = true;
             formulas.push(parse_simple_tptp_app_encode_formula(scanner, bank)?);
         } else if scanner.test_id("include") {
@@ -5378,26 +5387,31 @@ fn parse_tptp_app_encode_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): --app-encode currently supports input_formula formula entries for old TPTP input",
+                    "{}(just read '{}'): --app-encode currently supports input_clause clauses and input_formula formula entries for old TPTP input",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
             ));
         }
     }
-    Ok((saw_formula_owner, formulas))
+    Ok((saw_input_owner, saw_formula_owner, formulas))
 }
 
 fn parse_tstp_app_encode_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
-) -> Result<(bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
+) -> Result<(bool, bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
     let mut formulas = Vec::new();
+    let mut saw_input_owner = false;
     let mut saw_formula_owner = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
-        if scanner.test_id("fof|tff|tcf") {
-            saw_formula_owner = true;
+        if scanner.test_id("cnf") {
+            saw_input_owner = true;
+            let _clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+        } else if scanner.test_id("fof|tff|tcf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
+                saw_input_owner = true;
+                saw_formula_owner = true;
                 formulas.push(formula);
             }
         } else if scanner.test_id("include") {
@@ -5408,14 +5422,14 @@ fn parse_tstp_app_encode_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): --app-encode currently supports fof/tff/tcf formula entries for TSTP input",
+                    "{}(just read '{}'): --app-encode currently supports cnf clauses and fof/tff/tcf formula entries for TSTP input",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
             ));
         }
     }
-    Ok((saw_formula_owner, formulas))
+    Ok((saw_input_owner, saw_formula_owner, formulas))
 }
 
 fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -9319,6 +9333,97 @@ mod tests {
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(!printed.contains("skip_true"));
         assert!(printed.contains("tff(show_false, axiom, "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_tstp_cnf_entries_without_formula_output() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-cnf-only");
+        std::fs::write(&path, "cnf(c1, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--error-on-empty",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            default_preprocessing_debug_line()
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_old_tptp_input_clause_entries() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-old-tptp-input-clause");
+        std::fs::write(
+            &path,
+            "input_clause(c1, axiom, [++p(a)]).\n\
+             input_formula(f1, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tptp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(f1, axiom, "));
+        assert!(!printed.contains("input_clause"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_mixed_tstp_cnf_and_formula_entries() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-mixed-cnf-fof");
+        std::fs::write(
+            &path,
+            "cnf(c1, axiom, (p(c))).\n\
+             fof(f1, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(f1, axiom, "));
+        assert!(!printed.contains("cnf(c1"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
