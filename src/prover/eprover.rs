@@ -4686,6 +4686,7 @@ enum SimpleFofFormula {
     Implication { antecedent: Eqn, consequent: Eqn },
     Equivalence { left: Eqn, right: Eqn },
     Disjunction(Vec<SimpleFofFormula>),
+    Negation(Vec<SimpleFofFormula>),
 }
 
 fn parse_tstp_entry_list(
@@ -4793,13 +4794,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
     if negate_as_conjecture && formulas.len() > 1 {
         let mut literals = Vec::with_capacity(formulas.len());
         for formula in formulas {
-            match formula {
-                SimpleFofFormula::Literal(literal) => literals.push(literal),
-                SimpleFofFormula::Implication { .. } | SimpleFofFormula::Equivalence { .. } => {
-                    return Err(simple_fof_conjecture_implication_error());
-                }
-                SimpleFofFormula::Disjunction(_) => return Err(simple_fof_conjecture_mix_error()),
-            }
+            literals.push(simple_fof_formula_to_single_literal(formula)?);
         }
         let mut literals = EqnList::from_vec(literals);
         literals.negate_eqns();
@@ -4842,6 +4837,9 @@ fn simple_fof_formula_to_clause_literal_lists(
         }
         return Ok(simple_fof_equivalence_to_clause_literal_lists(left, right));
     }
+    if let SimpleFofFormula::Negation(formulas) = formula {
+        return simple_fof_formulas_to_clause_literal_lists(formulas, !negate_as_conjecture);
+    }
 
     Ok(vec![simple_fof_formula_to_clause_literals(
         formula,
@@ -4854,8 +4852,8 @@ fn simple_fof_collect_atomic_disjuncts(
     literals: &mut Vec<Eqn>,
 ) -> Result<(), Diagnostic> {
     match formula {
-        SimpleFofFormula::Literal(literal) => {
-            literals.push(literal);
+        SimpleFofFormula::Literal(_) | SimpleFofFormula::Negation(_) => {
+            literals.push(simple_fof_formula_to_single_literal(formula)?);
             Ok(())
         }
         SimpleFofFormula::Disjunction(disjuncts) => {
@@ -4867,6 +4865,27 @@ fn simple_fof_collect_atomic_disjuncts(
         SimpleFofFormula::Implication { .. } | SimpleFofFormula::Equivalence { .. } => {
             Err(simple_fof_conjecture_implication_error())
         }
+    }
+}
+
+fn simple_fof_formula_to_single_literal(formula: SimpleFofFormula) -> Result<Eqn, Diagnostic> {
+    match formula {
+        SimpleFofFormula::Literal(literal) => Ok(literal),
+        SimpleFofFormula::Negation(formulas) => {
+            let mut literal_lists = simple_fof_formulas_to_clause_literal_lists(formulas, true)?;
+            if literal_lists.len() != 1 {
+                return Err(simple_fof_conjecture_mix_error());
+            }
+            let literals = literal_lists.remove(0).into_vec();
+            match <[Eqn; 1]>::try_from(literals) {
+                Ok([literal]) => Ok(literal),
+                Err(_) => Err(simple_fof_conjecture_mix_error()),
+            }
+        }
+        SimpleFofFormula::Implication { .. } | SimpleFofFormula::Equivalence { .. } => {
+            Err(simple_fof_conjecture_implication_error())
+        }
+        SimpleFofFormula::Disjunction(_) => Err(simple_fof_conjecture_mix_error()),
     }
 }
 
@@ -4896,6 +4915,14 @@ fn simple_fof_formula_to_clause_literals(
             simple_fof_disjunction_to_clause_literals(disjuncts, negate_as_conjecture)
         }
         SimpleFofFormula::Equivalence { .. } => Err(simple_fof_equivalence_context_error()),
+        SimpleFofFormula::Negation(formulas) => {
+            let literal_lists =
+                simple_fof_formulas_to_clause_literal_lists(formulas, !negate_as_conjecture)?;
+            match <[EqnList; 1]>::try_from(literal_lists) {
+                Ok([literals]) => Ok(literals),
+                Err(_) => Err(simple_fof_conjecture_mix_error()),
+            }
+        }
     }
 }
 
@@ -4948,6 +4975,11 @@ fn parse_simple_fof_conjunct(
         let formulas = parse_simple_fof_parenthesized_formulas(scanner, bank)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         return Ok(formulas);
+    }
+    if scanner.test_tok(TokenType::TILDE_SIGN) {
+        scanner.accept_tok(TokenType::TILDE_SIGN)?;
+        let formulas = parse_simple_fof_conjunct(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Negation(formulas)]);
     }
 
     let left_literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
@@ -7481,6 +7513,36 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_supported_fof_parenthesized_negations() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-fof-negation");
+        std::fs::write(
+            &path,
+            "fof(not_both, axiom, ~(p(a) & q(a))).\n\
+             fof(not_either, conjecture, ~(p(a) | q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_resources_info_prints_c_shaped_footer() {
         let _guard = global_state_lock();
         let path = temp_path("resources-info");
@@ -7852,6 +7914,56 @@ mod tests {
             &path,
             "fof(p, axiom, p(a)).\n\
              fof(goal, conjecture, (p(a) | q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_negated_conjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-negated-conjunction");
+        std::fs::write(
+            &path,
+            "fof(not_both, axiom, ~(p(a) & q(a))).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_negated_conjecture_disjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-negated-conjecture-disjunction");
+        std::fs::write(
+            &path,
+            "fof(not_p, axiom, ~p(a)).\n\
+             fof(not_q, axiom, ~q(a)).\n\
+             fof(goal, conjecture, ~(p(a) | q(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
