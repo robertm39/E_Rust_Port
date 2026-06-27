@@ -56,6 +56,7 @@ use crate::inout::basicparser::parse_skip_parenthesized_expr;
 use crate::inout::commandline::{
     get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState, ParsedOpt,
 };
+use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{
     token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
@@ -88,6 +89,14 @@ const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
 const LPO_RECURSION_WARNING_LIMIT: i64 = 20_000;
 const LPO_RECURSION_LIMIT_WARNING: &str = "Using very large values for --lpo-recursion-limit may lead to stack overflows and segmentation faults.";
 const DEFAULT_MAX_UNIFIERS: i64 = 4;
+
+struct IoRunGuard;
+
+impl Drop for IoRunGuard {
+    fn drop(&mut self) {
+        exit_io();
+    }
+}
 const DEFAULT_MAX_UNIF_STEPS: i64 = 256;
 const DEFAULT_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
@@ -1806,6 +1815,8 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    init_io(PROGRAM_NAME);
+    let _io_guard = IoRunGuard;
     match process_options(argv)? {
         EProverAction::Help => {
             stdout.write_all(print_help().as_bytes())?;
@@ -7214,12 +7225,33 @@ mod tests {
     };
     use crate::terms::termtypes::RewriteLevel;
     use crate::test_support::global_state_lock;
+    use std::ffi::OsString;
+
+    struct EnvGuard {
+        name: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::current_dir()
             .unwrap()
             .join("target")
             .join(format!("eprover-{name}-{}.out", std::process::id()))
+    }
+
+    fn set_env_var(name: &'static str, value: &str) -> EnvGuard {
+        let previous = std::env::var_os(name);
+        std::env::set_var(name, value);
+        EnvGuard { name, previous }
     }
 
     fn default_preprocessing_debug_line() -> String {
@@ -12149,6 +12181,36 @@ mod tests {
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_resolves_tstp_include_through_tptp_env() {
+        let _guard = global_state_lock();
+        let tptp_root = temp_path("proof-fof-include-tptp-root");
+        _ = std::fs::remove_dir_all(&tptp_root);
+        let axioms_dir = tptp_root.join("Axioms");
+        std::fs::create_dir_all(&axioms_dir).unwrap();
+        std::fs::write(axioms_dir.join("ENV001.ax"), "fof(fact, axiom, p(a)).\n").unwrap();
+        let _env = set_env_var("TPTP", &tptp_root.to_string_lossy());
+        let path = temp_path("proof-fof-include-tptp-main");
+        std::fs::write(
+            &path,
+            "include('Axioms/ENV001.ax').\nfof(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir_all(&tptp_root).unwrap();
     }
 
     #[test]
