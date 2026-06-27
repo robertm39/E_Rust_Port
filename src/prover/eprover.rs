@@ -5105,6 +5105,11 @@ struct ParsedSimpleFofClause {
     formula_conjecture_seen: bool,
 }
 
+struct SimpleFofBoundVariable {
+    name: String,
+    variable: Option<Term>,
+}
+
 fn parse_simple_tstp_formula_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -6100,7 +6105,7 @@ fn parse_simple_fof_primary_formula(
     if scanner.test_tok(TokenType::EXIST_QUANTOR) {
         return parse_simple_fof_existential_formula(scanner, bank);
     }
-    let universal_bound_names = parse_simple_fof_universal_prefix(scanner)?;
+    let universal_bound = parse_simple_fof_universal_prefix(scanner, bank)?;
     let formulas = if scanner.test_tok(TokenType::EXIST_QUANTOR) {
         parse_simple_fof_existential_formula(scanner, bank)?
     } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
@@ -6123,7 +6128,7 @@ fn parse_simple_fof_primary_formula(
 
     Ok(simple_fof_wrap_universal_formulas(
         bank,
-        &universal_bound_names,
+        universal_bound,
         formulas,
     ))
 }
@@ -6137,44 +6142,49 @@ fn simple_fof_formulas_to_disjuncts(formulas: Vec<SimpleFofFormula>) -> Vec<Simp
 
 fn simple_fof_wrap_universal_formulas(
     bank: &TermBank,
-    bound_names: &[String],
+    bound: Vec<SimpleFofBoundVariable>,
     formulas: Vec<SimpleFofFormula>,
 ) -> Vec<SimpleFofFormula> {
-    if bound_names.is_empty() {
+    if bound.is_empty() {
         return formulas;
     }
 
-    let mut bound = Vec::new();
-    for name in bound_names {
-        if let Some(variable) = bank.vars().ext_name_find(name) {
-            if !bound.iter().any(|existing| existing == &variable) {
-                bound.push(variable);
-            }
-        }
-    }
-    if bound.is_empty() {
+    let unique_bound = simple_fof_resolve_bound_variables(bank, bound);
+    if unique_bound.is_empty() {
         formulas
     } else {
-        vec![SimpleFofFormula::Universal { bound, formulas }]
+        vec![SimpleFofFormula::Universal {
+            bound: unique_bound,
+            formulas,
+        }]
     }
 }
 
-fn parse_simple_fof_universal_prefix(scanner: &mut Scanner) -> Result<Vec<String>, Diagnostic> {
-    let mut names = Vec::new();
+fn parse_simple_fof_universal_prefix(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofBoundVariable>, Diagnostic> {
+    let mut bound = Vec::new();
     while scanner.test_tok(TokenType::UNIV_QUANTOR) {
         scanner.accept_tok(TokenType::UNIV_QUANTOR)?;
         scanner.accept_tok(TokenType::OPEN_SQUARE)?;
-        names.push(scanner.current_token().literal());
+        let name = scanner.current_token().literal();
         scanner.accept_tok(TokenType::NAME)?;
+        bound.push(parse_simple_fof_quantified_variable_declaration(
+            scanner, bank, name,
+        )?);
         while scanner.test_tok(TokenType::COMMA) {
             scanner.accept_tok(TokenType::COMMA)?;
-            names.push(scanner.current_token().literal());
+            let name = scanner.current_token().literal();
             scanner.accept_tok(TokenType::NAME)?;
+            bound.push(parse_simple_fof_quantified_variable_declaration(
+                scanner, bank, name,
+            )?);
         }
         scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
         scanner.accept_tok(TokenType::COLON)?;
     }
-    Ok(names)
+    Ok(bound)
 }
 
 fn parse_simple_fof_existential_formula(
@@ -6183,13 +6193,19 @@ fn parse_simple_fof_existential_formula(
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     scanner.accept_tok(TokenType::EXIST_QUANTOR)?;
     scanner.accept_tok(TokenType::OPEN_SQUARE)?;
-    let mut bound_names = Vec::new();
-    bound_names.push(scanner.current_token().literal());
+    let mut bound = Vec::new();
+    let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME)?;
+    bound.push(parse_simple_fof_quantified_variable_declaration(
+        scanner, bank, name,
+    )?);
     while scanner.test_tok(TokenType::COMMA) {
         scanner.accept_tok(TokenType::COMMA)?;
-        bound_names.push(scanner.current_token().literal());
+        let name = scanner.current_token().literal();
         scanner.accept_tok(TokenType::NAME)?;
+        bound.push(parse_simple_fof_quantified_variable_declaration(
+            scanner, bank, name,
+        )?);
     }
     scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
     scanner.accept_tok(TokenType::COLON)?;
@@ -6223,16 +6239,49 @@ fn parse_simple_fof_existential_formula(
         simple_fof_literal_formulas(vec![literal])
     };
 
-    let mut bound = Vec::new();
-    for name in &bound_names {
-        if let Some(variable) = bank.vars().ext_name_find(name) {
-            if !bound.iter().any(|existing| existing == &variable) {
-                bound.push(variable);
+    let bound = simple_fof_resolve_bound_variables(bank, bound);
+    Ok(vec![SimpleFofFormula::Existential { bound, formulas }])
+}
+
+fn parse_simple_fof_quantified_variable_declaration(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    name: String,
+) -> Result<SimpleFofBoundVariable, Diagnostic> {
+    if scanner.test_tok(TokenType::COLON) {
+        scanner.accept_tok(TokenType::COLON)?;
+        let type_ = bank
+            .signature_mut()
+            .type_bank_mut()
+            .parse_type(scanner, ProblemType::FirstOrder)?;
+        let variable = bank.vars().ext_name_assert_alloc_sort(&name, &type_);
+        return Ok(SimpleFofBoundVariable {
+            name,
+            variable: Some(variable),
+        });
+    }
+    Ok(SimpleFofBoundVariable {
+        name,
+        variable: None,
+    })
+}
+
+fn simple_fof_resolve_bound_variables(
+    bank: &TermBank,
+    bound: Vec<SimpleFofBoundVariable>,
+) -> Vec<Term> {
+    let mut variables = Vec::new();
+    for declaration in bound {
+        let variable = declaration
+            .variable
+            .or_else(|| bank.vars().ext_name_find(&declaration.name));
+        if let Some(variable) = variable {
+            if !variables.iter().any(|existing| existing == &variable) {
+                variables.push(variable);
             }
         }
     }
-
-    Ok(vec![SimpleFofFormula::Existential { bound, formulas }])
+    variables
 }
 
 fn parse_simple_fof_truth_constant(
@@ -9169,6 +9218,33 @@ mod tests {
              tff(a_type, type, a: person).\n\
              tff(p_type, type, p: person > $o).\n\
              tff(fact, axiom, p(a)).\n\
+             tff(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_theorem_for_tff_typed_universal_quantifier() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tff-typed-universal");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(rule, axiom, ![X: person]:p(X)).\n\
              tff(goal, conjecture, p(a)).\n",
         )
         .unwrap();
@@ -12206,6 +12282,43 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_tff_typed_existential_quantifier() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tff-typed-existential");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(exists, axiom, ?[X: person]:p(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "p(esk1_0:person):$o <- .\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_expands_fof_distinct_formula() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-fof-distinct");
@@ -13062,6 +13175,38 @@ mod tests {
              tff(fact, axiom, p(a)).\n\
              tff(rule, axiom, (p(a)=>q(a))).\n\
              tff(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tff_typed_quantifier_variables() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tff-typed-quantifiers");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(q_type, type, q: person * person > $o).\n\
+             tff(rule, axiom, ![X: person]:(p(X)=>?[Y: person]:q(X,Y))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
