@@ -13,7 +13,10 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausepos::RewriteSequenceEntry;
-use crate::clauses::eqn::{eqn_tstp_string, eqn_write, eqn_write_debug, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{
+    eqn_tstp_string, eqn_write, eqn_write_debug, eqn_write_fof, Eqn, EqnFofPrintOptions,
+    EqnPrintOptions,
+};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, EP_DOMINATES, EP_HAS_EQUIV, EP_IS_DOMINATED, EP_PSEUDO_LIT,
 };
@@ -25,12 +28,13 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::func_symb_start_token;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::simpletypes::Type;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{Term, TermProperties, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_OP_FLAG};
 use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::TermWeightExtension;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
@@ -1746,14 +1750,13 @@ pub fn clause_print_tstp_core_string(
     output
 }
 
-/// Writes the C `ClauseTSTPPrint` shape for the currently ported core branch.
+/// Writes the C `ClauseTSTPPrint` shape for the ported first-order branches.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if the clause needs the typed first-order or
-/// higher-order formula-closure path, which depends on the not-yet-ported
-/// `TFormulaClauseEncode`/`TFormulaClosure` printing pipeline, or if the
-/// output writer reports a formatting error.
+/// Returns a diagnostic if the clause needs the higher-order formula-closure
+/// path, which depends on the not-yet-ported higher-order formula decoding
+/// pipeline, or if the output writer reports a formatting error.
 ///
 /// # Panics
 ///
@@ -1815,10 +1818,20 @@ pub fn clause_write_tstp_with_type_suffixes(
             print_types,
         )
         .map_err(tstp_write_error)?;
+    } else if problem_type == ProblemType::FirstOrder {
+        clause_write_tstp_formula_closure_with_type_suffixes(
+            output,
+            bank,
+            clause,
+            full_terms,
+            problem_type,
+            print_types,
+        )
+        .map_err(tstp_write_error)?;
     } else {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
-            "ClauseTSTPPrint formula rendering is not ported for typed or higher-order clauses",
+            "ClauseTSTPPrint higher-order formula rendering is not ported",
         ));
     }
 
@@ -1828,7 +1841,7 @@ pub fn clause_write_tstp_with_type_suffixes(
     Ok(())
 }
 
-/// Returns the C `ClauseTSTPPrint` shape for the currently ported core branch.
+/// Returns the C `ClauseTSTPPrint` shape for the ported first-order branches.
 ///
 /// # Errors
 ///
@@ -2011,6 +2024,95 @@ fn clause_tstp_kind(is_untyped: bool, problem_type: ProblemType) -> &'static str
     }
 }
 
+fn clause_write_tstp_formula_closure_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    problem_type: ProblemType,
+    print_types: bool,
+) -> fmt::Result {
+    let mut variables = BTreeMap::new();
+    let _ = clause.collect_variables(&mut variables);
+    let mut variables: Vec<_> = variables.into_values().collect();
+    variables.sort_by_key(|variable| Reverse(variable.f_code()));
+
+    if variables.is_empty() {
+        return clause_write_tstp_formula_body_with_type_suffixes(
+            output,
+            bank,
+            clause,
+            full_terms,
+            print_types,
+        );
+    }
+
+    output.write_str("![")?;
+    for (index, variable) in variables.iter().enumerate() {
+        if index != 0 {
+            output.write_str(", ")?;
+        }
+        bank.write_term_with_type_suffixes(output, variable, true, print_types)?;
+        let type_ = variable
+            .type_()
+            .expect("quantified variable printing requires a known type");
+        if problem_type == ProblemType::HigherOrder || !type_.is_individual() {
+            output.write_char(':')?;
+            write_tstp_type(output, bank, &type_, problem_type)?;
+        }
+    }
+    output.write_str("]:(")?;
+    clause_write_tstp_formula_body_with_type_suffixes(
+        output,
+        bank,
+        clause,
+        full_terms,
+        print_types,
+    )?;
+    output.write_char(')')
+}
+
+fn clause_write_tstp_formula_body_with_type_suffixes(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    print_types: bool,
+) -> fmt::Result {
+    let literals = clause.literals().as_slice();
+    if literals.len() > 1 {
+        output.write_char('(')?;
+    }
+
+    let options = EqnFofPrintOptions::tstp().with_print_types(print_types);
+    for (index, literal) in literals.iter().enumerate() {
+        if index != 0 {
+            output.write_char('|')?;
+        }
+        eqn_write_fof(output, bank, literal, false, full_terms, options)?;
+    }
+
+    if literals.len() > 1 {
+        output.write_char(')')?;
+    }
+    Ok(())
+}
+
+fn write_tstp_type(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    type_: &Type,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    let mut rendered = Vec::new();
+    bank.signature()
+        .type_bank()
+        .print_tstp(&mut rendered, type_, problem_type)
+        .map_err(|_| fmt::Error)?;
+    let rendered = String::from_utf8(rendered).map_err(|_| fmt::Error)?;
+    output.write_str(&rendered)
+}
+
 fn clause_tstp_role(clause: &Clause) -> &'static str {
     match clause.query_tptp_type() {
         CP_TYPE_AXIOM if clause.query_prop(CP_INPUT_FORMULA) => "axiom",
@@ -2117,7 +2219,8 @@ mod tests {
         clause_debug_string, clause_parse, clause_pcl_parse, clause_pcl_string,
         clause_print_axiom_string, clause_print_goal_string, clause_print_lop_format_string,
         clause_print_query_string, clause_print_rule_string, clause_print_tptp_format_string,
-        clause_print_tstp_core_string, clause_starts_maybe, clause_tstp_string, Clause,
+        clause_print_tstp_core_string, clause_starts_maybe, clause_tstp_string,
+        clause_write_tstp_with_type_suffixes, Clause,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2142,7 +2245,7 @@ mod tests {
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_SKOLEM_SYMBOL};
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_OP_FLAG, TP_SPECIAL_FLAG};
@@ -2203,6 +2306,37 @@ mod tests {
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_var_with_type(bank: &TermBank, f_code: i64, type_: &Type) -> Term {
+        bank.vars().var_assert_alloc(f_code, type_)
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: &Type) -> Term {
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_.clone())
+            .unwrap();
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_.clone()));
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_pred_unary_with_arg_type(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let arg_type = arg.type_().expect("test argument has a type");
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type.clone()]));
+        bank.signature_mut()
+            .declare_final_type(f_code, predicate_type)
+            .unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     fn answer_term(bank: &mut TermBank, arg: &Term) -> Term {
@@ -2462,7 +2596,81 @@ mod tests {
         let error =
             clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap_err();
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("formula rendering is not ported"));
+        assert!(error.message().contains("higher-order formula rendering"));
+    }
+
+    #[test]
+    fn clause_tstp_string_closes_typed_first_order_clause_like_c() {
+        let mut bank = test_bank();
+        let person_code = bank
+            .signature_mut()
+            .type_bank_mut()
+            .define_simple_sort("person")
+            .unwrap();
+        let person = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(person_code));
+        let x = typed_var(&bank, -2);
+        let y = typed_var_with_type(&bank, -4, &person);
+        let p_x = typed_pred_unary_with_arg_type(&mut bank, "typed_p", &x);
+        let q_y = typed_pred_unary_with_arg_type(&mut bank, "typed_q", &y);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            Eqn::alloc_flatten(p_x, &mut bank, true).unwrap(),
+            Eqn::alloc_flatten(q_y, &mut bank, true).unwrap(),
+        ]));
+        clause.set_ident(13);
+        clause.set_csscpa_source(2);
+        clause.set_tptp_type(CP_TYPE_AXIOM);
+        clause.set_prop(CP_INPUT_FORMULA);
+
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::FirstOrder).unwrap(),
+            "tcf(c_2_13, axiom, ![X1, X2:person]:((typed_p(X1)|typed_q(X2))))."
+        );
+
+        let mut typed_output = String::new();
+        clause_write_tstp_with_type_suffixes(
+            &mut typed_output,
+            &bank,
+            &clause,
+            true,
+            true,
+            ProblemType::FirstOrder,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            typed_output,
+            "tcf(c_2_13, axiom, ![X1:$i, X2:person:person]:((typed_p(X1:$i):$o|typed_q(X2:person):$o)))."
+        );
+    }
+
+    #[test]
+    fn clause_tstp_string_prints_ground_typed_formula_without_core_parens() {
+        let mut bank = test_bank();
+        let person_code = bank
+            .signature_mut()
+            .type_bank_mut()
+            .define_simple_sort("person")
+            .unwrap();
+        let person = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(person_code));
+        let alice = typed_const_with_type(&mut bank, "alice", &person);
+        let q_alice = typed_pred_unary_with_arg_type(&mut bank, "holds", &alice);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![Eqn::alloc_flatten(
+            q_alice, &mut bank, true,
+        )
+        .unwrap()]));
+        clause.set_ident(14);
+        clause.set_csscpa_source(2);
+
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::FirstOrder).unwrap(),
+            "tcf(c_2_14, plain, holds(alice))."
+        );
     }
 
     #[test]
