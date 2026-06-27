@@ -5163,11 +5163,7 @@ fn parse_simple_fof_formulas(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let formulas = parse_simple_fof_conjunct(scanner, bank)?;
-    if scanner.test_tok(TokenType::FOF_AND) {
-        return Err(simple_fof_unsupported_error(scanner));
-    }
-    Ok(formulas)
+    parse_simple_fof_connective_formulas(scanner, bank)
 }
 
 fn parse_simple_fof_conjunct(
@@ -5180,7 +5176,7 @@ fn parse_simple_fof_conjunct(
     }
     if scanner.test_tok(TokenType::OPEN_BRACKET) {
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-        let formulas = parse_simple_fof_parenthesized_formulas(scanner, bank)?;
+        let formulas = parse_simple_fof_connective_formulas(scanner, bank)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         if scanner.test_tok(TokenType::FOF_LR_IMPL) {
             scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
@@ -5261,7 +5257,7 @@ fn parse_simple_fof_equivalence_operand(
     parse_simple_fof_conjunct(scanner, bank)
 }
 
-fn parse_simple_fof_parenthesized_formulas(
+fn parse_simple_fof_connective_formulas(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
@@ -5327,7 +5323,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified implications and equivalences over supported fragments, grouped non-conjecture conjunctions/disjunctions, and grouped conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified implications and equivalences over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -7778,6 +7774,37 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_supported_unparenthesized_fof_connective_fragments() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-fof-unparenthesized-connectives");
+        std::fs::write(
+            &path,
+            "fof(both, axiom, p(a) & q(a)).\n\
+             fof(either, axiom, p(a) | q(a)).\n\
+             fof(goal, conjecture, p(a) & q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_supported_fof_parenthesized_negations() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-only-fof-negation");
@@ -8429,6 +8456,30 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_axiom_conjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-conjunction");
+        std::fs::write(
+            &path,
+            "fof(axs, axiom, p(a) & q(a)).\n\
+             fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_conjecture_conjunction_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjecture-conjunction");
@@ -8530,6 +8581,31 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_axiom_disjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-disjunction");
+        std::fs::write(
+            &path,
+            "fof(either, axiom, p(a) | q(a)).\n\
+             fof(not_p, axiom, ~p(a)).\n\
+             fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -8709,6 +8785,60 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_conjecture_conjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-conjecture-conjunction");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n\
+             fof(goal, conjecture, p(a) & q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_false_unparenthesized_fof_disjunction_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-conjecture-disjunction-counter");
+        std::fs::write(
+            &path,
+            "fof(not_p, axiom, ~p(a)).\n\
+             fof(not_q, axiom, ~q(a)).\n\
+             fof(goal, conjecture, p(a) | q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
