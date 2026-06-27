@@ -147,6 +147,7 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - Change-later candidate: C CNF conversion relies on destructive formula mutation, shared term/formula structure, polarity markers, and side-effecting definition archives. Rust should mirror the observable clause output and proof metadata first, but the final clausifier should expose ownership and mutation phases explicitly so temporary bridges do not duplicate ad hoc fragments of this pipeline.
+- Change-later candidate: `TFormulaSkolemizeOutermost` seeds recursive Skolemization with globally free variables and `tformula_rek_skolemize` mutates variable bindings while pushing/popping universal variables through a raw `PStack`. Rust's temporary FOF bridge mirrors that stack order only for occurring dependencies in supported fragments; the final formula owner should keep the dependency stack explicit and avoid exposing temporary term bindings outside the clausification phase.
 
 ### Porting Focus
 
