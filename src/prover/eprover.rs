@@ -6120,6 +6120,9 @@ fn parse_simple_fof_primary_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
+        return Ok(formulas);
+    }
     if scanner.test_id("$distinct") {
         return parse_simple_fof_distinct_formula(scanner, bank);
     }
@@ -6138,6 +6141,8 @@ fn parse_simple_fof_primary_formula(
         scanner.accept_tok(TokenType::TILDE_SIGN)?;
         let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
         vec![SimpleFofFormula::Negation(formulas)]
+    } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
+        formulas
     } else if scanner.test_id("$distinct") {
         parse_simple_fof_distinct_formula(scanner, bank)?
     } else {
@@ -6234,6 +6239,8 @@ fn parse_simple_fof_existential_formula(
             return Err(simple_fof_existential_requires_full_cnf_error());
         }
         formulas
+    } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
+        formulas
     } else if scanner.test_id("$distinct") {
         parse_simple_fof_distinct_formula(scanner, bank)?
     } else {
@@ -6255,6 +6262,20 @@ fn parse_simple_fof_existential_formula(
     }
 
     Ok(vec![SimpleFofFormula::Existential { bound, formulas }])
+}
+
+fn parse_simple_fof_truth_constant(
+    scanner: &mut Scanner,
+) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
+    if scanner.test_id("$true") {
+        scanner.accept_id("$true")?;
+        return Ok(Some(simple_fof_truth_formula(true)));
+    }
+    if scanner.test_id("$false") {
+        scanner.accept_id("$false")?;
+        return Ok(Some(simple_fof_truth_formula(false)));
+    }
+    Ok(None)
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -6349,7 +6370,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, supported parenthesized existential bodies in direct positive or negated contexts, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies in direct positive or negated contexts, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -9134,6 +9155,25 @@ mod tests {
              input_formula(goal, conjecture, p(a)).\n",
         )
         .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_theorem_for_fof_true_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-true-conjecture");
+        std::fs::write(&path, "fof(goal, conjecture, $true).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -12183,6 +12223,41 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_lowers_fof_truth_constants() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-fof-truth-constants");
+        std::fs::write(
+            &path,
+            "fof(true_axiom, axiom, $true).\n\
+             fof(false_axiom, axiom, $false).\n\
+             fof(false_disjunction, axiom, ($false|p(a))).\n\
+             fof(true_conjunction, axiom, ($true&p(a))).\n\
+             fof(goal, conjecture, $true).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(!printed.contains("$true"));
+        assert!(printed.contains(", axiom, ($false)).\n"));
+        assert_eq!(printed.matches(", axiom, (p(a))).\n").count(), 2);
+        assert!(printed.contains(", negated_conjecture, ($false)).\n"));
+        assert_eq!(printed.matches("cnf(i_0_").count(), 4);
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_uses_old_tptp_output_when_requested() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tptp-out");
@@ -12881,6 +12956,36 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_old_tptp_truth_constants() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tptp-truth-constants");
+        std::fs::write(
+            &path,
+            "input_formula(old_true, axiom, $true).\n\
+             input_formula(old_false, conjecture, $false).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_tstp_type_declarations_before_fof_formula() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-tstp-type-declarations");
@@ -12917,6 +13022,41 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-distinct");
         std::fs::write(&path, "fof(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_fof_truth_constants() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-truth-constants");
+        std::fs::write(
+            &path,
+            "fof(true_axiom, axiom, $true).\n\
+             fof(false_axiom, axiom, $false).\n\
+             fof(negated, axiom, ~$false).\n\
+             fof(conj, axiom, ($true&p(a))).\n\
+             fof(disj, axiom, ($false|p(a))).\n\
+             fof(exists, axiom, ?[X]:$true).\n\
+             fof(univ, conjecture, ![X]:$false).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
