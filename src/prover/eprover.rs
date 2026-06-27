@@ -2308,7 +2308,9 @@ fn apply_proof_option(
         EProverOption::ProofObject => {
             let level = get_int_arg_check_range(parsed.option(), parsed.arg().unwrap_or(""), 0, 3)?;
             config.proof_object_level = config.proof_object_level.max(level);
-            config.proof_output = config.proof_output.max(1);
+            if level > 0 {
+                config.proof_output = config.proof_output.max(1);
+            }
         }
         EProverOption::ProofGraph => {
             let level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
@@ -9020,6 +9022,13 @@ mod tests {
 
     #[test]
     fn process_options_records_proof_output_state_like_c() {
+        let action = process_options(["eprover", "--proof-object=0"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(config.proof_object_level, 0);
+        assert_eq!(config.proof_output, 0);
+
         let action = process_options(["eprover", "--proof-object=3", "--proof-object=1"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
@@ -12936,6 +12945,31 @@ mod tests {
         ));
         assert!(printed.contains("     2 : :[] : 1 : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_zero_does_not_enable_proof_object_output() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-zero");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--proof-object=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(!printed.contains("SZS output start CNFRefutation"));
+        assert!(!printed.contains("SZS output end CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
