@@ -95,6 +95,8 @@ const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
 const THF_REQUIRES_HOL_MESSAGE: &str =
     "To support HOL reasoning, recompile E using './configure --enable-ho && make rebuild'";
+const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
+    "Formula has free variables (check parentheses and quantifier precedence)";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
 
@@ -5067,6 +5069,13 @@ fn thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
     )
 }
 
+fn tstp_formula_free_variables_error(position: &str) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!("{position} {TSTP_FORMULA_FREE_VARIABLES_MESSAGE}"),
+    )
+}
+
 fn tstp_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i64>>) -> bool {
     let Some(selectors) = selectors else {
         return true;
@@ -5170,7 +5179,11 @@ fn parse_simple_tstp_formula_clause(
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
+    let formula_position = token_pos_rep(scanner.current_token());
     let formulas = parse_simple_fof_formulas(scanner, bank)?;
+    if !simple_fof_global_free_variables(&formulas).is_empty() {
+        return Err(tstp_formula_free_variables_error(&formula_position));
+    }
     let literal_lists =
         simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
@@ -6452,6 +6465,7 @@ mod tests {
         FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
         PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
         LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -12611,25 +12625,26 @@ mod tests {
     }
 
     #[test]
-    fn run_print_formulas_skolemizes_positive_existential_over_free_variable() {
+    fn run_syntax_only_rejects_tstp_formula_free_variables() {
         let _guard = global_state_lock();
-        let path = temp_path("print-formulas-positive-existential-free-variable");
+        let path = temp_path("syntax-tstp-formula-free-variables");
         std::fs::write(&path, "fof(test1, axiom, ?[X]:p(X,Y)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed.starts_with("cnf(i_0_"));
-        assert!(printed.ends_with(", axiom, (p(esk1_1(X2),X2))).\n"));
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains(TSTP_FORMULA_FREE_VARIABLES_MESSAGE));
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
