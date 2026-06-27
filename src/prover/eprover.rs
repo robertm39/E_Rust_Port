@@ -6170,14 +6170,16 @@ fn parse_simple_fof_existential_formula(
             return Err(simple_fof_existential_requires_full_cnf_error());
         }
         formulas
+    } else if scanner
+        .test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::TILDE_SIGN)
+    {
+        let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
+        if simple_fof_formulas_contain_unsupported_existential_body_quantifier(&formulas) {
+            return Err(simple_fof_existential_requires_full_cnf_error());
+        }
+        formulas
     } else {
-        if scanner.test_tok(
-            TokenType::UNIV_QUANTOR
-                | TokenType::EXIST_QUANTOR
-                | TokenType::FOF_BIN_OP
-                | TokenType::TILDE_SIGN
-                | TokenType::OPEN_BRACKET,
-        ) {
+        if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::OPEN_BRACKET) {
             return Err(simple_fof_unsupported_error(scanner));
         }
 
@@ -9230,6 +9232,30 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_existential_universal_scope() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-existential-universal-scope");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, ?[X]:![Y]:p(X,Y)).\n\
+             fof(goal, conjecture, ?[X]:p(X,a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_implication_with_existential_consequent() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-implication-existential-consequent");
@@ -12068,6 +12094,30 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_unparenthesized_nested_fof_existentials() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-unparenthesized-nested-existentials");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:?[Y]:p(X,Y)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (p(esk1_0,esk2_0))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_negates_nested_fof_existential_conjecture() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-negated-nested-existentials");
@@ -12286,6 +12336,54 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with("cnf(i_0_"));
         assert!(printed.ends_with(", axiom, (p(esk1_0,X2))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_skolemizes_unparenthesized_existential_before_universal_scope() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-unparenthesized-existential-universal-scope");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:![Y]:p(X,Y)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (p(esk1_0,X2))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_skolemizes_unparenthesized_negated_existential_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-unparenthesized-negated-existential-body");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:~p(X)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (~p(esk1_0))).\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -12599,6 +12697,37 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-existential-nested-quantifier");
         std::fs::write(&path, "fof(test1, axiom, ?[X]:(![Y]:p(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_unparenthesized_existential_unitary_bodies() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-unparenthesized-existential-unitary-bodies");
+        std::fs::write(
+            &path,
+            "fof(univ, axiom, ?[X]:![Y]:p(X,Y)).\n\
+             fof(ex, axiom, ?[X]:?[Y]:q(X,Y)).\n\
+             fof(neg, axiom, ?[X]:~r(X)).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
