@@ -251,6 +251,11 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 
 - `TermPrintDbg` is a macro: in first-order mode it is just `TermPrintFO`, while higher-order mode dispatches to `TermPrintDbgHO`, which prints space-separated application without interpreted-symbol pretty-printing. Rust exposes this as a problem-type-explicit term-bank debug writer so callers do not need to read process-global `problemType`.
 - `TermPrintTypes` is a process-global formatting switch consulted by the full conventional term printers after the term body and after every recursively printed argument, yielding suffixes such as `f(a:$i):$i`. The compact term-bank abbreviation printer does not consult this switch. Rust now keeps typed output as an explicit term/equation print option for supported full-term clause output; avoid reintroducing a global switch except as an executable-compatibility shim.
+- `TermParse` rejects an argument list after an integer or object token when the signature still treats that token class as distinct, using diagnostics that point to `--free-numbers` or `--free-objects`. Unlike `TBTermParseReal`, this unshared parser does not have separate rational/float branches. Rust keeps the unshared check separate from the term-bank checked parser so both C surfaces remain testable.
+
+### Change Later Candidates
+
+- The C parser surfaces differ: unshared `TermParse` checks integer/object argument lists, full `TBTermParseReal` also checks rational/float argument lists, and `TBTermParseSimple` does not check distinct-token argument lists at all. Keep the distinction for compatibility, but future internal APIs should name the checked/full parser path explicitly so callers do not accidentally choose the looser simple parser.
 
 ### Porting Focus
 

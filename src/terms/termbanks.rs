@@ -13,8 +13,9 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
-    term_apply_arg as term_apply_arg_unshared, term_copy, term_is_ground_compute,
-    term_parse_operator, term_sig_insert, term_standard_weight, var_print_string,
+    reject_term_bank_distinct_argument_list, term_apply_arg as term_apply_arg_unshared, term_copy,
+    term_is_ground_compute, term_parse_operator, term_sig_insert, term_standard_weight,
+    var_print_string,
 };
 use crate::terms::termtypes::{
     term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
@@ -920,6 +921,21 @@ impl TermBank {
     }
 
     pub fn parse_term_simple(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        self.parse_term_simple_with_distinct_checks(scanner, false)
+    }
+
+    pub fn parse_term_with_distinct_checks(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        self.parse_term_simple_with_distinct_checks(scanner, true)
+    }
+
+    fn parse_term_simple_with_distinct_checks(
+        &mut self,
+        scanner: &mut Scanner,
+        check_distinct_argument_lists: bool,
+    ) -> Result<Term, Diagnostic> {
         let mut id = DynamicString::new();
         let id_type = term_parse_operator(scanner, &mut id)?;
         let name = id.view().into_owned();
@@ -935,7 +951,10 @@ impl TermBank {
             return Ok(self.vars.ext_name_assert_alloc(&name));
         }
 
-        let args = self.parse_simple_arg_list_opt(scanner)?;
+        if scanner.test_tok(TokenType::OPEN_BRACKET) && check_distinct_argument_lists {
+            reject_term_bank_distinct_argument_list(&self.sig, id_type)?;
+        }
+        let args = self.parse_simple_arg_list_opt(scanner, check_distinct_argument_lists)?;
         let arity = i32::try_from(args.len()).map_err(|_| {
             Diagnostic::new(
                 ErrorCode::RESOURCE_OUT,
@@ -1280,6 +1299,7 @@ impl TermBank {
     fn parse_simple_arg_list_opt(
         &mut self,
         scanner: &mut Scanner,
+        check_distinct_argument_lists: bool,
     ) -> Result<Vec<Term>, Diagnostic> {
         if !scanner.test_tok(TokenType::OPEN_BRACKET) {
             return Ok(Vec::new());
@@ -1291,10 +1311,17 @@ impl TermBank {
             return Ok(Vec::new());
         }
 
-        let mut args = vec![self.parse_term_simple(scanner)?];
+        let mut args =
+            vec![self
+                .parse_term_simple_with_distinct_checks(scanner, check_distinct_argument_lists)?];
         while scanner.test_tok(TokenType::COMMA) {
             scanner.accept_tok(TokenType::COMMA)?;
-            args.push(self.parse_term_simple(scanner)?);
+            args.push(
+                self.parse_term_simple_with_distinct_checks(
+                    scanner,
+                    check_distinct_argument_lists,
+                )?,
+            );
         }
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         Ok(args)
@@ -1512,11 +1539,15 @@ mod tests {
         tb_term_set_prop_count, term_is_false_term, term_is_true_term, TermBank,
         INSERT_NO_PROPS_CACHE_THRESHOLD,
     };
+    use crate::basics::error::ErrorCode;
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::inout::scanner::Scanner;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
-    use crate::terms::signature::{Signature, SIG_FALSE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
+    use crate::terms::signature::{
+        Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_FALSE_CODE,
+        SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+    };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
         DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_GARBAGE_FLAG,
@@ -1576,6 +1607,97 @@ mod tests {
         assert_eq!(bank.term_string(&parsed, true), "f(a,X1,g(X2))");
         assert_eq!(bank.vars().ext_name_find("X").unwrap().f_code(), -2);
         assert_eq!(bank.vars().ext_name_find("Y").unwrap().f_code(), -4);
+    }
+
+    #[test]
+    fn simple_parser_allows_distinct_number_and_object_argument_lists_like_c() {
+        let (bank, parsed_number) = parse_simple("12(a)");
+        assert_eq!(
+            bank.signature().find_name(parsed_number.f_code()),
+            Some("12")
+        );
+        assert_eq!(parsed_number.arity(), 1);
+
+        let (bank, parsed_object) = parse_simple("\"obj\"(a)");
+        assert_eq!(
+            bank.signature().find_name(parsed_object.f_code()),
+            Some("\"obj\"")
+        );
+        assert_eq!(parsed_object.arity(), 1);
+    }
+
+    #[test]
+    fn checked_parser_rejects_distinct_number_argument_lists() {
+        let mut number_bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut number = Scanner::from_user_string("12(a)", false).unwrap();
+        let error = number_bank
+            .parse_term_with_distinct_checks(&mut number)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+
+        let mut rational_bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut rational = Scanner::from_user_string("3/4(a)", false).unwrap();
+        let error = rational_bank
+            .parse_term_with_distinct_checks(&mut rational)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Rational number cannot have argument list"));
+
+        let mut float_bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut float = Scanner::from_user_string("1.5(a)", false).unwrap();
+        let error = float_bank
+            .parse_term_with_distinct_checks(&mut float)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Floating point number cannot have argument list"));
+    }
+
+    #[test]
+    fn checked_parser_rejects_distinct_object_argument_lists() {
+        let mut object_bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut object = Scanner::from_user_string("\"obj\"(a)", false).unwrap();
+        let error = object_bank
+            .parse_term_with_distinct_checks(&mut object)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Object cannot have argument list"));
+    }
+
+    #[test]
+    fn checked_parser_allows_freed_number_and_object_argument_lists() {
+        let mut signature = Signature::new(TypeBank::new());
+        signature
+            .remove_distinct_props(FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT | FP_IS_OBJECT);
+        let mut bank = TermBank::new(signature).unwrap();
+
+        let mut number = Scanner::from_user_string("12(a)", false).unwrap();
+        let parsed_number = bank.parse_term_with_distinct_checks(&mut number).unwrap();
+        assert_eq!(
+            bank.signature().find_name(parsed_number.f_code()),
+            Some("12")
+        );
+        assert_eq!(parsed_number.arity(), 1);
+
+        let mut rational = Scanner::from_user_string("3/4(a)", false).unwrap();
+        let parsed_rational = bank.parse_term_with_distinct_checks(&mut rational).unwrap();
+        assert_eq!(parsed_rational.arity(), 1);
+
+        let mut float = Scanner::from_user_string("1.5(a)", false).unwrap();
+        let parsed_float = bank.parse_term_with_distinct_checks(&mut float).unwrap();
+        assert_eq!(parsed_float.arity(), 1);
+
+        let mut object = Scanner::from_user_string("\"obj\"(a)", false).unwrap();
+        let parsed_object = bank.parse_term_with_distinct_checks(&mut object).unwrap();
+        assert_eq!(
+            bank.signature().find_name(parsed_object.f_code()),
+            Some("\"obj\"")
+        );
+        assert_eq!(parsed_object.arity(), 1);
     }
 
     #[test]

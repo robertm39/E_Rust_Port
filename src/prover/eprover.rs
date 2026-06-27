@@ -3673,7 +3673,9 @@ fn run_syntax_only(
     output: &mut impl Write,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
-    let mut bank = TermBank::new(Signature::new(TypeBank::new()))?;
+    let mut signature = Signature::new(TypeBank::new());
+    signature.remove_distinct_props(config.free_symbol_properties);
+    let mut bank = TermBank::new(signature)?;
     let mut clauses = ClauseSet::new();
 
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
@@ -7893,6 +7895,52 @@ mod tests {
             "\n% Parsing successful!\n% SZS status Unknown\n"
         );
         assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_honors_free_symbol_distinct_masks() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-free-symbols");
+        std::fs::write(&path, "12(a).\n\"obj\"(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+
+        let mut rejected_stdout = Vec::new();
+        let mut rejected_stderr = Vec::new();
+        let error = run(
+            ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            &mut rejected_stdout,
+            &mut rejected_stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+        assert!(rejected_stdout.is_empty());
+        assert!(rejected_stderr.is_empty());
+
+        let mut accepted_stdout = Vec::new();
+        let mut accepted_stderr = Vec::new();
+        let status = run(
+            [
+                "eprover",
+                "--syntax-only",
+                "--lop-in",
+                "--free-numbers",
+                "--free-objects",
+                path_arg.as_str(),
+            ],
+            &mut accepted_stdout,
+            &mut accepted_stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(accepted_stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(accepted_stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 

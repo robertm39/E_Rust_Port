@@ -164,11 +164,45 @@ pub fn term_parse_arg_list(
     Ok(result)
 }
 
-fn reject_distinct_argument_list(sig: &Signature, id_type: FuncSymbType) -> Result<(), Diagnostic> {
+pub(crate) fn reject_distinct_argument_list(
+    sig: &Signature,
+    id_type: FuncSymbType,
+) -> Result<(), Diagnostic> {
     if id_type == FuncSymbType::IdentInt && sig.distinct_props().intersects(FP_IS_INTEGER) {
         return Err(Diagnostic::new(
             ErrorCode::SYNTAX_ERROR,
             "Number cannot have argument list (consider --free-numbers)",
+        ));
+    }
+    if id_type == FuncSymbType::IdentObject && sig.distinct_props().intersects(FP_IS_OBJECT) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Object cannot have argument list (consider --free-objects)",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_term_bank_distinct_argument_list(
+    sig: &Signature,
+    id_type: FuncSymbType,
+) -> Result<(), Diagnostic> {
+    if id_type == FuncSymbType::IdentInt && sig.distinct_props().intersects(FP_IS_INTEGER) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Number cannot have argument list (consider --free-numbers)",
+        ));
+    }
+    if id_type == FuncSymbType::IdentFloat && sig.distinct_props().intersects(FP_IS_FLOAT) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Floating point number cannot have argument list (consider --free-numbers)",
+        ));
+    }
+    if id_type == FuncSymbType::IdentRational && sig.distinct_props().intersects(FP_IS_RATIONAL) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            "Rational number cannot have argument list (consider --free-numbers)",
         ));
     }
     if id_type == FuncSymbType::IdentObject && sig.distinct_props().intersects(FP_IS_OBJECT) {

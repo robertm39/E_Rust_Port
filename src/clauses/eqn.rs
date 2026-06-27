@@ -2287,13 +2287,13 @@ fn eqn_parse_prefix_terms(
     if scanner.test_id(EQUAL_PREDICATE) {
         scanner.accept_id(EQUAL_PREDICATE)?;
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-        let left = bank.parse_term_simple(scanner)?;
+        let left = bank.parse_term_with_distinct_checks(scanner)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let right = bank.parse_term_simple(scanner)?;
+        let right = bank.parse_term_with_distinct_checks(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         Ok((true, left, right))
     } else {
-        let left = bank.parse_term_simple(scanner)?;
+        let left = bank.parse_term_with_distinct_checks(scanner)?;
         prepare_predicate_literal(bank, &left)?;
         Ok((true, left, bank.true_term().clone()))
     }
@@ -2310,7 +2310,7 @@ fn eqn_parse_infix_terms(
         in_parens = true;
     }
 
-    let left = bank.parse_term_simple(scanner)?;
+    let left = bank.parse_term_with_distinct_checks(scanner)?;
     if in_parens && scanner.test_tok(TokenType::CLOSE_BRACKET) {
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         in_parens = false;
@@ -2322,7 +2322,7 @@ fn eqn_parse_infix_terms(
             positive = false;
         }
         scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
-        bank.parse_term_simple(scanner)?
+        bank.parse_term_with_distinct_checks(scanner)?
     } else {
         prepare_predicate_literal(bank, &left)?;
         bank.true_term().clone()

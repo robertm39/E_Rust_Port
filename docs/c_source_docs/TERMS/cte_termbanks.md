@@ -223,6 +223,15 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
+### Compatibility Notes
+
+- `TBTermParseReal` rejects argument lists after integer, rational, floating-point, or object tokens while the corresponding `signature->distinct_props` bit remains set, and the diagnostics point to `--free-numbers` or `--free-objects`. Rust exposes a checked bank parser for clause/equation parsing to preserve that behavior.
+- `TBTermParseSimple` is intentionally looser: despite parsing the same token classes and inserting the same function-property bits, it does not reject distinct numeric/object symbols with argument lists. Rust keeps the simple parser permissive and uses the checked variant only for clause paths that correspond to C `TBTermParse`.
+
+### Change Later Candidates
+
+- The full and simple term-bank parsers share much of their syntax shape but enforce different distinct-symbol policies. Future Rust parser APIs should keep that difference explicit until full `TBTermParseReal` parity, formula/list/`let`/`ite` parsing, and caller audits prove a single parser entry point is safe.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
