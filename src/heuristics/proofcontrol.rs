@@ -2625,8 +2625,9 @@ fn proof_state_processed_clause_by_class(
 /// This preserves the C loop gate order, delegates each iteration to
 /// [`proof_state_process_clause`], runs `cleanup_unprocessed_clauses` after
 /// non-returning clauses, and stops when the local limit checks fail. The
-/// generated-inference path is still limited by `proof_state_process_clause` to
-/// C `NoGeneration`; the SAT-check branch reports an explicit diagnostic when
+/// default path uses the ported unindexed selected-clause generators; the
+/// caller-owned global-index variant uses the indexed branch when PM indexes
+/// are available. The SAT-check branch reports an explicit diagnostic when
 /// enabled and due because `SATCheck` itself is not ported yet.
 ///
 /// # Errors
@@ -2648,6 +2649,78 @@ pub fn proof_state_saturate(
     tb_insert_limit: i64,
     answer_limit: i64,
 ) -> Result<SaturateOutcome, Diagnostic> {
+    proof_state_saturate_impl(
+        state,
+        control,
+        step_limit,
+        proc_limit,
+        unproc_limit,
+        total_limit,
+        generated_limit,
+        tb_insert_limit,
+        answer_limit,
+        None,
+    )
+}
+
+/// Runs the ported C `Saturate` loop using caller-owned global indices.
+///
+/// This mirrors the `ProcessClause` path where C inserts each processed
+/// survivor into `state->gindices` and then uses indexed selected-clause
+/// generation when paramodulation indexes are available. The caller owns the
+/// indices until a proof-session owner can safely hold both the proof state and
+/// its signature-borrowing index shell.
+///
+/// # Errors
+///
+/// Returns diagnostics from indexed clause processing, cleanup, or an enabled
+/// due SAT-check.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+pub fn proof_state_saturate_with_global_indices(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<SaturateOutcome, Diagnostic> {
+    proof_state_saturate_impl(
+        state,
+        control,
+        step_limit,
+        proc_limit,
+        unproc_limit,
+        total_limit,
+        generated_limit,
+        tb_insert_limit,
+        answer_limit,
+        Some(indices),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+fn proof_state_saturate_impl(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+    mut indices: Option<&mut GlobalIndices<'_>>,
+) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
 
     loop {
@@ -2668,7 +2741,12 @@ pub fn proof_state_saturate(
         }
 
         processed_steps = processed_steps.saturating_add(1);
-        match proof_state_process_clause(state, control, answer_limit)? {
+        let process_outcome = if let Some(indices) = indices.as_deref_mut() {
+            proof_state_process_clause_with_global_indices(state, control, answer_limit, indices)?
+        } else {
+            proof_state_process_clause(state, control, answer_limit)?
+        };
+        match process_outcome {
             ProcessClauseOutcome::NoClause => {
                 return Ok(SaturateOutcome::Stopped {
                     reason: SaturateStopReason::Saturated,
@@ -3489,7 +3567,8 @@ mod tests {
         proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
         proof_state_process_clause, proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_saturate, proof_state_simplify_watchlist,
+        proof_state_reset_processed, proof_state_saturate,
+        proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
         proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
         ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
         LiteralSelectionOutcome, ProcessClauseOutcome, ProcessedClauseClass,
@@ -5776,6 +5855,59 @@ mod tests {
             panic!("predicate Horn chain should close");
         };
         assert!(clause.is_empty());
+    }
+
+    #[test]
+    fn proof_state_saturate_with_global_indices_uses_indexed_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, mut indexed_partner, source) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_saturate_idx_pm_source");
+            let replacement = typed_const(terms, "pc_saturate_idx_pm_replacement");
+            let rhs = typed_const(terms, "pc_saturate_idx_pm_rhs");
+            let f_source = typed_unary(terms, "pc_saturate_idx_pm_f", &source);
+            let mut selected_lit = literal(terms, &source, &replacement, true);
+            let mut partner_lit = literal(terms, &f_source, &rhs, true);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_155);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            (selected, partner, source)
+        };
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_partner, state.terms(), false);
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "SaturateIndexedParamodTest");
+        control.set_ocb(kbo_ocb(state.terms()));
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_saturate_with_global_indices(
+            &mut state,
+            &mut control,
+            1,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+            &mut indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::StepLimit,
+                processed_steps: 1,
+            }
+        );
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.processed_cardinality(), 1);
+        assert_eq!(state.unprocessed().members(), 1);
+        assert!(indices.find_pm_from_occurrence(&source).is_some());
     }
 
     #[test]
