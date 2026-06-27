@@ -4841,8 +4841,14 @@ struct ParsedClauseFile {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum SimpleFofFormula {
     Literal(Eqn),
-    Implication { antecedent: Eqn, consequent: Eqn },
-    Equivalence { left: Eqn, right: Eqn },
+    Implication {
+        antecedents: Vec<Eqn>,
+        consequent: Eqn,
+    },
+    Equivalence {
+        left: Eqn,
+        right: Eqn,
+    },
     Disjunction(Vec<SimpleFofFormula>),
     Negation(Vec<SimpleFofFormula>),
 }
@@ -5060,14 +5066,19 @@ fn simple_fof_formula_to_clause_literals(
             Ok(literals)
         }
         SimpleFofFormula::Implication {
-            mut antecedent,
+            antecedents,
             consequent,
         } => {
             if negate_as_conjecture {
                 return Err(simple_fof_conjecture_implication_error());
             }
-            antecedent.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
-            Ok(EqnList::from_vec(vec![consequent, antecedent]))
+            let mut literals = Vec::with_capacity(antecedents.len().saturating_add(1));
+            literals.push(consequent);
+            for mut antecedent in antecedents {
+                antecedent.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
+                literals.push(antecedent);
+            }
+            Ok(EqnList::from_vec(literals))
         }
         SimpleFofFormula::Disjunction(disjuncts) => {
             simple_fof_disjunction_to_clause_literals(disjuncts, negate_as_conjecture)
@@ -5109,6 +5120,16 @@ fn simple_fof_disjunction_to_clause_literals(
     Ok(EqnList::from_vec(literals))
 }
 
+fn simple_fof_formulas_to_literals(
+    formulas: Vec<SimpleFofFormula>,
+) -> Result<Vec<Eqn>, Diagnostic> {
+    let mut literals = Vec::with_capacity(formulas.len());
+    for formula in formulas {
+        literals.push(simple_fof_formula_to_single_literal(formula)?);
+    }
+    Ok(literals)
+}
+
 fn parse_simple_fof_formulas(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -5132,6 +5153,14 @@ fn parse_simple_fof_conjunct(
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
         let formulas = parse_simple_fof_parenthesized_formulas(scanner, bank)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        if scanner.test_tok(TokenType::FOF_LR_IMPL) {
+            scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
+            let consequent = parse_simple_fof_literal(scanner, bank)?;
+            return Ok(vec![SimpleFofFormula::Implication {
+                antecedents: simple_fof_formulas_to_literals(formulas)?,
+                consequent,
+            }]);
+        }
         return Ok(formulas);
     }
     if scanner.test_tok(TokenType::TILDE_SIGN) {
@@ -5145,15 +5174,15 @@ fn parse_simple_fof_conjunct(
         scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
         let consequent = parse_simple_fof_literal(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Implication {
-            antecedent: left_literal,
+            antecedents: vec![left_literal],
             consequent,
         }]);
     }
     if scanner.test_tok(TokenType::FOF_RL_IMPL) {
         scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
-        let antecedent = parse_simple_fof_literal(scanner, bank)?;
+        let antecedents = parse_simple_fof_literal_conjunction(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Implication {
-            antecedent,
+            antecedents,
             consequent: left_literal,
         }]);
     }
@@ -5213,6 +5242,19 @@ fn simple_fof_formulas_to_disjuncts(
     ))
 }
 
+fn parse_simple_fof_literal_conjunction(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<Eqn>, Diagnostic> {
+    if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let formulas = parse_simple_fof_parenthesized_formulas(scanner, bank)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        return simple_fof_formulas_to_literals(formulas);
+    }
+    Ok(vec![parse_simple_fof_literal(scanner, bank)?])
+}
+
 fn parse_simple_fof_literal(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Eqn, Diagnostic> {
     if scanner.test_tok(TokenType::EXIST_QUANTOR | TokenType::UNIV_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
@@ -5261,7 +5303,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications, grouped non-conjecture conjunctions/disjunctions, and grouped atomic conjecture conjunctions/disjunctions",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications with atomic or grouped atomic antecedents, grouped non-conjecture conjunctions/disjunctions, and grouped atomic conjecture conjunctions/disjunctions",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -7990,6 +8032,32 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_grouped_horn_antecedent_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-grouped-horn-antecedent");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, ![X]:((human(X) & wise(X)) => mortal(X))).\n\
+             fof(human, axiom, human(socrates)).\n\
+             fof(wise, axiom, wise(socrates)).\n\
+             fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_reverse_implication_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-reverse-implication");
@@ -7997,6 +8065,32 @@ mod tests {
             &path,
             "fof(rule, axiom, ![X]:(mortal(X) <= human(X))).\n\
              fof(fact, axiom, human(socrates)).\n\
+             fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_grouped_reverse_implication_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-grouped-reverse-implication");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, ![X]:(mortal(X) <= (human(X) & wise(X)))).\n\
+             fof(human, axiom, human(socrates)).\n\
+             fof(wise, axiom, wise(socrates)).\n\
              fof(goal, conjecture, mortal(socrates)).\n",
         )
         .unwrap();
