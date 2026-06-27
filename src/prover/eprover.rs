@@ -5020,6 +5020,9 @@ fn parse_tstp_entry_list(
                     clauses.insert(clause);
                 }
             }
+        } else if scanner.test_id("tff") {
+            let parsed = parse_simple_tstp_type_declaration(scanner, bank, "tff")?;
+            tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut());
         } else if scanner.test_id("include") {
             let mut include_selectors = StrTree::new();
             let skip_includes = StrTree::new();
@@ -5037,7 +5040,7 @@ fn parse_tstp_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses and the temporary atomic/connective-fragment fof bridge",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order tff type declarations, and the temporary atomic/connective-fragment fof bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -5117,6 +5120,21 @@ fn parse_simple_fof_clause(
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
     scanner.accept_tok(TokenType::COMMA)?;
+    if scanner.test_id("type") {
+        scanner.accept_id("type")?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        bank.signature_mut()
+            .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+        parse_simple_tstp_optional_source(scanner)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        scanner.accept_tok(TokenType::FULLSTOP)?;
+        return Ok(ParsedSimpleFofClause {
+            name,
+            clauses: Vec::new(),
+            formula_conjecture_seen: false,
+        });
+    }
+
     scanner.check_id(
         "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist",
     )?;
@@ -5135,15 +5153,7 @@ fn parse_simple_fof_clause(
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
-    if scanner.test_tok(TokenType::COMMA) {
-        scanner.accept_tok(TokenType::COMMA)?;
-        tstp_skip_source(scanner)?;
-        if scanner.test_tok(TokenType::COMMA) {
-            scanner.accept_tok(TokenType::COMMA)?;
-            scanner.check_tok(TokenType::OPEN_SQUARE)?;
-            parse_skip_parenthesized_expr(scanner)?;
-        }
-    }
+    parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
@@ -5164,6 +5174,32 @@ fn parse_simple_fof_clause(
         name,
         clauses,
         formula_conjecture_seen,
+    })
+}
+
+fn parse_simple_tstp_type_declaration(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    entry_kind: &str,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    bank.vars().clear_ext_names();
+    scanner.accept_id(entry_kind)?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.accept_id("type")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    bank.signature_mut()
+        .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+    parse_simple_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    Ok(ParsedSimpleFofClause {
+        name,
+        clauses: Vec::new(),
+        formula_conjecture_seen: false,
     })
 }
 
@@ -6197,6 +6233,19 @@ fn parse_simple_fof_existential_formula(
     }
 
     Ok(vec![SimpleFofFormula::Existential { bound, formulas }])
+}
+
+fn parse_simple_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        tstp_skip_source(scanner)?;
+        if scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            scanner.check_tok(TokenType::OPEN_SQUARE)?;
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+    }
+    Ok(())
 }
 
 fn tstp_skip_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -11940,6 +11989,41 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_uses_tstp_type_declarations_for_term_types() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tstp-type-declarations");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             fof(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             fof(test1, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:person):$o <- .\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_uses_old_tptp_output_when_requested() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tptp-out");
@@ -12617,6 +12701,38 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-tptp-input-formula");
         std::fs::write(&path, "input_formula(goal, conjecture, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_type_declarations_before_fof_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tstp-type-declarations");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             fof(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             fof(test1, axiom, p(a)).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
