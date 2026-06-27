@@ -5014,17 +5014,14 @@ fn parse_tstp_entry_list(
             ) {
                 clauses.insert(clause);
             }
-        } else if scanner.test_id("fof") {
-            let parsed = parse_simple_fof_clause(scanner, bank)?;
+        } else if scanner.test_id("fof|tff") {
+            let parsed = parse_simple_tstp_formula_clause(scanner, bank)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 formula_conjecture_seen |= parsed.formula_conjecture_seen;
                 for clause in parsed.clauses {
                     clauses.insert(clause);
                 }
             }
-        } else if scanner.test_id("tff") {
-            let parsed = parse_simple_tstp_type_declaration(scanner, bank, "tff")?;
-            tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut());
         } else if scanner.test_id("include") {
             let mut include_selectors = StrTree::new();
             let skip_includes = StrTree::new();
@@ -5042,7 +5039,7 @@ fn parse_tstp_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order tff type declarations, and the temporary atomic/connective-fragment fof bridge",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order tff/fof type declarations, and the temporary atomic/connective-fragment fof/tff bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -5108,7 +5105,7 @@ struct ParsedSimpleFofClause {
     formula_conjecture_seen: bool,
 }
 
-fn parse_simple_fof_clause(
+fn parse_simple_tstp_formula_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
@@ -5117,7 +5114,7 @@ fn parse_simple_fof_clause(
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
 
-    scanner.accept_id("fof")?;
+    scanner.accept_id("fof|tff")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
@@ -5176,32 +5173,6 @@ fn parse_simple_fof_clause(
         name,
         clauses,
         formula_conjecture_seen,
-    })
-}
-
-fn parse_simple_tstp_type_declaration(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-    entry_kind: &str,
-) -> Result<ParsedSimpleFofClause, Diagnostic> {
-    bank.vars().clear_ext_names();
-    scanner.accept_id(entry_kind)?;
-    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-    let name = scanner.current_token().literal();
-    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
-    scanner.accept_tok(TokenType::COMMA)?;
-    scanner.accept_id("type")?;
-    scanner.accept_tok(TokenType::COMMA)?;
-    bank.signature_mut()
-        .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
-    parse_simple_tstp_optional_source(scanner)?;
-    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-    scanner.accept_tok(TokenType::FULLSTOP)?;
-
-    Ok(ParsedSimpleFofClause {
-        name,
-        clauses: Vec::new(),
-        formula_conjecture_seen: false,
     })
 }
 
@@ -9189,6 +9160,33 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_reports_theorem_for_tff_formula_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tff-formula-conjecture");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(fact, axiom, p(a)).\n\
+             tff(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_existential_conjecture_atom() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-existential-conjecture");
@@ -12173,6 +12171,41 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_uses_tff_formula_entries() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tff-formula-entries");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(test1, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                "--print-types",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a:person):$o <- .\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_expands_fof_distinct_formula() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-fof-distinct");
@@ -12995,6 +13028,40 @@ mod tests {
              fof(a_type, type, a: person).\n\
              tff(p_type, type, p: person > $o).\n\
              fof(test1, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tff_formula_entries() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tff-formula-entries");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(fact, axiom, p(a)).\n\
+             tff(rule, axiom, (p(a)=>q(a))).\n\
+             tff(goal, conjecture, q(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
