@@ -4902,6 +4902,10 @@ enum SimpleFofFormula {
     Conjunction(Vec<SimpleFofFormula>),
     Disjunction(Vec<SimpleFofFormula>),
     Negation(Vec<SimpleFofFormula>),
+    Universal {
+        bound: Vec<Term>,
+        formulas: Vec<SimpleFofFormula>,
+    },
     Existential {
         bound: Vec<Term>,
         formulas: Vec<SimpleFofFormula>,
@@ -5248,36 +5252,35 @@ fn simple_fof_skolemize_existential_literal_lists(
     }
 
     let bound_ids = bound.iter().map(term_identity_id).collect::<Vec<usize>>();
-    let mut skolemized = Vec::with_capacity(literal_lists.len());
-    for literal_list in literal_lists {
-        let mut variables = BTreeMap::new();
+    let mut variables = BTreeMap::new();
+    for literal_list in &literal_lists {
         for literal in literal_list.as_slice() {
             literal.collect_variables(&mut variables);
         }
-        let mut dependencies = variables
-            .iter()
-            .filter(|(id, _)| !bound_ids.contains(id))
-            .map(|(_, variable)| variable.clone())
-            .collect::<Vec<_>>();
-        dependencies.sort_by_key(|variable| std::cmp::Reverse(variable.f_code()));
-
-        let mut subst = Substitution::new();
-        let copy_result = (|| {
-            for variable in bound {
-                if variable.binding().is_none()
-                    && variables.contains_key(&term_identity_id(variable))
-                {
-                    let type_ = variable.type_();
-                    let skolem = bank.alloc_new_skolem(&dependencies, type_.as_ref())?;
-                    subst.add_binding(variable, &skolem);
-                }
-            }
-            literal_list.copy_to_bank(bank)
-        })();
-        subst.backtrack();
-        skolemized.push(copy_result?);
     }
-    Ok(skolemized)
+    let mut dependencies = variables
+        .iter()
+        .filter(|(id, _)| !bound_ids.contains(id))
+        .map(|(_, variable)| variable.clone())
+        .collect::<Vec<_>>();
+    dependencies.sort_by_key(|variable| std::cmp::Reverse(variable.f_code()));
+
+    let mut subst = Substitution::new();
+    let copy_result = (|| {
+        for variable in bound {
+            if variable.binding().is_none() && variables.contains_key(&term_identity_id(variable)) {
+                let type_ = variable.type_();
+                let skolem = bank.alloc_new_skolem(&dependencies, type_.as_ref())?;
+                subst.add_binding(variable, &skolem);
+            }
+        }
+        literal_lists
+            .iter()
+            .map(|literal_list| literal_list.copy_to_bank(bank))
+            .collect()
+    })();
+    subst.backtrack();
+    copy_result
 }
 
 fn simple_fof_formula_to_clause_literal_lists(
@@ -5339,6 +5342,18 @@ fn simple_fof_formula_to_clause_literal_lists(
         SimpleFofFormula::Negation(formulas) => {
             simple_fof_formulas_to_clause_literal_lists(formulas, !negate_as_conjecture, bank)
         }
+        SimpleFofFormula::Universal { bound, formulas } => {
+            if negate_as_conjecture && simple_fof_formulas_contain_existential(&formulas) {
+                return Err(simple_fof_existential_requires_full_cnf_error());
+            }
+            let literal_lists =
+                simple_fof_formulas_to_clause_literal_lists(formulas, negate_as_conjecture, bank)?;
+            if negate_as_conjecture {
+                simple_fof_skolemize_existential_literal_lists(literal_lists, &bound, bank)
+            } else {
+                Ok(literal_lists)
+            }
+        }
         SimpleFofFormula::Existential { bound, formulas } => {
             if negate_as_conjecture {
                 simple_fof_formulas_to_clause_literal_lists(formulas, true, bank)
@@ -5371,7 +5386,10 @@ fn simple_fof_formula_contains_existential(formula: &SimpleFofFormula) -> bool {
         }
         SimpleFofFormula::Conjunction(formulas)
         | SimpleFofFormula::Disjunction(formulas)
-        | SimpleFofFormula::Negation(formulas) => simple_fof_formulas_contain_existential(formulas),
+        | SimpleFofFormula::Negation(formulas)
+        | SimpleFofFormula::Universal { formulas, .. } => {
+            simple_fof_formulas_contain_existential(formulas)
+        }
         SimpleFofFormula::Existential { .. } => true,
     }
 }
@@ -5601,24 +5619,28 @@ fn parse_simple_fof_primary_formula(
     if scanner.test_tok(TokenType::EXIST_QUANTOR) {
         return parse_simple_fof_existential_atomic_formula(scanner, bank);
     }
-    parse_simple_fof_universal_prefix(scanner)?;
-    if scanner.test_tok(TokenType::EXIST_QUANTOR) {
-        return Err(simple_fof_unsupported_error(scanner));
-    }
-    if scanner.test_tok(TokenType::OPEN_BRACKET) {
+    let universal_bound_names = parse_simple_fof_universal_prefix(scanner)?;
+    let formulas = if scanner.test_tok(TokenType::EXIST_QUANTOR) {
+        parse_simple_fof_existential_atomic_formula(scanner, bank)?
+    } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
         let formulas = parse_simple_fof_connective_formulas(scanner, bank)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-        return Ok(formulas);
-    }
-    if scanner.test_tok(TokenType::TILDE_SIGN) {
+        formulas
+    } else if scanner.test_tok(TokenType::TILDE_SIGN) {
         scanner.accept_tok(TokenType::TILDE_SIGN)?;
         let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Negation(formulas)]);
-    }
+        vec![SimpleFofFormula::Negation(formulas)]
+    } else {
+        let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+        simple_fof_literal_formulas(vec![literal])
+    };
 
-    let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
-    Ok(simple_fof_literal_formulas(vec![literal]))
+    Ok(simple_fof_wrap_universal_formulas(
+        bank,
+        &universal_bound_names,
+        formulas,
+    ))
 }
 
 fn simple_fof_formulas_to_disjuncts(formulas: Vec<SimpleFofFormula>) -> Vec<SimpleFofFormula> {
@@ -5628,19 +5650,46 @@ fn simple_fof_formulas_to_disjuncts(formulas: Vec<SimpleFofFormula>) -> Vec<Simp
     vec![SimpleFofFormula::Conjunction(formulas)]
 }
 
-fn parse_simple_fof_universal_prefix(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+fn simple_fof_wrap_universal_formulas(
+    bank: &TermBank,
+    bound_names: &[String],
+    formulas: Vec<SimpleFofFormula>,
+) -> Vec<SimpleFofFormula> {
+    if bound_names.is_empty() {
+        return formulas;
+    }
+
+    let mut bound = Vec::new();
+    for name in bound_names {
+        if let Some(variable) = bank.vars().ext_name_find(name) {
+            if !bound.iter().any(|existing| existing == &variable) {
+                bound.push(variable);
+            }
+        }
+    }
+    if bound.is_empty() {
+        formulas
+    } else {
+        vec![SimpleFofFormula::Universal { bound, formulas }]
+    }
+}
+
+fn parse_simple_fof_universal_prefix(scanner: &mut Scanner) -> Result<Vec<String>, Diagnostic> {
+    let mut names = Vec::new();
     while scanner.test_tok(TokenType::UNIV_QUANTOR) {
         scanner.accept_tok(TokenType::UNIV_QUANTOR)?;
         scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+        names.push(scanner.current_token().literal());
         scanner.accept_tok(TokenType::NAME)?;
         while scanner.test_tok(TokenType::COMMA) {
             scanner.accept_tok(TokenType::COMMA)?;
+            names.push(scanner.current_token().literal());
             scanner.accept_tok(TokenType::NAME)?;
         }
         scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
         scanner.accept_tok(TokenType::COLON)?;
     }
-    Ok(())
+    Ok(names)
 }
 
 fn parse_simple_fof_existential_atomic_formula(
@@ -8543,7 +8592,31 @@ mod tests {
         std::fs::write(
             &path,
             "fof(fact, axiom, ?[X]:p(X)).\n\
-             fof(goal, conjecture, ![Y]:p(Y)).\n",
+             fof(goal, conjecture, ?[Y]:p(Y)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_universal_positive_existential_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-universal-positive-existential");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, ![Y]: ?[X]:p(X,Y)).\n\
+             fof(goal, conjecture, ?[X]:p(X,a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -11117,6 +11190,54 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_universal_positive_existential_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-universal-positive-existential");
+        std::fs::write(&path, "fof(test1, axiom, ![Y]: ?[X]:p(X,Y)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (p(esk1_1(X2),X2))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_skolemizes_negated_universal_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-universal-conjecture");
+        std::fs::write(&path, "fof(goal, conjecture, ![Y]:p(Y)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", negated_conjecture, (~p(esk1_0))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_rejects_trailing_tokens_after_clause_list() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-junk");
@@ -11171,6 +11292,29 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-mixed-existential");
         std::fs::write(&path, "fof(test1, axiom, ?[X]:(p(X)&q(X))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("requires full clausification"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_negated_universal_with_existential_scope() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-negated-universal-existential");
+        std::fs::write(&path, "fof(goal, conjecture, ![Y]: ?[X]:p(X,Y)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
