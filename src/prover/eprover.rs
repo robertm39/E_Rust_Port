@@ -5512,7 +5512,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             )
         }
         SimpleFofFormula::Conjunction(formulas) => {
-            simple_fof_nonexistential_connective_to_clause_literal_lists(
+            simple_fof_conjunction_formula_to_clause_literal_lists(
                 formulas,
                 negate_as_conjecture,
                 universal_dependencies,
@@ -5599,12 +5599,19 @@ fn simple_fof_equivalence_formula_to_clause_literal_lists(
     }
 }
 
-fn simple_fof_nonexistential_connective_to_clause_literal_lists(
+fn simple_fof_conjunction_formula_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
+    if negate_as_conjecture {
+        return simple_fof_negated_conjunction_to_clause_literal_lists(
+            formulas,
+            universal_dependencies,
+            bank,
+        );
+    }
     if simple_fof_formulas_contain_existential(&formulas) {
         return Err(simple_fof_existential_requires_full_cnf_error());
     }
@@ -5622,7 +5629,7 @@ fn simple_fof_disjunction_formula_to_clause_literal_lists(
     universal_dependencies: &[Term],
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    if simple_fof_formulas_contain_existential(&disjuncts) {
+    if !negate_as_conjecture && simple_fof_formulas_contain_existential(&disjuncts) {
         return Err(simple_fof_existential_requires_full_cnf_error());
     }
     simple_fof_disjunction_to_clause_literal_lists(
@@ -6218,7 +6225,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, positive-universal-scope parenthesized existential bodies, or quantifier-free parenthesized existential bodies in direct positive or negated contexts, universally quantified implications, equivalences, and XORs with supported existential operands, NANDs and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, positive-universal-scope parenthesized existential bodies, or quantifier-free parenthesized existential bodies in direct positive or negated contexts, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -9698,6 +9705,31 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_nand_with_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-nand-existential");
+        std::fs::write(
+            &path,
+            "fof(nand, axiom, (p(a) ~& ?[X]:q(X))).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_conjecture_nor_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjecture-nor");
@@ -9718,6 +9750,30 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_nor_with_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-nor-existential");
+        std::fs::write(
+            &path,
+            "fof(nor, axiom, (p(a) ~| ?[X]:q(X))).\n\
+             fof(p, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -12052,6 +12108,82 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_lowers_nand_with_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-nand-existential-operand");
+        std::fs::write(&path, "fof(test1, axiom, (p(a)~&?[X]:q(X))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (~p(a)|~q(X1))).\n"));
+        assert!(!printed.contains("esk"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_nor_with_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-nor-existential-operand");
+        std::fs::write(&path, "fof(test1, axiom, (p(a)~|?[X]:q(X))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains(", axiom, (~p(a))).\n"));
+        assert!(printed.contains(", axiom, (~q(X1))).\n"));
+        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
+        assert!(!printed.contains("esk"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_universal_nand_with_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-universal-nand-existential-operand");
+        std::fs::write(&path, "fof(test1, axiom, ![Y]:(p(Y)~&?[X]:q(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (~p(X1)|~q(X2,X1))).\n"));
+        assert!(!printed.contains("esk"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_skolemizes_negated_universal_conjecture() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-universal-conjecture");
@@ -12340,6 +12472,37 @@ mod tests {
             &path,
             "fof(nand, axiom, (p(a)~&q(a))).\n\
              fof(nor, conjecture, (p(a)~|q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_supported_nand_nor_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-nand-nor-existential");
+        std::fs::write(
+            &path,
+            "fof(nand, axiom, (p(a)~&?[X]:q(X))).\n\
+             fof(nor, axiom, (r(a)~|?[X]:s(X))).\n\
+             fof(universal_nand, axiom, ![Y]:(t(Y)~&?[X]:u(X,Y))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
