@@ -5237,7 +5237,7 @@ fn parse_simple_tptp_formula_clause(
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
-    let formulas = parse_simple_fof_formulas(scanner, bank)?;
+    let formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
     let literal_lists =
         simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
@@ -5921,6 +5921,169 @@ fn simple_fof_disjunction_to_clause_literal_lists(
         literal_lists = simple_fof_clause_literal_list_products(&literal_lists, &disjunct_literals);
     }
     Ok(literal_lists)
+}
+
+fn parse_simple_old_tptp_fof_formulas(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    parse_simple_old_tptp_fof_formula(scanner, bank)
+}
+
+fn parse_simple_old_tptp_fof_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let formulas = parse_simple_old_tptp_fof_elementary_formula(scanner, bank)?;
+    if scanner.test_tok(TokenType::FOF_LR_IMPL) {
+        scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
+        let consequents = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Implication {
+            antecedents: formulas,
+            consequents,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_RL_IMPL) {
+        scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
+        let antecedents = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Implication {
+            antecedents,
+            consequents: formulas,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_EQUIV) {
+        scanner.accept_tok(TokenType::FOF_EQUIV)?;
+        let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Equivalence {
+            left: formulas,
+            right,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_XOR) {
+        scanner.accept_tok(TokenType::FOF_XOR)?;
+        let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Negation(vec![
+            SimpleFofFormula::Equivalence {
+                left: formulas,
+                right,
+            },
+        ])]);
+    }
+    if scanner.test_tok(TokenType::FOF_NAND) {
+        scanner.accept_tok(TokenType::FOF_NAND)?;
+        let mut conjuncts = formulas;
+        conjuncts.extend(parse_simple_old_tptp_fof_formula(scanner, bank)?);
+        return Ok(vec![SimpleFofFormula::Negation(vec![
+            SimpleFofFormula::Conjunction(conjuncts),
+        ])]);
+    }
+    if scanner.test_tok(TokenType::FOF_NOR) {
+        scanner.accept_tok(TokenType::FOF_NOR)?;
+        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
+        disjuncts.extend(simple_fof_formulas_to_disjuncts(
+            parse_simple_old_tptp_fof_formula(scanner, bank)?,
+        ));
+        return Ok(vec![SimpleFofFormula::Negation(vec![
+            SimpleFofFormula::Disjunction(disjuncts),
+        ])]);
+    }
+    if scanner.test_tok(TokenType::FOF_AND) {
+        scanner.accept_tok(TokenType::FOF_AND)?;
+        let mut conjuncts = formulas;
+        conjuncts.extend(parse_simple_old_tptp_fof_formula(scanner, bank)?);
+        return Ok(conjuncts);
+    }
+    if scanner.test_tok(TokenType::FOF_OR) {
+        scanner.accept_tok(TokenType::FOF_OR)?;
+        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
+        disjuncts.extend(simple_fof_formulas_to_disjuncts(
+            parse_simple_old_tptp_fof_formula(scanner, bank)?,
+        ));
+        return Ok(vec![SimpleFofFormula::Disjunction(disjuncts)]);
+    }
+    if scanner.test_tok(TokenType::FOF_BIN_OP) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    Ok(formulas)
+}
+
+fn parse_simple_old_tptp_fof_elementary_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
+        return Ok(formulas);
+    }
+    if scanner.test_id("$distinct") {
+        return parse_simple_fof_distinct_formula(scanner, bank);
+    }
+    if scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+        return parse_simple_old_tptp_fof_quantified_formula(scanner, bank);
+    }
+    if scanner.test_tok(TokenType::OPEN_BRACKET) {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let formulas = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        return Ok(formulas);
+    }
+    if scanner.test_tok(TokenType::TILDE_SIGN) {
+        scanner.accept_tok(TokenType::TILDE_SIGN)?;
+        let formulas = parse_simple_old_tptp_fof_elementary_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Negation(formulas)]);
+    }
+
+    let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+    Ok(simple_fof_literal_formulas(vec![literal]))
+}
+
+fn parse_simple_old_tptp_fof_quantified_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let universal = scanner.test_tok(TokenType::UNIV_QUANTOR);
+    if universal {
+        scanner.accept_tok(TokenType::UNIV_QUANTOR)?;
+    } else {
+        scanner.accept_tok(TokenType::EXIST_QUANTOR)?;
+    }
+    scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+    bank.vars().push_env();
+    let parsed = (|| {
+        let mut bound = Vec::new();
+        let name = scanner.current_token().literal();
+        scanner.accept_tok(TokenType::NAME)?;
+        bound.push(parse_simple_fof_quantified_variable_declaration(
+            scanner, bank, name,
+        )?);
+        while scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            let name = scanner.current_token().literal();
+            scanner.accept_tok(TokenType::NAME)?;
+            bound.push(parse_simple_fof_quantified_variable_declaration(
+                scanner, bank, name,
+            )?);
+        }
+        scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+        scanner.accept_tok(TokenType::COLON)?;
+        let formulas = parse_simple_old_tptp_fof_elementary_formula(scanner, bank)?;
+        Ok((bound, formulas))
+    })();
+    let (bound, formulas) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            bank.vars().pop_env();
+            return Err(error);
+        }
+    };
+
+    let formulas = if universal {
+        simple_fof_wrap_universal_formulas(bank, bound, formulas)
+    } else {
+        let bound = simple_fof_resolve_bound_variables(bank, bound);
+        vec![SimpleFofFormula::Existential { bound, formulas }]
+    };
+    bank.vars().pop_env();
+    Ok(formulas)
 }
 
 fn parse_simple_fof_formulas(
@@ -9160,6 +9323,64 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_preserves_old_tptp_right_recursive_binary_parse() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-right-recursive-binary");
+        std::fs::write(
+            &path,
+            "input_formula(rule, axiom, p(a) | q(a) => r(a)).\n\
+             input_formula(fact, axiom, p(a)).\n\
+             input_formula(goal, conjecture, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_preserves_old_tptp_quantifier_element_scope() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-quantifier-element-scope");
+        std::fs::write(
+            &path,
+            "input_formula(rule, axiom, ![X]:p(X) => q(a)).\n\
+             input_formula(fact, axiom, p(a)).\n\
+             input_formula(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

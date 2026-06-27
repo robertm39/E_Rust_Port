@@ -206,6 +206,7 @@ Source files reviewed: `CLAUSES/ccl_tformulae.h`, `CLAUSES/ccl_tformulae.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - Change-later candidate: the C TSTP/FOF parser encodes formulas as terms and shares scanner, term-bank, and formula-owner state across parsing, simplification, CNF conversion, and proof output. Rust should preserve the observable token flow first, but the final owner API should separate parsing from clausification enough to make unsupported fragments and source metadata explicit.
+- Change-later candidate: old TPTP `input_formula(...)` uses `TFormulaTPTPParse`, which treats every FOF binary operator as the same-precedence right-recursive operator and lets a quantifier bind only the next elementary formula unless the body is parenthesized. Rust preserves that dialect quirk for compatibility, but the final parser API should make TPTP-vs-TSTP precedence and quantifier-scope rules explicit rather than hiding them behind shared helper names.
 
 ### Porting Focus
 
