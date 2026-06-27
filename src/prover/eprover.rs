@@ -4928,13 +4928,21 @@ fn parse_simple_fof_conjunct(
         return Ok(formulas);
     }
 
-    let antecedent = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+    let left_literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
     if scanner.test_tok(TokenType::FOF_LR_IMPL) {
         scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
         let consequent = parse_simple_fof_literal(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Implication {
-            antecedent,
+            antecedent: left_literal,
             consequent,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_RL_IMPL) {
+        scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
+        let antecedent = parse_simple_fof_literal(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Implication {
+            antecedent,
+            consequent: left_literal,
         }]);
     }
     if scanner.test_tok(TokenType::FOF_BIN_OP)
@@ -4942,7 +4950,7 @@ fn parse_simple_fof_conjunct(
     {
         return Err(simple_fof_unsupported_error(scanner));
     }
-    Ok(vec![SimpleFofFormula::Literal(antecedent)])
+    Ok(vec![SimpleFofFormula::Literal(left_literal)])
 }
 
 fn parse_simple_fof_parenthesized_formulas(
@@ -7318,6 +7326,7 @@ mod tests {
         std::fs::write(
             &path,
             "fof(rule, axiom, ![X]:(human(X) => mortal(X))).\n\
+             fof(reverse_rule, axiom, ![X]:(mortal(X) <= human(X))).\n\
              fof(fact, axiom, human(socrates)).\n\
              fof(goal, conjecture, mortal(socrates)).\n",
         )
@@ -7655,6 +7664,31 @@ mod tests {
         std::fs::write(
             &path,
             "fof(rule, axiom, ![X]:(human(X) => mortal(X))).\n\
+             fof(fact, axiom, human(socrates)).\n\
+             fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_reverse_implication_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-reverse-implication");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, ![X]:(mortal(X) <= human(X))).\n\
              fof(fact, axiom, human(socrates)).\n\
              fof(goal, conjecture, mortal(socrates)).\n",
         )
