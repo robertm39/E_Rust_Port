@@ -130,6 +130,7 @@ Source files reviewed: `CLAUSES/ccl_formulasets.h`, `CLAUSES/ccl_formulasets.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `FormulaSetAppEncode` first walks every wrapped formula with `PreloadTypes`, then prints app-encoded type declarations, app-encoded symbol declarations, and finally each non-`$true` formula. It takes the term bank from the first set entry and assumes formula-shaped wrappers when calling `WFormulaAppEncode`; a cleaned Rust API should keep the preload/declaration ordering explicit but avoid coupling declaration output to the first list cell once full `FormulaSet` ownership is available.
 
 ### Porting Focus
 

@@ -21,7 +21,8 @@ use crate::clauses::clause::{
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
-    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
+    CP_TYPE_QUESTION,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -29,7 +30,7 @@ use crate::clauses::derivation::{
     op_has_arg1, op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef,
     DerivationEntry,
 };
-use crate::clauses::eqn::{eqn_fof_parse, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
@@ -67,7 +68,7 @@ use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL,
 };
-use crate::terms::simpletypes::Type;
+use crate::terms::simpletypes::{type_app_encoded_name, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, RewriteDemodulator, RewriteLevel, Term};
@@ -3634,6 +3635,11 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
+    if config.encoding.app_encode {
+        run_app_encode(&mut output, &mut runtime_config)?;
+        return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
+    }
+
     if config.flags.contains(EProverFlag::PruneOnly) {
         run_prune_only(&mut output, &mut runtime_config)?;
         return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
@@ -3752,6 +3758,279 @@ fn write_syntax_only_success(output: &mut impl Write) -> Result<(), EProverError
     write_comment_line_after_blank(output, "Parsing successful!")?;
     write_tstp_status(output, "Unknown")?;
     Ok(())
+}
+
+fn run_app_encode<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &mut EProverConfig,
+) -> Result<(), EProverError> {
+    let mut signature = Signature::new(TypeBank::new());
+    signature.remove_distinct_props(config.free_symbol_properties);
+    let mut bank = TermBank::new(signature)?;
+    let mut formulas = Vec::new();
+    let mut saw_any_formula_owner = false;
+
+    let files = config.files.clone();
+    for file in &files {
+        let parsed_file = parse_app_encode_file(file, config.parse_format, &mut bank)?;
+        apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
+        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.saw_formula_owner {
+            return Err(Diagnostic::new(
+                ErrorCode::INPUT_SEMANTIC_ERROR,
+                format!("Input file {file} did not contain any clauses"),
+            )
+            .into());
+        }
+        saw_any_formula_owner |= parsed_file.saw_formula_owner;
+        formulas.extend(parsed_file.formulas);
+    }
+
+    if config.flags.contains(EProverFlag::RequireNonempty) && !saw_any_formula_owner {
+        return Err(Diagnostic::new(
+            ErrorCode::INPUT_SEMANTIC_ERROR,
+            "Input did not contain any clauses",
+        )
+        .into());
+    }
+
+    write_preprocessing_config_debug_line(output, config)?;
+    write_app_encoded_formula_set(output, &mut bank, &formulas, saw_any_formula_owner)?;
+    Ok(())
+}
+
+fn write_app_encoded_formula_set<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    bank: &mut TermBank,
+    formulas: &[SimpleAppEncodedFormula],
+    saw_formula_owner: bool,
+) -> Result<(), EProverError> {
+    if !saw_formula_owner {
+        return Ok(());
+    }
+
+    for formula in formulas {
+        simple_fof_preload_app_encoded_formulas(&formula.formulas, bank)?;
+    }
+
+    let mut rendered = Vec::new();
+    bank.signature()
+        .type_bank()
+        .app_encode_types(&mut rendered, ProblemType::FirstOrder, true)?;
+    bank.signature().print_app_encoded_decls(&mut rendered)?;
+
+    for formula in formulas {
+        if simple_fof_formulas_are_app_encoded_prop_true(&formula.formulas) {
+            continue;
+        }
+
+        let mut formula_text = String::new();
+        write!(
+            formula_text,
+            "tff({}, {}, ",
+            formula.name,
+            app_encoded_formula_role(formula.type_)
+        )
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        simple_fof_write_app_encoded_formulas(&mut formula_text, bank, &formula.formulas)?;
+        formula_text.push_str(").\n");
+        rendered.extend_from_slice(formula_text.as_bytes());
+    }
+
+    output.write_stdout_side_channel(&rendered)?;
+    Ok(())
+}
+
+fn simple_fof_preload_app_encoded_formulas(
+    formulas: &[SimpleFofFormula],
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    for formula in formulas {
+        simple_fof_preload_app_encoded_formula(formula, bank)?;
+    }
+    Ok(())
+}
+
+fn simple_fof_preload_app_encoded_formula(
+    formula: &SimpleFofFormula,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    match formula {
+        SimpleFofFormula::Truth(_) => {}
+        SimpleFofFormula::Literal(literal) => {
+            let mut sink = String::new();
+            eqn_write_app_encode(&mut sink, bank, literal, false)?;
+        }
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        } => {
+            simple_fof_preload_app_encoded_formulas(antecedents, bank)?;
+            simple_fof_preload_app_encoded_formulas(consequents, bank)?;
+        }
+        SimpleFofFormula::Equivalence { left, right } => {
+            simple_fof_preload_app_encoded_formulas(left, bank)?;
+            simple_fof_preload_app_encoded_formulas(right, bank)?;
+        }
+        SimpleFofFormula::Conjunction(formulas)
+        | SimpleFofFormula::Disjunction(formulas)
+        | SimpleFofFormula::Negation(formulas)
+        | SimpleFofFormula::Universal { formulas, .. }
+        | SimpleFofFormula::Existential { formulas, .. } => {
+            simple_fof_preload_app_encoded_formulas(formulas, bank)?;
+        }
+    }
+    Ok(())
+}
+
+fn simple_fof_formulas_are_app_encoded_prop_true(formulas: &[SimpleFofFormula]) -> bool {
+    matches!(formulas, [SimpleFofFormula::Truth(true)])
+}
+
+fn app_encoded_formula_role(properties: FormulaProperties) -> &'static str {
+    match properties.query_tptp_type() {
+        CP_TYPE_AXIOM if properties.query(CP_INPUT_FORMULA) => "axiom",
+        CP_TYPE_HYPOTHESIS => "hypothesis",
+        CP_TYPE_CONJECTURE => "conjecture",
+        CP_TYPE_QUESTION => "question",
+        CP_TYPE_LEMMA => "lemma",
+        CP_TYPE_NEG_CONJECTURE => "negated_conjecture",
+        _ => "plain",
+    }
+}
+
+fn simple_fof_write_app_encoded_formulas(
+    output: &mut String,
+    bank: &mut TermBank,
+    formulas: &[SimpleFofFormula],
+) -> Result<(), Diagnostic> {
+    if let Some((first, rest)) = formulas.split_first() {
+        if rest.is_empty() {
+            return simple_fof_write_app_encoded_formula(output, bank, first);
+        }
+
+        output.push('(');
+        simple_fof_write_app_encoded_formula(output, bank, first)?;
+        for formula in rest {
+            output.push('&');
+            simple_fof_write_app_encoded_formula(output, bank, formula)?;
+        }
+        output.push(')');
+        Ok(())
+    } else {
+        simple_fof_write_app_encoded_truth(output, bank, true)
+    }
+}
+
+fn simple_fof_write_app_encoded_formula(
+    output: &mut String,
+    bank: &mut TermBank,
+    formula: &SimpleFofFormula,
+) -> Result<(), Diagnostic> {
+    match formula {
+        SimpleFofFormula::Truth(value) => simple_fof_write_app_encoded_truth(output, bank, *value),
+        SimpleFofFormula::Literal(literal) => eqn_write_app_encode(output, bank, literal, false),
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        } => simple_fof_write_app_encoded_binary(output, bank, antecedents, "=>", consequents),
+        SimpleFofFormula::Equivalence { left, right } => {
+            simple_fof_write_app_encoded_binary(output, bank, left, "<=>", right)
+        }
+        SimpleFofFormula::Conjunction(formulas) => {
+            simple_fof_write_app_encoded_chain(output, bank, formulas, "&")
+        }
+        SimpleFofFormula::Disjunction(formulas) => {
+            simple_fof_write_app_encoded_chain(output, bank, formulas, "|")
+        }
+        SimpleFofFormula::Negation(formulas) => {
+            output.push_str("~(");
+            simple_fof_write_app_encoded_formulas(output, bank, formulas)?;
+            output.push(')');
+            Ok(())
+        }
+        SimpleFofFormula::Universal { bound, formulas } => {
+            simple_fof_write_app_encoded_quantified(output, bank, "!", bound, formulas)
+        }
+        SimpleFofFormula::Existential { bound, formulas } => {
+            simple_fof_write_app_encoded_quantified(output, bank, "?", bound, formulas)
+        }
+    }
+}
+
+fn simple_fof_write_app_encoded_truth(
+    output: &mut String,
+    bank: &mut TermBank,
+    value: bool,
+) -> Result<(), Diagnostic> {
+    let literal = Eqn::alloc(
+        bank.true_term().clone(),
+        bank.true_term().clone(),
+        bank,
+        value,
+    )?;
+    eqn_write_app_encode(output, bank, &literal, false)
+}
+
+fn simple_fof_write_app_encoded_binary(
+    output: &mut String,
+    bank: &mut TermBank,
+    left: &[SimpleFofFormula],
+    operator: &str,
+    right: &[SimpleFofFormula],
+) -> Result<(), Diagnostic> {
+    output.push('(');
+    simple_fof_write_app_encoded_formulas(output, bank, left)?;
+    output.push_str(operator);
+    simple_fof_write_app_encoded_formulas(output, bank, right)?;
+    output.push(')');
+    Ok(())
+}
+
+fn simple_fof_write_app_encoded_chain(
+    output: &mut String,
+    bank: &mut TermBank,
+    formulas: &[SimpleFofFormula],
+    operator: &str,
+) -> Result<(), Diagnostic> {
+    output.push('(');
+    if let Some((first, rest)) = formulas.split_first() {
+        simple_fof_write_app_encoded_formula(output, bank, first)?;
+        for formula in rest {
+            output.push_str(operator);
+            simple_fof_write_app_encoded_formula(output, bank, formula)?;
+        }
+    } else {
+        simple_fof_write_app_encoded_truth(output, bank, true)?;
+    }
+    output.push(')');
+    Ok(())
+}
+
+fn simple_fof_write_app_encoded_quantified(
+    output: &mut String,
+    bank: &mut TermBank,
+    quantifier: &str,
+    bound: &[Term],
+    formulas: &[SimpleFofFormula],
+) -> Result<(), Diagnostic> {
+    output.push_str(quantifier);
+    output.push('[');
+    for (index, variable) in bound.iter().enumerate() {
+        if index != 0 {
+            output.push_str(", ");
+        }
+        let type_ = variable.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "app-encoded quantified variable has no type",
+            )
+        })?;
+        let type_name = type_app_encoded_name(&type_)?;
+        write!(output, "{}:{type_name}", bank.term_string(variable, true))
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+    }
+    output.push_str("]:");
+    simple_fof_write_app_encoded_formulas(output, bank, formulas)
 }
 
 fn run_prune_only<W: Write + ?Sized>(
@@ -4917,10 +5196,74 @@ fn parse_clause_file(
     })
 }
 
+fn parse_app_encode_file(
+    file: &str,
+    parse_format: IoFormat,
+    bank: &mut TermBank,
+) -> Result<ParsedAppEncodeFile, Diagnostic> {
+    let mut scanner = if file == "-" {
+        let mut input = Vec::new();
+        io::stdin().read_to_end(&mut input).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read standard input: {error}"),
+            )
+        })?;
+        Scanner::from_file_content("-", input, false)?
+    } else {
+        Scanner::from_file(Path::new(file), false)?
+    };
+    scanner.set_format(parse_format);
+    let detected_format = scanner.format();
+    let (saw_formula_owner, formulas) = match detected_format {
+        IoFormat::Tstp => parse_tstp_app_encode_entry_list(&mut scanner, bank)?,
+        IoFormat::Tptp => parse_tptp_app_encode_entry_list(&mut scanner, bank)?,
+        _ => {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): --app-encode currently supports TPTP/TSTP formula input",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            ));
+        }
+    };
+    if !scanner.test_tok(TokenType::NO_TOKEN) {
+        return Err(Diagnostic::new(
+            ErrorCode::SYNTAX_ERROR,
+            format!(
+                "{}(just read '{}'): Unexpected token after app-encode input",
+                token_pos_rep(scanner.current_token()),
+                scanner.current_token().literal()
+            ),
+        ));
+    }
+    Ok(ParsedAppEncodeFile {
+        detected_format,
+        saw_formula_owner,
+        formulas,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ParsedClauseFile {
     detected_format: IoFormat,
     formula_conjecture_seen: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedAppEncodeFile {
+    detected_format: IoFormat,
+    saw_formula_owner: bool,
+    formulas: Vec<SimpleAppEncodedFormula>,
+}
+
+#[derive(Clone, Debug)]
+struct SimpleAppEncodedFormula {
+    name: String,
+    type_: FormulaProperties,
+    formulas: Vec<SimpleFofFormula>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4946,6 +5289,75 @@ enum SimpleFofFormula {
         bound: Vec<Term>,
         formulas: Vec<SimpleFofFormula>,
     },
+}
+
+fn parse_tptp_app_encode_entry_list(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<(bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
+    let mut formulas = Vec::new();
+    let mut saw_formula_owner = false;
+    while !scanner.test_tok(TokenType::NO_TOKEN) {
+        if scanner.test_id("input_formula") {
+            saw_formula_owner = true;
+            formulas.push(parse_simple_tptp_app_encode_formula(scanner, bank)?);
+        } else if scanner.test_id("include") {
+            parse_app_encode_ignored_include(scanner)?;
+        } else {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): --app-encode currently supports input_formula formula entries for old TPTP input",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            ));
+        }
+    }
+    Ok((saw_formula_owner, formulas))
+}
+
+fn parse_tstp_app_encode_entry_list(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<(bool, Vec<SimpleAppEncodedFormula>), Diagnostic> {
+    let mut formulas = Vec::new();
+    let mut saw_formula_owner = false;
+    while !scanner.test_tok(TokenType::NO_TOKEN) {
+        if scanner.test_id("fof|tff|tcf") {
+            saw_formula_owner = true;
+            if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
+                formulas.push(formula);
+            }
+        } else if scanner.test_id("include") {
+            parse_app_encode_ignored_include(scanner)?;
+        } else if scanner.test_id("thf") {
+            return Err(thf_requires_hol_error(scanner));
+        } else {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): --app-encode currently supports fof/tff/tcf formula entries for TSTP input",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            ));
+        }
+    }
+    Ok((saw_formula_owner, formulas))
+}
+
+fn parse_app_encode_ignored_include(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    scanner.accept_id("include")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    scanner.accept_tok(TokenType::SQ_STRING)?;
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        parse_skip_parenthesized_expr(scanner)?;
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    Ok(())
 }
 
 fn parse_tptp_entry_list(
@@ -5132,6 +5544,90 @@ struct ParsedSimpleFofClause {
 struct SimpleFofBoundVariable {
     name: String,
     variable: Option<Term>,
+}
+
+fn parse_simple_tstp_app_encode_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<SimpleAppEncodedFormula>, Diagnostic> {
+    bank.vars().clear_ext_names();
+
+    let formula_kind = scanner.current_token().literal();
+    scanner.accept_id("fof|tff|tcf")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    if scanner.test_id("type") {
+        scanner.accept_id("type")?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        bank.signature_mut()
+            .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+        parse_simple_tstp_optional_source(scanner)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        scanner.accept_tok(TokenType::FULLSTOP)?;
+        return Ok(None);
+    }
+
+    let roles = if formula_kind == "tcf" {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist"
+    } else {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question"
+    };
+    scanner.check_id(roles)?;
+    let role = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::IDENT)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    let formula_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let formula_position = token_pos_rep(scanner.current_token());
+    let formulas = parse_simple_fof_formulas(scanner, bank)?;
+    if !simple_fof_global_free_variables(&formulas).is_empty() {
+        return Err(tstp_formula_free_variables_error(&formula_position));
+    }
+    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    parse_simple_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    Ok(Some(SimpleAppEncodedFormula {
+        name,
+        type_: formula_type | CP_INPUT_FORMULA,
+        formulas,
+    }))
+}
+
+fn parse_simple_tptp_app_encode_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<SimpleAppEncodedFormula, Diagnostic> {
+    bank.vars().clear_ext_names();
+
+    scanner.accept_id("input_formula")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.check_id("axiom|hypothesis|negated_conjecture|conjecture|question|lemma|unknown")?;
+    let role = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::IDENT)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    let formula_type = old_tptp_input_formula_clause_type(&role);
+    let formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
+    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    Ok(SimpleAppEncodedFormula {
+        name,
+        type_: formula_type | CP_INPUT_FORMULA,
+        formulas,
+    })
 }
 
 fn parse_simple_tstp_formula_clause(
@@ -8557,6 +9053,74 @@ mod tests {
         assert!(output.starts_with("{\n"));
         assert!(output.contains("selection_strategy:             PSelectComplexExceptUniqMaxHorn"));
         assert!(output.contains("pm_type:                        ParamodSim"));
+    }
+
+    #[test]
+    fn run_app_encode_prints_supported_tff_formula_and_exits() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tff");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n\
+             tff(f_type, type, f: person > person).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(ax, axiom, p(f(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("%-- person."));
+        assert!(printed.contains("tff(typedecl"));
+        assert!(printed.contains("tff(symboltypedecl"));
+        assert!(printed.contains("app_"));
+        assert!(printed.contains("tff(ax, axiom, "));
+        assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_ignores_includes_and_skips_top_level_true() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-ignore-include");
+        std::fs::write(
+            &path,
+            "include('definitely_missing_for_app_encode.ax',[missing]).\n\
+             fof(skip_true, axiom, $true).\n\
+             fof(show_false, axiom, $false).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(!printed.contains("skip_true"));
+        assert!(printed.contains("tff(show_false, axiom, "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
