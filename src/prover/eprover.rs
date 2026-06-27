@@ -4684,6 +4684,7 @@ struct ParsedClauseFile {
 enum SimpleFofFormula {
     Literal(Eqn),
     Implication { antecedent: Eqn, consequent: Eqn },
+    Disjunction(Vec<SimpleFofFormula>),
 }
 
 fn parse_tstp_entry_list(
@@ -4796,6 +4797,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
                 SimpleFofFormula::Implication { .. } => {
                     return Err(simple_fof_conjecture_implication_error());
                 }
+                SimpleFofFormula::Disjunction(_) => return Err(simple_fof_conjecture_mix_error()),
             }
         }
         let mut literals = EqnList::from_vec(literals);
@@ -4803,10 +4805,60 @@ fn simple_fof_formulas_to_clause_literal_lists(
         return Ok(vec![literals]);
     }
 
-    formulas
-        .into_iter()
-        .map(|formula| simple_fof_formula_to_clause_literals(formula, negate_as_conjecture))
-        .collect()
+    let mut literal_lists = Vec::new();
+    for formula in formulas {
+        literal_lists.extend(simple_fof_formula_to_clause_literal_lists(
+            formula,
+            negate_as_conjecture,
+        )?);
+    }
+    Ok(literal_lists)
+}
+
+fn simple_fof_formula_to_clause_literal_lists(
+    formula: SimpleFofFormula,
+    negate_as_conjecture: bool,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    if negate_as_conjecture {
+        if let SimpleFofFormula::Disjunction(disjuncts) = formula {
+            let mut literals = Vec::new();
+            for disjunct in disjuncts {
+                simple_fof_collect_atomic_disjuncts(disjunct, &mut literals)?;
+            }
+            return Ok(literals
+                .into_iter()
+                .map(|literal| {
+                    let mut literals = EqnList::from_vec(vec![literal]);
+                    literals.negate_eqns();
+                    literals
+                })
+                .collect());
+        }
+    }
+
+    Ok(vec![simple_fof_formula_to_clause_literals(
+        formula,
+        negate_as_conjecture,
+    )?])
+}
+
+fn simple_fof_collect_atomic_disjuncts(
+    formula: SimpleFofFormula,
+    literals: &mut Vec<Eqn>,
+) -> Result<(), Diagnostic> {
+    match formula {
+        SimpleFofFormula::Literal(literal) => {
+            literals.push(literal);
+            Ok(())
+        }
+        SimpleFofFormula::Disjunction(disjuncts) => {
+            for disjunct in disjuncts {
+                simple_fof_collect_atomic_disjuncts(disjunct, literals)?;
+            }
+            Ok(())
+        }
+        SimpleFofFormula::Implication { .. } => Err(simple_fof_conjecture_implication_error()),
+    }
 }
 
 fn simple_fof_formula_to_clause_literals(
@@ -4831,7 +4883,23 @@ fn simple_fof_formula_to_clause_literals(
             antecedent.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
             Ok(EqnList::from_vec(vec![consequent, antecedent]))
         }
+        SimpleFofFormula::Disjunction(disjuncts) => {
+            simple_fof_disjunction_to_clause_literals(disjuncts, negate_as_conjecture)
+        }
     }
+}
+
+fn simple_fof_disjunction_to_clause_literals(
+    disjuncts: Vec<SimpleFofFormula>,
+    negate_as_conjecture: bool,
+) -> Result<EqnList, Diagnostic> {
+    let mut literals = Vec::new();
+    for disjunct in disjuncts {
+        let disjunct_literals =
+            simple_fof_formula_to_clause_literals(disjunct, negate_as_conjecture)?;
+        literals.extend(disjunct_literals.into_vec());
+    }
+    Ok(EqnList::from_vec(literals))
 }
 
 fn parse_simple_fof_formulas(
@@ -4869,7 +4937,9 @@ fn parse_simple_fof_conjunct(
             consequent,
         }]);
     }
-    if scanner.test_tok(TokenType::FOF_BIN_OP) && !scanner.test_tok(TokenType::FOF_AND) {
+    if scanner.test_tok(TokenType::FOF_BIN_OP)
+        && !scanner.test_tok(TokenType::FOF_AND | TokenType::FOF_OR)
+    {
         return Err(simple_fof_unsupported_error(scanner));
     }
     Ok(vec![SimpleFofFormula::Literal(antecedent)])
@@ -4884,10 +4954,35 @@ fn parse_simple_fof_parenthesized_formulas(
         scanner.accept_tok(TokenType::FOF_AND)?;
         formulas.extend(parse_simple_fof_conjunct(scanner, bank)?);
     }
+    if scanner.test_tok(TokenType::FOF_OR) {
+        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas)?;
+        while scanner.test_tok(TokenType::FOF_OR) {
+            scanner.accept_tok(TokenType::FOF_OR)?;
+            disjuncts.extend(simple_fof_formulas_to_disjuncts(
+                parse_simple_fof_conjunct(scanner, bank)?,
+            )?);
+        }
+        if scanner.test_tok(TokenType::FOF_BIN_OP) {
+            return Err(simple_fof_unsupported_error(scanner));
+        }
+        return Ok(vec![SimpleFofFormula::Disjunction(disjuncts)]);
+    }
     if scanner.test_tok(TokenType::FOF_BIN_OP) {
         return Err(simple_fof_unsupported_error(scanner));
     }
     Ok(formulas)
+}
+
+fn simple_fof_formulas_to_disjuncts(
+    formulas: Vec<SimpleFofFormula>,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if formulas.len() == 1 {
+        return Ok(formulas);
+    }
+    Err(Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        "FOF disjunctions with conjunctive operands require full clausification; the temporary parser only supports grouped disjunctions of supported clause formulas",
+    ))
 }
 
 fn parse_simple_fof_literal(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Eqn, Diagnostic> {
@@ -4938,7 +5033,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications, grouped non-conjecture conjunctions, and grouped atomic conjecture conjunctions",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications, grouped non-conjecture conjunctions/disjunctions, and grouped atomic conjecture conjunctions/disjunctions",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -4948,7 +5043,14 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
 fn simple_fof_conjecture_implication_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        "FOF conjecture implications require full clausification; the temporary parser only supports atomic conjectures and grouped atomic conjecture conjunctions",
+        "FOF conjecture implications require full clausification; the temporary parser only supports atomic conjectures and grouped atomic conjecture conjunctions/disjunctions",
+    )
+}
+
+fn simple_fof_conjecture_mix_error() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        "FOF conjectures that mix conjunction and disjunction require full clausification; the temporary parser only supports grouped atomic conjecture conjunctions or disjunctions",
     )
 }
 
@@ -7302,6 +7404,36 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_supported_fof_disjunction_fragments() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-fof-disjunction");
+        std::fs::write(
+            &path,
+            "fof(either, axiom, (p(a) | q(a))).\n\
+             fof(goal, conjecture, (p(a) | q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_resources_info_prints_c_shaped_footer() {
         let _guard = global_state_lock();
         let path = temp_path("resources-info");
@@ -7574,6 +7706,55 @@ mod tests {
             "fof(p, axiom, p(a)).\n\
              fof(q, axiom, q(a)).\n\
              fof(goal, conjecture, (p(a) & q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_axiom_disjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-axiom-disjunction");
+        std::fs::write(
+            &path,
+            "fof(either, axiom, (p(a) | q(a))).\n\
+             fof(not_p, axiom, ~p(a)).\n\
+             fof(not_q, axiom, ~q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_conjecture_disjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-conjecture-disjunction");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(goal, conjecture, (p(a) | q(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -8556,7 +8737,7 @@ mod tests {
     fn run_syntax_only_rejects_unsupported_fof_connective() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-unsupported");
-        std::fs::write(&path, "fof(test1, axiom, (p(a)|q(a))).\n").unwrap();
+        std::fs::write(&path, "fof(test1, axiom, (p(a)<=>q(a))).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -8570,6 +8751,31 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("requires full clausification"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_fof_disjunction_with_conjunctive_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-disjunction-conjunction-mix");
+        std::fs::write(&path, "fof(test1, axiom, ((p(a)&q(a)) | r(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("disjunctions with conjunctive operands require full clausification"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
