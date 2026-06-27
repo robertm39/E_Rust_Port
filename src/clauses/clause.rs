@@ -8,7 +8,8 @@ use crate::basics::sysdate::SysDate;
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
     CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
-    CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_WATCH_CLAUSE,
+    CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+    CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausepos::RewriteSequenceEntry;
@@ -1993,6 +1994,7 @@ fn clause_tptp_role(clause: &Clause) -> &'static str {
         CP_TYPE_AXIOM => "axiom",
         CP_TYPE_HYPOTHESIS => "hypothesis",
         CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE => "conjecture",
+        CP_TYPE_QUESTION => "question",
         CP_TYPE_LEMMA => "lemma",
         CP_TYPE_WATCH_CLAUSE => "watchlist",
         _ => "unknown",
@@ -2014,6 +2016,7 @@ fn clause_tstp_role(clause: &Clause) -> &'static str {
         CP_TYPE_AXIOM if clause.query_prop(CP_INPUT_FORMULA) => "axiom",
         CP_TYPE_HYPOTHESIS => "hypothesis",
         CP_TYPE_CONJECTURE => "conjecture",
+        CP_TYPE_QUESTION => "question",
         CP_TYPE_LEMMA => "lemma",
         CP_TYPE_WATCH_CLAUSE => "watchlist",
         CP_TYPE_NEG_CONJECTURE => "negated_conjecture",

@@ -12540,13 +12540,14 @@ mod tests {
     }
 
     #[test]
-    fn run_print_formulas_maps_old_tptp_lemma_and_unknown_formula_roles_to_axiom() {
+    fn run_print_formulas_preserves_old_tptp_formula_role_mapping() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tptp-input-formula-default-roles");
         std::fs::write(
             &path,
             "input_formula(lem, lemma, p(a)).\n\
-             input_formula(unk, unknown, q(a)).\n",
+             input_formula(unk, unknown, q(a)).\n\
+             input_formula(que, question, r(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -12569,6 +12570,7 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(printed.matches(", axiom, ").count(), 2);
+        assert_eq!(printed.matches(", question, ").count(), 1);
         assert!(!printed.contains(", lemma, "));
         assert!(!printed.contains(", plain, "));
         assert!(stderr.is_empty());
@@ -12596,6 +12598,31 @@ mod tests {
         assert!(printed.starts_with("cnf(i_0_"));
         assert!(printed.ends_with(", axiom, (p(a))).\n"));
         assert!(!printed.contains("<-"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_preserves_tstp_question_formula_role() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tstp-question-role");
+        std::fs::write(&path, "fof(query, question, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", question, (p(a))).\n"));
+        assert!(!printed.contains(", plain, "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
