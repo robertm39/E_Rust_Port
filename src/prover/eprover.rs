@@ -20,8 +20,8 @@ use crate::clauses::clause::{
     clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
-    clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA,
-    CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+    clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
+    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -5204,7 +5204,7 @@ fn parse_simple_tptp_formula_clause(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
 
-    let mut clause_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let mut clause_type = old_tptp_input_formula_clause_type(&role);
     let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
@@ -5236,6 +5236,16 @@ fn parse_simple_tptp_formula_clause(
         clauses,
         formula_conjecture_seen,
     })
+}
+
+fn old_tptp_input_formula_clause_type(role: &str) -> FormulaProperties {
+    match role {
+        "conjecture" => CP_TYPE_CONJECTURE,
+        "question" => CP_TYPE_QUESTION,
+        "negated_conjecture" => CP_TYPE_NEG_CONJECTURE,
+        "hypothesis" => CP_TYPE_HYPOTHESIS,
+        _ => CP_TYPE_AXIOM,
+    }
 }
 
 fn simple_fof_formulas_to_clause_literal_lists(
@@ -12496,6 +12506,42 @@ mod tests {
         assert!(printed.starts_with("input_clause(i_0_"));
         assert!(printed.ends_with(",axiom,[++equal(a, b)]).\n"));
         assert!(!printed.starts_with("cnf("));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_maps_old_tptp_lemma_and_unknown_formula_roles_to_axiom() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tptp-input-formula-default-roles");
+        std::fs::write(
+            &path,
+            "input_formula(lem, lemma, p(a)).\n\
+             input_formula(unk, unknown, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tptp-in",
+                "--tstp-out",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(printed.matches(", axiom, ").count(), 2);
+        assert!(!printed.contains(", lemma, "));
+        assert!(!printed.contains(", plain, "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
