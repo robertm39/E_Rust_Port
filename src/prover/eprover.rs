@@ -4684,6 +4684,7 @@ struct ParsedClauseFile {
 enum SimpleFofFormula {
     Literal(Eqn),
     Implication { antecedent: Eqn, consequent: Eqn },
+    Equivalence { left: Eqn, right: Eqn },
     Disjunction(Vec<SimpleFofFormula>),
 }
 
@@ -4794,7 +4795,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
         for formula in formulas {
             match formula {
                 SimpleFofFormula::Literal(literal) => literals.push(literal),
-                SimpleFofFormula::Implication { .. } => {
+                SimpleFofFormula::Implication { .. } | SimpleFofFormula::Equivalence { .. } => {
                     return Err(simple_fof_conjecture_implication_error());
                 }
                 SimpleFofFormula::Disjunction(_) => return Err(simple_fof_conjecture_mix_error()),
@@ -4835,6 +4836,12 @@ fn simple_fof_formula_to_clause_literal_lists(
                 .collect());
         }
     }
+    if let SimpleFofFormula::Equivalence { left, right } = formula {
+        if negate_as_conjecture {
+            return Err(simple_fof_conjecture_implication_error());
+        }
+        return Ok(simple_fof_equivalence_to_clause_literal_lists(left, right));
+    }
 
     Ok(vec![simple_fof_formula_to_clause_literals(
         formula,
@@ -4857,7 +4864,9 @@ fn simple_fof_collect_atomic_disjuncts(
             }
             Ok(())
         }
-        SimpleFofFormula::Implication { .. } => Err(simple_fof_conjecture_implication_error()),
+        SimpleFofFormula::Implication { .. } | SimpleFofFormula::Equivalence { .. } => {
+            Err(simple_fof_conjecture_implication_error())
+        }
     }
 }
 
@@ -4886,7 +4895,20 @@ fn simple_fof_formula_to_clause_literals(
         SimpleFofFormula::Disjunction(disjuncts) => {
             simple_fof_disjunction_to_clause_literals(disjuncts, negate_as_conjecture)
         }
+        SimpleFofFormula::Equivalence { .. } => Err(simple_fof_equivalence_context_error()),
     }
+}
+
+fn simple_fof_equivalence_to_clause_literal_lists(left: Eqn, right: Eqn) -> Vec<EqnList> {
+    let mut negative_left = left.clone();
+    negative_left.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
+    let mut negative_right = right.clone();
+    negative_right.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
+
+    vec![
+        EqnList::from_vec(vec![right, negative_left]),
+        EqnList::from_vec(vec![left, negative_right]),
+    ]
 }
 
 fn simple_fof_disjunction_to_clause_literals(
@@ -4943,6 +4965,14 @@ fn parse_simple_fof_conjunct(
         return Ok(vec![SimpleFofFormula::Implication {
             antecedent,
             consequent: left_literal,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_EQUIV) {
+        scanner.accept_tok(TokenType::FOF_EQUIV)?;
+        let right = parse_simple_fof_literal(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Equivalence {
+            left: left_literal,
+            right,
         }]);
     }
     if scanner.test_tok(TokenType::FOF_BIN_OP)
@@ -5051,7 +5081,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
 fn simple_fof_conjecture_implication_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        "FOF conjecture implications require full clausification; the temporary parser only supports atomic conjectures and grouped atomic conjecture conjunctions/disjunctions",
+        "FOF conjecture implications/equivalences require full clausification; the temporary parser only supports atomic conjectures and grouped atomic conjecture conjunctions/disjunctions",
     )
 }
 
@@ -5059,6 +5089,13 @@ fn simple_fof_conjecture_mix_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         "FOF conjectures that mix conjunction and disjunction require full clausification; the temporary parser only supports grouped atomic conjecture conjunctions or disjunctions",
+    )
+}
+
+fn simple_fof_equivalence_context_error() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        "FOF equivalences in disjunctions require full clausification; the temporary parser only supports standalone or conjunctive non-conjecture equivalences",
     )
 }
 
@@ -7327,6 +7364,7 @@ mod tests {
             &path,
             "fof(rule, axiom, ![X]:(human(X) => mortal(X))).\n\
              fof(reverse_rule, axiom, ![X]:(mortal(X) <= human(X))).\n\
+             fof(equiv_rule, axiom, ![X]:(human(X) <=> person(X))).\n\
              fof(fact, axiom, human(socrates)).\n\
              fof(goal, conjecture, mortal(socrates)).\n",
         )
@@ -7689,6 +7727,31 @@ mod tests {
         std::fs::write(
             &path,
             "fof(rule, axiom, ![X]:(mortal(X) <= human(X))).\n\
+             fof(fact, axiom, human(socrates)).\n\
+             fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_equivalence_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-equivalence");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, ![X]:(human(X) <=> mortal(X))).\n\
              fof(fact, axiom, human(socrates)).\n\
              fof(goal, conjecture, mortal(socrates)).\n",
         )
@@ -8771,7 +8834,7 @@ mod tests {
     fn run_syntax_only_rejects_unsupported_fof_connective() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-unsupported");
-        std::fs::write(&path, "fof(test1, axiom, (p(a)<=>q(a))).\n").unwrap();
+        std::fs::write(&path, "fof(test1, axiom, (p(a)<~>q(a))).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -8785,6 +8848,31 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("requires full clausification"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_fof_conjecture_equivalence() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-conjecture-equivalence");
+        std::fs::write(&path, "fof(goal, conjecture, (p(a)<=>q(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("conjecture implications/equivalences require full clausification"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -8838,7 +8926,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error
             .message()
-            .contains("conjecture implications require full clausification"));
+            .contains("conjecture implications/equivalences require full clausification"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
