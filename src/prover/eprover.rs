@@ -9916,6 +9916,42 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_accepts_supported_formula_bridge_input() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-formula-bridge");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, (p(a)=>q(a))).\n\
+             fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--prune", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains(&format!(
+            "cnf(c_0_1, axiom, (q(a)|~p(a)), file('{path_arg}', rule)).\n"
+        )));
+        assert!(printed.contains(&format!(
+            "cnf(c_0_3, negated_conjecture, (~q(a)), file('{path_arg}', goal)).\n"
+        )));
+        assert!(printed.ends_with("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_auto_tstp_input_uses_tstp_initial_docs() {
         let _guard = global_state_lock();
         let path = temp_path("prune-auto-tstp");
@@ -12710,6 +12746,40 @@ mod tests {
         assert!(printed.contains("% SZS status Unknown\n"));
         assert!(printed.contains("% Unprocessed non-unit clauses:\n"));
         assert!(!printed.contains("% Processed clauses                    :"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_accepts_supported_formula_bridge_input_without_saturation() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-formula-bridge");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, (p(a)=>q(a))).\n\
+             fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("% SZS status Unknown\n"));
+        assert!(printed.contains("p(a) <- .\n"));
+        assert!(printed.contains("?- q(a).\n"));
+        assert!(printed.contains("q(a) <- p(a).\n"));
+        assert!(!printed.contains("% Proof found!"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
