@@ -5755,11 +5755,11 @@ fn simple_fof_formula_contains_unsupported_existential_body_quantifier(
     match formula {
         SimpleFofFormula::Literal(_) => false,
         SimpleFofFormula::Universal { formulas, .. }
+        | SimpleFofFormula::Existential { formulas, .. }
         | SimpleFofFormula::Conjunction(formulas)
         | SimpleFofFormula::Disjunction(formulas) => {
             simple_fof_formulas_contain_unsupported_existential_body_quantifier(formulas)
         }
-        SimpleFofFormula::Existential { .. } => true,
         SimpleFofFormula::Negation(formulas) => simple_fof_formulas_contain_quantifier(formulas),
         SimpleFofFormula::Implication {
             antecedents,
@@ -5778,7 +5778,7 @@ fn simple_fof_formula_contains_unsupported_existential_body_quantifier(
 fn simple_fof_existential_requires_full_cnf_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        "FOF existential formula requires full clausification outside a supported atomic, positive universal-scope, or quantifier-free parenthesized context",
+        "FOF existential formula requires full clausification outside a supported atomic or parenthesized context",
     )
 }
 
@@ -6213,7 +6213,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, positive-universal-scope parenthesized existential bodies, or quantifier-free parenthesized existential bodies in direct positive or negated contexts, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, supported parenthesized existential bodies in direct positive or negated contexts, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -9068,6 +9068,30 @@ mod tests {
             &path,
             "fof(fact, axiom, ?[X]:(p(X)&q(X))).\n\
              fof(goal, conjecture, ?[Y]:q(Y)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_nested_fof_existentials() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-nested-existentials");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, ?[X]:(?[Y]:p(X,Y))).\n\
+             fof(goal, conjecture, ?[Z]:(?[W]:p(Z,W))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -12020,6 +12044,55 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_nested_fof_existentials() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-nested-existentials");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:(?[Y]:p(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (p(esk1_0,esk2_0))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_negates_nested_fof_existential_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-negated-nested-existentials");
+        std::fs::write(&path, "fof(goal, conjecture, ?[X]:(?[Y]:p(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", negated_conjecture, (~p(X1,X2))).\n"));
+        assert!(!printed.contains("esk"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_skolemizes_fof_conjunction_with_existential_conjunct() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-conjunction-existential-conjunct");
@@ -12608,7 +12681,7 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_nested_existential_in_parenthesized_existential_body() {
+    fn run_syntax_only_parses_nested_existential_in_parenthesized_existential_body() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-existential-nested-existential");
         std::fs::write(&path, "fof(test1, axiom, ?[X]:(?[Y]:p(X,Y))).\n").unwrap();
@@ -12616,16 +12689,18 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
+        let status = run(
             ["eprover", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains("requires full clausification"));
-        assert!(stdout.is_empty());
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
