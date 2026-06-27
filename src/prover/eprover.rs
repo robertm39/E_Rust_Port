@@ -5166,7 +5166,86 @@ fn parse_simple_fof_formulas(
     parse_simple_fof_connective_formulas(scanner, bank)
 }
 
-fn parse_simple_fof_conjunct(
+fn parse_simple_fof_connective_formulas(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let formulas = parse_simple_fof_disjunction_chain(scanner, bank)?;
+    if scanner.test_tok(TokenType::FOF_LR_IMPL) {
+        scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
+        let consequents = parse_simple_fof_implication_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Implication {
+            antecedents: formulas,
+            consequents,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_RL_IMPL) {
+        scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
+        let antecedents = parse_simple_fof_implication_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Implication {
+            antecedents,
+            consequents: formulas,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_EQUIV) {
+        scanner.accept_tok(TokenType::FOF_EQUIV)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Equivalence {
+            left: formulas,
+            right,
+        }]);
+    }
+    if scanner.test_tok(TokenType::FOF_BIN_OP) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    Ok(formulas)
+}
+
+fn parse_simple_fof_implication_operand(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    parse_simple_fof_connective_formulas(scanner, bank)
+}
+
+fn parse_simple_fof_equivalence_operand(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    parse_simple_fof_connective_formulas(scanner, bank)
+}
+
+fn parse_simple_fof_disjunction_chain(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let formulas = parse_simple_fof_conjunction_chain(scanner, bank)?;
+    if scanner.test_tok(TokenType::FOF_OR) {
+        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
+        while scanner.test_tok(TokenType::FOF_OR) {
+            scanner.accept_tok(TokenType::FOF_OR)?;
+            disjuncts.extend(simple_fof_formulas_to_disjuncts(
+                parse_simple_fof_conjunction_chain(scanner, bank)?,
+            ));
+        }
+        return Ok(vec![SimpleFofFormula::Disjunction(disjuncts)]);
+    }
+    Ok(formulas)
+}
+
+fn parse_simple_fof_conjunction_chain(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let mut formulas = parse_simple_fof_primary_formula(scanner, bank)?;
+    while scanner.test_tok(TokenType::FOF_AND) {
+        scanner.accept_tok(TokenType::FOF_AND)?;
+        formulas.extend(parse_simple_fof_primary_formula(scanner, bank)?);
+    }
+    Ok(formulas)
+}
+
+fn parse_simple_fof_primary_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
@@ -5178,111 +5257,16 @@ fn parse_simple_fof_conjunct(
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
         let formulas = parse_simple_fof_connective_formulas(scanner, bank)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-        if scanner.test_tok(TokenType::FOF_LR_IMPL) {
-            scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
-            let consequents = parse_simple_fof_implication_operand(scanner, bank)?;
-            return Ok(vec![SimpleFofFormula::Implication {
-                antecedents: formulas,
-                consequents,
-            }]);
-        }
-        if scanner.test_tok(TokenType::FOF_RL_IMPL) {
-            scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
-            let antecedents = parse_simple_fof_implication_operand(scanner, bank)?;
-            return Ok(vec![SimpleFofFormula::Implication {
-                antecedents,
-                consequents: formulas,
-            }]);
-        }
-        if scanner.test_tok(TokenType::FOF_EQUIV) {
-            scanner.accept_tok(TokenType::FOF_EQUIV)?;
-            let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
-            return Ok(vec![SimpleFofFormula::Equivalence {
-                left: formulas,
-                right,
-            }]);
-        }
         return Ok(formulas);
     }
     if scanner.test_tok(TokenType::TILDE_SIGN) {
         scanner.accept_tok(TokenType::TILDE_SIGN)?;
-        let formulas = parse_simple_fof_conjunct(scanner, bank)?;
+        let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Negation(formulas)]);
     }
 
-    let left_literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
-    if scanner.test_tok(TokenType::FOF_LR_IMPL) {
-        scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
-        let consequents = parse_simple_fof_implication_operand(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Implication {
-            antecedents: simple_fof_literal_formulas(vec![left_literal]),
-            consequents,
-        }]);
-    }
-    if scanner.test_tok(TokenType::FOF_RL_IMPL) {
-        scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
-        let antecedents = parse_simple_fof_implication_operand(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Implication {
-            antecedents,
-            consequents: simple_fof_literal_formulas(vec![left_literal]),
-        }]);
-    }
-    if scanner.test_tok(TokenType::FOF_EQUIV) {
-        scanner.accept_tok(TokenType::FOF_EQUIV)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
-        return Ok(vec![SimpleFofFormula::Equivalence {
-            left: simple_fof_literal_formulas(vec![left_literal]),
-            right,
-        }]);
-    }
-    if scanner.test_tok(TokenType::FOF_BIN_OP)
-        && !scanner.test_tok(TokenType::FOF_AND | TokenType::FOF_OR)
-    {
-        return Err(simple_fof_unsupported_error(scanner));
-    }
-    Ok(vec![SimpleFofFormula::Literal(left_literal)])
-}
-
-fn parse_simple_fof_implication_operand(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_conjunct(scanner, bank)
-}
-
-fn parse_simple_fof_equivalence_operand(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_conjunct(scanner, bank)
-}
-
-fn parse_simple_fof_connective_formulas(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let mut formulas = parse_simple_fof_conjunct(scanner, bank)?;
-    while scanner.test_tok(TokenType::FOF_AND) {
-        scanner.accept_tok(TokenType::FOF_AND)?;
-        formulas.extend(parse_simple_fof_conjunct(scanner, bank)?);
-    }
-    if scanner.test_tok(TokenType::FOF_OR) {
-        let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
-        while scanner.test_tok(TokenType::FOF_OR) {
-            scanner.accept_tok(TokenType::FOF_OR)?;
-            disjuncts.extend(simple_fof_formulas_to_disjuncts(parse_simple_fof_conjunct(
-                scanner, bank,
-            )?));
-        }
-        if scanner.test_tok(TokenType::FOF_BIN_OP) {
-            return Err(simple_fof_unsupported_error(scanner));
-        }
-        return Ok(vec![SimpleFofFormula::Disjunction(disjuncts)]);
-    }
-    if scanner.test_tok(TokenType::FOF_BIN_OP) {
-        return Err(simple_fof_unsupported_error(scanner));
-    }
-    Ok(formulas)
+    let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+    Ok(simple_fof_literal_formulas(vec![literal]))
 }
 
 fn simple_fof_formulas_to_disjuncts(formulas: Vec<SimpleFofFormula>) -> Vec<SimpleFofFormula> {
@@ -7781,6 +7765,9 @@ mod tests {
             &path,
             "fof(both, axiom, p(a) & q(a)).\n\
              fof(either, axiom, p(a) | q(a)).\n\
+             fof(rule, axiom, p(a) & q(a) => r(a)).\n\
+             fof(split, axiom, p(a) => q(a) & r(a)).\n\
+             fof(eq, axiom, p(a) | q(a) <=> r(a)).\n\
              fof(goal, conjecture, p(a) & q(a)).\n",
         )
         .unwrap();
@@ -8202,6 +8189,61 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_implication_antecedent_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-implication-antecedent");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, p(a) & q(a) => r(a)).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n\
+             fof(goal, conjecture, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_respects_unparenthesized_fof_implication_antecedent_precedence() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-implication-antecedent-precedence");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, p(a) & q(a) => r(a)).\n\
+             fof(q, axiom, q(a)).\n\
+             fof(goal, conjecture, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_conjunctive_implication_consequent_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjunctive-implication-consequent");
@@ -8210,6 +8252,31 @@ mod tests {
             "fof(rule, axiom, ![X]:(human(X) => (mortal(X) & breathing(X)))).\n\
              fof(fact, axiom, human(socrates)).\n\
              fof(goal, conjecture, breathing(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_implication_consequent_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-implication-consequent");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, p(a) => q(a) & r(a)).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(goal, conjecture, r(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -8594,6 +8661,31 @@ mod tests {
             "fof(either, axiom, p(a) | q(a)).\n\
              fof(not_p, axiom, ~p(a)).\n\
              fof(goal, conjecture, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_unparenthesized_fof_disjunction_right_conjunction() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-unparenthesized-disjunction-right-conjunction");
+        std::fs::write(
+            &path,
+            "fof(either, axiom, p(a) | q(a) & r(a)).\n\
+             fof(not_p, axiom, ~p(a)).\n\
+             fof(goal, conjecture, r(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
