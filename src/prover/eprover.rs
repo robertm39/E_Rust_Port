@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs::File;
@@ -65,8 +66,9 @@ use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL,
 };
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{RewriteDemodulator, RewriteLevel};
+use crate::terms::termtypes::{term_identity_id, RewriteDemodulator, RewriteLevel, Term};
 use crate::terms::typebanks::TypeBank;
 
 const MEGA: u64 = 1_048_576;
@@ -4900,7 +4902,10 @@ enum SimpleFofFormula {
     Conjunction(Vec<SimpleFofFormula>),
     Disjunction(Vec<SimpleFofFormula>),
     Negation(Vec<SimpleFofFormula>),
-    Existential(Vec<SimpleFofFormula>),
+    Existential {
+        bound: Vec<Term>,
+        formulas: Vec<SimpleFofFormula>,
+    },
 }
 
 fn parse_tptp_entry_list(
@@ -5092,7 +5097,7 @@ fn parse_simple_fof_clause(
     }
     let formulas = parse_simple_fof_formulas(scanner, bank)?;
     let literal_lists =
-        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen)?;
+        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -5154,7 +5159,7 @@ fn parse_simple_tptp_formula_clause(
     }
     let formulas = parse_simple_fof_formulas(scanner, bank)?;
     let literal_lists =
-        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen)?;
+        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -5184,12 +5189,13 @@ fn parse_simple_tptp_formula_clause(
 fn simple_fof_formulas_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if formulas.len() > 1 && simple_fof_formulas_contain_existential(&formulas) {
         return Err(simple_fof_existential_requires_full_cnf_error());
     }
     if negate_as_conjecture && formulas.len() > 1 {
-        return simple_fof_negated_conjunction_to_clause_literal_lists(formulas);
+        return simple_fof_negated_conjunction_to_clause_literal_lists(formulas, bank);
     }
 
     let mut literal_lists = Vec::new();
@@ -5197,6 +5203,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
         literal_lists.extend(simple_fof_formula_to_clause_literal_lists(
             formula,
             negate_as_conjecture,
+            bank,
         )?);
     }
     Ok(literal_lists)
@@ -5204,11 +5211,12 @@ fn simple_fof_formulas_to_clause_literal_lists(
 
 fn simple_fof_negated_conjunction_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let mut literal_lists = vec![EqnList::new()];
     for formula in formulas {
         let negated_formula_literal_lists =
-            simple_fof_formula_to_clause_literal_lists(formula, true)?;
+            simple_fof_formula_to_clause_literal_lists(formula, true, bank)?;
         literal_lists =
             simple_fof_clause_literal_list_products(&literal_lists, &negated_formula_literal_lists);
     }
@@ -5230,9 +5238,52 @@ fn simple_fof_clause_literal_list_products(
     distributed
 }
 
+fn simple_fof_skolemize_existential_literal_lists(
+    literal_lists: Vec<EqnList>,
+    bound: &[Term],
+    bank: &mut TermBank,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    if bound.is_empty() {
+        return Ok(literal_lists);
+    }
+
+    let bound_ids = bound.iter().map(term_identity_id).collect::<Vec<usize>>();
+    let mut skolemized = Vec::with_capacity(literal_lists.len());
+    for literal_list in literal_lists {
+        let mut variables = BTreeMap::new();
+        for literal in literal_list.as_slice() {
+            literal.collect_variables(&mut variables);
+        }
+        let mut dependencies = variables
+            .iter()
+            .filter(|(id, _)| !bound_ids.contains(id))
+            .map(|(_, variable)| variable.clone())
+            .collect::<Vec<_>>();
+        dependencies.sort_by_key(|variable| std::cmp::Reverse(variable.f_code()));
+
+        let mut subst = Substitution::new();
+        let copy_result = (|| {
+            for variable in bound {
+                if variable.binding().is_none()
+                    && variables.contains_key(&term_identity_id(variable))
+                {
+                    let type_ = variable.type_();
+                    let skolem = bank.alloc_new_skolem(&dependencies, type_.as_ref())?;
+                    subst.add_binding(variable, &skolem);
+                }
+            }
+            literal_list.copy_to_bank(bank)
+        })();
+        subst.backtrack();
+        skolemized.push(copy_result?);
+    }
+    Ok(skolemized)
+}
+
 fn simple_fof_formula_to_clause_literal_lists(
     formula: SimpleFofFormula,
     negate_as_conjecture: bool,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     match formula {
         SimpleFofFormula::Literal(literal) => {
@@ -5252,9 +5303,13 @@ fn simple_fof_formula_to_clause_literal_lists(
                 return Err(simple_fof_existential_requires_full_cnf_error());
             }
             if negate_as_conjecture {
-                simple_fof_negated_implication_to_clause_literal_lists(antecedents, consequents)
+                simple_fof_negated_implication_to_clause_literal_lists(
+                    antecedents,
+                    consequents,
+                    bank,
+                )
             } else {
-                simple_fof_implication_to_clause_literal_lists(antecedents, consequents)
+                simple_fof_implication_to_clause_literal_lists(antecedents, consequents, bank)
             }
         }
         SimpleFofFormula::Equivalence { left, right } => {
@@ -5264,31 +5319,33 @@ fn simple_fof_formula_to_clause_literal_lists(
                 return Err(simple_fof_existential_requires_full_cnf_error());
             }
             if negate_as_conjecture {
-                simple_fof_negated_equivalence_to_clause_literal_lists(left, right)
+                simple_fof_negated_equivalence_to_clause_literal_lists(left, right, bank)
             } else {
-                simple_fof_equivalence_to_clause_literal_lists(left, right)
+                simple_fof_equivalence_to_clause_literal_lists(left, right, bank)
             }
         }
         SimpleFofFormula::Conjunction(formulas) => {
             if simple_fof_formulas_contain_existential(&formulas) {
                 return Err(simple_fof_existential_requires_full_cnf_error());
             }
-            simple_fof_formulas_to_clause_literal_lists(formulas, negate_as_conjecture)
+            simple_fof_formulas_to_clause_literal_lists(formulas, negate_as_conjecture, bank)
         }
         SimpleFofFormula::Disjunction(disjuncts) => {
             if simple_fof_formulas_contain_existential(&disjuncts) {
                 return Err(simple_fof_existential_requires_full_cnf_error());
             }
-            simple_fof_disjunction_to_clause_literal_lists(disjuncts, negate_as_conjecture)
+            simple_fof_disjunction_to_clause_literal_lists(disjuncts, negate_as_conjecture, bank)
         }
         SimpleFofFormula::Negation(formulas) => {
-            simple_fof_formulas_to_clause_literal_lists(formulas, !negate_as_conjecture)
+            simple_fof_formulas_to_clause_literal_lists(formulas, !negate_as_conjecture, bank)
         }
-        SimpleFofFormula::Existential(formulas) => {
+        SimpleFofFormula::Existential { bound, formulas } => {
             if negate_as_conjecture {
-                simple_fof_formulas_to_clause_literal_lists(formulas, true)
+                simple_fof_formulas_to_clause_literal_lists(formulas, true, bank)
             } else {
-                Err(simple_fof_existential_requires_full_cnf_error())
+                let literal_lists =
+                    simple_fof_formulas_to_clause_literal_lists(formulas, false, bank)?;
+                simple_fof_skolemize_existential_literal_lists(literal_lists, &bound, bank)
             }
         }
     }
@@ -5315,23 +5372,25 @@ fn simple_fof_formula_contains_existential(formula: &SimpleFofFormula) -> bool {
         SimpleFofFormula::Conjunction(formulas)
         | SimpleFofFormula::Disjunction(formulas)
         | SimpleFofFormula::Negation(formulas) => simple_fof_formulas_contain_existential(formulas),
-        SimpleFofFormula::Existential(_) => true,
+        SimpleFofFormula::Existential { .. } => true,
     }
 }
 
 fn simple_fof_existential_requires_full_cnf_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        "FOF existential formula requires full clausification outside a supported atomic negated context",
+        "FOF existential formula requires full clausification outside a supported atomic context",
     )
 }
 
 fn simple_fof_implication_to_clause_literal_lists(
     antecedents: Vec<SimpleFofFormula>,
     consequents: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    let negated_antecedents = simple_fof_formulas_to_clause_literal_lists(antecedents, true)?;
-    let positive_consequents = simple_fof_formulas_to_clause_literal_lists(consequents, false)?;
+    let negated_antecedents = simple_fof_formulas_to_clause_literal_lists(antecedents, true, bank)?;
+    let positive_consequents =
+        simple_fof_formulas_to_clause_literal_lists(consequents, false, bank)?;
     Ok(simple_fof_clause_literal_list_products(
         &negated_antecedents,
         &positive_consequents,
@@ -5341,11 +5400,13 @@ fn simple_fof_implication_to_clause_literal_lists(
 fn simple_fof_negated_implication_to_clause_literal_lists(
     antecedents: Vec<SimpleFofFormula>,
     consequents: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    let mut literal_lists = simple_fof_formulas_to_clause_literal_lists(antecedents, false)?;
+    let mut literal_lists = simple_fof_formulas_to_clause_literal_lists(antecedents, false, bank)?;
     literal_lists.extend(simple_fof_formulas_to_clause_literal_lists(
         consequents,
         true,
+        bank,
     )?);
     Ok(literal_lists)
 }
@@ -5361,11 +5422,12 @@ fn simple_fof_literal_formulas(literals: Vec<Eqn>) -> Vec<SimpleFofFormula> {
 fn simple_fof_equivalence_to_clause_literal_lists(
     left: Vec<SimpleFofFormula>,
     right: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    let negative_left = simple_fof_formulas_to_clause_literal_lists(left.clone(), true)?;
-    let positive_left = simple_fof_formulas_to_clause_literal_lists(left, false)?;
-    let negative_right = simple_fof_formulas_to_clause_literal_lists(right.clone(), true)?;
-    let positive_right = simple_fof_formulas_to_clause_literal_lists(right, false)?;
+    let negative_left = simple_fof_formulas_to_clause_literal_lists(left.clone(), true, bank)?;
+    let positive_left = simple_fof_formulas_to_clause_literal_lists(left, false, bank)?;
+    let negative_right = simple_fof_formulas_to_clause_literal_lists(right.clone(), true, bank)?;
+    let positive_right = simple_fof_formulas_to_clause_literal_lists(right, false, bank)?;
 
     let mut literal_lists =
         simple_fof_clause_literal_list_products(&negative_left, &positive_right);
@@ -5379,11 +5441,12 @@ fn simple_fof_equivalence_to_clause_literal_lists(
 fn simple_fof_negated_equivalence_to_clause_literal_lists(
     left: Vec<SimpleFofFormula>,
     right: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    let positive_left = simple_fof_formulas_to_clause_literal_lists(left.clone(), false)?;
-    let negative_left = simple_fof_formulas_to_clause_literal_lists(left, true)?;
-    let positive_right = simple_fof_formulas_to_clause_literal_lists(right.clone(), false)?;
-    let negative_right = simple_fof_formulas_to_clause_literal_lists(right, true)?;
+    let positive_left = simple_fof_formulas_to_clause_literal_lists(left.clone(), false, bank)?;
+    let negative_left = simple_fof_formulas_to_clause_literal_lists(left, true, bank)?;
+    let positive_right = simple_fof_formulas_to_clause_literal_lists(right.clone(), false, bank)?;
+    let negative_right = simple_fof_formulas_to_clause_literal_lists(right, true, bank)?;
 
     let mut literal_lists =
         simple_fof_clause_literal_list_products(&positive_left, &positive_right);
@@ -5397,18 +5460,21 @@ fn simple_fof_negated_equivalence_to_clause_literal_lists(
 fn simple_fof_disjunction_to_clause_literal_lists(
     disjuncts: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
+    bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
         let mut literal_lists = Vec::new();
         for disjunct in disjuncts {
-            literal_lists.extend(simple_fof_formula_to_clause_literal_lists(disjunct, true)?);
+            literal_lists.extend(simple_fof_formula_to_clause_literal_lists(
+                disjunct, true, bank,
+            )?);
         }
         return Ok(literal_lists);
     }
 
     let mut literal_lists = vec![EqnList::new()];
     for disjunct in disjuncts {
-        let disjunct_literals = simple_fof_formula_to_clause_literal_lists(disjunct, false)?;
+        let disjunct_literals = simple_fof_formula_to_clause_literal_lists(disjunct, false, bank)?;
         literal_lists = simple_fof_clause_literal_list_products(&literal_lists, &disjunct_literals);
     }
     Ok(literal_lists)
@@ -5583,9 +5649,12 @@ fn parse_simple_fof_existential_atomic_formula(
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     scanner.accept_tok(TokenType::EXIST_QUANTOR)?;
     scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+    let mut bound_names = Vec::new();
+    bound_names.push(scanner.current_token().literal());
     scanner.accept_tok(TokenType::NAME)?;
     while scanner.test_tok(TokenType::COMMA) {
         scanner.accept_tok(TokenType::COMMA)?;
+        bound_names.push(scanner.current_token().literal());
         scanner.accept_tok(TokenType::NAME)?;
     }
     scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
@@ -5613,9 +5682,19 @@ fn parse_simple_fof_existential_atomic_formula(
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     }
 
-    Ok(vec![SimpleFofFormula::Existential(
-        simple_fof_literal_formulas(vec![literal]),
-    )])
+    let mut bound = Vec::new();
+    for name in &bound_names {
+        if let Some(variable) = bank.vars().ext_name_find(name) {
+            if !bound.iter().any(|existing| existing == &variable) {
+                bound.push(variable);
+            }
+        }
+    }
+
+    Ok(vec![SimpleFofFormula::Existential {
+        bound,
+        formulas: simple_fof_literal_formulas(vec![literal]),
+    }])
 }
 
 fn tstp_skip_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -5634,7 +5713,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas in a negated context, universally quantified implications, equivalences, XORs, NANDs, and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas in direct positive or negated contexts, universally quantified implications, equivalences, XORs, NANDs, and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -8458,6 +8537,30 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_positive_existential_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-positive-existential");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, ?[X]:p(X)).\n\
+             fof(goal, conjecture, ![Y]:p(Y)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_contradictory_axioms_when_fof_conjecture_is_unused() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-unused-conjecture");
@@ -10990,6 +11093,30 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_supported_fof_positive_existential_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-positive-existential");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:p(X)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (p(esk1_0))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_rejects_trailing_tokens_after_clause_list() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-junk");
@@ -11040,10 +11167,10 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_unsupported_fof_existential_quantifier() {
+    fn run_syntax_only_rejects_mixed_fof_existential_quantifier() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-fof-unsupported-existential");
-        std::fs::write(&path, "fof(test1, axiom, ?[X]:p(X)).\n").unwrap();
+        let path = temp_path("syntax-fof-mixed-existential");
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:(p(X)&q(X))).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
