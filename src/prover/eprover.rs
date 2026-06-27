@@ -4861,18 +4861,21 @@ fn parse_tstp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
-    selectors: Option<&StrTree<i64, i64>>,
+    mut selectors: Option<&mut StrTree<i64, i64>>,
 ) -> Result<bool, Diagnostic> {
     let mut formula_conjecture_seen = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-            if tstp_entry_selected(clause.info().and_then(ClauseInfo::name), selectors) {
+            if tstp_entry_selected(
+                clause.info().and_then(ClauseInfo::name),
+                selectors.as_deref_mut(),
+            ) {
                 clauses.insert(clause);
             }
         } else if scanner.test_id("fof") {
             let parsed = parse_simple_fof_clause(scanner, bank)?;
-            if tstp_entry_selected(Some(parsed.name.as_str()), selectors) {
+            if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 formula_conjecture_seen |= parsed.formula_conjecture_seen;
                 for clause in parsed.clauses {
                     clauses.insert(clause);
@@ -4884,8 +4887,12 @@ fn parse_tstp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
-                formula_conjecture_seen |=
-                    parse_tstp_entry_list(&mut included, bank, clauses, Some(&include_selectors))?;
+                formula_conjecture_seen |= parse_tstp_entry_list(
+                    &mut included,
+                    bank,
+                    clauses,
+                    Some(&mut include_selectors),
+                )?;
             }
         } else {
             return Err(Diagnostic::new(
@@ -4898,10 +4905,13 @@ fn parse_tstp_entry_list(
             ));
         }
     }
+    if let Some(selector_tree) = selectors.as_ref() {
+        check_tstp_include_selectors_found(scanner, selector_tree)?;
+    }
     Ok(formula_conjecture_seen)
 }
 
-fn tstp_entry_selected(name: Option<&str>, selectors: Option<&StrTree<i64, i64>>) -> bool {
+fn tstp_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i64>>) -> bool {
     let Some(selectors) = selectors else {
         return true;
     };
@@ -4911,7 +4921,41 @@ fn tstp_entry_selected(name: Option<&str>, selectors: Option<&StrTree<i64, i64>>
     if selectors.find(EMPTY_INCLUDE_SELECTOR_SENTINEL).is_some() {
         return false;
     }
-    name.is_some_and(|name| selectors.find(name).is_some())
+    let Some(name) = name else {
+        return false;
+    };
+    let Some(entry) = selectors.find_mut(name) else {
+        return false;
+    };
+    entry.val1 = 1;
+    true
+}
+
+fn check_tstp_include_selectors_found(
+    scanner: &Scanner,
+    selectors: &StrTree<i64, i64>,
+) -> Result<(), Diagnostic> {
+    let missing = selectors
+        .iter()
+        .filter_map(|(name, entry)| (entry.val1 == 0).then_some(name))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut message = String::new();
+    if let Some(include_pos) = scanner.include_pos() {
+        message.push_str(include_pos);
+        message.push(' ');
+    }
+    message
+        .push_str("\"include\" statement cannot find the following requested clauses/formulae in ");
+    message.push_str(&String::from_utf8_lossy(
+        scanner.current_token().source_bytes(),
+    ));
+    message.push_str(": ");
+    message.push_str(&missing.join(", "));
+    Err(Diagnostic::new(ErrorCode::INPUT_SEMANTIC_ERROR, message))
 }
 
 struct ParsedSimpleFofClause {
@@ -9372,6 +9416,35 @@ mod tests {
                 default_preprocessing_debug_line()
             )
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_missing_tstp_include_selector() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-fof-include-missing-selector-inc");
+        let path = temp_path("proof-fof-include-missing-selector-main");
+        std::fs::write(&include_path, "fof(present, axiom, p(a)).\n").unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}',[missing]).\nfof(goal, conjecture, p(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+        assert!(error.message().contains(
+            "\"include\" statement cannot find the following requested clauses/formulae"
+        ));
+        assert!(error.message().contains("missing"));
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(&include_path).unwrap();
