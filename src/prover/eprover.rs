@@ -7018,13 +7018,13 @@ fn parse_simple_fof_quantified_variable_declaration(
             .signature_mut()
             .type_bank_mut()
             .parse_type(scanner, ProblemType::FirstOrder)?;
-        let variable = bank.vars().ext_name_assert_alloc_sort(&name, &type_);
+        let variable = bank.vars().ext_name_declare_alloc_sort(&name, &type_);
         return Ok(SimpleFofBoundVariable {
             name,
             variable: Some(variable),
         });
     }
-    let variable = bank.vars().ext_name_assert_alloc(&name);
+    let variable = bank.vars().ext_name_declare_alloc(&name);
     Ok(SimpleFofBoundVariable {
         name,
         variable: Some(variable),
@@ -10307,6 +10307,33 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_saturates_same_name_shadowed_fof_existential() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-shadowed-existential");
+        std::fs::write(
+            &path,
+            "fof(test1, axiom, ![X,Y]:((p(X,Y)&?[X]:(q(Y,X)=>q(X,Y))))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status Satisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -14837,6 +14864,66 @@ mod tests {
             "fof(univ, axiom, ?[X]:![Y]:p(X,Y)).\n\
              fof(ex, axiom, ?[X]:?[Y]:q(X,Y)).\n\
              fof(neg, axiom, ?[X]:~r(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_same_name_shadowed_fof_quantifier() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-shadowed-quantifier");
+        std::fs::write(
+            &path,
+            "fof(test1, axiom, ![X,Y]:((p(X,Y)&?[X]:(q(Y,X)=>q(X,Y))))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_same_sort_shadowed_tff_quantifier() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tff-shadowed-quantifier");
+        std::fs::write(
+            &path,
+            "tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(rule, axiom, ![X: $i]:(p(X)|![X: $i]:q(X))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();

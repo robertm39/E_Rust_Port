@@ -143,6 +143,7 @@ Source files reviewed: `TERMS/cte_termvars.h`, `TERMS/cte_termvars.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Change-later candidate: C's `VarBankPushEnv`/`VarBankPopEnv` stack restores old external-name bindings only when `VarBankExtNameAssertAllocSort` shadows a name with a different type; same-type quantifier shadowing is handled later by the full formula variable-renaming pipeline rather than by the raw variable bank. Rust keeps the C-shaped assert-allocation helpers, but the temporary executable FOF/TFF bridge uses declaration-specific scoped allocation so same-name quantified variables cannot create self-referential Skolem bindings before the real `TFormula` owner exists.
 
 ### Porting Focus
 

@@ -32,7 +32,7 @@ struct VarBankCell {
 
 #[derive(Clone, Debug)]
 struct VarBankNamedCell {
-    var: Term,
+    var: Option<Term>,
     name: String,
 }
 
@@ -317,7 +317,7 @@ impl VarBank {
             Some(var) if var.type_() == Some(type_.clone()) => var,
             Some(var) => {
                 self.0.borrow_mut().env.push(Some(VarBankNamedCell {
-                    var: var.clone(),
+                    var: Some(var.clone()),
                     name: name.to_owned(),
                 }));
                 let new_var = self.get_fresh_var(type_);
@@ -330,6 +330,44 @@ impl VarBank {
         }
     }
 
+    /// Declares a new scoped external variable name using the default sort.
+    ///
+    /// Unlike [`Self::ext_name_assert_alloc`], this always allocates a fresh
+    /// variable when `name` already exists, preserving the old binding for
+    /// restoration by [`Self::pop_env`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the default type stored in the variable bank has no shared UID.
+    #[must_use]
+    pub fn ext_name_declare_alloc(&self, name: &str) -> Term {
+        let type_ = self.0.borrow().default_type.clone();
+        self.ext_name_declare_alloc_sort(name, &type_)
+    }
+
+    /// Declares a new scoped external variable name with `type_`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `type_` has no shared UID.
+    #[must_use]
+    pub fn ext_name_declare_alloc_sort(&self, name: &str, type_: &Type) -> Term {
+        assert_shared_type(type_);
+        let old = self.ext_name_find(name);
+        if !self.0.borrow().env.is_empty() {
+            self.0.borrow_mut().env.push(Some(VarBankNamedCell {
+                var: old,
+                name: name.to_owned(),
+            }));
+        }
+        let new_var = self.get_fresh_var(type_);
+        self.0
+            .borrow_mut()
+            .ext_index
+            .insert(name.to_owned(), new_var.clone());
+        new_var
+    }
+
     pub fn push_env(&self) {
         self.0.borrow_mut().env.push(None);
     }
@@ -340,7 +378,11 @@ impl VarBank {
             let Some(named) = named else {
                 break;
             };
-            inner.ext_index.insert(named.name, named.var);
+            if let Some(var) = named.var {
+                inner.ext_index.insert(named.name, var);
+            } else {
+                inner.ext_index.remove(&named.name);
+            }
         }
     }
 
@@ -551,6 +593,44 @@ mod tests {
         bank.pop_env();
         assert_eq!(bank.ext_name_find("X"), Some(x_i));
         assert_eq!(bank.env_depth(), 0);
+    }
+
+    #[test]
+    fn scoped_external_name_declaration_shadows_same_sort_binding() {
+        let types = TypeBank::new();
+        let bank = VarBank::new(&types);
+        bank.push_env();
+        let outer = bank.ext_name_declare_alloc("X");
+
+        bank.push_env();
+        let inner = bank.ext_name_declare_alloc("X");
+        assert_ne!(outer, inner);
+        assert_eq!(outer.f_code(), -2);
+        assert_eq!(inner.f_code(), -4);
+        assert_eq!(bank.ext_name_find("X"), Some(inner));
+
+        bank.pop_env();
+        assert_eq!(bank.ext_name_find("X"), Some(outer));
+        bank.pop_env();
+        assert_eq!(bank.ext_name_find("X"), None);
+    }
+
+    #[test]
+    fn sorted_scoped_external_name_declaration_shadows_same_sort_binding() {
+        let types = TypeBank::new();
+        let bank = VarBank::new(&types);
+        bank.push_env();
+        let outer = bank.ext_name_declare_alloc_sort("X", &types.i_type());
+
+        bank.push_env();
+        let inner = bank.ext_name_declare_alloc_sort("X", &types.i_type());
+        assert_ne!(outer, inner);
+        assert_eq!(bank.ext_name_find("X"), Some(inner));
+
+        bank.pop_env();
+        assert_eq!(bank.ext_name_find("X"), Some(outer));
+        bank.pop_env();
+        assert_eq!(bank.ext_name_find("X"), None);
     }
 
     #[test]
