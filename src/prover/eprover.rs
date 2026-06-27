@@ -5674,9 +5674,6 @@ fn simple_fof_conjunction_formula_to_clause_literal_lists(
             bank,
         );
     }
-    if simple_fof_formulas_contain_existential(&formulas) {
-        return Err(simple_fof_existential_requires_full_cnf_error());
-    }
     simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         formulas,
         negate_as_conjecture,
@@ -5750,34 +5747,6 @@ fn simple_fof_existential_scope_to_clause_literal_lists(
             universal_dependencies,
             bank,
         )
-    }
-}
-
-fn simple_fof_formulas_contain_existential(formulas: &[SimpleFofFormula]) -> bool {
-    formulas.iter().any(simple_fof_formula_contains_existential)
-}
-
-fn simple_fof_formula_contains_existential(formula: &SimpleFofFormula) -> bool {
-    match formula {
-        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => false,
-        SimpleFofFormula::Implication {
-            antecedents,
-            consequents,
-        } => {
-            simple_fof_formulas_contain_existential(antecedents)
-                || simple_fof_formulas_contain_existential(consequents)
-        }
-        SimpleFofFormula::Equivalence { left, right } => {
-            simple_fof_formulas_contain_existential(left)
-                || simple_fof_formulas_contain_existential(right)
-        }
-        SimpleFofFormula::Conjunction(formulas)
-        | SimpleFofFormula::Disjunction(formulas)
-        | SimpleFofFormula::Negation(formulas)
-        | SimpleFofFormula::Universal { formulas, .. } => {
-            simple_fof_formulas_contain_existential(formulas)
-        }
-        SimpleFofFormula::Existential { .. } => true,
     }
 }
 
@@ -10588,6 +10557,31 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_disjunction_with_existential_conjunctive_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-disjunction-existential-conjunction");
+        std::fs::write(
+            &path,
+            "fof(split, axiom, ((p(a) & ?[X]:q(X)) | r(a))).\n\
+             fof(no_q, axiom, ![Y]:~q(Y)).\n\
+             fof(no_r, axiom, ~r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_disjunction_with_equivalence_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-disjunction-equivalence");
@@ -12875,6 +12869,31 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_distributes_conjunctive_disjunct_with_existential_conjunct() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-disjunction-existential-conjunct");
+        std::fs::write(&path, "fof(test1, axiom, ((p(a)&?[X]:q(X))|r(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains(", axiom, (p(a)|r(a))).\n"));
+        assert!(printed.contains(", axiom, (q(esk1_0)|r(a))).\n"));
+        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_negates_supported_fof_parenthesized_existential_conjunction() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-negated-parenthesized-existential-conjunction");
@@ -13987,7 +14006,8 @@ mod tests {
         std::fs::write(
             &path,
             "fof(either, axiom, ?[X]:p(X)|q(a)).\n\
-             fof(split, axiom, ?[Y]:(r(Y)&s(Y))|t(a)).\n",
+             fof(split, axiom, ?[Y]:(r(Y)&s(Y))|t(a)).\n\
+             fof(conjunctive, axiom, ((u(a)&?[Z]:v(Z))|w(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
