@@ -5119,6 +5119,7 @@ fn parse_simple_tstp_formula_clause(
     let start_line = usize_to_i64(scanner.current_token().line());
     let start_column = usize_to_i64(scanner.current_token().column());
 
+    let formula_kind = scanner.current_token().literal();
     scanner.accept_id("fof|tff|tcf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
@@ -5139,9 +5140,12 @@ fn parse_simple_tstp_formula_clause(
         });
     }
 
-    scanner.check_id(
-        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist",
-    )?;
+    let roles = if formula_kind == "tcf" {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist"
+    } else {
+        "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question"
+    };
+    scanner.check_id(roles)?;
     let role = scanner.current_token().literal();
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
@@ -13291,6 +13295,56 @@ mod tests {
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tcf_watchlist_formula_role() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tcf-watchlist-role");
+        std::fs::write(&path, "tcf(watch, watchlist, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_non_tcf_watchlist_formula_role() {
+        let _guard = global_state_lock();
+        for formula_kind in ["fof", "tff"] {
+            let path = temp_path(&format!("syntax-{formula_kind}-watchlist-role"));
+            std::fs::write(&path, format!("{formula_kind}(watch, watchlist, p(a)).\n")).unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let error = run(
+                ["eprover", "--syntax-only", path_arg.as_str()],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert!(error.message().contains("watchlist"));
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
     }
 
     #[test]
