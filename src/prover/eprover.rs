@@ -93,6 +93,8 @@ const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
+const THF_REQUIRES_HOL_MESSAGE: &str =
+    "To support HOL reasoning, recompile E using './configure --enable-ho && make rebuild'";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
 
@@ -5035,11 +5037,13 @@ fn parse_tstp_entry_list(
                     Some(&mut include_selectors),
                 )?;
             }
+        } else if scanner.test_id("thf") {
+            return Err(thf_requires_hol_error(scanner));
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order tff/fof type declarations, and the temporary atomic/connective-fragment fof/tff/tcf bridge",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order fof/tff/tcf type declarations, and the temporary atomic/connective-fragment fof/tff/tcf bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -5050,6 +5054,17 @@ fn parse_tstp_entry_list(
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
     Ok(formula_conjecture_seen)
+}
+
+fn thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!(
+            "{}(just read '{}'): {THF_REQUIRES_HOL_MESSAGE}",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal()
+        ),
+    )
 }
 
 fn tstp_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i64>>) -> bool {
@@ -6436,7 +6451,7 @@ mod tests {
         EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
         FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
         PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -13391,6 +13406,29 @@ mod tests {
             assert!(stderr.is_empty());
             std::fs::remove_file(&path).unwrap();
         }
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_thf_with_hol_diagnostic() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-requires-hol");
+        std::fs::write(&path, "thf(goal, conjecture, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains(THF_REQUIRES_HOL_MESSAGE));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
