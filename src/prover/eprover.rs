@@ -5037,7 +5037,9 @@ fn simple_fof_formula_to_clause_literal_lists(
         }
         SimpleFofFormula::Equivalence { left, right } => {
             if negate_as_conjecture {
-                Err(simple_fof_conjecture_implication_error())
+                Ok(simple_fof_negated_equivalence_to_clause_literal_lists(
+                    left, right,
+                ))
             } else {
                 Ok(simple_fof_equivalence_to_clause_literal_lists(left, right))
             }
@@ -5186,6 +5188,18 @@ fn simple_fof_equivalence_to_clause_literal_lists(left: Eqn, right: Eqn) -> Vec<
     vec![
         EqnList::from_vec(vec![right, negative_left]),
         EqnList::from_vec(vec![left, negative_right]),
+    ]
+}
+
+fn simple_fof_negated_equivalence_to_clause_literal_lists(left: Eqn, right: Eqn) -> Vec<EqnList> {
+    let mut negative_left = left.clone();
+    negative_left.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
+    let mut negative_right = right.clone();
+    negative_right.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
+
+    vec![
+        EqnList::from_vec(vec![left, right]),
+        EqnList::from_vec(vec![negative_left, negative_right]),
     ]
 }
 
@@ -5417,7 +5431,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications with atomic or grouped atomic antecedents/consequents, standalone simple conjecture implications, grouped non-conjecture conjunctions/disjunctions, and grouped atomic conjecture conjunctions/disjunctions",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications with atomic or grouped atomic antecedents/consequents, standalone simple conjecture implications/equivalences, grouped non-conjecture conjunctions/disjunctions, and grouped atomic conjecture conjunctions/disjunctions",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -5427,7 +5441,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
 fn simple_fof_conjecture_implication_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        "FOF conjecture implications/equivalences require full clausification in this context; the temporary parser only supports standalone simple conjecture implications plus atomic and grouped atomic conjecture conjunctions/disjunctions",
+        "FOF conjecture implications/equivalences require full clausification in this context; the temporary parser only supports standalone simple conjecture implications/equivalences plus atomic and grouped atomic conjecture conjunctions/disjunctions",
     )
 }
 
@@ -8302,6 +8316,31 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_negated_equivalence_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-negated-equivalence");
+        std::fs::write(
+            &path,
+            "fof(not_same, axiom, ~(p(a) <=> q(a))).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_axiom_conjunction_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-conjunction");
@@ -8459,6 +8498,60 @@ mod tests {
             "fof(p, axiom, p(a)).\n\
              fof(not_q, axiom, ~q(a)).\n\
              fof(goal, conjecture, (p(a) => q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_conjecture_equivalence_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-conjecture-equivalence");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n\
+             fof(goal, conjecture, (p(a) <=> q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_reports_false_fof_conjecture_equivalence_as_counter_satisfiable() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-conjecture-equivalence-counter-satisfiable");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(not_q, axiom, ~q(a)).\n\
+             fof(goal, conjecture, (p(a) <=> q(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -9661,7 +9754,7 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_fof_conjecture_equivalence() {
+    fn run_syntax_only_parses_fof_conjecture_equivalence() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-conjecture-equivalence");
         std::fs::write(&path, "fof(goal, conjecture, (p(a)<=>q(a))).\n").unwrap();
@@ -9669,18 +9762,18 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
+        let status = run(
             ["eprover", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error
-            .message()
-            .contains("conjecture implications/equivalences require full clausification"));
-        assert!(stdout.is_empty());
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
