@@ -4851,10 +4851,16 @@ fn parse_clause_file(
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
     let mut formula_conjecture_seen = false;
-    if detected_format == IoFormat::Tstp {
-        formula_conjecture_seen = parse_tstp_entry_list(&mut scanner, bank, clauses, None)?;
-    } else {
-        clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
+    match detected_format {
+        IoFormat::Tstp => {
+            formula_conjecture_seen = parse_tstp_entry_list(&mut scanner, bank, clauses, None)?;
+        }
+        IoFormat::Tptp => {
+            formula_conjecture_seen = parse_tptp_entry_list(&mut scanner, bank, clauses, None)?;
+        }
+        _ => {
+            clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
+        }
     }
     if !scanner.test_tok(TokenType::NO_TOKEN) {
         return Err(Diagnostic::new(
@@ -4893,6 +4899,60 @@ enum SimpleFofFormula {
     Disjunction(Vec<SimpleFofFormula>),
     Negation(Vec<SimpleFofFormula>),
     Existential(Vec<SimpleFofFormula>),
+}
+
+fn parse_tptp_entry_list(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+    mut selectors: Option<&mut StrTree<i64, i64>>,
+) -> Result<bool, Diagnostic> {
+    let mut formula_conjecture_seen = false;
+    while !scanner.test_tok(TokenType::NO_TOKEN) {
+        if scanner.test_id("input_clause") {
+            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            if tstp_entry_selected(
+                clause.info().and_then(ClauseInfo::name),
+                selectors.as_deref_mut(),
+            ) {
+                clauses.insert(clause);
+            }
+        } else if scanner.test_id("input_formula") {
+            let parsed = parse_simple_tptp_formula_clause(scanner, bank)?;
+            if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+                formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                for clause in parsed.clauses {
+                    clauses.insert(clause);
+                }
+            }
+        } else if scanner.test_id("include") {
+            let mut include_selectors = StrTree::new();
+            let skip_includes = StrTree::new();
+            if let Some(mut included) =
+                scanner.parse_include(&mut include_selectors, &skip_includes)?
+            {
+                formula_conjecture_seen |= parse_tptp_entry_list(
+                    &mut included,
+                    bank,
+                    clauses,
+                    Some(&mut include_selectors),
+                )?;
+            }
+        } else {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): TPTP input currently supports input_clause clauses and the temporary atomic/connective-fragment input_formula bridge",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            ));
+        }
+    }
+    if let Some(selector_tree) = selectors.as_ref() {
+        check_tstp_include_selectors_found(scanner, selector_tree)?;
+    }
+    Ok(formula_conjecture_seen)
 }
 
 fn parse_tstp_entry_list(
@@ -5042,6 +5102,59 @@ fn parse_simple_fof_clause(
             scanner.check_tok(TokenType::OPEN_SQUARE)?;
             parse_skip_parenthesized_expr(scanner)?;
         }
+    }
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    let mut clauses = Vec::with_capacity(literal_lists.len());
+    for literals in literal_lists {
+        let mut clause = Clause::alloc(literals);
+        clause.set_tptp_type(clause_type);
+        clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+        clause.set_info(Some(ClauseInfo::new(
+            Some(name.as_str()),
+            Some(start_source.as_str()),
+            start_line,
+            start_column,
+        )));
+        clauses.push(clause);
+    }
+    Ok(ParsedSimpleFofClause {
+        name,
+        clauses,
+        formula_conjecture_seen,
+    })
+}
+
+fn parse_simple_tptp_formula_clause(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<ParsedSimpleFofClause, Diagnostic> {
+    bank.vars().clear_ext_names();
+    let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
+    let start_line = usize_to_i64(scanner.current_token().line());
+    let start_column = usize_to_i64(scanner.current_token().column());
+
+    scanner.accept_id("input_formula")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.check_id("axiom|hypothesis|negated_conjecture|conjecture|question|lemma|unknown")?;
+    let role = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::IDENT)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    let mut clause_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
+    if formula_conjecture_seen {
+        clause_type = CP_TYPE_NEG_CONJECTURE;
+    }
+    let formulas = parse_simple_fof_formulas(scanner, bank)?;
+    let literal_lists =
+        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen)?;
+    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
+        return Err(simple_fof_unsupported_error(scanner));
     }
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -8249,6 +8362,30 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_reports_theorem_for_old_tptp_input_formula_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-conjecture");
+        std::fs::write(
+            &path,
+            "input_formula(fact, axiom, p(a)).\n\
+             input_formula(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_existential_conjecture_atom() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-existential-conjecture");
@@ -9714,6 +9851,45 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_honors_old_tptp_input_formula_include_selector() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-tptp-input-formula-include-selected-inc");
+        let path = temp_path("proof-tptp-input-formula-include-selected-main");
+        std::fs::write(
+            &include_path,
+            "input_formula(selected, axiom, p(a)).\n\
+             input_formula(unselected, axiom, q(a)).\n",
+        )
+        .unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!(
+                "include('{include_arg}',[selected]).\ninput_formula(goal, conjecture, p(a)).\n"
+            ),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--tptp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_missing_tstp_include_selector() {
         let _guard = global_state_lock();
         let include_path = temp_path("proof-fof-include-missing-selector-inc");
@@ -10786,6 +10962,31 @@ mod tests {
             .message()
             .contains("Unexpected token after clause list"));
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_supported_old_tptp_input_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tptp-input-formula");
+        std::fs::write(&path, "input_formula(goal, conjecture, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
