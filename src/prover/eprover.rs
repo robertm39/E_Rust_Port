@@ -5587,11 +5587,6 @@ fn simple_fof_equivalence_formula_to_clause_literal_lists(
     universal_dependencies: &[Term],
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    if simple_fof_formulas_contain_existential(&left)
-        || simple_fof_formulas_contain_existential(&right)
-    {
-        return Err(simple_fof_existential_requires_full_cnf_error());
-    }
     if negate_as_conjecture {
         simple_fof_negated_equivalence_to_clause_literal_lists(
             left,
@@ -6223,7 +6218,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, positive-universal-scope parenthesized existential bodies, or quantifier-free parenthesized existential bodies in direct positive or negated contexts, universally quantified implications with supported existential operands, equivalences, XORs, NANDs, and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, atomic existential formulas, positive-universal-scope parenthesized existential bodies, or quantifier-free parenthesized existential bodies in direct positive or negated contexts, universally quantified implications, equivalences, and XORs with supported existential operands, NANDs and NORs over supported fragments, grouped or unparenthesized non-conjecture conjunctions/disjunctions, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -9193,6 +9188,56 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_equivalence_with_existential_from_left() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-equivalence-existential-left");
+        std::fs::write(
+            &path,
+            "fof(eq, axiom, ![Y]:(p(Y)<=>?[X]:q(X,Y))).\n\
+             fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, ?[X]:q(X,a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_equivalence_with_existential_from_right() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-equivalence-existential-right");
+        std::fs::write(
+            &path,
+            "fof(eq, axiom, ![Y]:(p(Y)<=>?[X]:q(X,Y))).\n\
+             fof(fact, axiom, q(b,a)).\n\
+             fof(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_contradictory_axioms_when_fof_conjecture_is_unused() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-unused-conjecture");
@@ -11957,6 +12002,56 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_existential_operand_in_equivalence() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-equivalence-existential-operand");
+        std::fs::write(&path, "fof(test1, axiom, ![Y]:(p(Y)<=>?[X]:q(X,Y))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains(", axiom, (q(esk1_1(X1),X1)|~p(X1))).\n"));
+        assert!(printed.contains(", axiom, (p(X1)|~q(X2,X1))).\n"));
+        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_xor_with_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-xor-existential-operand");
+        std::fs::write(&path, "fof(test1, axiom, (p(a)<~>?[X]:q(X))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains(", axiom, (p(a)|q(esk1_0))).\n"));
+        assert!(printed.contains(", axiom, (~p(a)|~q(X1))).\n"));
+        assert_eq!(printed.matches("cnf(i_0_").count(), 2);
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_skolemizes_negated_universal_conjecture() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-universal-conjecture");
@@ -12088,6 +12183,37 @@ mod tests {
             &path,
             "fof(rule1, axiom, ![Y]:(p(Y)=>?[X]:q(X,Y))).\n\
              fof(rule2, axiom, ![Y]:((?[X]:r(X,Y))=>s(Y))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_supported_equivalence_existential_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-equivalence-existential-operand");
+        std::fs::write(
+            &path,
+            "fof(eq1, axiom, ![Y]:(p(Y)<=>?[X]:q(X,Y))).\n\
+             fof(eq2, axiom, (r(a)<=>?[X]:s(X))).\n\
+             fof(xor, axiom, (m(a)<~>?[X]:n(X))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
