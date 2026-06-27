@@ -6188,9 +6188,6 @@ fn parse_simple_fof_existential_formula(
         }
 
         let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
-        if scanner.test_tok(TokenType::FOF_BIN_OP) {
-            return Err(simple_fof_unsupported_error(scanner));
-        }
         simple_fof_literal_formulas(vec![literal])
     };
 
@@ -9099,7 +9096,7 @@ mod tests {
         let path = temp_path("proof-fof-conjunction-existential-conjunct");
         std::fs::write(
             &path,
-            "fof(fact, axiom, (?[X]:p(X)) & q(a)).\n\
+            "fof(fact, axiom, ?[X]:p(X) & q(a)).\n\
              fof(no_p, axiom, ![Y]:~p(Y)).\n",
         )
         .unwrap();
@@ -9125,7 +9122,7 @@ mod tests {
             &path,
             "fof(p, axiom, p(a)).\n\
              fof(q, axiom, q(a)).\n\
-             fof(goal, conjecture, (?[X]:p(X)) & q(a)).\n",
+             fof(goal, conjecture, ?[X]:p(X) & q(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -11983,7 +11980,7 @@ mod tests {
     fn run_print_formulas_skolemizes_fof_conjunction_with_existential_conjunct() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-conjunction-existential-conjunct");
-        std::fs::write(&path, "fof(test1, axiom, (?[X]:p(X))&q(a)).\n").unwrap();
+        std::fs::write(&path, "fof(test1, axiom, ?[X]:p(X)&q(a)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -12008,7 +12005,7 @@ mod tests {
     fn run_print_formulas_negates_fof_conjecture_conjunction_with_existential_conjunct() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-conjecture-conjunction-existential-conjunct");
-        std::fs::write(&path, "fof(goal, conjecture, (?[X]:p(X))&q(a)).\n").unwrap();
+        std::fs::write(&path, "fof(goal, conjecture, ?[X]:p(X)&q(a)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -12384,8 +12381,8 @@ mod tests {
         let path = temp_path("syntax-fof-conjunction-existential-conjunct");
         std::fs::write(
             &path,
-            "fof(ax, axiom, (?[X]:p(X))&q(a)).\n\
-             fof(goal, conjecture, (?[Y]:r(Y))&s(a)).\n",
+            "fof(ax, axiom, ?[X]:p(X)&q(a)).\n\
+             fof(goal, conjecture, ?[Y]:r(Y)&s(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
