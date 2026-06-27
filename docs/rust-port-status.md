@@ -97,6 +97,11 @@ Proof-control integration:
 
 - `generate_new_clauses` now calls the Rust disequality-decomposition helper in the staged selected-clause generation path when C's literal-count and max-arity gates allow it. Plain, simultaneous, and super-simultaneous first-order unindexed paramodulation are wired after disequality decomposition, explicit caller-owned global-index variants can drive indexed paramodulation from selected-clause generation, `ProcessClause`, and `Saturate`, and supported first-order executable proof search uses configured caller-owned global indexes; higher-order and full state-owned indexed generation remain pending.
 
+Change-later notes:
+
+- C builds disequality-decomposition argument pairs by pushing each generated negative literal at the front, so the final generated clause lists decomposed arguments in reverse source-argument order. Rust preserves that order for proof and output compatibility; a later cleaned API should separate user-facing clause order from the C construction shortcut only after reference traces allow it.
+- The literal-count and max-arity gates are spread across the C control wrapper and helper-level assertions. Rust keeps those gates at the staged proof-control boundary for now; once proof-control owns all generation settings, expose them as typed configuration instead of relying on callers to reproduce C preconditions.
+
 ## Clause Derivation Metadata
 
 Rust files:
@@ -122,6 +127,11 @@ Pending:
 - Stable clause/formula parent handles instead of compact `ident`/source references.
 - Signature/proof-state ownership for AC axiom parent references.
 - Formula derivation stacks, optional-parent replacement, proof-object extraction, topological sorting, renumbering, PCL/TSTP/DOT printing, and proof-object analysis.
+
+Change-later notes:
+
+- C derivation parent references are compact clause identifiers paired with source tags rather than stable object handles. Rust preserves that representation for current proof-depth and inference-count behavior, but proof reconstruction should move to stable clause/formula handles before duplicate identifiers, archived copies, and requeued clauses become harder to distinguish.
+- C proof-documentation pushes are interleaved with inference construction, simplification, archive movement, and global output. Rust currently records derivation metadata locally and defers output side effects; the eventual proof object layer should keep metadata creation separate from rendering so compatibility shims can reproduce C streams without making them the core API.
 
 ## Initial Crate And CLI Foundation
 
