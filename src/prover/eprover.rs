@@ -3716,9 +3716,7 @@ fn run_syntax_only(
     output: &mut impl Write,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
-    let mut signature = Signature::new(TypeBank::new());
-    signature.remove_distinct_props(config.free_symbol_properties);
-    let mut bank = TermBank::new(signature)?;
+    let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
     let mut clauses = ClauseSet::new();
 
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
@@ -3793,9 +3791,7 @@ fn run_app_encode<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &mut EProverConfig,
 ) -> Result<(), EProverError> {
-    let mut signature = Signature::new(TypeBank::new());
-    signature.remove_distinct_props(config.free_symbol_properties);
-    let mut bank = TermBank::new(signature)?;
+    let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
     let mut formulas = Vec::new();
     let mut saw_any_formula_owner = false;
 
@@ -3825,6 +3821,15 @@ fn run_app_encode<W: Write + ?Sized>(
     write_preprocessing_config_debug_line(output, config)?;
     write_app_encoded_formula_set(output, &mut bank, &formulas, saw_any_formula_owner)?;
     Ok(())
+}
+
+fn temporary_executable_term_bank(
+    free_symbol_properties: FunctionProperties,
+) -> Result<TermBank, Diagnostic> {
+    let mut signature = Signature::new(TypeBank::new());
+    signature.insert_internal_codes()?;
+    signature.remove_distinct_props(free_symbol_properties);
+    TermBank::new(signature)
 }
 
 fn write_app_encoded_formula_set<W: Write + ?Sized>(
@@ -7243,6 +7248,7 @@ mod tests {
     use crate::terms::termtypes::RewriteLevel;
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
+    use std::fmt::Write as _;
 
     struct EnvGuard {
         name: &'static str,
@@ -9351,6 +9357,33 @@ mod tests {
     }
 
     #[test]
+    fn run_app_encode_reserves_internal_symbol_codes_for_temporary_bank() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-internal-symbol-codes");
+        let mut input = String::new();
+        for index in 1..=9 {
+            writeln!(&mut input, "fof(ax{index}, axiom, p{index}(a{index})).").unwrap();
+        }
+        std::fs::write(&path, input).unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("tff(ax9, axiom, "));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_applies_verbose_option_to_global_gate() {
         let _guard = global_state_lock();
         set_verbose_level(0);
@@ -9569,6 +9602,35 @@ mod tests {
 
         let status = run(
             ["eprover", "--syntax-only", "--lop-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_reserves_internal_symbol_codes_for_temporary_bank() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-internal-symbol-codes");
+        let mut input = String::new();
+        for index in 1..=9 {
+            writeln!(&mut input, "fof(ax{index}, axiom, p{index}(a{index})).").unwrap();
+        }
+        std::fs::write(&path, input).unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )

@@ -264,6 +264,14 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SigInsertInternalCodes` reserves fixed function codes for `$true`, `$false`, `$@_var`, named/DB lambdas, `$ite`, `$let`, and related built-ins before normal user symbols are parsed. Rust proof-state allocation and executable temporary parser banks now perform that reservation before inserting user symbols; otherwise an ordinary user predicate can receive `SIG_PHONY_APP_CODE` and be misclassified as a phony application.
+
+### Change Later Candidates
+
+- Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so temporary syntax-only/app-encode paths cannot bypass fixed-code reservation accidentally.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
