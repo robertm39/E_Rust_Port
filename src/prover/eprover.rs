@@ -4706,7 +4706,7 @@ fn parse_tstp_entry_list(
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses and the atomic/universal-implication fof fragment",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses and the temporary atomic/universal-implication/conjunction fof fragment",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -4748,9 +4748,8 @@ fn parse_simple_fof_clause(
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
     let formulas = parse_simple_fof_formulas(scanner, bank)?;
-    if formula_conjecture_seen && formulas.len() > 1 {
-        return Err(simple_fof_conjecture_conjunction_error());
-    }
+    let literal_lists =
+        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen)?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -4766,9 +4765,8 @@ fn parse_simple_fof_clause(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let mut clauses = Vec::with_capacity(formulas.len());
-    for formula in formulas {
-        let literals = simple_fof_formula_to_clause_literals(formula, formula_conjecture_seen)?;
+    let mut clauses = Vec::with_capacity(literal_lists.len());
+    for literals in literal_lists {
         let mut clause = Clause::alloc(literals);
         clause.set_tptp_type(clause_type);
         clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
@@ -4784,6 +4782,31 @@ fn parse_simple_fof_clause(
         clauses,
         formula_conjecture_seen,
     })
+}
+
+fn simple_fof_formulas_to_clause_literal_lists(
+    formulas: Vec<SimpleFofFormula>,
+    negate_as_conjecture: bool,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    if negate_as_conjecture && formulas.len() > 1 {
+        let mut literals = Vec::with_capacity(formulas.len());
+        for formula in formulas {
+            match formula {
+                SimpleFofFormula::Literal(literal) => literals.push(literal),
+                SimpleFofFormula::Implication { .. } => {
+                    return Err(simple_fof_conjecture_implication_error());
+                }
+            }
+        }
+        let mut literals = EqnList::from_vec(literals);
+        literals.negate_eqns();
+        return Ok(vec![literals]);
+    }
+
+    formulas
+        .into_iter()
+        .map(|formula| simple_fof_formula_to_clause_literals(formula, negate_as_conjecture))
+        .collect()
 }
 
 fn simple_fof_formula_to_clause_literals(
@@ -4803,10 +4826,7 @@ fn simple_fof_formula_to_clause_literals(
             consequent,
         } => {
             if negate_as_conjecture {
-                return Err(Diagnostic::new(
-                    ErrorCode::SYNTAX_ERROR,
-                    "FOF conjecture implications require full clausification; the temporary parser only supports atomic conjectures",
-                ));
+                return Err(simple_fof_conjecture_implication_error());
             }
             antecedent.flip_prop(crate::clauses::eqn_props::EP_IS_POSITIVE);
             Ok(EqnList::from_vec(vec![consequent, antecedent]))
@@ -4918,17 +4938,17 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications, and grouped non-conjecture conjunctions of those formulas",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, universally quantified atomic implications, grouped non-conjecture conjunctions, and grouped atomic conjecture conjunctions",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
     )
 }
 
-fn simple_fof_conjecture_conjunction_error() -> Diagnostic {
+fn simple_fof_conjecture_implication_error() -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        "FOF conjecture conjunctions require full clausification; the temporary parser only supports atomic conjectures",
+        "FOF conjecture implications require full clausification; the temporary parser only supports atomic conjectures and grouped atomic conjecture conjunctions",
     )
 }
 
@@ -7251,6 +7271,37 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_supported_fof_conjecture_conjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-fof-conjecture-conjunction");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n\
+             fof(goal, conjecture, (p(a) & q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_resources_info_prints_c_shaped_footer() {
         let _guard = global_state_lock();
         let path = temp_path("resources-info");
@@ -7498,6 +7549,31 @@ mod tests {
             &path,
             "fof(axs, axiom, (![X]:(human(X) => mortal(X)) & human(socrates))).\n\
              fof(goal, conjecture, mortal(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_conjecture_conjunction_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-conjecture-conjunction");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(q, axiom, q(a)).\n\
+             fof(goal, conjecture, (p(a) & q(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -8500,10 +8576,14 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_fof_conjecture_conjunction() {
+    fn run_syntax_only_rejects_fof_conjecture_conjunction_with_implication() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-fof-conjecture-conjunction");
-        std::fs::write(&path, "fof(goal, conjecture, (p(a)&q(a))).\n").unwrap();
+        let path = temp_path("syntax-fof-conjecture-conjunction-imp");
+        std::fs::write(
+            &path,
+            "fof(goal, conjecture, (![X]:(p(X) => q(X)) & r(a))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -8518,7 +8598,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error
             .message()
-            .contains("conjecture conjunctions require full clausification"));
+            .contains("conjecture implications require full clausification"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
