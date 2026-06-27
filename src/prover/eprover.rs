@@ -14,7 +14,8 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
-    clause_parse, clause_print_lop_format_string_with_options, clause_write_pcl_with_options,
+    clause_parse, clause_print_lop_format_string_with_options,
+    clause_print_tptp_format_string_with_options, clause_write_pcl_with_options,
     clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
@@ -4638,12 +4639,13 @@ fn write_saturated_output(
         .with_print_types(config.encoding.print_types);
     if let Some(success) = success {
         write_comment_line(output, "Saturated system contains the empty clause:")?;
-        let rendered = clause_print_lop_format_string_with_options(
+        let rendered = clause_print_for_output_format(
             state.terms(),
             success,
-            true,
+            config.output_format,
             eqn_print_options,
-        );
+            config.encoding.print_types,
+        )?;
         output.write_all(rendered.as_bytes())?;
         output.write_all(b"\n\n")?;
     }
@@ -4657,6 +4659,41 @@ fn write_saturated_output(
     output.write_all(rendered.as_bytes())?;
     output.write_all(b"\n")?;
     Ok(())
+}
+
+fn clause_print_for_output_format(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: IoFormat,
+    eqn_print_options: EqnPrintOptions,
+    print_types: bool,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string_with_options(
+            bank,
+            clause,
+            eqn_print_options,
+        )),
+        IoFormat::Tstp => {
+            let mut rendered = String::new();
+            clause_write_tstp_with_type_suffixes(
+                &mut rendered,
+                bank,
+                clause,
+                true,
+                true,
+                ProblemType::FirstOrder,
+                print_types,
+            )?;
+            Ok(rendered)
+        }
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
+            bank,
+            clause,
+            true,
+            eqn_print_options,
+        )),
+    }
 }
 
 fn write_proof_statistics(
@@ -9838,6 +9875,41 @@ mod tests {
         assert!(printed.contains(
             "% Saturated system contains the empty clause:\n <- .\n\n% Processed positive unit clauses:\n"
         ));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_saturated_success_clause_in_selected_output_format() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-print-saturated-success-tstp");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--tstp-out",
+                "--print-saturated=e",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.starts_with(&format!(
+            "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+            default_preprocessing_debug_line()
+        )));
+        assert!(printed.contains("% Saturated system contains the empty clause:\ncnf("));
+        assert!(printed.contains(", ($false)).\n\n% Processed positive unit clauses:\n"));
+        assert!(!printed.contains("\n <- .\n\n% Processed positive unit clauses:\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
