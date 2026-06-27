@@ -5239,6 +5239,16 @@ fn parse_simple_fof_connective_formulas(
             right,
         }]);
     }
+    if scanner.test_tok(TokenType::FOF_XOR) {
+        scanner.accept_tok(TokenType::FOF_XOR)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Negation(vec![
+            SimpleFofFormula::Equivalence {
+                left: formulas,
+                right,
+            },
+        ])]);
+    }
     if scanner.test_tok(TokenType::FOF_BIN_OP) {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -8466,6 +8476,56 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_fof_xor_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-xor");
+        std::fs::write(
+            &path,
+            "fof(xor, axiom, (p(a) <~> q(a))).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(goal, conjecture, ~q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_conjecture_xor_fragment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-conjecture-xor");
+        std::fs::write(
+            &path,
+            "fof(p, axiom, p(a)).\n\
+             fof(not_q, axiom, ~q(a)).\n\
+             fof(goal, conjecture, (p(a) <~> q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_supported_fof_equivalence_with_conjunctive_left_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("proof-fof-equivalence-conjunctive-left");
@@ -10467,7 +10527,7 @@ mod tests {
     fn run_syntax_only_rejects_unsupported_fof_connective() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-unsupported");
-        std::fs::write(&path, "fof(test1, axiom, (p(a)<~>q(a))).\n").unwrap();
+        std::fs::write(&path, "fof(test1, axiom, (p(a)~&q(a))).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -10482,6 +10542,31 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("requires full clausification"));
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_fof_xor() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-xor");
+        std::fs::write(&path, "fof(goal, conjecture, (p(a)<~>q(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
