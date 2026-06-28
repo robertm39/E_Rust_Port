@@ -12,6 +12,7 @@ use crate::basics::os_wrapper::{
     set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
+use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
@@ -25,6 +26,7 @@ use crate::clauses::clause_props::{
     CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
     CP_TYPE_QUESTION,
 };
+use crate::clauses::clausefunc::pstack_clause_print_lop_string;
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
@@ -97,6 +99,8 @@ const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
 const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
 const SINE_AUTO_MASK: &str = "-aaaaaaa";
 const SINE_AUTO_CLASS_LEN: usize = SINE_AUTO_MASK.len();
+const TRAINING_PRINT_POS: i64 = 1;
+const TRAINING_PRINT_NEG: i64 = 2;
 const SINE_AUTO_CLASSES: &[(&str, Option<&str>)] = &[
     ("-LMSSMLL", None),
     ("-MMSSMSL", None),
@@ -4690,6 +4694,7 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         next_doc_ident,
     )?;
+    process_success_proof_object_gc(output, config, &mut state, &outcome)?;
     let saturated_success = match &outcome {
         SaturateOutcome::Returned { clause, .. } => Some(clause.as_ref()),
         SaturateOutcome::Stopped { .. } => None,
@@ -5008,6 +5013,23 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
             write_saturation_proof_object_output(output, config, state)?;
         }
         SaturateOutcome::Stopped { .. } => {}
+    }
+    Ok(())
+}
+
+fn process_success_proof_object_gc<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    outcome: &SaturateOutcome,
+) -> Result<(), EProverError> {
+    if config.proof_object_level <= 0 || !matches!(outcome, SaturateOutcome::Returned { .. }) {
+        return Ok(());
+    }
+
+    let _ = state.analyse_gc();
+    if let Some(training_flags) = config.training_examples {
+        write_training_examples(output, state, training_flags)?;
     }
     Ok(())
 }
@@ -5863,6 +5885,46 @@ fn write_answer_outputs(
     for answer_output in state.take_answer_outputs() {
         output.write_all(answer_output.as_bytes())?;
     }
+    Ok(())
+}
+
+fn write_training_examples(
+    output: &mut impl Write,
+    state: &crate::clauses::proofstate::ProofState,
+    flags: i64,
+) -> Result<(), EProverError> {
+    let examples = state.pick_training_examples();
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Training examples: {} positive, {} negative",
+        examples.positive.len(),
+        examples.negative.len()
+    )?;
+    if flags & TRAINING_PRINT_POS != 0 {
+        write_comment_line(output, "Training: Positive examples begin")?;
+        write_training_clause_examples(output, state, &examples.positive, "% trainpos")?;
+        write_comment_line(output, "Training: Positive examples end")?;
+    }
+    if flags & TRAINING_PRINT_NEG != 0 {
+        write_comment_line(output, "Training: Negative examples begin")?;
+        write_training_clause_examples(output, state, &examples.negative, "%trainneg")?;
+        write_comment_line(output, "Training: Negative examples end")?;
+    }
+    Ok(())
+}
+
+fn write_training_clause_examples(
+    output: &mut impl Write,
+    state: &crate::clauses::proofstate::ProofState,
+    clauses: &[&Clause],
+    extra: &str,
+) -> Result<(), EProverError> {
+    let mut stack = PStack::new();
+    for clause in clauses {
+        stack.push(*clause);
+    }
+    output
+        .write_all(pstack_clause_print_lop_string(state.terms(), &stack, Some(extra)).as_bytes())?;
     Ok(())
 }
 
@@ -14677,6 +14739,69 @@ mod tests {
         ));
         assert!(printed.contains("cnf(c_0_2, plain, ($false), c_0_1,['proof']).\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_record_gcs_updates_success_statistics() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-record-gcs");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--print-statistics",
+                "--record-gcs",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("% Proof object given clauses           : 0\n"));
+        assert!(printed.contains("% Proof search given clauses           : 1\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_training_examples_prints_counts_and_requested_sections() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-training-examples");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--training-examples=3",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("% Training examples: 0 positive, 1 negative\n"));
+        assert!(printed.contains("% Training: Positive examples begin\n"));
+        assert!(printed.contains("% Training: Positive examples end\n"));
+        assert!(printed.contains("% Training: Negative examples begin\n"));
+        assert!(printed.contains("%trainneg\n"));
+        assert!(printed.contains("% Training: Negative examples end\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
