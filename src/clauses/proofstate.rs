@@ -6,7 +6,9 @@ use crate::clauses::clause_props::{
     CP_IS_DEAD, CP_IS_PROOF_CLAUSE, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
 };
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::derivation::{clause_is_eval_gc, ClauseDerivationRef, DerivationParentRef};
+use crate::clauses::derivation::{
+    clause_is_eval_gc, deriv_stack_extract_parents, ClauseDerivationRef, DerivationParentRef,
+};
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
@@ -18,7 +20,11 @@ use crate::terms::signature::{FunctionProperties, Signature};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
-use std::{collections::BTreeMap, fmt, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    path::Path,
+};
 
 pub const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 pub const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
@@ -457,6 +463,49 @@ impl ProofState {
     }
 
     #[must_use]
+    pub fn clause_by_derivation_ref_mut(
+        &mut self,
+        parent: ClauseDerivationRef,
+    ) -> Option<&mut Clause> {
+        if let Some(clause) = self.axioms.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.ax_archive.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_pos_rules.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_pos_eqns.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_neg_units.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_non_units.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.unprocessed.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.tmp_store.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.eval_store.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.archive.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.definition_store.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        self.watchlist
+            .as_mut()
+            .and_then(|watchlist| watchlist.find_by_derivation_ref_mut(parent))
+    }
+
+    #[must_use]
     pub fn clause_parent_is_dead(&self, parent: DerivationParentRef) -> bool {
         match parent {
             DerivationParentRef::Clause(parent) => {
@@ -542,6 +591,25 @@ impl ProofState {
         &mut self.statistics
     }
 
+    /// Marks represented clause ancestors that participate in a successful proof.
+    ///
+    /// This ports the clause-side marking side effect of C
+    /// `DerivationMarkProofSteps`: an empty or already proof-marked root makes
+    /// reachable clause parents proof clauses. Rust also accepts semantically
+    /// false roots while supported answer-limit proof roots still use that
+    /// executable bridge representation. Formula parents and ordered proof
+    /// graph construction stay with the future formula/archive derivation
+    /// slice.
+    #[must_use]
+    pub fn mark_proof_clause_ancestors(&mut self, root: &Clause) -> u64 {
+        if !root.is_empty() && !root.is_sem_false() && !root.query_prop(CP_IS_PROOF_CLAUSE) {
+            return 0;
+        }
+
+        let (parents, _) = deriv_stack_extract_parents(root.derivation(), &[]);
+        self.mark_proof_clause_parent_refs(parents)
+    }
+
     /// Counts EvalGC-selected clauses like C `ProofStateAnalyseGC`.
     ///
     /// C accumulates the result into `gc_count` and `gc_used_count` instead of
@@ -592,6 +660,90 @@ impl ProofState {
             }
         }
         analysis
+    }
+
+    fn mark_proof_clause_parent_refs(&mut self, parents: Vec<DerivationParentRef>) -> u64 {
+        let mut pending = parents;
+        let mut visited = BTreeSet::new();
+        let mut marked = 0;
+
+        while let Some(parent) = pending.pop() {
+            let DerivationParentRef::Clause(parent) = parent else {
+                continue;
+            };
+            if !visited.insert(parent) {
+                continue;
+            }
+            let Some((newly_marked, parent_parents)) =
+                self.mark_proof_clause_by_derivation_ref(parent)
+            else {
+                continue;
+            };
+            if newly_marked {
+                marked += 1;
+                pending.extend(parent_parents);
+            }
+        }
+
+        marked
+    }
+
+    fn mark_proof_clause_by_derivation_ref(
+        &mut self,
+        parent: ClauseDerivationRef,
+    ) -> Option<(bool, Vec<DerivationParentRef>)> {
+        let clause = self.proof_clause_by_derivation_ref_mut(parent)?;
+        if clause.query_prop(CP_IS_PROOF_CLAUSE) {
+            return Some((false, Vec::new()));
+        }
+        clause.set_prop(CP_IS_PROOF_CLAUSE);
+        let (parents, _) = deriv_stack_extract_parents(clause.derivation(), &[]);
+        Some((true, parents))
+    }
+
+    fn proof_clause_by_derivation_ref_mut(
+        &mut self,
+        parent: ClauseDerivationRef,
+    ) -> Option<&mut Clause> {
+        // C derivations store parent pointers. Until Rust has stable clause
+        // handles, selected archive copies must win over same-id axioms for
+        // proof-object GC/training marking.
+        if let Some(clause) = self.archive.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_pos_rules.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_pos_eqns.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_neg_units.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.processed_non_units.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.ax_archive.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.axioms.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.unprocessed.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.tmp_store.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.eval_store.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        if let Some(clause) = self.definition_store.find_by_derivation_ref_mut(parent) {
+            return Some(clause);
+        }
+        self.watchlist
+            .as_mut()
+            .and_then(|watchlist| watchlist.find_by_derivation_ref_mut(parent))
     }
 
     fn gc_clause_sets(&self) -> [&ClauseSet; 6] {
@@ -1175,6 +1327,7 @@ mod tests {
     };
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_EVAL_GC,
+        DC_CNF_QUOTE, DC_EQ_RES,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -1355,6 +1508,76 @@ mod tests {
         assert!(state.clause_parent_is_dead(DerivationParentRef::Clause(
             ClauseDerivationRef::new(20_002, 7)
         )));
+    }
+
+    #[test]
+    fn proof_state_mark_proof_clause_ancestors_sets_reachable_clause_prop() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut source = simple_clause(&mut state, "proof_mark_source", 20_003);
+        source.set_csscpa_source(11);
+        let mut selected = simple_clause(&mut state, "proof_mark_selected", 20_004);
+        selected.set_csscpa_source(12);
+        clause_push_derivation(&mut selected, DC_CNF_QUOTE, Some(&source), None);
+        clause_push_derivation(&mut selected, DC_CNF_EVAL_GC, None, None);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&selected), None);
+
+        state.ax_archive_mut().insert(source);
+        state.archive_mut().insert(selected);
+
+        assert_eq!(state.mark_proof_clause_ancestors(&root), 2);
+        assert!(state
+            .ax_archive()
+            .find_by_id(20_003)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(state
+            .archive()
+            .find_by_id(20_004)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+        assert_eq!(
+            state.analyse_gc(),
+            ProofStateGcAnalysis {
+                clause_count: 2,
+                given_count: 1,
+                used_given_count: 1,
+            }
+        );
+        assert_eq!(state.mark_proof_clause_ancestors(&root), 0);
+    }
+
+    #[test]
+    fn proof_state_mark_proof_clause_ancestors_prefers_archive_copy_for_duplicate_refs() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = simple_clause(&mut state, "proof_mark_duplicate_original", 20_005);
+        let mut selected_copy = simple_clause(&mut state, "proof_mark_duplicate_selected", 20_005);
+        clause_push_derivation(&mut selected_copy, DC_CNF_EVAL_GC, None, None);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&selected_copy), None);
+
+        state.ax_archive_mut().insert(original);
+        state.archive_mut().insert(selected_copy);
+
+        assert_eq!(state.mark_proof_clause_ancestors(&root), 1);
+        assert!(!state
+            .ax_archive()
+            .find_by_id(20_005)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+        assert!(state
+            .archive()
+            .find_by_id(20_005)
+            .unwrap()
+            .query_prop(CP_IS_PROOF_CLAUSE));
+        assert_eq!(
+            state.analyse_gc(),
+            ProofStateGcAnalysis {
+                clause_count: 2,
+                given_count: 1,
+                used_given_count: 1,
+            }
+        );
     }
 
     #[test]

@@ -500,6 +500,16 @@ impl ClauseSet {
         })
     }
 
+    #[must_use]
+    pub fn find_by_derivation_ref_mut(
+        &mut self,
+        parent: ClauseDerivationRef,
+    ) -> Option<&mut Clause> {
+        self.clauses.iter_mut().find(|clause| {
+            clause.ident() == parent.ident() && clause.query_csscpa_source() == parent.source()
+        })
+    }
+
     pub fn find_by_id_mut(&mut self, ident: i64) -> Option<&mut Clause> {
         self.clauses
             .iter_mut()

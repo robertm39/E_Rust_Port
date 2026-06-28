@@ -5021,10 +5021,14 @@ fn process_success_proof_object_gc<W: Write + ?Sized>(
     state: &mut crate::clauses::proofstate::ProofState,
     outcome: &SaturateOutcome,
 ) -> Result<(), EProverError> {
-    if config.proof_object_level <= 0 || !matches!(outcome, SaturateOutcome::Returned { .. }) {
+    if config.proof_object_level <= 0 {
         return Ok(());
     }
+    let SaturateOutcome::Returned { clause, .. } = outcome else {
+        return Ok(());
+    };
 
+    let _ = state.mark_proof_clause_ancestors(clause);
     let _ = state.analyse_gc();
     if let Some(training_flags) = config.training_examples {
         write_training_examples(output, config, state, training_flags)?;
@@ -14777,7 +14781,7 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Proof object given clauses           : 0\n"));
+        assert!(printed.contains("% Proof object given clauses           : 1\n"));
         assert!(printed.contains("% Proof search given clauses           : 1\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -14806,11 +14810,12 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Training examples: 0 positive, 1 negative\n"));
+        assert!(printed.contains("% Training examples: 1 positive, 0 negative\n"));
         assert!(printed.contains("% Training: Positive examples begin\n"));
+        assert!(printed.contains("% trainpos\n"));
         assert!(printed.contains("% Training: Positive examples end\n"));
         assert!(printed.contains("% Training: Negative examples begin\n"));
-        assert!(printed.contains("%trainneg\n"));
+        assert!(!printed.contains("%trainneg\n"));
         assert!(printed.contains("% Training: Negative examples end\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -14830,7 +14835,7 @@ mod tests {
                 "eprover",
                 "--lop-in",
                 "--tstp-out",
-                "--training-examples=2",
+                "--training-examples=1",
                 path_arg.as_str(),
             ],
             &mut stdout,
@@ -14840,11 +14845,11 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Training examples: 0 positive, 1 negative\n"));
-        assert!(printed.contains("% Training: Negative examples begin\n"));
+        assert!(printed.contains("% Training examples: 1 positive, 0 negative\n"));
+        assert!(printed.contains("% Training: Positive examples begin\n"));
         assert!(printed.contains("cnf("));
-        assert!(printed.contains(", ($false)).%trainneg\n"));
-        assert!(!printed.contains("\n <- a=a.%trainneg\n"));
+        assert!(printed.contains(", ($false)).% trainpos\n"));
+        assert!(!printed.contains("\n <- a=a.% trainpos\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
