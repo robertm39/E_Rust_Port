@@ -4705,7 +4705,9 @@ fn run_proof_search<W: Write + ?Sized>(
         SaturateOutcome::Returned { clause, .. } => Some(clause.as_ref()),
         SaturateOutcome::Stopped { .. } => None,
     };
-    write_saturated_output(output, config, &state, saturated_success)?;
+    if !should_suppress_saturated_output_after_force_deriv(config, &outcome) {
+        write_saturated_output(output, config, &state, saturated_success)?;
+    }
     write_proof_statistics(
         output,
         config,
@@ -4740,6 +4742,13 @@ fn run_main_saturation(
         config.answer_limit,
         indices,
     )?)
+}
+
+fn should_suppress_saturated_output_after_force_deriv(
+    config: &EProverConfig,
+    outcome: &SaturateOutcome,
+) -> bool {
+    config.force_derivation_output >= 2 && matches!(outcome, SaturateOutcome::Stopped { .. })
 }
 
 struct AutoModeContext {
@@ -5008,17 +5017,13 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
         SaturateOutcome::Returned { clause, .. } => {
             write_proof_success_object_output(output, config, state, clause, next_doc_ident)?;
         }
-        SaturateOutcome::Stopped { .. }
-            if should_write_saturation_proof_output(
-                config,
-                state,
-                outcome,
-                inference_system_complete,
-            ) =>
-        {
-            write_saturation_proof_output(output, config, state)?;
+        SaturateOutcome::Stopped { .. } => {
+            if let Some(status) =
+                stopped_proof_object_status(config, state, outcome, inference_system_complete)
+            {
+                write_stopped_proof_output(output, config, state, status)?;
+            }
         }
-        SaturateOutcome::Stopped { .. } => {}
     }
     Ok(())
 }
@@ -5571,14 +5576,27 @@ fn write_proof_success_list_output(
     Ok(())
 }
 
-fn should_write_saturation_proof_output(
+fn stopped_proof_object_status(
     config: &EProverConfig,
     state: &ProofState,
     outcome: &SaturateOutcome,
     inference_system_complete: bool,
+) -> Option<&'static str> {
+    if state.statistics().answer_count != 0 || !matches!(outcome, SaturateOutcome::Stopped { .. }) {
+        return None;
+    }
+    if is_complete_saturation_proof_object(state, outcome, inference_system_complete) {
+        return Some("Saturation");
+    }
+    (config.force_derivation_output > 0).then_some("Derivation")
+}
+
+fn is_complete_saturation_proof_object(
+    state: &ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
 ) -> bool {
-    config.proof_output >= 1
-        && state.statistics().answer_count == 0
+    state.statistics().answer_count == 0
         && matches!(
             outcome,
             SaturateOutcome::Stopped {
@@ -5591,34 +5609,25 @@ fn should_write_saturation_proof_output(
         && !state.has_interpreted_symbols()
 }
 
-fn write_saturation_proof_output(
+fn write_stopped_proof_output(
     output: &mut impl Write,
     config: &EProverConfig,
     state: &ProofState,
+    status: &str,
 ) -> Result<(), EProverError> {
+    if config.proof_output < 1 {
+        return Ok(());
+    }
     if config.proof_output >= 2 {
-        let graph = state.proof_object_graph_for_roots(proof_object_saturation_roots(state));
+        let graph = state.proof_object_graph_for_roots(stopped_proof_object_roots(config, state));
         return write_proof_object_dot(output, config, state.terms(), &graph);
     }
 
-    write_comment_line(output, "SZS output start Saturation")?;
-    write_saturation_proof_object_set(output, config, state.terms(), state.processed_pos_rules())?;
-    write_saturation_proof_object_set(output, config, state.terms(), state.processed_pos_eqns())?;
-    write_saturation_proof_object_set(output, config, state.terms(), state.processed_neg_units())?;
-    write_saturation_proof_object_set(output, config, state.terms(), state.processed_non_units())?;
-    write_comment_line(output, "SZS output end Saturation")?;
-    Ok(())
-}
-
-fn write_saturation_proof_object_set(
-    output: &mut impl Write,
-    config: &EProverConfig,
-    bank: &TermBank,
-    set: &ClauseSet,
-) -> Result<(), EProverError> {
-    for clause in set.iter() {
-        write_saturation_proof_object_clause(output, config, bank, clause)?;
+    writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output start {status}")?;
+    for clause in stopped_proof_object_roots(config, state) {
+        write_saturation_proof_object_clause(output, config, state.terms(), clause)?;
     }
+    writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output end {status}")?;
     Ok(())
 }
 
@@ -5787,39 +5796,15 @@ fn write_supported_proof_object_statistics(
             state.proof_object_analysis_for_roots(roots)
         }
         SaturateOutcome::Stopped { .. }
-            if should_analyse_saturation_proof_object(
-                config,
-                state,
-                outcome,
-                inference_system_complete,
-            ) =>
+            if stopped_proof_object_status(config, state, outcome, inference_system_complete)
+                .is_some() =>
         {
-            state.proof_object_analysis_for_roots(proof_object_saturation_roots(state))
+            state.proof_object_analysis_for_roots(stopped_proof_object_roots(config, state))
         }
         SaturateOutcome::Stopped { .. } => return Ok(()),
     };
 
     write_proof_object_analysis(output, analysis)
-}
-
-fn should_analyse_saturation_proof_object(
-    config: &EProverConfig,
-    state: &ProofState,
-    outcome: &SaturateOutcome,
-    inference_system_complete: bool,
-) -> bool {
-    config.proof_object_level > 0
-        && state.statistics().answer_count == 0
-        && matches!(
-            outcome,
-            SaturateOutcome::Stopped {
-                reason: SaturateStopReason::Saturated,
-                ..
-            }
-        )
-        && inference_system_complete
-        && state.state_is_complete()
-        && !state.has_interpreted_symbols()
 }
 
 fn proof_object_saturation_roots(state: &ProofState) -> Vec<&Clause> {
@@ -5830,6 +5815,17 @@ fn proof_object_saturation_roots(state: &ProofState) -> Vec<&Clause> {
         .chain(state.processed_neg_units().iter())
         .chain(state.processed_non_units().iter())
         .collect()
+}
+
+fn stopped_proof_object_roots<'a>(
+    config: &EProverConfig,
+    state: &'a ProofState,
+) -> Vec<&'a Clause> {
+    let mut roots = proof_object_saturation_roots(state);
+    if config.force_derivation_output >= 2 {
+        roots.extend(state.unprocessed().iter());
+    }
+    roots
 }
 
 fn write_proof_object_analysis(
@@ -15381,6 +15377,138 @@ mod tests {
         assert!(printed.contains("\n% Clause set closed under restricted calculus!\n"));
         assert!(!printed.contains("SZS output start Saturation"));
         assert!(!printed.contains("SZS output end Saturation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_force_deriv_prints_derivation_block_for_incomplete_no_proof() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-force-deriv-incomplete");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--proof-object=1",
+                "--force-deriv=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("\n% Clause set closed under restricted calculus!\n"));
+        assert!(printed.contains("% SZS output start Derivation\n"));
+        assert!(printed.contains("p(a)"));
+        assert!(printed.contains("'final'\n"));
+        assert!(printed.contains("% SZS output end Derivation\n"));
+        assert!(!printed.contains("SZS output start Saturation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_force_deriv_level2_prints_unprocessed_resource_roots() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-force-deriv-resource");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--processed-clauses-limit=0",
+                "--proof-object=1",
+                "--force-deriv=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(printed.contains("\n% Failure: User resource limit exceeded!\n"));
+        assert!(printed.contains("% SZS output start Derivation\n"));
+        assert!(printed.contains("p(a)"));
+        assert!(printed.contains("% SZS output end Derivation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_force_deriv_statistics_can_print_without_derivation_format() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-force-deriv-statistics");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--processed-clauses-limit=0",
+                "--force-deriv=2",
+                "--proof-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(!printed.contains("SZS output start Derivation"));
+        assert!(printed.contains("% Proof object total steps             : 1\n"));
+        assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_force_deriv_level2_suppresses_later_saturated_output() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-force-deriv-no-print-saturated");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--processed-clauses-limit=0",
+                "--print-saturated=e",
+                "--force-deriv=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(printed.contains("\n% Failure: User resource limit exceeded!\n"));
+        assert!(!printed.contains("SZS output start Derivation"));
+        assert!(!printed.contains("p(a)"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
