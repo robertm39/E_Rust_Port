@@ -96,6 +96,11 @@ Source files reviewed: `CONTROL/cco_scheduling.h`, `CONTROL/cco_scheduling.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change-Later Observations
+
+- `InitializePlaceholderSearchSchedule` mutates the generated search schedule in place: without forced preprocessing it writes a NULL terminator at the placeholder, and with forced preprocessing it overwrites the placeholder with the selected preprocessing strategy, rescales earlier fractions, then swaps the inserted entry into slot 1. Rust schedule parsing preserves the placeholder as a normal cell for now; a later executable scheduler should decide whether to clone before mutation or model the C global-array mutation explicitly.
+- `GetFilteredDefaultSchedule` also mutates the generated default schedule in place while filtering out strategies already run by an exhausted schedule. This relies on generated static arrays being writable process state. A Rust scheduler should prefer owned per-run schedule copies unless reference tests show cross-run mutation is observable.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
