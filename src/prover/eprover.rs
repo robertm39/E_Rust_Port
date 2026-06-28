@@ -39,17 +39,24 @@ use crate::clauses::proofstate::{
     proof_state_alloc, ProofState, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
-use crate::heuristics::clausesetfeatures::proof_state_print_selective_string;
+use crate::heuristics::clausesetfeatures::{
+    create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
+    spec_features_compute_clause_set_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
+    DEFAULT_CLASS_MASK,
+};
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
-    get_heuristic_with_name, heuristic_parms_strategy_print_string,
-    strategies_print_predefined_string,
+    get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
+    heuristic_parms_strategy_print_string, strategies_print_predefined_string,
 };
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_filter_unprocessed, proof_state_init,
     proof_state_reset_processed_with_global_indices, proof_state_saturate_with_global_indices,
     ProofControl, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+};
+use crate::heuristics::rawspecfeatures::{
+    raw_spec_features_classify, raw_spec_features_compute, RawSpecFeatureCell, RAW_DEFAULT_MASK,
 };
 use crate::heuristics::to_params::{self, OrderParmsCell};
 use crate::inout::basicparser::parse_skip_parenthesized_expr;
@@ -1127,6 +1134,7 @@ pub struct SearchControlConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EProverConfig {
     pub warnings: Vec<Diagnostic>,
+    pub explicit_options: Vec<EProverOption>,
     pub files: Vec<String>,
     pub output_file: Option<String>,
     pub output_level: i64,
@@ -1218,6 +1226,7 @@ impl Default for EProverConfig {
     fn default() -> Self {
         Self {
             warnings: Vec::new(),
+            explicit_options: Vec::new(),
             files: Vec::new(),
             output_file: None,
             output_level: 1,
@@ -1457,8 +1466,15 @@ pub fn heuristic_parms_from_config(
 /// Returns a diagnostic if manually constructed config values cannot be
 /// represented by the C-shaped proof-control parameter fields.
 pub fn proof_control_from_config(config: &EProverConfig) -> Result<ProofControl, Diagnostic> {
+    proof_control_from_heuristic_parms(config, heuristic_parms_with_strategy_io(config)?)
+}
+
+fn proof_control_from_heuristic_parms(
+    config: &EProverConfig,
+    params: HeuristicParmsCell,
+) -> Result<ProofControl, Diagnostic> {
     let mut control = ProofControl::new();
-    control.set_heuristic_parms(heuristic_parms_with_strategy_io(config)?);
+    control.set_heuristic_parms(params);
     control.set_fvi_parms(fv_index_params_from_config(&config.search.fv_index)?);
     control.set_record_gc_selection(config.flags.contains(EProverFlag::RecordGivenClauses));
     Ok(control)
@@ -1485,6 +1501,430 @@ fn apply_strategy_io_to_params(
         get_heuristic_with_name(name, params)?;
     }
     Ok(())
+}
+
+fn overlay_explicit_heuristic_options(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+) -> Result<(), Diagnostic> {
+    let cli = heuristic_parms_from_config(config)?;
+    let has = |option| config.explicit_options.contains(&option);
+
+    if has(EProverOption::MemoryLimit) {
+        params.mem_limit = cli.mem_limit;
+        params.delete_bad_limit = cli.delete_bad_limit;
+    }
+    if has(EProverOption::DeleteBadLimit) {
+        params.delete_bad_limit = cli.delete_bad_limit;
+    }
+    if has(EProverOption::NoPreprocessing) {
+        params.no_preproc = cli.no_preproc;
+    }
+    if has(EProverOption::EqUnfoldLimit) || has(EProverOption::NoEqUnfolding) {
+        params.eqdef_incrlimit = cli.eqdef_incrlimit;
+    }
+    if has(EProverOption::EqUnfoldMaxClauses) {
+        params.eqdef_maxclauses = cli.eqdef_maxclauses;
+    }
+    if has(EProverOption::GoalDefs) {
+        params.add_goal_defs_pos = cli.add_goal_defs_pos;
+        params.add_goal_defs_neg = cli.add_goal_defs_neg;
+    }
+    if has(EProverOption::GoalSubtermDefs) {
+        params.add_goal_defs_subterms = cli.add_goal_defs_subterms;
+    }
+    if has(EProverOption::Sine) {
+        params.sine.clone_from(&cli.sine);
+    }
+    if has(EProverOption::PresatSimplify) {
+        params.presat_interreduction = cli.presat_interreduction;
+    }
+    if has(EProverOption::AcHandling) {
+        params.ac_handling = cli.ac_handling;
+    }
+    if has(EProverOption::AcNonAggressive) {
+        params.ac_res_aggressive = cli.ac_res_aggressive;
+    }
+    if has(EProverOption::DefinitionalCnf) {
+        params.formula_def_limit = cli.formula_def_limit;
+    }
+    if has(EProverOption::MiniscopeLimit) {
+        params.miniscope_limit = cli.miniscope_limit;
+    }
+    if has(EProverOption::FoolUnroll) {
+        params.fool_unroll = cli.fool_unroll;
+    }
+    if has(EProverOption::Bce) {
+        params.bce = cli.bce;
+    }
+    if has(EProverOption::BceMaxOccs) {
+        params.bce_max_occs = cli.bce_max_occs;
+    }
+    if has(EProverOption::PredElim) {
+        params.pred_elim = cli.pred_elim;
+    }
+    if has(EProverOption::PredElimRecognizeGates) {
+        params.pred_elim_gates = cli.pred_elim_gates;
+    }
+    if has(EProverOption::PredElimForceMuDecrease) {
+        params.pred_elim_force_mu_decrease = cli.pred_elim_force_mu_decrease;
+    }
+    if has(EProverOption::PredElimIgnoreConjSyms) {
+        params.pred_elim_ignore_conj_syms = cli.pred_elim_ignore_conj_syms;
+    }
+    if has(EProverOption::PredElimMaxOccs) {
+        params.pred_elim_max_occs = cli.pred_elim_max_occs;
+    }
+    if has(EProverOption::PredElimTolerance) {
+        params.pred_elim_tolerance = cli.pred_elim_tolerance;
+    }
+
+    overlay_explicit_order_options(config, params, &cli);
+    overlay_explicit_selection_options(config, params, &cli);
+    overlay_explicit_inference_options(config, params, &cli);
+    overlay_explicit_index_and_split_options(config, params, &cli);
+    overlay_explicit_higher_order_options(config, params, &cli);
+    Ok(())
+}
+
+fn overlay_explicit_order_options(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+    cli: &HeuristicParmsCell,
+) {
+    let has = |option| config.explicit_options.contains(&option);
+    if has(EProverOption::TermOrdering) {
+        params.order_params.ordertype = cli.order_params.ordertype;
+    }
+    if has(EProverOption::OrderWeightGeneration) {
+        params.order_params.to_weight_gen = cli.order_params.to_weight_gen;
+    }
+    if has(EProverOption::OrderWeights) {
+        params
+            .order_params
+            .to_pre_weights
+            .clone_from(&cli.order_params.to_pre_weights);
+    }
+    if has(EProverOption::OrderPrecedenceGeneration) {
+        params.order_params.to_prec_gen = cli.order_params.to_prec_gen;
+    }
+    if has(EProverOption::PrecPureConj) {
+        params.order_params.conj_only_mod = cli.order_params.conj_only_mod;
+    }
+    if has(EProverOption::PrecConjAxiom) {
+        params.order_params.conj_axiom_mod = cli.order_params.conj_axiom_mod;
+    }
+    if has(EProverOption::PrecPureAxiom) {
+        params.order_params.axiom_only_mod = cli.order_params.axiom_only_mod;
+    }
+    if has(EProverOption::PrecSkolem) {
+        params.order_params.skolem_mod = cli.order_params.skolem_mod;
+    }
+    if has(EProverOption::PrecDefPred) {
+        params.order_params.defpred_mod = cli.order_params.defpred_mod;
+    }
+    if has(EProverOption::OrderConstantWeight) {
+        params.order_params.to_const_weight = cli.order_params.to_const_weight;
+    }
+    if has(EProverOption::Precedence) {
+        params
+            .order_params
+            .to_pre_prec
+            .clone_from(&cli.order_params.to_pre_prec);
+    }
+    if has(EProverOption::RestrictLiteralComparisons)
+        || has(EProverOption::LiteralComparison)
+        || has(EProverOption::LpoRecursionLimit)
+    {
+        params.order_params.lit_cmp = cli.order_params.lit_cmp;
+    }
+    if has(EProverOption::KboLambdaWeight) {
+        params.order_params.lam_w = cli.order_params.lam_w;
+    }
+    if has(EProverOption::KboDbWeight) {
+        params.order_params.db_w = cli.order_params.db_w;
+    }
+    if has(EProverOption::StrongRwInst) {
+        params.order_params.rewrite_strong_rhs_inst = cli.order_params.rewrite_strong_rhs_inst;
+    }
+    if has(EProverOption::HoOrderKind) {
+        params.order_params.ho_order_kind = cli.order_params.ho_order_kind;
+    }
+}
+
+fn overlay_explicit_selection_options(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+    cli: &HeuristicParmsCell,
+) {
+    let has = |option| config.explicit_options.contains(&option);
+    if has(EProverOption::LiteralSelectionStrategy) || has(EProverOption::NoGeneration) {
+        params
+            .selection_strategy
+            .clone_from(&cli.selection_strategy);
+    }
+    if has(EProverOption::SelectOnProcessingOnly) {
+        params.select_on_proc_only = cli.select_on_proc_only;
+    }
+    if has(EProverOption::InheritParamodLiterals) {
+        params.inherit_paramod_lit = cli.inherit_paramod_lit;
+    }
+    if has(EProverOption::InheritGoalParamodLiterals) {
+        params.inherit_goal_pm_lit = cli.inherit_goal_pm_lit;
+    }
+    if has(EProverOption::InheritConjectureParamodLiterals) {
+        params.inherit_conj_pm_lit = cli.inherit_conj_pm_lit;
+    }
+    if has(EProverOption::SelectionPosMin) {
+        params.pos_lit_sel_min = cli.pos_lit_sel_min;
+    }
+    if has(EProverOption::SelectionPosMax) {
+        params.pos_lit_sel_max = cli.pos_lit_sel_max;
+    }
+    if has(EProverOption::SelectionNegMin) {
+        params.neg_lit_sel_min = cli.neg_lit_sel_min;
+    }
+    if has(EProverOption::SelectionNegMax) {
+        params.neg_lit_sel_max = cli.neg_lit_sel_max;
+    }
+    if has(EProverOption::SelectionAllMin) {
+        params.all_lit_sel_min = cli.all_lit_sel_min;
+    }
+    if has(EProverOption::SelectionAllMax) {
+        params.all_lit_sel_max = cli.all_lit_sel_max;
+    }
+    if has(EProverOption::SelectionWeightMin) {
+        params.weight_sel_min = cli.weight_sel_min;
+    }
+    if has(EProverOption::PreferInitialClauses) {
+        params.prefer_initial_clauses = cli.prefer_initial_clauses;
+    }
+    if has(EProverOption::ExpertHeuristic) {
+        params.heuristic_name.clone_from(&cli.heuristic_name);
+    }
+    if has(EProverOption::FilterOrphansLimit) {
+        params.filter_orphans_limit = cli.filter_orphans_limit;
+    }
+    if has(EProverOption::ForwardContractLimit) {
+        params.forward_contract_limit = cli.forward_contract_limit;
+    }
+    if has(EProverOption::DefineHeuristic) {
+        params.heuristic_def.clone_from(&cli.heuristic_def);
+    }
+}
+
+fn overlay_explicit_inference_options(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+    cli: &HeuristicParmsCell,
+) {
+    let has = |option| config.explicit_options.contains(&option);
+    if has(EProverOption::DisableEqFactoring) {
+        params.enable_eq_factoring = cli.enable_eq_factoring;
+    }
+    if has(EProverOption::DisableParamodIntoNegUnits) {
+        params.enable_neg_unit_paramod = cli.enable_neg_unit_paramod;
+    }
+    if has(EProverOption::DisableGivenClauseForwardContraction) {
+        params.enable_given_forward_simpl = cli.enable_given_forward_simpl;
+    }
+    if has(EProverOption::SimulParamod)
+        || has(EProverOption::OrientedSimulParamod)
+        || has(EProverOption::SupersimulParamod)
+        || has(EProverOption::OrientedSupersimulParamod)
+    {
+        params.pm_type = cli.pm_type;
+    }
+    if has(EProverOption::SosUsesInputTypes) {
+        params.use_tptp_sos = cli.use_tptp_sos;
+    }
+    if has(EProverOption::DestructiveEr) || has(EProverOption::StrongDestructiveEr) {
+        params.er_varlit_destructive = cli.er_varlit_destructive;
+        params.er_strong_destructive = cli.er_strong_destructive;
+    }
+    if has(EProverOption::DestructiveErAggressive) {
+        params.er_aggressive = cli.er_aggressive;
+    }
+    if has(EProverOption::ForwardContextSr) || has(EProverOption::ForwardContextSrAggressive) {
+        params.forward_context_sr = cli.forward_context_sr;
+        params.forward_context_sr_aggressive = cli.forward_context_sr_aggressive;
+    }
+    if has(EProverOption::BackwardContextSr) {
+        params.backward_context_sr = cli.backward_context_sr;
+    }
+    if has(EProverOption::ForwardSubsumptionAggressive) {
+        params.forward_subsumption_aggressive = cli.forward_subsumption_aggressive;
+    }
+    if has(EProverOption::PreferGeneralDemodulators) {
+        params.prefer_general = cli.prefer_general;
+    }
+    if has(EProverOption::ForwardDemodLevel) {
+        params.forward_demod = cli.forward_demod;
+    }
+    if has(EProverOption::DemodUnderLambda) {
+        params.lambda_demod = cli.lambda_demod;
+    }
+    if has(EProverOption::Condense) || has(EProverOption::CondenseAggressive) {
+        params.condensing = cli.condensing;
+        params.condensing_aggressive = cli.condensing_aggressive;
+    }
+    if has(EProverOption::SatCheckProcInterval) {
+        params.sat_check_step_limit = cli.sat_check_step_limit;
+    }
+    if has(EProverOption::SatCheckGenInterval) {
+        params.sat_check_size_limit = cli.sat_check_size_limit;
+    }
+    if has(EProverOption::SatCheckTTInsertInterval) {
+        params.sat_check_ttinsert_limit = cli.sat_check_ttinsert_limit;
+    }
+    if has(EProverOption::SatCheck) {
+        params.sat_check_grounding = cli.sat_check_grounding;
+    }
+    if has(EProverOption::SatCheckDecisionLimit) {
+        params.sat_check_decision_limit = cli.sat_check_decision_limit;
+    }
+    if has(EProverOption::SatCheckNormalizeConst) {
+        params.sat_check_normconst = cli.sat_check_normconst;
+    }
+    if has(EProverOption::SatCheckNormalizeUnproc) {
+        params.sat_check_normalize = cli.sat_check_normalize;
+    }
+}
+
+fn overlay_explicit_index_and_split_options(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+    cli: &HeuristicParmsCell,
+) {
+    let has = |option| config.explicit_options.contains(&option);
+    if has(EProverOption::RewriteBackwardIndex) || has(EProverOption::FingerprintIndex) {
+        params.rw_bw_index_type.clone_from(&cli.rw_bw_index_type);
+    }
+    if has(EProverOption::ParamodFromIndex) || has(EProverOption::FingerprintIndex) {
+        params
+            .pm_from_index_type
+            .clone_from(&cli.pm_from_index_type);
+    }
+    if has(EProverOption::ParamodIntoIndex) || has(EProverOption::FingerprintIndex) {
+        params
+            .pm_into_index_type
+            .clone_from(&cli.pm_into_index_type);
+    }
+    if has(EProverOption::SplitClauses) {
+        params.split_clauses = cli.split_clauses;
+    }
+    if has(EProverOption::SplitMethod) {
+        params.split_method = cli.split_method;
+    }
+    if has(EProverOption::SplitAggressive) {
+        params.split_aggressive = cli.split_aggressive;
+    }
+    if has(EProverOption::SplitReuseDefs) {
+        params.split_fresh_defs = cli.split_fresh_defs;
+    }
+    if has(EProverOption::DisequalityDecomposition) {
+        params.diseq_decomposition = cli.diseq_decomposition;
+    }
+    if has(EProverOption::DisequalityDecompMaxArity) {
+        params.diseq_decomp_maxarity = cli.diseq_decomp_maxarity;
+    }
+    if has(EProverOption::StaticWatchlist) {
+        params.watchlist_is_static = cli.watchlist_is_static;
+    }
+    if has(EProverOption::NoWatchlistSimplification) {
+        params.watchlist_simplify = cli.watchlist_simplify;
+    }
+    if has(EProverOption::DeterministicRewriteSort) {
+        params.detsort_bw_rw = cli.detsort_bw_rw;
+    }
+    if has(EProverOption::DeterministicNewSort) {
+        params.detsort_tmpset = cli.detsort_tmpset;
+    }
+}
+
+fn overlay_explicit_higher_order_options(
+    config: &EProverConfig,
+    params: &mut HeuristicParmsCell,
+    cli: &HeuristicParmsCell,
+) {
+    let has = |option| config.explicit_options.contains(&option);
+    if has(EProverOption::ArgCong) {
+        params.arg_cong = cli.arg_cong;
+    }
+    if has(EProverOption::NegExt) {
+        params.neg_ext = cli.neg_ext;
+    }
+    if has(EProverOption::PosExt) {
+        params.pos_ext = cli.pos_ext;
+    }
+    if has(EProverOption::ExtSupMaxDepth) {
+        params.ext_rules_max_depth = cli.ext_rules_max_depth;
+    }
+    if has(EProverOption::InverseRecognition) {
+        params.inverse_recognition = cli.inverse_recognition;
+    }
+    if has(EProverOption::ReplaceInjDefs) {
+        params.replace_inj_defs = cli.replace_inj_defs;
+    }
+    if has(EProverOption::LiftLambdas) {
+        params.lift_lambdas = cli.lift_lambdas;
+    }
+    if has(EProverOption::CnfLambdaToForall) {
+        params.lambda_to_forall = cli.lambda_to_forall;
+    }
+    if has(EProverOption::EliminateLeibnizEq) {
+        params.elim_leibniz_max_depth = cli.elim_leibniz_max_depth;
+    }
+    if has(EProverOption::UnrollFormulasOnly) {
+        params.unroll_only_formulas = cli.unroll_only_formulas;
+    }
+    if has(EProverOption::PrimEnumMode) {
+        params.prim_enum_mode = cli.prim_enum_mode;
+    }
+    if has(EProverOption::PrimEnumMaxDepth) {
+        params.prim_enum_max_depth = cli.prim_enum_max_depth;
+    }
+    if has(EProverOption::InstChoiceMaxDepth) {
+        params.inst_choice_max_depth = cli.inst_choice_max_depth;
+    }
+    if has(EProverOption::LocalRw) {
+        params.local_rw = cli.local_rw;
+    }
+    if has(EProverOption::PruneArgs) {
+        params.prune_args = cli.prune_args;
+    }
+    if has(EProverOption::PreinstantiateInduction)
+        || has(EProverOption::ClassificationTimeoutPortion)
+    {
+        params.preinstantiate_induction = cli.preinstantiate_induction;
+    }
+    if has(EProverOption::FuncProjLimit) {
+        params.func_proj_limit = cli.func_proj_limit;
+    }
+    if has(EProverOption::ImitLimit) {
+        params.imit_limit = cli.imit_limit;
+    }
+    if has(EProverOption::IdentLimit) {
+        params.ident_limit = cli.ident_limit;
+    }
+    if has(EProverOption::ElimLimit) {
+        params.elim_limit = cli.elim_limit;
+    }
+    if has(EProverOption::UnifMode) {
+        params.unif_mode = cli.unif_mode;
+    }
+    if has(EProverOption::PatternOracle) {
+        params.pattern_oracle = cli.pattern_oracle;
+    }
+    if has(EProverOption::FixpointOracle) {
+        params.fixpoint_oracle = cli.fixpoint_oracle;
+    }
+    if has(EProverOption::MaxUnifiers) {
+        params.max_unifiers = cli.max_unifiers;
+    }
+    if has(EProverOption::MaxUnifSteps) {
+        params.max_unif_steps = cli.max_unif_steps;
+    }
 }
 
 /// Builds C-shaped feature-vector index parameters from parsed executable
@@ -1889,6 +2329,7 @@ fn apply_parsed_option(
         EProverOption::Version => return Ok(Some(EProverAction::Version)),
         _ => {}
     }
+    config.explicit_options.push(option_code);
 
     if is_output_option(option_code) {
         apply_output_option(config, parsed)?;
@@ -4103,13 +4544,20 @@ fn run_prune_only<W: Write + ?Sized>(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "executable proof-search pipeline keeps C ordering visible"
+)]
 fn run_proof_search<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
-    write_preprocessing_config_debug_line(output, config)?;
+    let mut heuristic_params = heuristic_parms_from_config(config)?;
+    let auto_context =
+        apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
+    write_preprocessing_params_debug_line(output, &heuristic_params)?;
     let relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
@@ -4118,7 +4566,15 @@ fn run_proof_search<W: Write + ?Sized>(
     load_configured_watchlist(config, &mut state)?;
     let next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
 
-    let mut control = proof_control_from_config(config)?;
+    apply_auto_mode_search_selection(
+        output,
+        config,
+        &state,
+        auto_context.as_ref(),
+        &mut heuristic_params,
+    )?;
+    apply_strategy_io_to_params(config, &mut heuristic_params)?;
+    let mut control = proof_control_from_heuristic_parms(config, heuristic_params)?;
     let mut params = control.heuristic_parms().clone();
     let fvi_params = control.fvi_parms().clone();
     let wfcb_defs = &config.search.heuristic.weight_function_definitions;
@@ -4219,6 +4675,102 @@ fn run_main_saturation(
         config.answer_limit,
         indices,
     )?)
+}
+
+struct AutoModeContext {
+    limits: SpecLimits,
+    raw_features: RawSpecFeatureCell,
+}
+
+fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    params: &mut HeuristicParmsCell,
+) -> Result<Option<AutoModeContext>, EProverError> {
+    if config.strategy_scheduling {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "strategy scheduling process execution is not ported yet",
+        )
+        .into());
+    }
+    if !config.flags.contains(EProverFlag::Auto) {
+        return Ok(None);
+    }
+
+    let limits = create_default_spec_limits();
+    let mut raw_features = RawSpecFeatureCell::default();
+    raw_spec_features_compute(&mut raw_features, state);
+    raw_spec_features_classify(&mut raw_features, &limits, Some(RAW_DEFAULT_MASK));
+    let preproc_schedule = get_preprocessing_schedule(&raw_features.class)?;
+    let preproc_name = first_schedule_heuristic_name(&preproc_schedule.schedule)?;
+    get_heuristic_with_name(preproc_name, params)?;
+    overlay_explicit_heuristic_options(config, params)?;
+
+    output.write_stdout_side_channel(
+        format!(
+            "{DEFAULT_COMCHAR_RAW} Preprocessing class: {}.\n",
+            raw_features.class
+        )
+        .as_bytes(),
+    )?;
+    output.write_stdout_side_channel(
+        format!("{DEFAULT_COMCHAR_RAW} Configuration: {preproc_name}\n").as_bytes(),
+    )?;
+
+    Ok(Some(AutoModeContext {
+        limits,
+        raw_features,
+    }))
+}
+
+fn apply_auto_mode_search_selection<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    auto_context: Option<&AutoModeContext>,
+    params: &mut HeuristicParmsCell,
+) -> Result<(), EProverError> {
+    let Some(auto_context) = auto_context else {
+        return Ok(());
+    };
+    if config.flags.contains(EProverFlag::CnfOnly) {
+        return Ok(());
+    }
+
+    let choice_max_depth = params.inst_choice_max_depth;
+    let mut features = SpecFeatureCell::default();
+    spec_features_compute_clause_set_without_choice(&mut features, state.axioms(), state.terms());
+    features.order = auto_context.raw_features.order;
+    features.goal_order = auto_context.raw_features.conj_order;
+    features.num_of_definitions = auto_context.raw_features.num_of_definitions;
+    features.perc_of_form_defs = auto_context.raw_features.perc_of_form_defs;
+    spec_features_add_eval(&mut features, &auto_context.limits);
+    let class = spec_type_string(&features, DEFAULT_CLASS_MASK);
+    let search_schedule = get_search_schedule(&class)?;
+    let search_name = first_schedule_heuristic_name(&search_schedule.schedule)?;
+
+    get_heuristic_with_name(search_name, params)?;
+    params.inst_choice_max_depth = choice_max_depth;
+    overlay_explicit_heuristic_options(config, params)?;
+
+    output.write_stdout_side_channel(
+        format!("{DEFAULT_COMCHAR_RAW} Search class: {class}\n").as_bytes(),
+    )?;
+    output.write_stdout_side_channel(
+        format!("{DEFAULT_COMCHAR_RAW} Configuration: {search_name}\n").as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn first_schedule_heuristic_name(
+    schedule: &[crate::heuristics::new_autoschedule::ScheduleCell],
+) -> Result<&str, Diagnostic> {
+    schedule
+        .first()
+        .map(|cell| cell.heuristic_name.as_str())
+        .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty"))
 }
 
 fn proof_search_global_indices<'sig>(
@@ -4363,6 +4915,14 @@ fn write_preprocessing_config_debug_line<W: Write + ?Sized>(
     Ok(())
 }
 
+fn write_preprocessing_params_debug_line<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    params: &HeuristicParmsCell,
+) -> Result<(), EProverError> {
+    output.write_stdout_side_channel(preprocessing_params_debug_line(params).as_bytes())?;
+    Ok(())
+}
+
 fn preprocessing_config_debug_line(config: &EProverConfig) -> String {
     let ho_preprocessing = &config.search.inference.higher_order_preprocessing;
     format!(
@@ -4371,6 +4931,16 @@ fn preprocessing_config_debug_line(config: &EProverConfig) -> String {
         i32::from(ho_preprocessing.lambda_to_forall),
         i32::from(ho_preprocessing.unroll_only_formulas),
         config.sine.as_deref().unwrap_or("(null)")
+    )
+}
+
+fn preprocessing_params_debug_line(params: &HeuristicParmsCell) -> String {
+    format!(
+        "{DEFAULT_COMCHAR_RAW} (lift_lambdas = {}, lambda_to_forall = {},unroll_only_formulas = {}, sine = {})\n",
+        i32::from(params.lift_lambdas),
+        i32::from(params.lambda_to_forall),
+        i32::from(params.unroll_only_formulas),
+        params.sine.as_deref().unwrap_or("(null)")
     )
 }
 
@@ -10293,6 +10863,117 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_auto_mode_selects_generated_preprocessing_and_search_strategies() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-auto-generated-strategy");
+        std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--auto", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
+        assert!(output.contains("% Configuration: G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+        assert!(output.contains("% Search class: FUUNFGFFSF00SSFFFFFNN\n"));
+        assert!(output.contains("% Configuration: SAT001_MinMin_p005000_rr_RG\n"));
+        assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_auto_cnf_skips_generated_search_strategy_like_c() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-auto-cnf");
+        std::fs::write(&path, "cnf(a, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--auto", "--cnf", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
+        assert!(output.contains("% Configuration: G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
+        assert!(!output.contains("% Search class:"));
+        assert!(output.contains("% CNFization successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_auto_mode_replays_explicit_sine_after_generated_strategy() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-auto-sine");
+        std::fs::write(&path, "cnf(a, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--auto",
+                "--sine=NoSInE",
+                "--cnf",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(output.contains(
+            "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = NoSInE)\n"
+        ));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_auto_schedule_reports_pending_process_scheduler() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-auto-schedule-pending");
+        std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--auto-schedule", "--tstp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(
+            error.message(),
+            "strategy scheduling process execution is not ported yet"
+        );
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
