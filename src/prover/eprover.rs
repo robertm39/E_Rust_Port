@@ -36,7 +36,9 @@ use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
-use crate::clauses::inferencedoc::{pcl_print_end, pcl_print_start, PclStepPrintOptions};
+use crate::clauses::inferencedoc::{
+    pcl_print_end, pcl_print_start, tstp_print_end, PclStepPrintOptions,
+};
 use crate::clauses::proofstate::{
     proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
     WatchlistSource as ProofStateWatchlistSource,
@@ -5520,12 +5522,13 @@ fn write_tstp_initial_clause_doc<W: Write + ?Sized>(
         crate::basics::simple_stuff::ProblemType::FirstOrder,
         config.encoding.print_types,
     )?;
-    writeln!(
+    write!(
         &mut rendered,
-        ", {}).",
+        ", {}",
         source_info_tstp_string(clause.info())
     )
     .map_err(initial_doc_write_error)?;
+    tstp_print_end(&mut rendered, clause, None).map_err(initial_doc_write_error)?;
     output.write_all(rendered.as_bytes())?;
     Ok(())
 }
@@ -16269,7 +16272,8 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
         let input_doc = format!("cnf(c_0_1, axiom, (p(a)), file('{path_arg}', input)).\n");
-        let watch_doc = format!("cnf(c_0_2, watchlist, (p(a)), file('{path_arg}', watch)).\n");
+        let watch_doc =
+            format!("cnf(c_0_2, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
         let final_doc =
             "cnf(c_0_3, plain, (p(a)), c_0_1,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
         let input_doc_pos = printed.find(&input_doc).unwrap();

@@ -82,9 +82,25 @@ pub fn pcl_print_end(
     output.write_char('\n')
 }
 
+pub fn tstp_print_end(
+    output: &mut impl fmt::Write,
+    clause: &Clause,
+    comment: Option<&str>,
+) -> fmt::Result {
+    match (clause.query_prop(CP_WATCH_ONLY), comment) {
+        (true, Some(comment)) => write!(output, ",['wl,{comment}']")?,
+        (false, Some(comment)) => write!(output, ",['{comment}']")?,
+        (true, None) => output.write_str(",['wl']")?,
+        (false, None) => {}
+    }
+    output.write_str(").\n")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{pcl_print_end, pcl_print_start, pcl_type_str, PclStepPrintOptions};
+    use super::{
+        pcl_print_end, pcl_print_start, pcl_type_str, tstp_print_end, PclStepPrintOptions,
+    };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
@@ -194,5 +210,28 @@ mod tests {
         let mut rendered = String::new();
         pcl_print_end(&mut rendered, &watch, None, PclStepPrintOptions::default()).unwrap();
         assert_eq!(rendered, ": 'wl'\n");
+    }
+
+    #[test]
+    fn tstp_print_end_matches_c_comment_and_watchlist_suffixes() {
+        let plain = Clause::empty();
+        let mut watch = Clause::empty();
+        watch.set_prop(CP_WATCH_ONLY);
+
+        let mut rendered = String::new();
+        tstp_print_end(&mut rendered, &plain, Some("proof")).unwrap();
+        assert_eq!(rendered, ",['proof']).\n");
+
+        let mut rendered = String::new();
+        tstp_print_end(&mut rendered, &watch, Some("proof")).unwrap();
+        assert_eq!(rendered, ",['wl,proof']).\n");
+
+        let mut rendered = String::new();
+        tstp_print_end(&mut rendered, &watch, None).unwrap();
+        assert_eq!(rendered, ",['wl']).\n");
+
+        let mut rendered = String::new();
+        tstp_print_end(&mut rendered, &plain, None).unwrap();
+        assert_eq!(rendered, ").\n");
     }
 }
