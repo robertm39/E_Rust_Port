@@ -28,8 +28,8 @@ use crate::clauses::clause_props::{
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    demodulator_clause_refs, op_has_arg1, op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2,
-    ClauseDerivationRef, DerivationEntry,
+    demodulator_clause_refs, deriv_stack_tstp_string, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
 };
 use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
@@ -5683,9 +5683,10 @@ fn write_proof_object_dot(
     for edge in &graph.edges {
         writeln!(
             output,
-            "    {} -> {} [style=\"bold\"]",
+            "    {} -> {} [style=\"bold\"{}]",
             proof_object_dot_node_id(graph, edge.parent_index),
-            proof_object_dot_node_id(graph, edge.child_index)
+            proof_object_dot_node_id(graph, edge.child_index),
+            proof_object_dot_node_colour(graph.clauses[edge.child_index])
         )?;
     }
     output.write_all(b"}\n")?;
@@ -5705,11 +5706,16 @@ fn write_proof_object_dot_clause(
             &mut rendered,
             bank,
             clause,
-            config.pcl_output.full_terms,
+            true,
             false,
             ProblemType::FirstOrder,
             config.encoding.print_types,
         )?;
+        if let Some(derivation) = deriv_stack_tstp_string(clause.derivation()) {
+            rendered.push_str(",\n");
+            rendered.push_str(&derivation);
+        }
+        rendered.push_str(").");
         rendered
     } else {
         format!("c{node_id}")
@@ -15026,8 +15032,36 @@ mod tests {
         assert!(printed.contains(
             "  2 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c2\"]\n"
         ));
-        assert!(printed.contains("    1 -> 2 [style=\"bold\"]\n"));
+        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
         assert!(!printed.contains("SZS output start CNFRefutation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_graph_level2_prints_clause_and_derivation_labels() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-graph-detailed-dot");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--proof-graph=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("label=\"cnf("));
+        assert!(printed.contains(",\\ninference("));
+        assert!(printed.contains("[status(thm)],[c_0_"));
+        assert!(printed.contains("])).\"]\n"));
+        assert!(!printed.contains("label=\"c2\""));
+        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
