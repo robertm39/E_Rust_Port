@@ -4161,12 +4161,14 @@ mod tests {
     };
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::IoFormat;
+    use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, FP_COMMUTATIVE, FP_IGNORE_PROPS};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -6673,6 +6675,41 @@ mod tests {
         assert_eq!(state.statistics().processed_count, 2);
         assert!(state.unprocessed().is_empty());
         assert_eq!(state.processed_cardinality(), 2);
+    }
+
+    #[test]
+    fn proof_state_saturate_stops_on_cooperative_time_limit() {
+        let _guard = global_state_lock();
+        configure_time_limits(0, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_saturate_time_limit", 4_151);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::TimeLimit,
+                processed_steps: 0,
+            }
+        );
+        assert_eq!(state.statistics().processed_count, 0);
+        assert_eq!(state.unprocessed().members(), 1);
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
     }
 
     #[test]

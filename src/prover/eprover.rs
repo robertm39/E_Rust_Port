@@ -71,7 +71,7 @@ use crate::inout::output::set_output_level;
 use crate::inout::scanner::{
     token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
 };
-use crate::inout::signals::{set_hard_time_limit, set_schedule_time_limit, set_soft_time_limit};
+use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
@@ -2225,15 +2225,14 @@ fn check_hard_soft_limits(
 }
 
 fn apply_time_limit_state(config: &EProverConfig) {
-    if let Some(limit) = config.cpu_limit {
-        let _ = set_hard_time_limit(c_rlimit_from_arg(limit));
-    }
-    if let Some(limit) = config.soft_cpu_limit {
-        let _ = set_soft_time_limit(c_rlimit_from_arg(limit));
-    }
-    if let Some(limit) = config.schedule_time_limit {
-        let _ = set_schedule_time_limit(c_rlimit_from_arg(limit));
-    }
+    let hard_limit = config
+        .cpu_limit
+        .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
+    let soft_limit = config
+        .soft_cpu_limit
+        .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
+    let schedule_limit = config.schedule_time_limit.map_or(0, c_rlimit_from_arg);
+    configure_time_limits(hard_limit, soft_limit, schedule_limit);
 }
 
 fn apply_ordering_state(config: &EProverConfig) {
@@ -7961,8 +7960,8 @@ mod tests {
     use crate::inout::output::{output_level, set_output_level};
     use crate::inout::scanner::IoFormat;
     use crate::inout::signals::{
-        hard_time_limit, schedule_time_limit, set_hard_time_limit, set_schedule_time_limit,
-        set_soft_time_limit, soft_time_limit, RLIM_INFINITY_COMPAT,
+        configure_time_limits, hard_time_limit, schedule_time_limit, set_time_is_up,
+        soft_time_limit, time_is_up, RLIM_INFINITY_COMPAT,
     };
     use crate::orderings::cto_lpo::{lpo_recursion_depth_limit, set_lpo_recursion_depth_limit};
     use crate::prover::version::VERSION;
@@ -10245,9 +10244,7 @@ mod tests {
     #[test]
     fn run_applies_cpu_limit_options_to_signal_state() {
         let _guard = global_state_lock();
-        let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
-        let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
-        let _ = set_schedule_time_limit(0);
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let path = temp_path("cpu-limits");
         std::fs::write(&path, "").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -10271,9 +10268,29 @@ mod tests {
         assert_eq!(soft_time_limit(), 25);
         assert_eq!(schedule_time_limit(), 100);
 
-        let _ = set_hard_time_limit(RLIM_INFINITY_COMPAT);
-        let _ = set_soft_time_limit(RLIM_INFINITY_COMPAT);
-        let _ = set_schedule_time_limit(0);
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_without_cpu_limit_resets_prior_time_up_latch() {
+        let _guard = global_state_lock();
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let _ = set_time_is_up(true);
+        let path = temp_path("cpu-limit-reset");
+        std::fs::write(&path, "").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(!time_is_up());
+        assert_eq!(hard_time_limit(), RLIM_INFINITY_COMPAT);
+        assert_eq!(soft_time_limit(), RLIM_INFINITY_COMPAT);
+        assert_eq!(schedule_time_limit(), 0);
+
         std::fs::remove_file(&path).unwrap();
     }
 

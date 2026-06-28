@@ -1,11 +1,13 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::os_wrapper::get_usec_clock;
 use crate::inout::tempfile::temp_file_cleanup;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 
 pub const RLIM_INFINITY_COMPAT: u64 = u64::MAX;
 pub const SIGINT_COMPAT: i32 = 2;
 pub const SIGTERM_COMPAT: i32 = 15;
 pub const SIGXCPU_COMPAT: i32 = 24;
+const USEC_PER_SEC: u64 = 1_000_000;
 
 static SCHEDULE_TIME_LIMIT: AtomicU64 = AtomicU64::new(0);
 static SYSTEM_TIME_LIMIT: AtomicU64 = AtomicU64::new(RLIM_INFINITY_COMPAT);
@@ -13,6 +15,8 @@ static SOFT_TIME_LIMIT: AtomicU64 = AtomicU64::new(RLIM_INFINITY_COMPAT);
 static HARD_TIME_LIMIT: AtomicU64 = AtomicU64::new(RLIM_INFINITY_COMPAT);
 static TIME_IS_UP: AtomicBool = AtomicBool::new(false);
 static TIME_LIMIT_IS_SOFT: AtomicBool = AtomicBool::new(false);
+static TIME_LIMIT_START_USEC: AtomicI64 = AtomicI64::new(0);
+static TIME_LIMIT_DEADLINE_USEC: AtomicI64 = AtomicI64::new(i64::MAX);
 static SIG_TERM_CAUGHT: AtomicUsize = AtomicUsize::new(0);
 static FATAL_ERROR_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
@@ -79,9 +83,48 @@ pub fn set_hard_time_limit(limit: u64) -> u64 {
     HARD_TIME_LIMIT.swap(limit, Ordering::SeqCst)
 }
 
+pub fn configure_time_limits(hard_limit: u64, soft_limit: u64, schedule_limit: u64) {
+    HARD_TIME_LIMIT.store(hard_limit, Ordering::SeqCst);
+    SOFT_TIME_LIMIT.store(soft_limit, Ordering::SeqCst);
+    SCHEDULE_TIME_LIMIT.store(schedule_limit, Ordering::SeqCst);
+    TIME_IS_UP.store(false, Ordering::SeqCst);
+
+    let active_limit = if soft_limit != RLIM_INFINITY_COMPAT {
+        TIME_LIMIT_IS_SOFT.store(true, Ordering::SeqCst);
+        Some(soft_limit)
+    } else if hard_limit != RLIM_INFINITY_COMPAT {
+        TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
+        Some(hard_limit)
+    } else {
+        TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
+        None
+    };
+
+    let start = get_usec_clock();
+    TIME_LIMIT_START_USEC.store(start, Ordering::SeqCst);
+    TIME_LIMIT_DEADLINE_USEC.store(
+        active_limit.map_or(i64::MAX, |limit| time_limit_deadline_usec(start, limit)),
+        Ordering::SeqCst,
+    );
+}
+
 #[must_use]
 pub fn time_is_up() -> bool {
-    TIME_IS_UP.load(Ordering::SeqCst)
+    if TIME_IS_UP.load(Ordering::SeqCst) {
+        return true;
+    }
+
+    let deadline = TIME_LIMIT_DEADLINE_USEC.load(Ordering::SeqCst);
+    if deadline == i64::MAX {
+        return false;
+    }
+    if get_usec_clock() < deadline {
+        return false;
+    }
+
+    TIME_IS_UP.store(true, Ordering::SeqCst);
+    TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
+    true
 }
 
 #[must_use]
@@ -181,6 +224,12 @@ fn handle_termination(signal: i32) -> SignalOutcome {
     }
 }
 
+fn time_limit_deadline_usec(start_usec: i64, limit_seconds: u64) -> i64 {
+    let limit_usec = limit_seconds.saturating_mul(USEC_PER_SEC);
+    let limit_usec = i64::try_from(limit_usec).unwrap_or(i64::MAX);
+    start_usec.saturating_add(limit_usec)
+}
+
 #[cfg(test)]
 fn reset_signal_state_for_tests() {
     SCHEDULE_TIME_LIMIT.store(0, Ordering::SeqCst);
@@ -189,6 +238,8 @@ fn reset_signal_state_for_tests() {
     HARD_TIME_LIMIT.store(RLIM_INFINITY_COMPAT, Ordering::SeqCst);
     TIME_IS_UP.store(false, Ordering::SeqCst);
     TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
+    TIME_LIMIT_START_USEC.store(0, Ordering::SeqCst);
+    TIME_LIMIT_DEADLINE_USEC.store(i64::MAX, Ordering::SeqCst);
     SIG_TERM_CAUGHT.store(0, Ordering::SeqCst);
     FATAL_ERROR_IN_PROGRESS.store(false, Ordering::SeqCst);
     SILENT_TIME_OUT.store(false, Ordering::SeqCst);
@@ -197,8 +248,8 @@ fn reset_signal_state_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::{
-        e_sig_term_sched_handler, e_signal_handler, e_signal_setup, hard_time_limit,
-        reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
+        configure_time_limits, e_sig_term_sched_handler, e_signal_handler, e_signal_setup,
+        hard_time_limit, reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
         set_schedule_time_limit, set_silent_time_out, set_soft_time_limit, set_system_time_limit,
         set_time_is_up, set_time_limit_is_soft, sig_term_caught, silent_time_out, soft_time_limit,
         system_time_limit, time_is_up, time_limit_is_soft, SignalOutcome, RLIM_INFINITY_COMPAT,
@@ -259,6 +310,46 @@ mod tests {
             }
         );
         assert_eq!(system_time_limit(), RLIM_INFINITY_COMPAT);
+    }
+
+    #[test]
+    fn configured_soft_cpu_limit_latches_time_up_cooperatively() {
+        let _guard = global_state_lock();
+        reset_signal_state_for_tests();
+
+        configure_time_limits(10, 0, 0);
+
+        assert_eq!(hard_time_limit(), 10);
+        assert_eq!(soft_time_limit(), 0);
+        assert!(time_limit_is_soft());
+        assert!(time_is_up());
+        assert!(!time_limit_is_soft());
+    }
+
+    #[test]
+    fn configured_hard_cpu_limit_latches_time_up_without_soft_marker() {
+        let _guard = global_state_lock();
+        reset_signal_state_for_tests();
+
+        configure_time_limits(0, RLIM_INFINITY_COMPAT, 0);
+
+        assert_eq!(hard_time_limit(), 0);
+        assert_eq!(soft_time_limit(), RLIM_INFINITY_COMPAT);
+        assert!(!time_limit_is_soft());
+        assert!(time_is_up());
+    }
+
+    #[test]
+    fn configuring_unlimited_cpu_limits_resets_latch_and_deadline() {
+        let _guard = global_state_lock();
+        reset_signal_state_for_tests();
+        let _ = set_time_is_up(true);
+        let _ = set_time_limit_is_soft(true);
+
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+
+        assert!(!time_is_up());
+        assert!(!time_limit_is_soft());
     }
 
     #[test]
