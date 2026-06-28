@@ -5530,11 +5530,7 @@ fn write_proof_success_object_output(
     match config.proof_output {
         1 => write_proof_success_list_output(output, config, state, clause, next_doc_ident),
         level if level >= 2 => {
-            let mut roots = vec![clause];
-            if config.flags.contains(EProverFlag::FullDerivation) {
-                roots.extend(proof_object_saturation_roots(state));
-                roots.extend(state.unprocessed().iter());
-            }
+            let roots = proof_success_object_roots(config, state, clause);
             let graph = state.proof_object_graph_for_roots(roots);
             write_proof_object_dot(output, config, state.terms(), &graph)
         }
@@ -5550,7 +5546,8 @@ fn write_proof_success_list_output(
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
     write_comment_line(output, "SZS output start CNFRefutation")?;
-    let graph = state.proof_object_graph_for_roots([clause]);
+    let graph =
+        state.proof_object_graph_for_roots(proof_success_object_roots(config, state, clause));
     if graph.clauses.is_empty() {
         let doc_ident = proof_object_success_doc_ident(config, clause, next_doc_ident);
         let parent_ident = proof_object_success_parent_ident(config, clause);
@@ -5578,6 +5575,7 @@ fn write_proof_success_list_output(
 }
 
 fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Clause, bool)> {
+    let root_indices: BTreeSet<usize> = graph.root_indices.iter().copied().collect();
     let print_clauses: Vec<(usize, &Clause)> = graph
         .clauses
         .iter()
@@ -5595,7 +5593,6 @@ fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Claus
             .or_insert(display_id);
     }
 
-    let root = graph.clauses.first().copied();
     print_clauses
         .into_iter()
         .map(|(graph_index, clause)| {
@@ -5610,7 +5607,7 @@ fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Claus
                     &fallback_display_ids,
                 )));
             }
-            let is_root = root.is_some_and(|root| std::ptr::eq(root, clause));
+            let is_root = root_indices.contains(&graph_index);
             (display, is_root)
         })
         .collect()
@@ -5951,11 +5948,7 @@ fn write_supported_proof_object_statistics(
 
     let analysis = match outcome {
         SaturateOutcome::Returned { clause, .. } => {
-            let mut roots = vec![clause.as_ref()];
-            if config.flags.contains(EProverFlag::FullDerivation) {
-                roots.extend(proof_object_saturation_roots(state));
-                roots.extend(state.unprocessed().iter());
-            }
+            let roots = proof_success_object_roots(config, state, clause.as_ref());
             state.proof_object_analysis_for_roots(roots)
         }
         SaturateOutcome::Stopped { .. }
@@ -5968,6 +5961,19 @@ fn write_supported_proof_object_statistics(
     };
 
     write_proof_object_analysis(output, analysis)
+}
+
+fn proof_success_object_roots<'a>(
+    config: &EProverConfig,
+    state: &'a ProofState,
+    clause: &'a Clause,
+) -> Vec<&'a Clause> {
+    let mut roots = vec![clause];
+    if config.flags.contains(EProverFlag::FullDerivation) {
+        roots.extend(proof_object_saturation_roots(state));
+        roots.extend(state.unprocessed().iter());
+    }
+    roots
 }
 
 fn proof_object_saturation_roots(state: &ProofState) -> Vec<&Clause> {
@@ -15114,6 +15120,38 @@ mod tests {
         assert!(printed.contains("     1 : :[--equal(a, a)] : initial("));
         assert!(printed.contains("     2 : :[] : cn(1) : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_full_deriv_proof_object_list_prints_success_nonproof_roots() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-success-full-deriv-list");
+        std::fs::write(&path, "a!=a.\np(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--full-deriv",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("% SZS output start CNFRefutation\n"));
+        assert!(printed.contains("p(a)"));
+        assert!(printed.contains(": 'final'\n"));
+        assert!(printed.contains(": 'proof'\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

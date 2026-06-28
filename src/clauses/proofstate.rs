@@ -172,6 +172,7 @@ pub struct ProofObjectGraphEdge {
 pub struct ProofObjectGraph<'a> {
     pub clauses: Vec<&'a Clause>,
     pub edges: Vec<ProofObjectGraphEdge>,
+    pub root_indices: Vec<usize>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -799,12 +800,15 @@ impl ProofState {
 
         for root in roots {
             let root = self.proof_object_first_clause(root);
-            Self::collect_proof_object_graph_clause(
+            let root_index = Self::collect_proof_object_graph_clause(
                 root,
                 &mut graph,
                 &mut visited,
                 &mut pending_edges,
             );
+            if !graph.root_indices.contains(&root_index) {
+                graph.root_indices.push(root_index);
+            }
         }
 
         while let Some((child_index, edge)) = pending_edges.pop() {
@@ -2003,6 +2007,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![20_011, 20_010, 20_009]
         );
+        assert_eq!(graph.root_indices, vec![0]);
         assert_eq!(
             graph.edges,
             vec![
@@ -2034,6 +2039,7 @@ mod tests {
         state.archive_mut().insert(selected_copy);
 
         let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(graph.root_indices, vec![0]);
         assert_eq!(
             graph.edges,
             vec![
@@ -2046,6 +2052,36 @@ mod tests {
                     child_index: 1,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_records_distinct_requested_roots() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let first_root = simple_clause(&mut state, "proof_graph_first_root", 20_015);
+        let parent = simple_clause(&mut state, "proof_graph_second_parent", 20_016);
+        let mut second_root = Clause::alloc(EqnList::new());
+        second_root.set_ident(20_017);
+        clause_push_derivation(&mut second_root, DC_EQ_RES, Some(&parent), None);
+
+        state.axioms_mut().insert(parent);
+
+        let graph = state.proof_object_graph_for_roots([&first_root, &second_root, &first_root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20_015, 20_017, 20_016]
+        );
+        assert_eq!(graph.root_indices, vec![0, 1]);
+        assert_eq!(
+            graph.edges,
+            vec![ProofObjectGraphEdge {
+                parent_index: 2,
+                child_index: 1,
+            }]
         );
     }
 
