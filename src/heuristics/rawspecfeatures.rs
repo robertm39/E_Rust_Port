@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausesetfeatures::SpecLimits;
 use crate::inout::basicparser::{parse_bool, parse_float, parse_int, parse_plain_filename};
 use crate::inout::scanner::{Scanner, TokenType};
@@ -28,6 +29,30 @@ pub struct RawSpecFeatureCell {
     pub conj_order: i32,
     pub app_var_lits: bool,
     pub class: String,
+}
+
+pub fn raw_spec_features_compute(features: &mut RawSpecFeatureCell, state: &ProofState) {
+    let signature = state.terms().signature();
+    let axioms = state.axioms();
+    features.sentence_no = axioms.members();
+    features.term_size = axioms.standard_weight();
+    features.hypothesis_count = 0;
+    features.conjecture_count = axioms.count_conjectures(&mut features.hypothesis_count);
+
+    features.sig_size = signature.count_symbols(true) + signature.count_symbols(false);
+    features.predc_size = signature.count_arity_symbols(0, true);
+    features.func_size = signature.count_arity_symbols(0, false);
+    features.pred_size = signature.count_symbols(true) - features.predc_size;
+    features.fun_size = signature.count_symbols(false) - features.func_size;
+    features.has_choice_sym = signature.has_choice_sym();
+
+    features.order = 1;
+    features.conj_order = 1;
+    features.num_of_definitions = 0;
+    features.perc_of_form_defs = 0.0;
+    features.num_lambdas = 0;
+    features.app_var_lits = false;
+    features.class.clear();
 }
 
 pub fn raw_spec_features_classify(
@@ -240,13 +265,24 @@ const fn bool_as_c_int(value: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        raw_spec_features_classify_for_problem_type, raw_spec_features_format,
-        raw_spec_features_parse, RawSpecFeatureCell, RAW_PARSE_CLASS_LEN,
+        raw_spec_features_classify_for_problem_type, raw_spec_features_compute,
+        raw_spec_features_format, raw_spec_features_parse, RawSpecFeatureCell, RAW_PARSE_CLASS_LEN,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
+    use crate::clauses::clause::clause_parse;
+    use crate::clauses::proofstate::ProofState;
     use crate::heuristics::clausesetfeatures::SpecLimits;
-    use crate::inout::scanner::Scanner;
+    use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::terms::signature::FP_IGNORE_PROPS;
+
+    fn insert_tstp_clause(state: &mut ProofState, input: &str) {
+        let mut scanner = Scanner::from_user_string(input, false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+        let clause =
+            clause_parse(&mut scanner, state.terms_mut(), ProblemType::FirstOrder).unwrap();
+        state.axioms_mut().insert(clause);
+    }
 
     fn small_limits() -> SpecLimits {
         SpecLimits {
@@ -272,6 +308,55 @@ mod tests {
             num_of_lams_large_limit: 20,
             ..SpecLimits::default_auto()
         }
+    }
+
+    #[test]
+    fn compute_fills_clause_side_proof_state_features() {
+        let mut state = ProofState::new(FP_IGNORE_PROPS).unwrap();
+        insert_tstp_clause(&mut state, "cnf(hyp, hypothesis, (p(f(a)))).");
+        insert_tstp_clause(&mut state, "cnf(goal, negated_conjecture, (~q(a))).");
+        let expected_weight = state.axioms().standard_weight();
+        let signature = state.terms().signature();
+        let expected_signature_counts = (
+            signature.count_symbols(true) + signature.count_symbols(false),
+            signature.count_symbols(true) - signature.count_arity_symbols(0, true),
+            signature.count_arity_symbols(0, true),
+            signature.count_symbols(false) - signature.count_arity_symbols(0, false),
+            signature.count_arity_symbols(0, false),
+        );
+        let mut features = RawSpecFeatureCell {
+            class: "stale".to_owned(),
+            num_of_definitions: 99,
+            perc_of_form_defs: 0.5,
+            num_lambdas: 7,
+            app_var_lits: true,
+            ..RawSpecFeatureCell::default()
+        };
+
+        raw_spec_features_compute(&mut features, &state);
+
+        assert_eq!(features.sentence_no, 2);
+        assert_eq!(features.term_size, expected_weight);
+        assert_eq!(features.hypothesis_count, 1);
+        assert_eq!(features.conjecture_count, 1);
+        assert_eq!(
+            (
+                features.sig_size,
+                features.pred_size,
+                features.predc_size,
+                features.fun_size,
+                features.func_size,
+            ),
+            expected_signature_counts
+        );
+        assert!(!features.has_choice_sym);
+        assert_eq!(features.order, 1);
+        assert_eq!(features.conj_order, 1);
+        assert_eq!(features.num_of_definitions, 0);
+        assert!(features.perc_of_form_defs.abs() < f64::EPSILON);
+        assert_eq!(features.num_lambdas, 0);
+        assert!(!features.app_var_lits);
+        assert!(features.class.is_empty());
     }
 
     #[test]

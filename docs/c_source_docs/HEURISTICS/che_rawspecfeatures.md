@@ -89,6 +89,7 @@ Source files reviewed: `HEURISTICS/che_rawspecfeatures.h`, `HEURISTICS/che_rawsp
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `RawSpecFeaturesCompute` combines clause-set cardinality, clause standard weight, clause conjecture/hypothesis counts, and signature symbol counts with formula-set-only order and definition statistics. With no formula owners, C leaves `order` and `conj_order` at `1` and sets definition/lambda/app-var fields to empty defaults even if clause terms are higher-order; Rust now preserves that clause-only surface for represented proof states. Once formula sets are owned, revisit whether a cleaned classifier should expose clause-level order separately from the C raw-spec compatibility vector.
 
 ### Porting Focus
 
