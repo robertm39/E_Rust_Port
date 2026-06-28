@@ -114,6 +114,7 @@ Source files reviewed: `INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `ParseIntLimited` accepts the exact LP64 `LONG_MIN` spelling `-9223372036854775808` via unsigned-token arithmetic, while still rejecting `-0` as underflow. Rust preserves that sentinel behavior so generated strategy files can parse C's `LONG_MIN` fields.
 
 ### Porting Focus
 

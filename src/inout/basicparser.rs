@@ -40,13 +40,14 @@ pub fn parse_int_limited(scanner: &mut Scanner, lower: i64, upper: i64) -> Resul
         scanner.next_token()?;
         scanner.check_tok_no_skip(TokenType::POS_INT)?;
         let numval = scanner.current_token().numval();
-        if numval == 0 || numval - 1 > i64::MAX.unsigned_abs() {
+        if numval == 0 || numval > i64::MIN.unsigned_abs() {
             return Err(current_error(scanner, "Long integer underflow"));
         }
-        let Ok(value) = i64::try_from(numval) else {
-            return Err(current_error(scanner, "Long integer underflow"));
-        };
-        -value
+        if numval == i64::MIN.unsigned_abs() {
+            i64::MIN
+        } else {
+            -i64::try_from(numval).map_err(|_| current_error(scanner, "Long integer underflow"))?
+        }
     } else {
         scanner.check_tok(TokenType::POS_INT)?;
         let numval = scanner.current_token().numval();
@@ -391,6 +392,18 @@ mod tests {
 
         let mut scanner = make_scanner("9");
         assert_eq!(parse_int_max(&mut scanner).unwrap(), -9);
+    }
+
+    #[test]
+    fn parse_int_accepts_long_min_sentinel() {
+        let mut scanner = make_scanner("-9223372036854775808 tail");
+        assert_eq!(parse_int(&mut scanner).unwrap(), i64::MIN);
+        assert_eq!(scanner.current_token().literal(), "tail");
+
+        let mut below_min = make_scanner("-9223372036854775809");
+        let error = parse_int(&mut below_min).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Long integer underflow"));
     }
 
     #[test]

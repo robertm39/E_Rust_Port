@@ -2939,6 +2939,21 @@ mod tests {
     }
 
     #[test]
+    fn heuristic_parms_parse_accepts_long_min_eqdef_sentinel() {
+        let mut scanner = scanner("{ eqdef_incrlimit: -9223372036854775808 } tail");
+        let mut params = HeuristicParmsCell::default();
+
+        let complete =
+            heuristic_parms_parse_into(&mut scanner, &mut params, false).unwrap_or_else(|err| {
+                panic!("{err}");
+            });
+
+        assert!(!complete);
+        assert_eq!(params.eqdef_incrlimit, i64::MIN);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
     fn heuristic_parms_parse_preserves_c_string_and_intmax_quirks() {
         let mut default_scanner = scanner(&format!(
             "{} tail",
