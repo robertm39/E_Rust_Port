@@ -28,8 +28,8 @@ use crate::clauses::clause_props::{
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    demodulator_clause_refs, deriv_stack_tstp_string, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
+    demodulator_clause_refs, deriv_stack_pcl_string, deriv_stack_tstp_string, op_has_arg1,
+    op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
 };
 use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
@@ -5642,7 +5642,18 @@ fn write_saturation_proof_object_clause(
         DocOutputFormat::Pcl => {
             write_pcl_doc_step_start(&mut rendered, config, bank, clause, true)
                 .map_err(proof_doc_write_error)?;
-            rendered.push_str("'final'\n");
+            if let Some(derivation) = deriv_stack_pcl_string(clause.derivation()) {
+                rendered.push_str(&derivation);
+            } else {
+                rendered.push_str(&source_info_pcl_string(clause.info()));
+            }
+            if config.pcl_output.compact {
+                rendered.push(':');
+            } else {
+                rendered.push_str(" : ");
+            }
+            rendered.push_str(proof_object_root_marker(clause));
+            rendered.push('\n');
         }
         DocOutputFormat::Tstp => {
             clause_write_tstp_with_type_suffixes(
@@ -5650,16 +5661,37 @@ fn write_saturation_proof_object_clause(
                 bank,
                 clause,
                 config.pcl_output.full_terms,
-                true,
+                false,
                 ProblemType::FirstOrder,
                 config.encoding.print_types,
             )?;
+            if let Some(derivation) = deriv_stack_tstp_string(clause.derivation()) {
+                rendered.push_str(", ");
+                rendered.push_str(&derivation);
+            } else {
+                let source_info = source_info_tstp_string(clause.info());
+                if !source_info.is_empty() {
+                    rendered.push_str(", ");
+                    rendered.push_str(&source_info);
+                }
+            }
+            rendered.push_str(", [");
+            rendered.push_str(proof_object_root_marker(clause));
+            rendered.push_str("]).");
             rendered.push('\n');
         }
         _ => write_comment_line(output, "Output format not implemented.")?,
     }
     output.write_all(rendered.as_bytes())?;
     Ok(())
+}
+
+fn proof_object_root_marker(clause: &Clause) -> &'static str {
+    if clause.is_empty() {
+        "'proof'"
+    } else {
+        "'final'"
+    }
 }
 
 fn write_proof_object_dot(
@@ -8760,7 +8792,8 @@ mod tests {
     use super::{
         auto_memory_limit_from_system_mb, fv_index_params_from_config, heuristic_parms_from_config,
         order_parms_from_config, preprocessing_config_debug_line, process_options,
-        proof_control_from_config, run, run_config, AcHandling, DocOutputFormat, EProverAction,
+        proof_control_from_config, run, run_config, temporary_executable_term_bank,
+        write_saturation_proof_object_clause, AcHandling, DocOutputFormat, EProverAction,
         EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
         FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
         PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
@@ -8770,6 +8803,9 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
+    use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_TYPE_AXIOM;
+    use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
@@ -15250,6 +15286,7 @@ mod tests {
         ));
         assert!(printed.contains("cnf("));
         assert!(printed.contains("(p(a))"));
+        assert!(printed.contains(", ['final']).\n"));
         assert!(printed.contains("% SZS output end Saturation\n"));
         assert!(!printed.contains("CNFRefutation"));
         assert!(stderr.is_empty());
@@ -15343,11 +15380,35 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(printed.contains("% SZS output start Saturation\n"));
         assert!(printed.contains("p(a)"));
-        assert!(printed.contains("'final'\n"));
+        assert!(printed.contains(" : 'final'\n"));
         assert!(printed.contains("% SZS output end Saturation\n"));
         assert!(!printed.contains("CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn write_saturation_proof_object_clause_uses_source_info_and_root_marker() {
+        let bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut clause = Clause::empty();
+        clause.set_ident(7);
+        clause.set_tptp_type(CP_TYPE_AXIOM);
+        clause.set_info(Some(ClauseInfo::new(Some("named"), Some("file.p"), 3, 4)));
+
+        let mut config = EProverConfig {
+            doc_output_format: DocOutputFormat::Pcl,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause).unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("initial(\"file.p\", named) : 'proof'\n"));
+
+        config.doc_output_format = DocOutputFormat::Tstp;
+        let mut output = Vec::new();
+        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause).unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains(", file('file.p', named), ['proof']).\n"));
     }
 
     #[test]

@@ -374,6 +374,75 @@ pub fn deriv_stack_count_search_inferences(
     (generating_count, simplifying_count)
 }
 
+/// Returns the C `DerivationStackPCLPrint` expression for represented
+/// clause-side derivation stacks.
+///
+/// Formula parents and signature-owned AC axiom expansion remain with the
+/// later formula/signature proof-object owner.
+///
+/// # Panics
+///
+/// Panics if an opcode-declared clause argument is missing or has the wrong
+/// Rust stack entry shape.
+#[must_use]
+pub fn deriv_stack_pcl_string(derivation: Option<&PStack<DerivationEntry>>) -> Option<String> {
+    let derivation = derivation?;
+    let entries = derivation.as_slice();
+    let subexpressions = derivation_subexpression_starts(entries);
+
+    let mut rendered = String::new();
+    let mut extra_cnf_args = Vec::new();
+    for &start in subexpressions.iter().rev() {
+        let Some(DerivationEntry::Operation(op)) = entries.get(start) else {
+            continue;
+        };
+        match *op {
+            DC_CNF_QUOTE => {}
+            DC_CNF_ADD_ARG => {
+                extra_cnf_args.push(derivation_clause_arg(entries, start + 1));
+            }
+            op if op_code(op) == DO_INTRO_DEF => rendered.push_str("introduced"),
+            op => {
+                write!(&mut rendered, "{}(", derivation_op_id(op))
+                    .expect("writing to String cannot fail");
+            }
+        }
+    }
+
+    for &start in &subexpressions {
+        let Some(DerivationEntry::Operation(op)) = entries.get(start) else {
+            continue;
+        };
+        if *op == DC_CNF_ADD_ARG {
+            continue;
+        }
+        if op_has_cnf_arg1(*op) {
+            if start != 0 {
+                rendered.push_str(", ");
+            }
+            write_derivation_clause_ident(&mut rendered, derivation_clause_arg(entries, start + 1));
+            if op_has_cnf_arg2(*op) {
+                rendered.push_str(", ");
+                write_derivation_clause_ident(
+                    &mut rendered,
+                    derivation_clause_arg(entries, start + 2),
+                );
+            }
+        }
+        while let Some(parent) = extra_cnf_args.pop() {
+            rendered.push_str(", ");
+            write_derivation_clause_ident(&mut rendered, parent);
+        }
+        match *op {
+            DC_CNF_QUOTE => {}
+            op if op_code(op) == DO_INTRO_DEF => {}
+            _ => rendered.push(')'),
+        }
+    }
+
+    Some(rendered)
+}
+
 /// Returns the C `DerivationStackTSTPPrint` expression for represented
 /// clause-side derivation stacks.
 ///
@@ -388,22 +457,7 @@ pub fn deriv_stack_count_search_inferences(
 pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> Option<String> {
     let derivation = derivation?;
     let entries = derivation.as_slice();
-    let mut subexpressions = Vec::new();
-    let mut index = 0;
-    while index < entries.len() {
-        subexpressions.push(index);
-        let DerivationEntry::Operation(op) = entries[index] else {
-            index += 1;
-            continue;
-        };
-        index += 1;
-        if op_has_arg1(op) {
-            index += 1;
-        }
-        if op_has_arg2(op) {
-            index += 1;
-        }
-    }
+    let subexpressions = derivation_subexpression_starts(entries);
 
     let mut rendered = String::new();
     let mut extra_cnf_args = Vec::new();
@@ -472,6 +526,26 @@ pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> 
     Some(rendered)
 }
 
+fn derivation_subexpression_starts(entries: &[DerivationEntry]) -> Vec<usize> {
+    let mut subexpressions = Vec::new();
+    let mut index = 0;
+    while index < entries.len() {
+        subexpressions.push(index);
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+        if op_has_arg1(op) {
+            index += 1;
+        }
+        if op_has_arg2(op) {
+            index += 1;
+        }
+    }
+    subexpressions
+}
+
 #[must_use]
 pub fn demodulator_clause_refs(demodulator: RewriteDemodulator) -> Vec<ClauseDerivationRef> {
     let id = demodulator.id();
@@ -504,6 +578,10 @@ fn derivation_clause_arg(entries: &[DerivationEntry], index: usize) -> ClauseDer
 
 fn write_derivation_clause_ref(output: &mut String, parent: ClauseDerivationRef) {
     write!(output, "c_0_{}", parent.ident()).expect("writing to String cannot fail");
+}
+
+fn write_derivation_clause_ident(output: &mut String, parent: ClauseDerivationRef) {
+    write!(output, "{}", parent.ident()).expect("writing to String cannot fail");
 }
 
 const fn derivation_op_id(op: i64) -> &'static str {
@@ -659,12 +737,12 @@ mod tests {
     use super::{
         clause_is_dummy_quote, clause_is_eval_gc, clause_push_derivation,
         clause_push_numeric_derivation, deriv_stack_count_search_inferences,
-        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_tstp_string,
-        derivation_entries, get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef,
-        DerivationEntry, DerivationParentRef, ARG1_CNF, ARG1_NUM, ARG2_CNF, ARG_IS_HO, DC_AC_RES,
-        DC_APPLY_DEF, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR,
-        DC_DIS_EQ_DECOMPOSE, DC_EQ_FACTOR, DC_EQ_RES, DC_EVAL_ANSWERS, DC_LOCAL_REWRITE,
-        DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE, DC_UNFOLD,
+        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
+        deriv_stack_tstp_string, derivation_entries, get_is_ho, op_code, op_is_generating,
+        set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef, ARG1_CNF, ARG1_NUM,
+        ARG2_CNF, ARG_IS_HO, DC_AC_RES, DC_APPLY_DEF, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+        DC_CONDENSE, DC_CONTEXT_SR, DC_DIS_EQ_DECOMPOSE, DC_EQ_FACTOR, DC_EQ_RES, DC_EVAL_ANSWERS,
+        DC_LOCAL_REWRITE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE, DC_UNFOLD,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -841,6 +919,25 @@ mod tests {
     }
 
     #[test]
+    fn deriv_stack_pcl_string_matches_c_nested_shape() {
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_CNF_QUOTE));
+        derivation.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            101, 0,
+        )));
+        derivation.push(DerivationEntry::Operation(DC_CNF_EVAL_GC));
+        derivation.push(DerivationEntry::Operation(DC_EQ_RES));
+        derivation.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            102, 0,
+        )));
+
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&derivation)).as_deref(),
+            Some("er(evalgc(101), 102)")
+        );
+    }
+
+    #[test]
     fn deriv_stack_tstp_string_preserves_cnf_add_arg_stack_order() {
         let mut derivation = PStack::new();
         derivation.push(DerivationEntry::Operation(DC_EQ_RES));
@@ -855,6 +952,24 @@ mod tests {
         assert_eq!(
             deriv_stack_tstp_string(Some(&derivation)).as_deref(),
             Some("inference(er,[status(thm)],[c_0_202, c_0_201])")
+        );
+    }
+
+    #[test]
+    fn deriv_stack_pcl_string_preserves_cnf_add_arg_stack_order() {
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_EQ_RES));
+        derivation.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            202, 0,
+        )));
+        derivation.push(DerivationEntry::Operation(DC_CNF_ADD_ARG));
+        derivation.push(DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+            201, 0,
+        )));
+
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&derivation)).as_deref(),
+            Some("er(202, 201)")
         );
     }
 }
