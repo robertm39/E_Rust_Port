@@ -9,6 +9,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
     ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
+    DC_NORMALIZE,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
@@ -201,6 +202,7 @@ pub fn clause_remove_superfluous_literals(clause: &mut Clause, bank: &TermBank) 
         clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
         clause.recompute_lit_counts();
         clause.set_weight(clause.standard_weight());
+        clause_push_derivation(clause, DC_NORMALIZE, None, None);
     }
     removed
 }
@@ -684,7 +686,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
+        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
+        DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
@@ -1061,6 +1064,10 @@ mod tests {
         assert_eq!(clause.weight(), clause.standard_weight());
         assert!(!clause.query_prop(CP_INITIAL));
         assert!(!clause.query_prop(CP_LIMITED_RW));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
     }
 
     #[test]
