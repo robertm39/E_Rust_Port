@@ -96,10 +96,33 @@ pub fn tstp_print_end(
     output.write_str(").\n")
 }
 
+pub fn pcl_formula_print_end(
+    output: &mut impl fmt::Write,
+    comment: Option<&str>,
+    options: PclStepPrintOptions,
+) -> fmt::Result {
+    if let Some(comment) = comment {
+        write!(
+            output,
+            "{}'{comment}'",
+            if options.compact { ":" } else { " : " }
+        )?;
+    }
+    output.write_char('\n')
+}
+
+pub fn tstp_formula_print_end(output: &mut impl fmt::Write, comment: Option<&str>) -> fmt::Result {
+    if let Some(comment) = comment {
+        write!(output, ",['{comment}']")?;
+    }
+    output.write_str(").\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        pcl_print_end, pcl_print_start, pcl_type_str, tstp_print_end, PclStepPrintOptions,
+        pcl_formula_print_end, pcl_print_end, pcl_print_start, pcl_type_str,
+        tstp_formula_print_end, tstp_print_end, PclStepPrintOptions,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -232,6 +255,45 @@ mod tests {
 
         let mut rendered = String::new();
         tstp_print_end(&mut rendered, &plain, None).unwrap();
+        assert_eq!(rendered, ").\n");
+    }
+
+    #[test]
+    fn pcl_formula_print_end_matches_c_comment_spacing() {
+        let mut rendered = String::new();
+        pcl_formula_print_end(
+            &mut rendered,
+            Some("fof_simpl"),
+            PclStepPrintOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(rendered, " : 'fof_simpl'\n");
+
+        let mut rendered = String::new();
+        pcl_formula_print_end(
+            &mut rendered,
+            Some("fof_simpl"),
+            PclStepPrintOptions {
+                compact: true,
+                ..PclStepPrintOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(rendered, ":'fof_simpl'\n");
+
+        let mut rendered = String::new();
+        pcl_formula_print_end(&mut rendered, None, PclStepPrintOptions::default()).unwrap();
+        assert_eq!(rendered, "\n");
+    }
+
+    #[test]
+    fn tstp_formula_print_end_matches_c_comment_suffix() {
+        let mut rendered = String::new();
+        tstp_formula_print_end(&mut rendered, Some("fof_simpl")).unwrap();
+        assert_eq!(rendered, ",['fof_simpl']).\n");
+
+        let mut rendered = String::new();
+        tstp_formula_print_end(&mut rendered, None).unwrap();
         assert_eq!(rendered, ").\n");
     }
 }
