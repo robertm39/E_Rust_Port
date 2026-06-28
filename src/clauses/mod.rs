@@ -33,6 +33,7 @@ pub mod proofstate;
 pub mod propclauses;
 pub mod relevance;
 pub mod rewrite;
+pub mod satinterface;
 pub mod sine;
 pub mod splitting;
 pub mod subsumption;

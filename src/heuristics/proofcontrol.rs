@@ -1,6 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
-use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
@@ -38,6 +38,7 @@ use crate::clauses::paramodulation::{
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
 use crate::clauses::rewrite::find_rewritable_clauses;
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
+use crate::clauses::satinterface::{sat_check_proof_state, SatCheckReport};
 use crate::clauses::splitting::{
     clause_split, clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
     SplitDefinitionStore,
@@ -70,7 +71,7 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{RewriteLevel, TP_IS_REWRITABLE};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Instant};
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -2828,13 +2829,12 @@ fn proof_state_processed_clause_by_class(
 /// non-returning clauses, and stops when the local limit checks fail. The
 /// default path uses the ported unindexed selected-clause generators; the
 /// caller-owned global-index variant uses the indexed branch when PM indexes
-/// are available. The SAT-check branch reports an explicit diagnostic when
-/// enabled and due because `SATCheck` itself is not ported yet.
+/// are available. The SAT-check branch uses the ported pseudo-ground
+/// propositional import and internal solver when enabled and due.
 ///
 /// # Errors
 ///
-/// Returns diagnostics from clause processing, cleanup, or an enabled due
-/// SAT-check.
+/// Returns diagnostics from clause processing, cleanup, or SAT-check import.
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
@@ -2874,8 +2874,8 @@ pub fn proof_state_saturate(
 ///
 /// # Errors
 ///
-/// Returns diagnostics from indexed clause processing, cleanup, or an enabled
-/// due SAT-check.
+/// Returns diagnostics from indexed clause processing, cleanup, or SAT-check
+/// import.
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
@@ -2906,6 +2906,52 @@ pub fn proof_state_saturate_with_global_indices(
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SatCheckThresholds {
+    size: i64,
+    step: i64,
+    ttinsert: i64,
+}
+
+impl SatCheckThresholds {
+    const fn new(params: &HeuristicParmsCell) -> Self {
+        Self {
+            size: params.sat_check_size_limit,
+            step: params.sat_check_step_limit,
+            ttinsert: params.sat_check_ttinsert_limit,
+        }
+    }
+
+    fn advance_after(self, trigger: SatCheckTrigger, params: &HeuristicParmsCell) -> Self {
+        match trigger {
+            SatCheckTrigger::Size { cardinality } => {
+                let mut next = self.size;
+                if params.sat_check_size_limit > 0 {
+                    while next <= cardinality {
+                        next = next.saturating_add(params.sat_check_size_limit);
+                    }
+                }
+                Self { size: next, ..self }
+            }
+            SatCheckTrigger::Step => Self {
+                step: self.step.saturating_add(params.sat_check_step_limit),
+                ..self
+            },
+            SatCheckTrigger::TermBankInsertions => Self {
+                ttinsert: self.ttinsert.saturating_mul(2),
+                ..self
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SatCheckTrigger {
+    Size { cardinality: i64 },
+    Step,
+    TermBankInsertions,
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
@@ -2923,6 +2969,7 @@ fn proof_state_saturate_impl(
     mut indices: Option<&mut GlobalIndices<'_>>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
+    let mut sat_check_thresholds = SatCheckThresholds::new(control.heuristic_parms());
 
     loop {
         if let Some(reason) = proof_state_saturate_stop_reason(
@@ -2993,7 +3040,15 @@ fn proof_state_saturate_impl(
             });
         }
 
-        proof_state_saturate_sat_check_gate(state, control)?;
+        if let Some(clause) =
+            proof_state_saturate_sat_check_gate(state, control, &mut sat_check_thresholds)?
+        {
+            return Ok(SaturateOutcome::Returned {
+                clause: Box::new(clause),
+                reason: SaturateReturnReason::SatCheck,
+                processed_steps,
+            });
+        }
     }
 }
 
@@ -3062,31 +3117,108 @@ fn i64_as_c_unsigned_long(value: i64) -> u64 {
 }
 
 fn proof_state_saturate_sat_check_gate(
-    state: &ProofState,
-    control: &ProofControl,
-) -> Result<(), Diagnostic> {
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    thresholds: &mut SatCheckThresholds,
+) -> Result<Option<Clause>, Diagnostic> {
     let params = control.heuristic_parms();
     if params.sat_check_grounding == GroundingStrategy::NoGrounding {
-        return Ok(());
+        return Ok(None);
     }
 
-    let due = state.cardinality() >= params.sat_check_size_limit
-        || c_unsigned_long_ge_signed_long(
-            state.statistics().proc_non_trivial_count,
-            params.sat_check_step_limit,
-        )
-        || c_unsigned_long_ge_signed_long(
-            state.terms().insertions(),
-            params.sat_check_ttinsert_limit,
-        );
-    if !due {
-        return Ok(());
+    let cardinality = state.cardinality();
+    let trigger = if cardinality >= thresholds.size {
+        Some(SatCheckTrigger::Size { cardinality })
+    } else if c_unsigned_long_ge_signed_long(
+        state.statistics().proc_non_trivial_count,
+        thresholds.step,
+    ) {
+        Some(SatCheckTrigger::Step)
+    } else if c_unsigned_long_ge_signed_long(state.terms().insertions(), thresholds.ttinsert) {
+        Some(SatCheckTrigger::TermBankInsertions)
+    } else {
+        None
+    };
+
+    let Some(trigger) = trigger else {
+        return Ok(None);
+    };
+
+    let empty = proof_state_sat_check(state, control)?;
+    *thresholds = thresholds.advance_after(trigger, control.heuristic_parms());
+    Ok(empty)
+}
+
+fn proof_state_sat_check(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<Clause>, Diagnostic> {
+    let sat_check_normalize = control.heuristic_parms().sat_check_normalize;
+    let sat_check_grounding = control.heuristic_parms().sat_check_grounding;
+    let sat_check_normconst = control.heuristic_parms().sat_check_normconst;
+    let sat_check_decision_limit = control.heuristic_parms().sat_check_decision_limit;
+    let preproc_start = Instant::now();
+    let mut preproc_time = 0.0;
+    if sat_check_normalize {
+        let mut eliminated = 0_u64;
+        let mut unprocessed = std::mem::take(state.unprocessed_mut());
+        let empty = match proof_state_forward_contract_set_reweight(
+            state,
+            control,
+            &mut unprocessed,
+            false,
+            RewriteLevel::FullRewrite,
+            &mut eliminated,
+        ) {
+            Ok(empty) => empty,
+            Err(err) => {
+                *state.unprocessed_mut() = unprocessed;
+                return Err(err);
+            }
+        };
+        *state.unprocessed_mut() = unprocessed;
+        state.statistics_mut().proc_trivial_count = state
+            .statistics()
+            .proc_trivial_count
+            .saturating_add(eliminated);
+        preproc_time = preproc_start.elapsed().as_secs_f64();
+        if empty.is_some() {
+            return Ok(empty);
+        }
     }
 
-    Err(Diagnostic::new(
-        ErrorCode::OTHER_ERROR,
-        "Saturate SATCheck is not ported yet",
-    ))
+    let report = sat_check_proof_state(
+        state,
+        sat_check_grounding,
+        sat_check_normconst,
+        sat_check_decision_limit,
+    )?;
+    control.reset_sat_solver();
+    apply_sat_check_report(state, preproc_time, &report);
+    Ok(report.empty)
+}
+
+fn apply_sat_check_report(state: &mut ProofState, preproc_time: f64, report: &SatCheckReport) {
+    let statistics = state.statistics_mut();
+    statistics.satcheck_count = statistics.satcheck_count.saturating_add(1);
+    statistics.satcheck_preproc_time += preproc_time;
+    statistics.satcheck_encoding_time += report.encoding_time;
+    statistics.satcheck_solver_time += report.solver_time;
+    match report.result {
+        ProverResult::Unsatisfiable => {
+            statistics.satcheck_success = statistics.satcheck_success.saturating_add(1);
+            statistics.satcheck_full_size = report.full_size;
+            statistics.satcheck_actual_size = report.actual_size;
+            statistics.satcheck_core_size = report.core_size;
+            statistics.satcheck_preproc_stime += preproc_time;
+            statistics.satcheck_encoding_stime += report.encoding_time;
+            statistics.satcheck_solver_stime += report.solver_time;
+        }
+        ProverResult::Satisfiable => {
+            statistics.satcheck_satisfiable = statistics.satcheck_satisfiable.saturating_add(1);
+        }
+        _ => {}
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3922,7 +4054,8 @@ mod tests {
         BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
         GenerateNewClausesOutcome, LiteralSelectionOutcome, ProcessClauseOutcome,
         ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -4113,9 +4246,20 @@ mod tests {
     }
 
     fn unit_clause_with_id(bank: &mut TermBank, stem: &str, ident: i64) -> Clause {
+        signed_unit_clause_with_id(bank, stem, ident, true)
+    }
+
+    fn signed_unit_clause_with_id(
+        bank: &mut TermBank,
+        stem: &str,
+        ident: i64,
+        positive: bool,
+    ) -> Clause {
         let left = typed_const(bank, &format!("{stem}_left"));
         let right = typed_const(bank, &format!("{stem}_right"));
-        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(bank, &left, &right, true)]));
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            bank, &left, &right, positive,
+        )]));
         clause.set_ident(ident);
         clause
     }
@@ -6522,7 +6666,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_saturate_rejects_due_sat_check_branch() {
+    fn proof_state_saturate_runs_due_sat_check_and_records_model() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
@@ -6531,7 +6675,7 @@ mod tests {
         control.heuristic_parms_mut().sat_check_grounding = GroundingStrategy::GlobalMin;
         control.heuristic_parms_mut().sat_check_step_limit = 1;
 
-        let error = proof_state_saturate(
+        let outcome = proof_state_saturate(
             &mut state,
             &mut control,
             i64::MAX,
@@ -6542,10 +6686,76 @@ mod tests {
             i64::MAX,
             1,
         )
-        .unwrap_err();
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.to_string().contains("SATCheck"));
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::Saturated,
+                processed_steps: 1,
+            }
+        );
+        assert_eq!(state.statistics().satcheck_count, 1);
+        assert_eq!(state.statistics().satcheck_satisfiable, 1);
+        assert_eq!(state.statistics().satcheck_success, 0);
+        assert_eq!(state.statistics().satcheck_full_size, 0);
+        assert_eq!(state.statistics().satcheck_actual_size, 0);
+        assert_eq!(control.solver().generation(), 2);
+    }
+
+    #[test]
+    fn proof_state_saturate_sat_check_refutes_opposite_pseudo_ground_units() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let positive = signed_unit_clause_with_id(
+            state.terms_mut(),
+            "pc_saturate_satcheck_unsat",
+            4_143,
+            true,
+        );
+        let negative = signed_unit_clause_with_id(
+            state.terms_mut(),
+            "pc_saturate_satcheck_unsat",
+            4_144,
+            false,
+        );
+        queue_unprocessed_for_process(&mut state, &mut control, positive);
+        queue_unprocessed_for_process(&mut state, &mut control, negative);
+        control.heuristic_parms_mut().sat_check_grounding = GroundingStrategy::GlobalMin;
+        control.heuristic_parms_mut().sat_check_step_limit = 1;
+
+        let outcome = proof_state_saturate(
+            &mut state,
+            &mut control,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let SaturateOutcome::Returned {
+            clause,
+            reason,
+            processed_steps,
+        } = outcome
+        else {
+            panic!("SATCheck should return an empty proof clause");
+        };
+        assert!(clause.is_empty());
+        assert_eq!(reason, SaturateReturnReason::SatCheck);
+        assert_eq!(processed_steps, 1);
+        assert_eq!(state.statistics().satcheck_count, 1);
+        assert_eq!(state.statistics().satcheck_satisfiable, 0);
+        assert_eq!(state.statistics().satcheck_success, 1);
+        assert_eq!(state.statistics().satcheck_full_size, 2);
+        assert_eq!(state.statistics().satcheck_actual_size, 2);
+        assert_eq!(state.statistics().satcheck_core_size, 2);
+        assert_eq!(control.solver().generation(), 2);
     }
 
     #[test]

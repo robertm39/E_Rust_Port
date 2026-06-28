@@ -410,6 +410,11 @@ impl VarBank {
     }
 
     #[must_use]
+    pub fn normal_variables_by_sort(&self) -> BTreeMap<TypeUniqueId, Vec<Term>> {
+        self.0.borrow().varstacks.clone()
+    }
+
+    #[must_use]
     pub fn v_count_for_type(&self, type_: &Type) -> usize {
         self.0
             .borrow()
@@ -431,10 +436,6 @@ impl VarBank {
 
     fn all_variables(&self) -> Vec<Term> {
         self.0.borrow().variables.values().cloned().collect()
-    }
-
-    fn normal_variables_by_sort(&self) -> BTreeMap<TypeUniqueId, Vec<Term>> {
-        self.0.borrow().varstacks.clone()
     }
 }
 

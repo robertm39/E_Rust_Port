@@ -147,6 +147,18 @@ Source files reviewed: `CLAUSES/ccl_satinterface.h`, `CLAUSES/ccl_satinterface.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SatClauseSetImportProofState` builds one pseudo-grounding substitution, imports processed positive rules, processed positive equations, processed negative units, processed non-units, and unprocessed clauses in that order, then deletes the substitution. Rust now mirrors that import order and backtracks the temporary substitution after term-bank atom encoding.
+- `SatClauseSetMarkPure` marks a clause as pure when any literal in that clause has only one polarity in the whole SAT clause set; `SatClauseSetExportToSolverNonPure` then exports only clauses without such literals. Rust preserves this clause-level filter before invoking its internal solver.
+- `SatClauseSetCheckUnsat` uses PicoSAT with a decision limit, resets the proof-control solver after each completed SAT check at the proof-process layer, and extracts a PicoSAT unsat core into the generated empty clause derivation. Rust currently uses a deterministic internal DPLL solver and records all exported non-pure clauses as the core parents.
+
+### Change-Later Observations
+
+- PicoSAT integration remains the compatibility target for exact propagation/decision-limit semantics, trace generation, and minimized unsat-core extraction. The internal Rust DPLL bridge is useful for search integration and tests, but should be replaced or feature-gated once external solver ownership is represented.
+- Four conjecture-frequency tie-break helpers use assignment (`=`) where equality comparison appears intended. Rust's SAT grounding currently uses normal equality comparisons for the intended lexicographic ordering; preserve the C mutation only behind an explicit compatibility decision if reference tests show that accidental behavior matters.
+- C `SatClauseAlloc` reserves a trailing zero sentinel for PicoSAT and leaves other literal slots uninitialized. Rust stores initialized vectors; if a future PicoSAT FFI path wants zero-copy DIMACS/PicoSAT buffers, keep the sentinel layout as a solver-boundary detail rather than leaking uninitialized storage into general clause code.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
