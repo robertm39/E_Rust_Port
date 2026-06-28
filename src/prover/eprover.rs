@@ -37,7 +37,7 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::proofstate::{
-    proof_state_alloc, ProofObjectAnalysis, ProofState, RawFormulaFeatures,
+    proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
     WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
@@ -5006,17 +5006,17 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
     )?;
     match outcome {
         SaturateOutcome::Returned { clause, .. } => {
-            write_proof_object_output(output, config, state.terms(), clause, next_doc_ident)?;
+            write_proof_success_object_output(output, config, state, clause, next_doc_ident)?;
         }
         SaturateOutcome::Stopped { .. }
-            if should_write_saturation_proof_object(
+            if should_write_saturation_proof_output(
                 config,
                 state,
                 outcome,
                 inference_system_complete,
             ) =>
         {
-            write_saturation_proof_object_output(output, config, state)?;
+            write_saturation_proof_output(output, config, state)?;
         }
         SaturateOutcome::Stopped { .. } => {}
     }
@@ -5514,17 +5514,35 @@ fn write_tstp_proof_success_doc_with_parent(
     Ok(())
 }
 
-fn write_proof_object_output(
+fn write_proof_success_object_output(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &ProofState,
+    clause: &Clause,
+    next_doc_ident: i64,
+) -> Result<(), EProverError> {
+    match config.proof_output {
+        1 => write_proof_success_list_output(output, config, state.terms(), clause, next_doc_ident),
+        level if level >= 2 => {
+            let mut roots = vec![clause];
+            if config.flags.contains(EProverFlag::FullDerivation) {
+                roots.extend(proof_object_saturation_roots(state));
+                roots.extend(state.unprocessed().iter());
+            }
+            let graph = state.proof_object_graph_for_roots(roots);
+            write_proof_object_dot(output, config, state.terms(), &graph)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn write_proof_success_list_output(
     output: &mut impl Write,
     config: &EProverConfig,
     bank: &TermBank,
     clause: &Clause,
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
-    if config.proof_output != 1 {
-        return Ok(());
-    }
-
     write_comment_line(output, "SZS output start CNFRefutation")?;
     let doc_ident = proof_object_success_doc_ident(config, clause, next_doc_ident);
     let parent_ident = proof_object_success_parent_ident(config, clause);
@@ -5553,13 +5571,13 @@ fn write_proof_object_output(
     Ok(())
 }
 
-fn should_write_saturation_proof_object(
+fn should_write_saturation_proof_output(
     config: &EProverConfig,
     state: &ProofState,
     outcome: &SaturateOutcome,
     inference_system_complete: bool,
 ) -> bool {
-    config.proof_output == 1
+    config.proof_output >= 1
         && state.statistics().answer_count == 0
         && matches!(
             outcome,
@@ -5573,11 +5591,16 @@ fn should_write_saturation_proof_object(
         && !state.has_interpreted_symbols()
 }
 
-fn write_saturation_proof_object_output(
+fn write_saturation_proof_output(
     output: &mut impl Write,
     config: &EProverConfig,
     state: &ProofState,
 ) -> Result<(), EProverError> {
+    if config.proof_output >= 2 {
+        let graph = state.proof_object_graph_for_roots(proof_object_saturation_roots(state));
+        return write_proof_object_dot(output, config, state.terms(), &graph);
+    }
+
     write_comment_line(output, "SZS output start Saturation")?;
     write_saturation_proof_object_set(output, config, state.terms(), state.processed_pos_rules())?;
     write_saturation_proof_object_set(output, config, state.terms(), state.processed_pos_eqns())?;
@@ -5628,6 +5651,107 @@ fn write_saturation_proof_object_clause(
     }
     output.write_all(rendered.as_bytes())?;
     Ok(())
+}
+
+fn write_proof_object_dot(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    graph: &ProofObjectGraph<'_>,
+) -> Result<(), EProverError> {
+    output.write_all(
+        b"digraph proof{\n  rankdir=TB\n  graph [splines=true overlap=false];\n  subgraph ax{\n  rank=\"same\";\n",
+    )?;
+    let mut axiom_open = true;
+    for index in (0..graph.clauses.len()).rev() {
+        let clause = graph.clauses[index];
+        if axiom_open && clause.derivation().is_some() {
+            output.write_all(b"   }\n")?;
+            axiom_open = false;
+        }
+        write_proof_object_dot_clause(
+            output,
+            config,
+            bank,
+            clause,
+            proof_object_dot_node_id(graph, index),
+        )?;
+    }
+    if axiom_open {
+        output.write_all(b"   }\n")?;
+    }
+    for edge in &graph.edges {
+        writeln!(
+            output,
+            "    {} -> {} [style=\"bold\"]",
+            proof_object_dot_node_id(graph, edge.parent_index),
+            proof_object_dot_node_id(graph, edge.child_index)
+        )?;
+    }
+    output.write_all(b"}\n")?;
+    Ok(())
+}
+
+fn write_proof_object_dot_clause(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    node_id: usize,
+) -> Result<(), EProverError> {
+    let label = if config.proof_output > 2 {
+        let mut rendered = String::new();
+        clause_write_tstp_with_type_suffixes(
+            &mut rendered,
+            bank,
+            clause,
+            config.pcl_output.full_terms,
+            false,
+            ProblemType::FirstOrder,
+            config.encoding.print_types,
+        )?;
+        rendered
+    } else {
+        format!("c{node_id}")
+    };
+    writeln!(
+        output,
+        "  {} [shape=box{},style=filled,label=\"{}\"]",
+        node_id,
+        proof_object_dot_node_colour(clause),
+        dot_label_escape(&label)
+    )?;
+    Ok(())
+}
+
+fn proof_object_dot_node_id(graph: &ProofObjectGraph<'_>, index: usize) -> usize {
+    graph.clauses.len().saturating_sub(index)
+}
+
+fn proof_object_dot_node_colour(clause: &Clause) -> &'static str {
+    if clause.is_empty() {
+        ",color=blue,fillcolor=darkorchid1"
+    } else if clause.is_conjecture() {
+        ",color=blue,fillcolor=lightskyblue1"
+    } else if clause.derivation().is_some() {
+        ",color=green,fillcolor=palegreen"
+    } else {
+        ",color=green,fillcolor=forestgreen"
+    }
+}
+
+fn dot_label_escape(label: &str) -> String {
+    let mut escaped = String::with_capacity(label.len());
+    for character in label.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => {}
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn write_supported_proof_object_statistics(
@@ -14877,6 +15001,38 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_graph_prints_supported_success_dot() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-graph-success-dot");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--proof-graph=1", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\ndigraph proof{\n"));
+        assert!(printed.contains("  rankdir=TB\n"));
+        assert!(printed.contains(
+            "  1 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"c1\"]\n"
+        ));
+        assert!(printed.contains(
+            "  2 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c2\"]\n"
+        ));
+        assert!(printed.contains("    1 -> 2 [style=\"bold\"]\n"));
+        assert!(!printed.contains("SZS output start CNFRefutation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_record_gcs_updates_success_statistics() {
         let _guard = global_state_lock();
         let path = temp_path("proof-object-record-gcs");
@@ -15067,6 +15223,34 @@ mod tests {
         assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
         assert!(printed.contains("% Proof object generating inferences   : 0\n"));
         assert!(printed.contains("% Proof object simplifying inferences  : 0\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_graph_prints_saturation_dot_for_complete_no_proof() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-graph-saturation-dot");
+        std::fs::write(&path, "cnf(keep, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--proof-graph=1", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\ndigraph proof{\n"));
+        assert!(printed.contains(
+            "  1 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"c1\"]\n"
+        ));
+        assert!(!printed.contains("SZS output start Saturation"));
+        assert!(!printed.contains("CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

@@ -162,6 +162,18 @@ impl ProofObjectAnalysis {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofObjectGraphEdge {
+    pub parent_index: usize,
+    pub child_index: usize,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct ProofObjectGraph<'a> {
+    pub clauses: Vec<&'a Clause>,
+    pub edges: Vec<ProofObjectGraphEdge>,
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct ProofStateTrainingExamples<'a> {
     pub positive: Vec<&'a Clause>,
@@ -776,6 +788,44 @@ impl ProofState {
         analysis
     }
 
+    #[must_use]
+    pub fn proof_object_graph_for_roots<'a, I>(&'a self, roots: I) -> ProofObjectGraph<'a>
+    where
+        I: IntoIterator<Item = &'a Clause>,
+    {
+        let mut graph = ProofObjectGraph::default();
+        let mut visited = Vec::new();
+        let mut pending_edges = Vec::new();
+
+        for root in roots {
+            let root = self.proof_object_first_clause(root);
+            Self::collect_proof_object_graph_clause(
+                root,
+                &mut graph,
+                &mut visited,
+                &mut pending_edges,
+            );
+        }
+
+        while let Some((child_index, edge)) = pending_edges.pop() {
+            for clause in self.proof_object_edge_clauses(edge) {
+                let clause = self.proof_object_first_clause(clause);
+                let parent_index = Self::collect_proof_object_graph_clause(
+                    clause,
+                    &mut graph,
+                    &mut visited,
+                    &mut pending_edges,
+                );
+                graph.edges.push(ProofObjectGraphEdge {
+                    parent_index,
+                    child_index,
+                });
+            }
+        }
+
+        graph
+    }
+
     fn gc_analysis(&self) -> ProofStateGcAnalysis {
         let mut analysis = ProofStateGcAnalysis::default();
         for set in self.gc_clause_sets() {
@@ -816,6 +866,27 @@ impl ProofState {
         analysis.simplifying_inference_count += simplifying;
 
         pending_edges.extend(proof_object_parent_edges(clause.derivation()));
+    }
+
+    fn collect_proof_object_graph_clause<'a>(
+        clause: &'a Clause,
+        graph: &mut ProofObjectGraph<'a>,
+        visited: &mut Vec<(*const Clause, usize)>,
+        pending_edges: &mut Vec<(usize, ProofObjectParentEdge)>,
+    ) -> usize {
+        let key = std::ptr::from_ref(clause);
+        if let Some((_, index)) = visited.iter().find(|(visited, _)| *visited == key) {
+            return *index;
+        }
+        let index = graph.clauses.len();
+        visited.push((key, index));
+        graph.clauses.push(clause);
+        pending_edges.extend(
+            proof_object_parent_edges(clause.derivation())
+                .into_iter()
+                .map(|edge| (index, edge)),
+        );
+        index
     }
 
     fn proof_object_first_clause<'a>(&'a self, clause: &'a Clause) -> &'a Clause {
@@ -1583,8 +1654,8 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        proof_state_alloc, ProofObjectAnalysis, ProofState, ProofStateGcAnalysis,
-        ProofStateStatistics, WatchlistSource,
+        proof_state_alloc, ProofObjectAnalysis, ProofObjectGraphEdge, ProofState,
+        ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1904,6 +1975,77 @@ mod tests {
                 generating_inference_count: 1,
                 simplifying_inference_count: 0,
             }
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_collects_reachable_clause_edges() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut source = simple_clause(&mut state, "proof_graph_source", 20_009);
+        source.set_csscpa_source(31);
+        let mut selected = simple_clause(&mut state, "proof_graph_selected", 20_010);
+        selected.set_csscpa_source(32);
+        clause_push_derivation(&mut selected, DC_CNF_QUOTE, Some(&source), None);
+        clause_push_derivation(&mut selected, DC_CNF_EVAL_GC, None, None);
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_011);
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&selected), None);
+
+        state.axioms_mut().insert(source);
+        state.archive_mut().insert(selected);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20_011, 20_010, 20_009]
+        );
+        assert_eq!(
+            graph.edges,
+            vec![
+                ProofObjectGraphEdge {
+                    parent_index: 1,
+                    child_index: 0,
+                },
+                ProofObjectGraphEdge {
+                    parent_index: 2,
+                    child_index: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_graph_uses_quote_source_for_duplicate_refs() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = simple_clause(&mut state, "proof_graph_duplicate_original", 20_012);
+        let mut selected_copy = simple_clause(&mut state, "proof_graph_duplicate_selected", 20_012);
+        selected_copy.set_ident(20_013);
+        clause_push_derivation(&mut selected_copy, DC_CNF_QUOTE, Some(&original), None);
+        clause_push_derivation(&mut selected_copy, DC_CNF_EVAL_GC, None, None);
+        let mut root = Clause::alloc(EqnList::new());
+        root.set_ident(20_014);
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&selected_copy), None);
+
+        state.axioms_mut().insert(original);
+        state.archive_mut().insert(selected_copy);
+
+        let graph = state.proof_object_graph_for_roots([&root]);
+        assert_eq!(
+            graph.edges,
+            vec![
+                ProofObjectGraphEdge {
+                    parent_index: 1,
+                    child_index: 0,
+                },
+                ProofObjectGraphEdge {
+                    parent_index: 2,
+                    child_index: 1,
+                },
+            ]
         );
     }
 
