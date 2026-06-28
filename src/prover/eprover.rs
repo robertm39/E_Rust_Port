@@ -1477,6 +1477,8 @@ fn proof_control_from_heuristic_parms(
     control.set_heuristic_parms(params);
     control.set_fvi_parms(fv_index_params_from_config(&config.search.fv_index)?);
     control.set_record_gc_selection(config.flags.contains(EProverFlag::RecordGivenClauses));
+    control
+        .set_strong_unit_forward_subsumption(config.search.support.strong_unit_forward_subsumption);
     Ok(control)
 }
 
@@ -9033,6 +9035,7 @@ mod tests {
             "--fvindex-maxfeatures=19",
             "--fvindex-slack=2",
             "--record-gcs",
+            "--strong-forward-subsumption",
         ]);
 
         let control = proof_control_from_config(&config).unwrap_or_else(|err| panic!("{err}"));
@@ -9043,6 +9046,7 @@ mod tests {
         assert!(control.hcbs().is_empty());
         assert_eq!(control.solver().generation(), 1);
         assert!(control.record_gc_selection());
+        assert!(control.strong_unit_forward_subsumption());
         assert_eq!(control.heuristic_parms().heuristic_name, "Auto");
         assert_eq!(control.heuristic_parms().delete_bad_limit, 77);
         assert_eq!(control.heuristic_parms().split_clauses.c_value(), 3);

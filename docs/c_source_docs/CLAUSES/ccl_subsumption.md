@@ -165,12 +165,12 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 
 - `src/clauses/subsumption.rs` ports direct first-order subsumption helpers, unit subsumption helpers, plain-set positive and negative simplify-reflect, optional strong positive unit simplify-reflect, plain and FV-indexed subsumed-clause discovery, variant lookup, and the process-global subsumption counters.
 - Positive and negative simplify-reflect now record `DCSR` derivation entries with compact references to the simplifying unit clause when a literal is removed.
-- Indexed simplify-reflect lookup, proof-state/session wiring for `StrongUnitForwardSubsumption`, full PCL/proof-documentation output, and proof-object traversal remain pending.
+- Indexed simplify-reflect lookup, full PCL/proof-documentation output, and proof-object traversal remain pending. Rust stores C's process-global `StrongUnitForwardSubsumption` as proof-control session configuration for forward subsumption and positive simplify-reflect callers.
 
 ### Change-Later Observations
 
 - C's simplify-reflect functions receive indexed unit-clause sets and push the raw simplifying `Clause_p` in `DCSR`. Rust currently uses plain-set lookup and compact clause references; replace both with the indexed lookup plus stable clause handles before proof-object reconstruction depends on parent identity.
-- Positive simplify-reflect's strong mode is controlled by the process-global `StrongUnitForwardSubsumption` in C. Rust exposes it as an explicit boolean for the helper; fold that back into proof-control-owned configuration when the full caller path is represented.
+- Positive simplify-reflect's strong mode is controlled by the process-global `StrongUnitForwardSubsumption` in C. Rust now exposes the lower-level helper parameter while routing configured proof search through a `ProofControl` session flag; revisit only if later strategy scheduling needs C-global sharing semantics.
 - The simplify-reflect helpers mutate the target clause while iterating literal links in C. Rust uses index-based removal over owned literal vectors; keep tests around repeated removals and empty-clause return behavior before refactoring the loop.
 
 ### Porting Focus

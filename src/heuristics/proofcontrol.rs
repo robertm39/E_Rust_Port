@@ -44,10 +44,11 @@ use crate::clauses::splitting::{
     SplitDefinitionStore,
 };
 use crate::clauses::subsumption::{
-    clause_negative_simplify_reflect, clause_positive_simplify_reflect,
+    clause_negative_simplify_reflect, clause_positive_simplify_reflect_with_strong,
     clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
     clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
     eqn_topsubsumes_termpair, unit_clause_set_subsumes_clause,
+    unit_clause_set_subsumes_clause_with_strong,
 };
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
@@ -347,6 +348,7 @@ pub struct ProofControl {
     problem_specs: SpecFeatureCell,
     solver: SatSolverState,
     record_gc_selection: bool,
+    strong_unit_forward_subsumption: bool,
 }
 
 impl ProofControl {
@@ -363,6 +365,7 @@ impl ProofControl {
             problem_specs: SpecFeatureCell::default(),
             solver: SatSolverState::new(),
             record_gc_selection: false,
+            strong_unit_forward_subsumption: false,
         }
     }
 
@@ -463,6 +466,15 @@ impl ProofControl {
 
     pub const fn set_record_gc_selection(&mut self, record: bool) {
         self.record_gc_selection = record;
+    }
+
+    #[must_use]
+    pub const fn strong_unit_forward_subsumption(&self) -> bool {
+        self.strong_unit_forward_subsumption
+    }
+
+    pub const fn set_strong_unit_forward_subsumption(&mut self, enabled: bool) {
+        self.strong_unit_forward_subsumption = enabled;
     }
 }
 
@@ -1208,6 +1220,7 @@ pub fn proof_state_forward_modify_clause(
     let lambda_demod = control.heuristic_parms().lambda_demod;
     let local_rw = control.heuristic_parms().local_rw;
     let ac_handling_active = control.ac_handling_active();
+    let strong_unit_forward_subsumption = control.strong_unit_forward_subsumption();
     let ocb = control.ocb.as_mut().ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -1253,7 +1266,11 @@ pub fn proof_state_forward_modify_clause(
             }
 
             if clause.negative_literal_count() != 0 {
-                let _ = clause_positive_simplify_reflect(processed_sets.pos_eqns, clause);
+                let _ = clause_positive_simplify_reflect_with_strong(
+                    processed_sets.pos_eqns,
+                    clause,
+                    strong_unit_forward_subsumption,
+                );
             }
             if clause.positive_literal_count() != 0 {
                 let _ = clause_negative_simplify_reflect(processed_sets.neg_units, clause);
@@ -1281,12 +1298,29 @@ pub fn proof_state_forward_subsumption(
     counts: &mut ForwardContractCounts,
     non_unit_subsumption: bool,
 ) -> Option<FvPackedClause> {
+    proof_state_forward_subsumption_with_strong(state, clause, counts, non_unit_subsumption, false)
+}
+
+/// Tries C `ForwardSubsumption` while honoring C's global
+/// `StrongUnitForwardSubsumption` switch through an explicit session flag.
+#[must_use]
+pub fn proof_state_forward_subsumption_with_strong(
+    state: &ProofState,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    non_unit_subsumption: bool,
+    strong_unit_forward_subsumption: bool,
+) -> Option<FvPackedClause> {
     clause.set_weight(clause.standard_weight());
 
     let mut subsumer_found = false;
     if clause.positive_literal_count() != 0 {
-        subsumer_found =
-            unit_clause_set_subsumes_clause(state.processed_pos_eqns(), clause).is_some();
+        subsumer_found = unit_clause_set_subsumes_clause_with_strong(
+            state.processed_pos_eqns(),
+            clause,
+            strong_unit_forward_subsumption,
+        )
+        .is_some();
     }
     if !subsumer_found && clause.negative_literal_count() != 0 {
         subsumer_found =
@@ -1312,6 +1346,22 @@ pub fn proof_state_forward_subsumption(
         clause.clone(),
         state.processed_non_units().fv_anchor(),
     ))
+}
+
+fn proof_state_forward_subsumption_with_control(
+    state: &ProofState,
+    control: &ProofControl,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    non_unit_subsumption: bool,
+) -> Option<FvPackedClause> {
+    proof_state_forward_subsumption_with_strong(
+        state,
+        clause,
+        counts,
+        non_unit_subsumption,
+        control.strong_unit_forward_subsumption(),
+    )
 }
 
 /// Applies the first-order/local body of C `forward_contract_keep`.
@@ -1379,8 +1429,14 @@ pub fn proof_state_forward_contract_keep(
             ));
         }
 
-        if proof_state_forward_subsumption(state, clause, counts, options.non_unit_subsumption)
-            .is_none()
+        if proof_state_forward_subsumption_with_control(
+            state,
+            control,
+            clause,
+            counts,
+            options.non_unit_subsumption,
+        )
+        .is_none()
         {
             return Ok(None);
         }
@@ -1934,6 +1990,23 @@ pub fn proof_state_queue_generated_clause_for_eval(
     Ok(())
 }
 
+fn proof_state_aggressive_forward_subsumed(
+    state: &mut ProofState,
+    control: &ProofControl,
+    clause: &mut Clause,
+) -> bool {
+    if !control.heuristic_parms().forward_subsumption_aggressive {
+        return false;
+    }
+
+    let mut counts = ForwardContractCounts::default();
+    let subsumed =
+        proof_state_forward_subsumption_with_control(state, control, clause, &mut counts, true)
+            .is_none();
+    state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
+    subsumed
+}
+
 /// Drains `tmp_store` through the currently ported local body of C
 /// `insert_new_clauses`.
 ///
@@ -2001,13 +2074,8 @@ pub fn proof_state_insert_new_clauses(
             return Ok(Some(clause));
         }
 
-        if control.heuristic_parms().forward_subsumption_aggressive {
-            let mut counts = ForwardContractCounts::default();
-            if proof_state_forward_subsumption(state, &mut clause, &mut counts, true).is_none() {
-                state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
-                continue;
-            }
-            state.statistics_mut().aggressive_forward_subsumed_count += counts.subsumed;
+        if proof_state_aggressive_forward_subsumed(state, control, &mut clause) {
+            continue;
         }
 
         if control.heuristic_parms().er_aggressive
@@ -4040,13 +4108,14 @@ mod tests {
         proof_state_eval_clause_set, proof_state_filter_unprocessed,
         proof_state_forward_contract_clause, proof_state_forward_contract_set,
         proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_subsumption, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_move_to_tmp_store_with_global_indices,
-        proof_state_process_clause, proof_state_process_clause_with_global_indices,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
+        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
+        proof_state_init_indexing, proof_state_init_with_global_indices,
+        proof_state_insert_new_clauses, proof_state_insert_processed_clause,
+        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
+        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
+        proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_global_indices,
         proof_state_saturate, proof_state_saturate_with_global_indices,
@@ -4069,7 +4138,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_ORDERED_FACTOR,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_ORDERED_FACTOR, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -4988,6 +5057,79 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_forward_modify_clause_honors_strong_unit_forward_subsumption() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (positive_unit, positive_id, mut default_target, mut strong_target) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -10);
+            let constant = typed_const(terms, "pc_strong_sr_a");
+            let left_other = typed_const(terms, "pc_strong_sr_b");
+            let right_other = typed_const(terms, "pc_strong_sr_c");
+            let right_match = typed_const(terms, "pc_strong_sr_d");
+            let kept_left = typed_const(terms, "pc_strong_sr_e");
+            let kept_right = typed_const(terms, "pc_strong_sr_g");
+            let f_code = typed_binary_code(terms, "pc_strong_sr_f");
+            let left = typed_binary_with_code(terms, f_code, &left_other, &right_other);
+            let right = typed_binary_with_code(terms, f_code, &constant, &right_match);
+            let mut positive_unit = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &right_match,
+                true,
+            )]));
+            positive_unit.set_ident(4_102);
+            let positive_id = positive_unit.ident();
+            let default_target = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left, &right, false),
+                literal(terms, &kept_left, &kept_right, true),
+            ]));
+            let strong_target = default_target.clone();
+            (positive_unit, positive_id, default_target, strong_target)
+        };
+        state.processed_pos_eqns_mut().insert(positive_unit);
+
+        let mut default_control = proof_control_alloc();
+        default_control.set_ocb(kbo_ocb(state.terms()));
+        let default_trivial = proof_state_forward_modify_clause(
+            &mut state,
+            &mut default_control,
+            &mut default_target,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!default_trivial);
+        assert_eq!(default_target.negative_literal_count(), 1);
+        assert!(default_target.derivation().is_none());
+
+        let mut strong_control = proof_control_alloc();
+        strong_control.set_ocb(kbo_ocb(state.terms()));
+        strong_control.set_strong_unit_forward_subsumption(true);
+        let strong_trivial = proof_state_forward_modify_clause(
+            &mut state,
+            &mut strong_control,
+            &mut strong_target,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!strong_trivial);
+        assert_eq!(strong_target.negative_literal_count(), 0);
+        assert_eq!(strong_target.positive_literal_count(), 1);
+        assert_eq!(
+            strong_target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(positive_id, 0)),
+            ]
+        );
+    }
+
+    #[test]
     fn proof_state_forward_subsumption_counts_processed_unit_subsumer() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (subsumer, mut clause) = {
@@ -5018,6 +5160,57 @@ mod tests {
 
         assert!(packed.is_none());
         assert_eq!(counts.subsumed, 1);
+    }
+
+    #[test]
+    fn proof_state_forward_subsumption_honors_strong_unit_forward_subsumption() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (subsumer, mut default_clause, mut strong_clause) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -10);
+            let constant = typed_const(terms, "pc_strong_subsumption_a");
+            let left_other = typed_const(terms, "pc_strong_subsumption_b");
+            let right_other = typed_const(terms, "pc_strong_subsumption_c");
+            let right_match = typed_const(terms, "pc_strong_subsumption_d");
+            let f_code = typed_binary_code(terms, "pc_strong_subsumption_f");
+            let left = typed_binary_with_code(terms, f_code, &left_other, &right_other);
+            let right = typed_binary_with_code(terms, f_code, &constant, &right_match);
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &variable,
+                &right_match,
+                true,
+            )]));
+            subsumer.set_ident(4_103);
+            let default_clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]));
+            let strong_clause = default_clause.clone();
+            (subsumer, default_clause, strong_clause)
+        };
+        state.processed_pos_eqns_mut().insert(subsumer);
+
+        let mut default_counts = ForwardContractCounts::default();
+        let packed = proof_state_forward_subsumption(
+            &state,
+            &mut default_clause,
+            &mut default_counts,
+            false,
+        );
+
+        assert!(packed.is_some());
+        assert_eq!(default_counts.subsumed, 0);
+
+        let mut strong_counts = ForwardContractCounts::default();
+        let packed = proof_state_forward_subsumption_with_strong(
+            &state,
+            &mut strong_clause,
+            &mut strong_counts,
+            false,
+            true,
+        );
+
+        assert!(packed.is_none());
+        assert_eq!(strong_counts.subsumed, 1);
     }
 
     #[test]
