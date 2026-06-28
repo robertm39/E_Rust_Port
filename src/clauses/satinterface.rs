@@ -150,6 +150,7 @@ impl SatClauseSet {
         let mut sources = self
             .exported
             .iter()
+            .rev()
             .map(|index| &self.clauses[*index].source);
         if let Some(parent) = sources.next() {
             clause_push_derivation(&mut empty, DC_SAT_GEN, Some(parent), None);
@@ -546,6 +547,9 @@ mod tests {
     use super::{sat_check_proof_state, solve_sat, SatClause, SatClauseSet, SolverStatus};
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
+    use crate::clauses::derivation::{
+        derivation_entries, ClauseDerivationRef, DerivationEntry, DC_CNF_ADD_ARG, DC_SAT_GEN,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::proofstate::proof_state_alloc;
@@ -624,6 +628,46 @@ mod tests {
             SolverStatus::GaveUp
         );
         assert_eq!(solve_sat(&[vec![], vec![1]], 1, 0), SolverStatus::Unsat);
+    }
+
+    #[test]
+    fn unsat_empty_clause_derivation_uses_c_core_stack_pop_order() {
+        let mut first = Clause::empty();
+        first.set_ident(101);
+        first.set_csscpa_source(1);
+        let mut second = Clause::empty();
+        second.set_ident(102);
+        second.set_csscpa_source(1);
+        let mut set = SatClauseSet {
+            max_lit: 1,
+            clauses: vec![
+                SatClause {
+                    literals: vec![1],
+                    source: first.clone(),
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![-1],
+                    source: second.clone(),
+                    has_pure_lit: false,
+                },
+            ],
+            ..SatClauseSet::default()
+        };
+
+        let (result, empty) = set.check_unsat(-1);
+        let empty = empty.unwrap();
+
+        assert_eq!(result, ProverResult::Unsatisfiable);
+        assert_eq!(
+            derivation_entries(&empty),
+            &[
+                DerivationEntry::Operation(DC_SAT_GEN),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&second)),
+                DerivationEntry::Operation(DC_CNF_ADD_ARG),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&first)),
+            ]
+        );
     }
 
     #[test]
