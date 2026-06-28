@@ -5560,17 +5560,27 @@ fn write_proof_success_list_output(
             parent_ident,
         )?;
     } else {
-        for (proof_clause, is_root) in proof_object_list_display_clauses(&graph) {
-            write_saturation_proof_object_clause(
-                output,
-                config,
-                state.terms(),
-                &proof_clause,
-                is_root,
-            )?;
-        }
+        write_proof_object_list_graph(output, config, state, &graph)?;
     }
     write_comment_line(output, "SZS output end CNFRefutation")?;
+    Ok(())
+}
+
+fn write_proof_object_list_graph(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &ProofState,
+    graph: &ProofObjectGraph<'_>,
+) -> Result<(), EProverError> {
+    for (proof_clause, is_root) in proof_object_list_display_clauses(graph) {
+        write_saturation_proof_object_clause(
+            output,
+            config,
+            state.terms(),
+            &proof_clause,
+            is_root,
+        )?;
+    }
     Ok(())
 }
 
@@ -5746,9 +5756,8 @@ fn write_stopped_proof_output(
     }
 
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output start {status}")?;
-    for clause in stopped_proof_object_roots(config, state) {
-        write_saturation_proof_object_clause(output, config, state.terms(), clause, true)?;
-    }
+    let graph = state.proof_object_graph_for_roots(stopped_proof_object_roots(config, state));
+    write_proof_object_list_graph(output, config, state, &graph)?;
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output end {status}")?;
     Ok(())
 }
@@ -8930,23 +8939,26 @@ mod tests {
         auto_memory_limit_from_system_mb, fv_index_params_from_config, heuristic_parms_from_config,
         order_parms_from_config, preprocessing_config_debug_line, process_options,
         proof_control_from_config, run, run_config, temporary_executable_term_bank,
-        write_saturation_proof_object_clause, AcHandling, DocOutputFormat, EProverAction,
-        EProverConfig, EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll,
-        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
-        PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
+        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
-    use crate::clauses::clause::Clause;
+    use crate::clauses::clause::{clause_parse, Clause};
     use crate::clauses::clause_props::CP_TYPE_AXIOM;
     use crate::clauses::clauseinfo::ClauseInfo;
+    use crate::clauses::derivation::{clause_push_derivation, DC_EQ_RES};
     use crate::clauses::freqvectors::FvIndexType;
+    use crate::clauses::proofstate::proof_state_alloc;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
-    use crate::inout::scanner::IoFormat;
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::inout::signals::{
         configure_time_limits, hard_time_limit, schedule_time_limit, set_time_is_up,
         soft_time_limit, time_is_up, RLIM_INFINITY_COMPAT,
@@ -8956,6 +8968,7 @@ mod tests {
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::RewriteLevel;
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
@@ -8986,6 +8999,14 @@ mod tests {
         let previous = std::env::var_os(name);
         std::env::set_var(name, value);
         EnvGuard { name, previous }
+    }
+
+    fn parse_lop_test_clause(bank: &mut TermBank, input: &str, ident: i64) -> Clause {
+        let mut scanner = Scanner::from_user_string(input, false).unwrap();
+        scanner.set_format(IoFormat::Lop);
+        let mut clause = clause_parse(&mut scanner, bank, ProblemType::FirstOrder).unwrap();
+        clause.set_ident(ident);
+        clause
     }
 
     fn default_preprocessing_debug_line() -> String {
@@ -15558,6 +15579,44 @@ mod tests {
         assert!(!printed.contains("CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn write_stopped_proof_object_list_expands_represented_ancestors() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut parent = parse_lop_test_clause(state.terms_mut(), "p(a).", 31);
+        parent.set_csscpa_source(1);
+        let mut root = parse_lop_test_clause(state.terms_mut(), "q(a).", 32);
+        root.set_csscpa_source(2);
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&parent), None);
+
+        state.axioms_mut().insert(parent);
+        state.processed_non_units_mut().insert(root);
+
+        let config = EProverConfig {
+            proof_output: 1,
+            doc_output_format: DocOutputFormat::Pcl,
+            ..EProverConfig::default()
+        };
+        let mut output = Vec::new();
+        write_stopped_proof_output(&mut output, &config, &state, "Saturation").unwrap();
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("% SZS output start Saturation\n"));
+        let parent_position = printed
+            .find("p(a)")
+            .unwrap_or_else(|| panic!("missing ancestor clause in:\n{printed}"));
+        let final_position = printed
+            .find("'final'")
+            .unwrap_or_else(|| panic!("missing final root marker in:\n{printed}"));
+        assert!(parent_position < final_position, "{printed}");
+        let root_line = printed
+            .lines()
+            .find(|line| line.contains("'final'"))
+            .unwrap_or_else(|| panic!("missing final root line in:\n{printed}"));
+        assert!(root_line.contains("(1)"), "{printed}");
+        assert_eq!(printed.matches("'final'").count(), 1);
+        assert!(printed.contains("% SZS output end Saturation\n"));
     }
 
     #[test]
