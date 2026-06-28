@@ -10,11 +10,12 @@ use crate::clauses::fcvindexing::{
 use crate::clauses::freqvectors::FvCollect;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::functypes::FunCode;
 use crate::terms::signature::{FunctionProperties, Signature};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
-use std::{fmt, path::Path};
+use std::{collections::BTreeMap, fmt, path::Path};
 
 pub const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
 pub const WATCHLIST_INLINE_QSTRING: &str = "'Use inline watchlist type'";
@@ -103,6 +104,7 @@ pub struct ProofState {
     watchlist: Option<ClauseSet>,
     watchlist_activation: WatchlistActivation,
     definition_store: ClauseSet,
+    definition_assocs: BTreeMap<i64, FunCode>,
     fvi_initialized: bool,
     fvi_cspec: Option<FvCollect>,
     def_store_cspec: Option<FvCollect>,
@@ -154,6 +156,7 @@ impl ProofState {
             watchlist: Some(ClauseSet::new()),
             watchlist_activation: WatchlistActivation::Inactive,
             definition_store: ClauseSet::new(),
+            definition_assocs: BTreeMap::new(),
             fvi_initialized: false,
             fvi_cspec: None,
             def_store_cspec: None,
@@ -372,6 +375,27 @@ impl ProofState {
 
     pub fn definition_store_mut(&mut self) -> &mut ClauseSet {
         &mut self.definition_store
+    }
+
+    #[must_use]
+    pub const fn definition_assocs(&self) -> &BTreeMap<i64, FunCode> {
+        &self.definition_assocs
+    }
+
+    pub fn definition_assocs_mut(&mut self) -> &mut BTreeMap<i64, FunCode> {
+        &mut self.definition_assocs
+    }
+
+    pub fn terms_and_definition_store_mut(
+        &mut self,
+    ) -> (&mut TermBank, &mut ClauseSet, &mut BTreeMap<i64, FunCode>) {
+        let Self {
+            terms,
+            definition_store,
+            definition_assocs,
+            ..
+        } = self;
+        (terms, definition_store, definition_assocs)
     }
 
     #[must_use]

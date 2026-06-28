@@ -38,7 +38,8 @@ use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
 use crate::clauses::rewrite::find_rewritable_clauses;
 use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
 use crate::clauses::splitting::{
-    clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
+    clause_split, clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
+    SplitDefinitionStore,
 };
 use crate::clauses::subsumption::{
     clause_negative_simplify_reflect, clause_positive_simplify_reflect,
@@ -1905,10 +1906,6 @@ pub fn proof_state_insert_new_clauses(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
-    if !state.tmp_store().is_empty() {
-        ensure_insert_new_clauses_supported(control)?;
-    }
-
     let generated_count = i64_to_u64_saturating(state.tmp_store().members());
     let generated_lit_count = i64_to_u64_saturating(state.tmp_store().literals());
     {
@@ -1987,12 +1984,17 @@ pub fn proof_state_insert_new_clauses(
             && controlled_split_class_matches(&clause, control.heuristic_parms().split_clauses)
         {
             let split_method = clause_split_method(control.heuristic_parms().split_method);
-            match clause_split_fresh(state.terms_mut(), clause, split_method)? {
+            match proof_state_split_clause(
+                state,
+                clause,
+                split_method,
+                control.heuristic_parms().split_fresh_defs,
+            )? {
                 ClauseSplitOutcome::Unsplit(unsplit) => {
                     clause = *unsplit;
                 }
-                ClauseSplitOutcome::Split(clauses) => {
-                    let count = usize_to_u64_saturating(clauses.len());
+                ClauseSplitOutcome::Split(clauses, split_count) => {
+                    let count = usize_to_u64_saturating(split_count);
                     for split_clause in clauses {
                         state.tmp_store_mut().insert(split_clause);
                     }
@@ -2013,8 +2015,8 @@ pub fn proof_state_insert_new_clauses(
 /// Applies C `replacing_inferences` to one already packed selected clause.
 ///
 /// The current port covers the first-order destructive equality-resolution
-/// branch and the fresh-definition controlled-splitting branch. If either
-/// branch replaces the selected clause, the produced clauses are routed through
+/// branch plus fresh and reused controlled-splitting branches. If either branch
+/// replaces the selected clause, the produced clauses are routed through
 /// [`proof_state_insert_new_clauses`] immediately, matching the C helper.
 ///
 /// # Errors
@@ -2054,19 +2056,17 @@ pub fn proof_state_replacing_inferences(
 
     let split_class = control.heuristic_parms().split_clauses;
     if controlled_split_class_matches(&clause, split_class) {
-        if !control.heuristic_parms().split_fresh_defs {
-            return Err(Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "replacing_inferences controlled splitting definition reuse is not ported yet",
-            ));
-        }
-
         let split_method = clause_split_method(control.heuristic_parms().split_method);
-        match clause_split_fresh(state.terms_mut(), clause, split_method)? {
+        match proof_state_split_clause(
+            state,
+            clause,
+            split_method,
+            control.heuristic_parms().split_fresh_defs,
+        )? {
             ClauseSplitOutcome::Unsplit(unsplit) => {
                 clause = *unsplit;
             }
-            ClauseSplitOutcome::Split(clauses) => {
+            ClauseSplitOutcome::Split(clauses, _) => {
                 for split_clause in clauses {
                     state.tmp_store_mut().insert(split_clause);
                 }
@@ -3491,20 +3491,6 @@ fn proof_state_delete_global_indexed_clause(
     }
 }
 
-fn ensure_insert_new_clauses_supported(control: &ProofControl) -> Result<(), Diagnostic> {
-    let params = control.heuristic_parms();
-    if params.split_aggressive
-        && params.split_clauses != SplitClassType::NONE
-        && !params.split_fresh_defs
-    {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "insert_new_clauses controlled splitting definition reuse is not ported yet",
-        ));
-    }
-    Ok(())
-}
-
 fn clause_split_method(method: SplitType) -> ClauseSplitMethod {
     match method {
         SplitType::GroundNone => ClauseSplitMethod::GroundNone,
@@ -3520,6 +3506,21 @@ fn controlled_split_class_matches(clause: &Clause, which: SplitClassType) -> boo
             || (clause.is_negative() && which.contains(SplitClassType::NEGATIVE))
             || (clause.is_positive() && which.contains(SplitClassType::POSITIVE))
             || (clause.is_mixed() && which.contains(SplitClassType::MIXED)))
+}
+
+fn proof_state_split_clause(
+    state: &mut ProofState,
+    clause: Clause,
+    method: ClauseSplitMethod,
+    fresh_defs: bool,
+) -> Result<ClauseSplitOutcome, Diagnostic> {
+    if fresh_defs {
+        return clause_split_fresh(state.terms_mut(), clause, method);
+    }
+
+    let (terms, definitions, predicates) = state.terms_and_definition_store_mut();
+    let mut store = SplitDefinitionStore::new(definitions, predicates);
+    clause_split(terms, Some(&mut store), clause, method, false)
 }
 
 /// Evaluates all clauses currently waiting in `eval_store`, matching C
@@ -5600,21 +5601,46 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_insert_new_clauses_rejects_unported_split_definition_reuse() {
+    fn proof_state_insert_new_clauses_reuses_split_definitions() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_unsupported", 4_083);
-        state.tmp_store_mut().insert(clause);
+        let (first_clause, second_clause) = {
+            let terms = state.terms_mut();
+            let first_const = typed_const(terms, "pc_insert_new_reuse_first");
+            let second_const = typed_const(terms, "pc_insert_new_reuse_second");
+            let mut first_clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &typed_var(terms, -44), &first_const, true),
+                literal(terms, &typed_var(terms, -46), &second_const, true),
+            ]));
+            first_clause.set_ident(4_083);
+            let mut second_clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &typed_var(terms, -48), &first_const, true),
+                literal(terms, &typed_var(terms, -50), &second_const, true),
+            ]));
+            second_clause.set_ident(4_084);
+            (first_clause, second_clause)
+        };
+        state.tmp_store_mut().insert(first_clause);
+        state.tmp_store_mut().insert(second_clause);
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewReuseSplitTest");
         control.heuristic_parms_mut().split_aggressive = true;
         control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
         control.heuristic_parms_mut().split_fresh_defs = false;
 
-        let error = proof_state_insert_new_clauses(&mut state, &mut control).unwrap_err();
+        let empty = proof_state_insert_new_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert_eq!(state.tmp_store().members(), 1);
-        assert_eq!(state.statistics().generated_count, 0);
-        assert_eq!(state.statistics().generated_lit_count, 0);
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.definition_store().members(), 2);
+        assert_eq!(state.definition_assocs().len(), 2);
+        assert_eq!(state.unprocessed().members(), 4);
+        assert_eq!(state.statistics().generated_count, 8);
+        assert_eq!(state.statistics().generated_lit_count, 4);
+        assert_eq!(state.statistics().non_trivial_generated_count, 4);
     }
 
     #[test]
@@ -5728,19 +5754,54 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_replacing_inferences_rejects_unported_split_definition_reuse() {
+    fn proof_state_replacing_inferences_reuses_split_definitions() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let clause = unit_clause_with_id(state.terms_mut(), "pc_replacing_unsupported", 4_087);
-        let packed = fv_index_pack_clause(clause, None);
+        let (first_clause, second_clause) = {
+            let terms = state.terms_mut();
+            let first_const = typed_const(terms, "pc_replacing_reuse_first");
+            let second_const = typed_const(terms, "pc_replacing_reuse_second");
+            let mut first_clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &typed_var(terms, -64), &first_const, true),
+                literal(terms, &typed_var(terms, -66), &second_const, true),
+            ]));
+            first_clause.set_ident(4_087);
+            let mut second_clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &typed_var(terms, -68), &first_const, true),
+                literal(terms, &typed_var(terms, -70), &second_const, true),
+            ]));
+            second_clause.set_ident(4_088);
+            (first_clause, second_clause)
+        };
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ReplacingReuseSplitTest");
         control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
         control.heuristic_parms_mut().split_fresh_defs = false;
 
-        let error = proof_state_replacing_inferences(&mut state, &mut control, packed).unwrap_err();
+        let first = proof_state_replacing_inferences(
+            &mut state,
+            &mut control,
+            fv_index_pack_clause(first_clause, None),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let second = proof_state_replacing_inferences(
+            &mut state,
+            &mut control,
+            fv_index_pack_clause(second_clause, None),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(first, ReplacingInferenceOutcome::Replaced { empty: None });
+        assert_eq!(second, ReplacingInferenceOutcome::Replaced { empty: None });
         assert!(state.tmp_store().is_empty());
-        assert_eq!(state.statistics().generated_count, 0);
+        assert!(state.eval_store().is_empty());
+        assert_eq!(state.definition_store().members(), 2);
+        assert_eq!(state.definition_assocs().len(), 2);
+        assert_eq!(state.unprocessed().members(), 4);
+        assert_eq!(state.statistics().generated_count, 4);
+        assert_eq!(state.statistics().generated_lit_count, 8);
+        assert_eq!(state.statistics().non_trivial_generated_count, 4);
     }
 
     #[test]
