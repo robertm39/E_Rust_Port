@@ -18,8 +18,7 @@ use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::clause::{
     clause_parse, clause_print_lop_format_string_with_options,
-    clause_print_tptp_format_string_with_options, clause_write_pcl_with_options,
-    clause_write_tstp_with_type_suffixes, Clause,
+    clause_print_tptp_format_string_with_options, clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
@@ -37,7 +36,7 @@ use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
-use crate::clauses::inferencedoc::pcl_type_str;
+use crate::clauses::inferencedoc::{pcl_print_end, pcl_print_start, PclStepPrintOptions};
 use crate::clauses::proofstate::{
     proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
     WatchlistSource as ProofStateWatchlistSource,
@@ -5474,8 +5473,10 @@ fn write_pcl_initial_clause_doc<W: Write + ?Sized>(
     .map_err(initial_doc_write_error)?;
     output.write_all(prefix.as_bytes())?;
     output.write_pcl_initial_marker()?;
-    output.write_all(source_info_pcl_string(clause.info()).as_bytes())?;
-    output.write_all(b"\n")?;
+    let mut suffix = source_info_pcl_string(clause.info());
+    pcl_print_end(&mut suffix, clause, None, pcl_step_print_options(config))
+        .map_err(initial_doc_write_error)?;
+    output.write_all(suffix.as_bytes())?;
     Ok(())
 }
 
@@ -5486,22 +5487,21 @@ fn write_pcl_doc_step_start(
     clause: &Clause,
     print_clause: bool,
 ) -> fmt::Result {
-    if config.pcl_output.compact {
-        write!(output, "{}:", clause.ident())?;
-    } else {
-        write!(output, "{:6} : ", clause.ident())?;
+    pcl_print_start(
+        output,
+        bank,
+        clause,
+        print_clause,
+        pcl_step_print_options(config),
+    )
+}
+
+const fn pcl_step_print_options(config: &EProverConfig) -> PclStepPrintOptions {
+    PclStepPrintOptions {
+        full_terms: config.pcl_output.full_terms,
+        compact: config.pcl_output.compact,
+        eqn_print_options: EqnPrintOptions::tptp().with_print_types(config.encoding.print_types),
     }
-    write!(output, "{}:", pcl_type_str(clause.query_tptp_type()))?;
-    if print_clause {
-        clause_write_pcl_with_options(
-            output,
-            bank,
-            clause,
-            config.pcl_output.full_terms,
-            EqnPrintOptions::tptp().with_print_types(config.encoding.print_types),
-        )?;
-    }
-    output.write_str(" : ")
 }
 
 fn write_tstp_initial_clause_doc<W: Write + ?Sized>(
@@ -5670,11 +5670,13 @@ fn write_pcl_clause_quote_doc_with_parent(
     )
     .map_err(proof_doc_write_error)?;
     write!(&mut rendered, "{old_id}").map_err(proof_doc_write_error)?;
-    if config.pcl_output.compact {
-        writeln!(&mut rendered, ":'{comment}'").map_err(proof_doc_write_error)?;
-    } else {
-        writeln!(&mut rendered, " : '{comment}'").map_err(proof_doc_write_error)?;
-    }
+    pcl_print_end(
+        &mut rendered,
+        &quoted,
+        Some(comment),
+        pcl_step_print_options(config),
+    )
+    .map_err(proof_doc_write_error)?;
     output.write_all(rendered.as_bytes())?;
     Ok(())
 }
@@ -16357,7 +16359,7 @@ mod tests {
         let input_doc =
             format!("     1 : :[++p(a)] : XX\ninitial(\"{input_arg}\", at_line_1_column_1)\n");
         let watch_doc = format!(
-            "     2 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1)\n",
+            "     2 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1): 'wl'\n",
             watch_path.to_string_lossy()
         );
         let final_doc = "     3 : :[++p(a)] : 1 : 'final_subsumes_wl'\n\n% Watchlist is empty!\n";
