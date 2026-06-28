@@ -5714,6 +5714,12 @@ fn write_proof_object_dot_clause(
         if let Some(derivation) = deriv_stack_tstp_string(clause.derivation()) {
             rendered.push_str(",\n");
             rendered.push_str(&derivation);
+        } else {
+            let source_info = source_info_tstp_string(clause.info());
+            if !source_info.is_empty() {
+                rendered.push_str(",\n");
+                rendered.push_str(&source_info);
+            }
         }
         rendered.push_str(").");
         rendered
@@ -15062,6 +15068,33 @@ mod tests {
         assert!(printed.contains("])).\"]\n"));
         assert!(!printed.contains("label=\"c2\""));
         assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_graph_level2_prints_source_info_for_initial_node() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-graph-source-info-dot");
+        std::fs::write(&path, "cnf(source_node, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--proof-graph=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("label=\"cnf("));
+        assert!(printed.contains(",\\nfile('"));
+        assert!(printed.contains("proof-graph-source-info-dot"));
+        assert!(printed.contains(", source_node)).\"]\n"));
+        assert!(!printed.contains("inference("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
