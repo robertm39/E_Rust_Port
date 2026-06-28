@@ -2,9 +2,11 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_answer_output_string, Clause};
-use crate::clauses::clause_props::{CP_IS_DEAD, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
+use crate::clauses::clause_props::{
+    CP_IS_DEAD, CP_IS_PROOF_CLAUSE, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
+};
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::derivation::{ClauseDerivationRef, DerivationParentRef};
+use crate::clauses::derivation::{clause_is_eval_gc, ClauseDerivationRef, DerivationParentRef};
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
@@ -118,6 +120,19 @@ pub struct ProofStateGenerationContext<'a> {
     pub processed_neg_units: &'a ClauseSet,
     pub processed_non_units: &'a ClauseSet,
     pub tmp_store: &'a mut ClauseSet,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProofStateGcAnalysis {
+    pub clause_count: u64,
+    pub given_count: u64,
+    pub used_given_count: u64,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct ProofStateTrainingExamples<'a> {
+    pub positive: Vec<&'a Clause>,
+    pub negative: Vec<&'a Clause>,
 }
 
 #[derive(Clone, Debug)]
@@ -525,6 +540,69 @@ impl ProofState {
 
     pub fn statistics_mut(&mut self) -> &mut ProofStateStatistics {
         &mut self.statistics
+    }
+
+    /// Counts EvalGC-selected clauses like C `ProofStateAnalyseGC`.
+    ///
+    /// C accumulates the result into `gc_count` and `gc_used_count` instead of
+    /// replacing existing values. Rust preserves that behavior while also
+    /// returning the one-shot analysis for callers that need a snapshot.
+    #[must_use]
+    pub fn analyse_gc(&mut self) -> ProofStateGcAnalysis {
+        let analysis = self.gc_analysis();
+        self.statistics.gc_count = self
+            .statistics
+            .gc_count
+            .saturating_add(analysis.given_count);
+        self.statistics.gc_used_count = self
+            .statistics
+            .gc_used_count
+            .saturating_add(analysis.used_given_count);
+        analysis
+    }
+
+    /// Selects positive and negative training examples like C
+    /// `ProofStatePickTrainingExamples`.
+    #[must_use]
+    pub fn pick_training_examples(&self) -> ProofStateTrainingExamples<'_> {
+        let mut examples = ProofStateTrainingExamples::default();
+        for set in self.gc_clause_sets() {
+            for clause in set.iter().filter(|clause| clause_is_eval_gc(clause)) {
+                if clause.query_prop(CP_IS_PROOF_CLAUSE) {
+                    examples.positive.push(clause);
+                } else {
+                    examples.negative.push(clause);
+                }
+            }
+        }
+        examples
+    }
+
+    fn gc_analysis(&self) -> ProofStateGcAnalysis {
+        let mut analysis = ProofStateGcAnalysis::default();
+        for set in self.gc_clause_sets() {
+            for clause in set.iter() {
+                analysis.clause_count += 1;
+                if clause_is_eval_gc(clause) {
+                    analysis.given_count += 1;
+                    if clause.query_prop(CP_IS_PROOF_CLAUSE) {
+                        analysis.used_given_count += 1;
+                    }
+                }
+            }
+        }
+        analysis
+    }
+
+    fn gc_clause_sets(&self) -> [&ClauseSet; 6] {
+        [
+            &self.ax_archive,
+            &self.processed_pos_rules,
+            &self.processed_pos_eqns,
+            &self.processed_neg_units,
+            &self.processed_non_units,
+            &self.archive,
+        ]
     }
 
     pub fn record_answer_clause(&mut self, clause: &Clause) {
@@ -1085,14 +1163,19 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 
 #[cfg(test)]
 mod tests {
-    use super::{proof_state_alloc, ProofState, ProofStateStatistics, WatchlistSource};
+    use super::{
+        proof_state_alloc, ProofState, ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
+    };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
-        CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_S_INDEXED, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
+        CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_PROOF_CLAUSE, CP_IS_S_INDEXED, CP_TYPE_WATCH_CLAUSE,
+        CP_WATCH_ONLY,
     };
-    use crate::clauses::derivation::{ClauseDerivationRef, DerivationParentRef};
+    use crate::clauses::derivation::{
+        clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_EVAL_GC,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
@@ -1151,6 +1234,15 @@ mod tests {
         let left = typed_const(bank, &format!("{stem}_left"));
         let right = typed_const(bank, &format!("{stem}_right"));
         clause_from(vec![literal(bank, &left, &right, true)], ident)
+    }
+
+    fn eval_gc_clause(state: &mut ProofState, stem: &str, ident: i64, proof: bool) -> Clause {
+        let mut clause = simple_clause(state, stem, ident);
+        clause_push_derivation(&mut clause, DC_CNF_EVAL_GC, None, None);
+        if proof {
+            clause.set_prop(CP_IS_PROOF_CLAUSE);
+        }
+        clause
     }
 
     fn nontrivial_clause(state: &mut ProofState, stem: &str, ident: i64) -> Clause {
@@ -1301,6 +1393,85 @@ mod tests {
         assert_eq!(state.unprocessed_cardinality(), 1);
         assert_eq!(state.cardinality(), 5);
         assert_eq!(state.axiom_count(), 1);
+    }
+
+    #[test]
+    fn proof_state_analyse_gc_counts_c_clause_domains_only() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let ax_archive = eval_gc_clause(&mut state, "gc_ax_archive", 40, true);
+        state.ax_archive_mut().insert(ax_archive);
+        let pos_rule = eval_gc_clause(&mut state, "gc_pos_rule", 41, false);
+        state.processed_pos_rules_mut().insert(pos_rule);
+        let plain_pos_eqn = simple_clause(&mut state, "gc_plain_pos_eqn", 42);
+        state.processed_pos_eqns_mut().insert(plain_pos_eqn);
+        let neg_unit = eval_gc_clause(&mut state, "gc_neg_unit", 43, true);
+        state.processed_neg_units_mut().insert(neg_unit);
+        let non_unit = eval_gc_clause(&mut state, "gc_non_unit", 44, false);
+        state.processed_non_units_mut().insert(non_unit);
+        let archive = eval_gc_clause(&mut state, "gc_archive", 45, true);
+        state.archive_mut().insert(archive);
+        let ignored_axiom = eval_gc_clause(&mut state, "gc_ignored_axiom", 46, true);
+        state.axioms_mut().insert(ignored_axiom);
+        let ignored_unprocessed = eval_gc_clause(&mut state, "gc_ignored_unprocessed", 47, true);
+        state.unprocessed_mut().insert(ignored_unprocessed);
+        let ignored_tmp = eval_gc_clause(&mut state, "gc_ignored_tmp", 48, true);
+        state.tmp_store_mut().insert(ignored_tmp);
+        let ignored_eval = eval_gc_clause(&mut state, "gc_ignored_eval", 49, true);
+        state.eval_store_mut().insert(ignored_eval);
+        let ignored_watch = eval_gc_clause(&mut state, "gc_ignored_watch", 50, true);
+        state.watchlist_mut().unwrap().insert(ignored_watch);
+
+        let expected = ProofStateGcAnalysis {
+            clause_count: 6,
+            given_count: 5,
+            used_given_count: 3,
+        };
+
+        assert_eq!(state.analyse_gc(), expected);
+        assert_eq!(state.statistics().gc_count, 5);
+        assert_eq!(state.statistics().gc_used_count, 3);
+
+        assert_eq!(state.analyse_gc(), expected);
+        assert_eq!(state.statistics().gc_count, 10);
+        assert_eq!(state.statistics().gc_used_count, 6);
+    }
+
+    #[test]
+    fn proof_state_pick_training_examples_uses_eval_gc_and_proof_clause_prop() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let ax_pos = eval_gc_clause(&mut state, "train_ax_pos", 60, true);
+        state.ax_archive_mut().insert(ax_pos);
+        let rule_neg = eval_gc_clause(&mut state, "train_rule_neg", 61, false);
+        state.processed_pos_rules_mut().insert(rule_neg);
+        let plain = simple_clause(&mut state, "train_plain", 62);
+        state.processed_pos_eqns_mut().insert(plain);
+        let neg_pos = eval_gc_clause(&mut state, "train_neg_pos", 63, true);
+        state.processed_neg_units_mut().insert(neg_pos);
+        let nonunit_neg = eval_gc_clause(&mut state, "train_nonunit_neg", 64, false);
+        state.processed_non_units_mut().insert(nonunit_neg);
+        let archive_pos = eval_gc_clause(&mut state, "train_archive_pos", 65, true);
+        state.archive_mut().insert(archive_pos);
+        let ignored = eval_gc_clause(&mut state, "train_ignored", 66, true);
+        state.unprocessed_mut().insert(ignored);
+
+        let examples = state.pick_training_examples();
+
+        assert_eq!(
+            examples
+                .positive
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![60, 63, 65]
+        );
+        assert_eq!(
+            examples
+                .negative
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![61, 64]
+        );
     }
 
     #[test]
