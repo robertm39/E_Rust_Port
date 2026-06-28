@@ -12,7 +12,6 @@ use crate::basics::os_wrapper::{
     set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
-use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
@@ -26,7 +25,6 @@ use crate::clauses::clause_props::{
     CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
     CP_TYPE_QUESTION,
 };
-use crate::clauses::clausefunc::pstack_clause_print_lop_string;
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
@@ -5029,7 +5027,7 @@ fn process_success_proof_object_gc<W: Write + ?Sized>(
 
     let _ = state.analyse_gc();
     if let Some(training_flags) = config.training_examples {
-        write_training_examples(output, state, training_flags)?;
+        write_training_examples(output, config, state, training_flags)?;
     }
     Ok(())
 }
@@ -5890,6 +5888,7 @@ fn write_answer_outputs(
 
 fn write_training_examples(
     output: &mut impl Write,
+    config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
     flags: i64,
 ) -> Result<(), EProverError> {
@@ -5902,12 +5901,12 @@ fn write_training_examples(
     )?;
     if flags & TRAINING_PRINT_POS != 0 {
         write_comment_line(output, "Training: Positive examples begin")?;
-        write_training_clause_examples(output, state, &examples.positive, "% trainpos")?;
+        write_training_clause_examples(output, config, state, &examples.positive, "% trainpos")?;
         write_comment_line(output, "Training: Positive examples end")?;
     }
     if flags & TRAINING_PRINT_NEG != 0 {
         write_comment_line(output, "Training: Negative examples begin")?;
-        write_training_clause_examples(output, state, &examples.negative, "%trainneg")?;
+        write_training_clause_examples(output, config, state, &examples.negative, "%trainneg")?;
         write_comment_line(output, "Training: Negative examples end")?;
     }
     Ok(())
@@ -5915,16 +5914,27 @@ fn write_training_examples(
 
 fn write_training_clause_examples(
     output: &mut impl Write,
+    config: &EProverConfig,
     state: &crate::clauses::proofstate::ProofState,
     clauses: &[&Clause],
     extra: &str,
 ) -> Result<(), EProverError> {
-    let mut stack = PStack::new();
+    let eqn_print_options = config
+        .equation_print
+        .into_eqn_print_options(config.output_format)
+        .with_print_types(config.encoding.print_types);
     for clause in clauses {
-        stack.push(*clause);
+        let rendered = clause_print_for_output_format(
+            state.terms(),
+            clause,
+            config.output_format,
+            eqn_print_options,
+            config.encoding.print_types,
+        )?;
+        output.write_all(rendered.as_bytes())?;
+        output.write_all(extra.as_bytes())?;
+        output.write_all(b"\n")?;
     }
-    output
-        .write_all(pstack_clause_print_lop_string(state.terms(), &stack, Some(extra)).as_bytes())?;
     Ok(())
 }
 
@@ -14802,6 +14812,39 @@ mod tests {
         assert!(printed.contains("% Training: Negative examples begin\n"));
         assert!(printed.contains("%trainneg\n"));
         assert!(printed.contains("% Training: Negative examples end\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_training_examples_prints_clauses_in_selected_output_format() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-training-examples-tstp");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--tstp-out",
+                "--training-examples=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("% Training examples: 0 positive, 1 negative\n"));
+        assert!(printed.contains("% Training: Negative examples begin\n"));
+        assert!(printed.contains("cnf("));
+        assert!(printed.contains(", ($false)).%trainneg\n"));
+        assert!(!printed.contains("\n <- a=a.%trainneg\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
