@@ -98,8 +98,9 @@ Source files reviewed: `CONTROL/cco_scheduling.h`, `CONTROL/cco_scheduling.c`.
 
 ### Change-Later Observations
 
-- `InitializePlaceholderSearchSchedule` mutates the generated search schedule in place: without forced preprocessing it writes a NULL terminator at the placeholder, and with forced preprocessing it overwrites the placeholder with the selected preprocessing strategy, rescales earlier fractions, then swaps the inserted entry into slot 1. Rust schedule parsing preserves the placeholder as a normal cell for now; a later executable scheduler should decide whether to clone before mutation or model the C global-array mutation explicitly.
-- `GetFilteredDefaultSchedule` also mutates the generated default schedule in place while filtering out strategies already run by an exhausted schedule. This relies on generated static arrays being writable process state. A Rust scheduler should prefer owned per-run schedule copies unless reference tests show cross-run mutation is observable.
+- `ScheduleTimesInit` casts `time_fraction * limit` directly to `rlim_t`, truncating fractional seconds for all but the final strategy; `ScheduleTimesInitMultiCore` instead uses `ceil` and may allocate preprocessing schedules more total CPU seconds than wall-clock seconds because it multiplies by per-strategy cores. Rust preserves both shapes in pure helpers over owned schedule copies.
+- `InitializePlaceholderSearchSchedule` mutates the generated search schedule in place: without forced preprocessing it writes a NULL terminator at the placeholder, and with forced preprocessing it overwrites the placeholder with the selected preprocessing strategy, rescales earlier fractions, then swaps the inserted entry into slot 1. Rust models this over owned vectors so callers can avoid mutating shared generated data; if C-style cross-run mutation becomes observable, scheduler ownership will need another audit.
+- `GetFilteredDefaultSchedule` also mutates the generated default schedule in place while filtering out strategies already run by an exhausted schedule. Its fraction-reset loop updates entries before `last_filtered` and leaves the final kept strategy's old fraction untouched. Rust preserves that quirk over a returned owned copy.
 
 ### Porting Focus
 
