@@ -11,6 +11,7 @@ use crate::heuristics::to_params::{TermOrdering, TERM_ORDERING_NAMES};
 use crate::inout::scanner::{Scanner, TokenType};
 
 const SCHEDULE_VARS: &str = include_str!("../../eprover/HEURISTICS/schedule.vars");
+pub const DEFAULT_MASK: &str = "aaaaa-aaaaaa-aaaaaaaaa";
 pub const DEFAULT_SCHED_TIME_LIMIT: u64 = 300;
 pub const SCHEDULE_DONE: i32 = -1;
 pub const RETRY_DEFAULT_SCHEDULE_THRESHOLD: f64 = 2.0;

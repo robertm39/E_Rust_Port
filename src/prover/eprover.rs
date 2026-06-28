@@ -43,14 +43,13 @@ use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
     spec_features_compute_clause_set_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
-    DEFAULT_CLASS_MASK,
 };
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
     get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
     heuristic_parms_strategy_print_string, initialize_placeholder_search_schedule,
-    schedule_times_init_multi_core, strategies_print_predefined_string, ScheduleCell,
+    schedule_times_init_multi_core, strategies_print_predefined_string, ScheduleCell, DEFAULT_MASK,
     DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
@@ -93,6 +92,47 @@ const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
 const DEFAULT_FORMULA_DEF_LIMIT: i64 = 24;
 const DEFAULT_HEURISTIC_NAME: &str = "Default";
+const SINE_AUTO_MASK: &str = "-aaaaaaa";
+const SINE_AUTO_CLASS_LEN: usize = SINE_AUTO_MASK.len();
+const SINE_AUTO_CLASSES: &[(&str, Option<&str>)] = &[
+    ("-LMSSMLL", None),
+    ("-MMSSMSL", None),
+    ("-LMLSMSL", Some("gf200_h_gu_R03_F100_L20000")),
+    ("-MMSSMSM", None),
+    ("-MSSMLSM", None),
+    ("-LMLSLLL", Some("gf120_h_gu_RUU_F100_L01000")),
+    ("-MMSMMSM", None),
+    ("-LMMSMLL", Some("gf120_gu_R02_F100_L20000")),
+    ("-LLLLMLL", Some("gf500_h_gu_R04_F100_L20000")),
+    ("-MSLMMSL", None),
+    ("-MSLSMSL", Some("gf500_h_gu_R04_F100_L20000")),
+    ("-SSSSLSM", None),
+    ("-SSSSLSL", None),
+    ("-SSSSMSL", None),
+    ("-SSSSMSM", None),
+    ("-SSSSMSS", None),
+    ("-SMSSMSM", Some("gf200_h_gu_R03_F100_L20000")),
+    ("-LSMSMSL", Some("gf200_h_gu_RUU_F100_L20000")),
+    ("-SSSSLSS", None),
+    ("-LLLSMSL", Some("gf600_h_gu_R05_F100_L20000")),
+    ("-MSSSMML", Some("gf120_h_gu_R02_F100_L20000")),
+    ("-MSSSMSS", Some("gf600_h_gu_R05_F100_L20000")),
+    ("-LMLMMLL", Some("gf120_h_gu_RUU_F100_L00500")),
+    ("-LMLMLLL", Some("gf120_h_gu_R02_F100_L20000")),
+    ("-LSLSMSL", Some("gf500_h_gu_R04_F100_L20000")),
+    ("-MMSSMLL", Some("gf120_h_gu_RUU_F100_L01000")),
+    ("-MSSSMSL", Some("gf600_h_gu_R05_F100_L20000")),
+    ("-MSSSMSM", None),
+    ("-LSSSMSM", None),
+    ("-MSMSMSL", None),
+    ("-LMLLMSL", None),
+    ("-MSSSLSM", None),
+    ("-SSSSMLL", None),
+    ("-LLLMLLL", Some("gf120_h_gu_RUU_F100_L01000")),
+    ("-LMMMMLL", Some("gf200_h_gu_R03_F100_L20000")),
+    ("-MSSSMLL", Some("gf120_h_gu_RUU_F100_L00500")),
+    ("-MMMSMLL", Some("gf120_h_gu_RUU_F100_L00500")),
+];
 const DEFAULT_LAMBDA_WEIGHT: i64 = 20;
 const DEFAULT_DB_WEIGHT: i64 = 10;
 const DEFAULT_LPO_RECURSION_LIMIT: i64 = 1_000;
@@ -4562,6 +4602,7 @@ fn run_proof_search<W: Write + ?Sized>(
     let auto_context =
         apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
+    write_sine_auto_report(output, &state, &heuristic_params)?;
     let relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
@@ -4756,7 +4797,7 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     features.num_of_definitions = auto_context.raw_features.num_of_definitions;
     features.perc_of_form_defs = auto_context.raw_features.perc_of_form_defs;
     spec_features_add_eval(&mut features, &auto_context.limits);
-    let class = spec_type_string(&features, DEFAULT_CLASS_MASK);
+    let class = spec_type_string(&features, DEFAULT_MASK);
     let mut search_schedule = get_search_schedule(&class)?.schedule;
     output.write_stdout_side_channel(
         format!("{DEFAULT_COMCHAR_RAW} Search class: {class}\n").as_bytes(),
@@ -5081,6 +5122,53 @@ fn preprocessing_params_debug_line(params: &HeuristicParmsCell) -> String {
         i32::from(params.unroll_only_formulas),
         params.sine.as_deref().unwrap_or("(null)")
     )
+}
+
+fn write_sine_auto_report<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    state: &crate::clauses::proofstate::ProofState,
+    params: &HeuristicParmsCell,
+) -> Result<(), EProverError> {
+    let Some("Auto") = params.sine.as_deref() else {
+        return Ok(());
+    };
+    if auto_sine_filter_name(state).is_none() {
+        write_comment_line(output, "No SInE strategy applied")?;
+    }
+    Ok(())
+}
+
+fn auto_sine_filter_name(state: &crate::clauses::proofstate::ProofState) -> Option<&'static str> {
+    let mut limits = SpecLimits::alloc();
+    limits.ax_some_limit = 1_199;
+    limits.ax_many_limit = 10_396;
+    limits.term_medium_limit = 664_277;
+    limits.term_large_limit = 5_573_560;
+    limits.symbols_medium_limit = 2_471;
+    limits.symbols_large_limit = 4_140;
+    limits.predc_medium_limit = 0;
+    limits.predc_large_limit = 2;
+    limits.pred_medium_limit = 1_225;
+    limits.pred_large_limit = 4_000;
+    limits.func_medium_limit = 8;
+    limits.func_large_limit = 110;
+    limits.fun_medium_limit = 360;
+    limits.fun_large_limit = 400;
+
+    let mut features = RawSpecFeatureCell::default();
+    raw_spec_features_compute(&mut features, state);
+    raw_spec_features_classify(&mut features, &limits, Some(SINE_AUTO_MASK));
+
+    if features.conjecture_count + features.hypothesis_count == 0 {
+        return None;
+    }
+    SINE_AUTO_CLASSES
+        .iter()
+        .find(|(class, _)| {
+            class.as_bytes().get(..SINE_AUTO_CLASS_LEN)
+                == features.class.as_bytes().get(..SINE_AUTO_CLASS_LEN)
+        })
+        .and_then(|(_, filter)| *filter)
 }
 
 fn apply_clause_relevance_pruning(
@@ -11046,7 +11134,8 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
         assert!(output.contains("% Configuration: G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
-        assert!(output.contains("% Search class: FUUNFGFFSF00SSFFFFFNN\n"));
+        assert!(output.contains("% No SInE strategy applied\n"));
+        assert!(output.contains("% Search class: FUUNF-FFSF00-SFFFFFNN\n"));
         assert!(output.contains("% Configuration: SAT001_MinMin_p005000_rr_RG\n"));
         assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
@@ -11136,7 +11225,8 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
         assert!(output.contains("% Scheduled 1 strats onto 1 cores with "));
-        assert!(output.contains("% Search class: FUUNFGFFSF00SSFFFFFNN\n"));
+        assert!(output.contains("% No SInE strategy applied\n"));
+        assert!(output.contains("% Search class: FUUNF-FFSF00-SFFFFFNN\n"));
         assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(!output.contains("strategy scheduling process execution is not ported yet"));
         assert!(stderr.is_empty());

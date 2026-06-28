@@ -110,6 +110,9 @@ Source files reviewed: `CONTROL/cco_sine.h`, `CONTROL/cco_sine.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `find_auto_sine` uses generated raw problem-class limits, the mask `-aaaaaaa`, and parallel `raw_class`/`raw_sine` arrays embedded directly in `cco_sine.c`; it returns no filter for problems with no conjectures or hypotheses even if the generated class table would otherwise match.
+- `ProofStateSinE(state, "Auto")` calls that lookup, prints `% No SInE strategy applied` through `GlobalOut` when the lookup returns `NULL`, otherwise prints the selected filter name and destructively prunes both formula and clause owners through the selected ax-filter.
+- Change-later candidate: the generated Auto SInE class table and hard-coded limits are source-embedded C data. Once compatibility and update tests cover this path, consider deriving the Rust data from generated schedule metadata or a checked build-time extractor instead of preserving another hand-copied table.
 
 ### Porting Focus
 
