@@ -1704,9 +1704,7 @@ impl ParentLivenessSnapshot {
 
     fn parent_is_dead(&self, parent: DerivationParentRef) -> bool {
         match parent {
-            DerivationParentRef::Clause(parent) => {
-                self.dead.contains(&parent) || !self.live.contains(&parent)
-            }
+            DerivationParentRef::Clause(parent) => !self.live.contains(&parent),
             DerivationParentRef::Demodulator(_) => false,
         }
     }
@@ -4121,10 +4119,10 @@ mod tests {
         proof_state_saturate, proof_state_saturate_with_global_indices,
         proof_state_simplify_watchlist, proof_state_storage_estimate, select_inherited_literal,
         BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
-        GenerateNewClausesOutcome, LiteralSelectionOutcome, ProcessClauseOutcome,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        GenerateNewClausesOutcome, LiteralSelectionOutcome, ParentLivenessSnapshot,
+        ProcessClauseOutcome, ProcessedClauseClass, ProofStateWatchlistOutcome,
+        ReplacingInferenceOutcome, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -5501,6 +5499,21 @@ mod tests {
         assert!(state.unprocessed().find_by_id(4_111).is_none());
         assert_eq!(state.statistics().other_redundant_count, 1);
         assert_eq!(state.statistics().filter_orphans_base, 2);
+    }
+
+    #[test]
+    fn compact_parent_liveness_keeps_live_duplicate_ref() {
+        let parent = ClauseDerivationRef::new(4_117, 0);
+        let mut snapshot = ParentLivenessSnapshot::default();
+        snapshot.live.insert(parent);
+        snapshot.dead.insert(parent);
+
+        assert!(!snapshot.parent_is_dead(DerivationParentRef::Clause(parent)));
+        assert!(
+            snapshot.parent_is_dead(DerivationParentRef::Clause(ClauseDerivationRef::new(
+                4_118, 0
+            )))
+        );
     }
 
     #[test]

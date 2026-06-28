@@ -37,7 +37,7 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::proofstate::{
-    proof_state_alloc, ProofState, WatchlistSource as ProofStateWatchlistSource,
+    proof_state_alloc, ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::heuristics::clausesetfeatures::{
@@ -81,6 +81,7 @@ use crate::terms::signature::{
 use crate::terms::simpletypes::{type_app_encoded_name, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::{term_identity_id, RewriteDemodulator, RewriteLevel, Term};
 use crate::terms::typebanks::TypeBank;
 
@@ -92,6 +93,8 @@ const DEFAULT_EQDEF_INCRLIMIT: i64 = 20;
 const DEFAULT_EQDEF_MAXCLAUSES: i64 = 20_000;
 const DEFAULT_FORMULA_DEF_LIMIT: i64 = 24;
 const DEFAULT_HEURISTIC_NAME: &str = "Default";
+const FOF_LOGICAL_SYMBOL_WEIGHT: i64 = 2;
+const FOF_QUANTIFIER_BINDER_WEIGHT: i64 = 8;
 const SINE_AUTO_MASK: &str = "-aaaaaaa";
 const SINE_AUTO_CLASS_LEN: usize = SINE_AUTO_MASK.len();
 const SINE_AUTO_CLASSES: &[(&str, Option<&str>)] = &[
@@ -5089,6 +5092,7 @@ fn parse_input_files_into_axioms(
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
         let parsed_count = parsed.len();
         parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
+        state.add_raw_formula_features(parsed_file.raw_formula_features);
         state.axioms_mut().insert_set(&mut parsed);
         if config.flags.contains(EProverFlag::RequireNonempty) && parsed_count == 0 {
             return Err(Diagnostic::new(
@@ -6125,14 +6129,19 @@ fn parse_clause_file(
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
     let mut formula_conjecture_seen = false;
+    let mut raw_formula_features = RawFormulaFeatures::default();
     match detected_format {
         IoFormat::Tstp => {
-            formula_conjecture_seen =
+            let parsed =
                 parse_tstp_entry_list(&mut scanner, bank, clauses, None, formula_preprocessing)?;
+            formula_conjecture_seen = parsed.formula_conjecture_seen;
+            raw_formula_features.add(parsed.raw_formula_features);
         }
         IoFormat::Tptp => {
-            formula_conjecture_seen =
+            let parsed =
                 parse_tptp_entry_list(&mut scanner, bank, clauses, None, formula_preprocessing)?;
+            formula_conjecture_seen = parsed.formula_conjecture_seen;
+            raw_formula_features.add(parsed.raw_formula_features);
         }
         _ => {
             clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
@@ -6151,6 +6160,7 @@ fn parse_clause_file(
     Ok(ParsedClauseFile {
         detected_format,
         formula_conjecture_seen,
+        raw_formula_features,
     })
 }
 
@@ -6205,10 +6215,24 @@ fn parse_app_encode_file(
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ParsedClauseFile {
     detected_format: IoFormat,
     formula_conjecture_seen: bool,
+    raw_formula_features: RawFormulaFeatures,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ParsedEntryList {
+    formula_conjecture_seen: bool,
+    raw_formula_features: RawFormulaFeatures,
+}
+
+impl ParsedEntryList {
+    fn add(&mut self, other: Self) {
+        self.formula_conjecture_seen |= other.formula_conjecture_seen;
+        self.raw_formula_features.add(other.raw_formula_features);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -6352,8 +6376,8 @@ fn parse_tptp_entry_list(
     clauses: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
-) -> Result<bool, Diagnostic> {
-    let mut formula_conjecture_seen = false;
+) -> Result<ParsedEntryList, Diagnostic> {
+    let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
@@ -6366,7 +6390,8 @@ fn parse_tptp_entry_list(
         } else if scanner.test_id("input_formula") {
             let parsed = parse_simple_tptp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
-                formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                result.raw_formula_features.add(parsed.raw_formula_features);
                 for clause in parsed.clauses {
                     clauses.insert(clause);
                 }
@@ -6377,13 +6402,13 @@ fn parse_tptp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
-                formula_conjecture_seen |= parse_tptp_entry_list(
+                result.add(parse_tptp_entry_list(
                     &mut included,
                     bank,
                     clauses,
                     Some(&mut include_selectors),
                     formula_preprocessing,
-                )?;
+                )?);
             }
         } else {
             return Err(Diagnostic::new(
@@ -6399,7 +6424,7 @@ fn parse_tptp_entry_list(
     if let Some(selector_tree) = selectors.as_ref() {
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
-    Ok(formula_conjecture_seen)
+    Ok(result)
 }
 
 fn parse_tstp_entry_list(
@@ -6408,8 +6433,8 @@ fn parse_tstp_entry_list(
     clauses: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
-) -> Result<bool, Diagnostic> {
-    let mut formula_conjecture_seen = false;
+) -> Result<ParsedEntryList, Diagnostic> {
+    let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
@@ -6422,7 +6447,8 @@ fn parse_tstp_entry_list(
         } else if scanner.test_id("fof|tff|tcf") {
             let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
-                formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                result.raw_formula_features.add(parsed.raw_formula_features);
                 for clause in parsed.clauses {
                     clauses.insert(clause);
                 }
@@ -6433,13 +6459,13 @@ fn parse_tstp_entry_list(
             if let Some(mut included) =
                 scanner.parse_include(&mut include_selectors, &skip_includes)?
             {
-                formula_conjecture_seen |= parse_tstp_entry_list(
+                result.add(parse_tstp_entry_list(
                     &mut included,
                     bank,
                     clauses,
                     Some(&mut include_selectors),
                     formula_preprocessing,
-                )?;
+                )?);
             }
         } else if scanner.test_id("thf") {
             return Err(thf_requires_hol_error(scanner));
@@ -6457,7 +6483,7 @@ fn parse_tstp_entry_list(
     if let Some(selector_tree) = selectors.as_ref() {
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
-    Ok(formula_conjecture_seen)
+    Ok(result)
 }
 
 fn thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
@@ -6529,6 +6555,7 @@ struct ParsedSimpleFofClause {
     name: String,
     clauses: Vec<Clause>,
     formula_conjecture_seen: bool,
+    raw_formula_features: RawFormulaFeatures,
 }
 
 struct SimpleFofBoundVariable {
@@ -6671,6 +6698,7 @@ fn parse_simple_tstp_formula_clause(
             name,
             clauses: Vec::new(),
             formula_conjecture_seen: false,
+            raw_formula_features: RawFormulaFeatures::default(),
         });
     }
 
@@ -6685,6 +6713,7 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::COMMA)?;
 
     let mut clause_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let raw_formula_type = clause_type;
     let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
     if annotate_question {
         clause_type = CP_TYPE_CONJECTURE;
@@ -6698,6 +6727,7 @@ fn parse_simple_tstp_formula_clause(
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
+    let raw_formula_features = simple_fof_raw_formula_features(&formulas, raw_formula_type, bank);
     if annotate_question {
         formulas = simple_fof_annotate_question_formulas(
             formulas,
@@ -6727,10 +6757,13 @@ fn parse_simple_tstp_formula_clause(
         )));
         clauses.push(clause);
     }
+    let raw_formula_features =
+        simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
     Ok(ParsedSimpleFofClause {
         name,
         clauses,
         formula_conjecture_seen,
+        raw_formula_features,
     })
 }
 
@@ -6755,6 +6788,7 @@ fn parse_simple_tptp_formula_clause(
     scanner.accept_tok(TokenType::COMMA)?;
 
     let mut clause_type = old_tptp_input_formula_clause_type(&role);
+    let raw_formula_type = clause_type;
     let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
     if annotate_question {
         clause_type = CP_TYPE_CONJECTURE;
@@ -6764,6 +6798,7 @@ fn parse_simple_tptp_formula_clause(
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
     let mut formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
+    let raw_formula_features = simple_fof_raw_formula_features(&formulas, raw_formula_type, bank);
     if annotate_question {
         formulas = simple_fof_annotate_question_formulas(
             formulas,
@@ -6792,11 +6827,154 @@ fn parse_simple_tptp_formula_clause(
         )));
         clauses.push(clause);
     }
+    let raw_formula_features =
+        simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
     Ok(ParsedSimpleFofClause {
         name,
         clauses,
         formula_conjecture_seen,
+        raw_formula_features,
     })
+}
+
+fn simple_fof_raw_formula_features(
+    formulas: &[SimpleFofFormula],
+    formula_type: FormulaProperties,
+    bank: &TermBank,
+) -> RawFormulaFeatures {
+    let order = simple_fof_formulas_order(formulas);
+    let (conjecture_count, hypothesis_count, conj_order) = if formula_type.is_conjecture() {
+        (1, 0, order)
+    } else if formula_type.is_hypothesis() {
+        (0, 1, order)
+    } else {
+        (0, 0, 0)
+    };
+
+    RawFormulaFeatures {
+        sentence_no: 1,
+        term_size: simple_fof_formulas_standard_weight(formulas, bank),
+        conjecture_count,
+        hypothesis_count,
+        order,
+        conj_order,
+        ..RawFormulaFeatures::default()
+    }
+}
+
+fn simple_fof_raw_formula_features_with_lowered_clauses(
+    mut features: RawFormulaFeatures,
+    clauses: &[Clause],
+) -> RawFormulaFeatures {
+    features.lowered_clause_no = usize_to_i64(clauses.len());
+    features.lowered_clause_term_size = clauses.iter().map(Clause::standard_weight).sum();
+    for clause in clauses {
+        if clause.is_conjecture() {
+            features.lowered_conjecture_count += 1;
+        }
+        if clause.is_hypothesis() {
+            features.lowered_hypothesis_count += 1;
+        }
+    }
+    features
+}
+
+fn simple_fof_formulas_standard_weight(formulas: &[SimpleFofFormula], bank: &TermBank) -> i64 {
+    match formulas {
+        [] => FOF_LOGICAL_SYMBOL_WEIGHT,
+        [formula] => simple_fof_formula_standard_weight(formula, bank),
+        many => {
+            (usize_to_i64(many.len()).saturating_sub(1) * FOF_LOGICAL_SYMBOL_WEIGHT)
+                + many
+                    .iter()
+                    .map(|formula| simple_fof_formula_standard_weight(formula, bank))
+                    .sum::<i64>()
+        }
+    }
+}
+
+fn simple_fof_formula_standard_weight(formula: &SimpleFofFormula, bank: &TermBank) -> i64 {
+    match formula {
+        SimpleFofFormula::Truth(_) => FOF_LOGICAL_SYMBOL_WEIGHT,
+        SimpleFofFormula::Literal(literal) => {
+            let atom_weight = if literal.is_equ_lit(bank) {
+                FOF_LOGICAL_SYMBOL_WEIGHT
+                    + term_standard_weight(literal.left())
+                    + term_standard_weight(literal.right())
+            } else {
+                term_standard_weight(literal.left())
+            };
+            if literal.is_positive() {
+                atom_weight
+            } else {
+                atom_weight + FOF_LOGICAL_SYMBOL_WEIGHT
+            }
+        }
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => {
+            FOF_LOGICAL_SYMBOL_WEIGHT
+                + simple_fof_formulas_standard_weight(antecedents, bank)
+                + simple_fof_formulas_standard_weight(consequents, bank)
+        }
+        SimpleFofFormula::Equivalence { left, right }
+        | SimpleFofFormula::Xor { left, right }
+        | SimpleFofFormula::Nand { left, right }
+        | SimpleFofFormula::Nor { left, right } => {
+            FOF_LOGICAL_SYMBOL_WEIGHT
+                + simple_fof_formulas_standard_weight(left, bank)
+                + simple_fof_formulas_standard_weight(right, bank)
+        }
+        SimpleFofFormula::Conjunction(formulas) | SimpleFofFormula::Disjunction(formulas) => {
+            simple_fof_formulas_standard_weight(formulas, bank)
+        }
+        SimpleFofFormula::Negation(formulas) => {
+            FOF_LOGICAL_SYMBOL_WEIGHT + simple_fof_formulas_standard_weight(formulas, bank)
+        }
+        SimpleFofFormula::Universal { bound, formulas }
+        | SimpleFofFormula::Existential { bound, formulas } => {
+            simple_fof_formulas_standard_weight(formulas, bank)
+                + FOF_QUANTIFIER_BINDER_WEIGHT * usize_to_i64(bound.len())
+        }
+    }
+}
+
+fn simple_fof_formulas_order(formulas: &[SimpleFofFormula]) -> i32 {
+    formulas
+        .iter()
+        .map(simple_fof_formula_order)
+        .max()
+        .unwrap_or(1)
+}
+
+fn simple_fof_formula_order(formula: &SimpleFofFormula) -> i32 {
+    match formula {
+        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => 1,
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => simple_fof_formulas_order(antecedents).max(simple_fof_formulas_order(consequents)),
+        SimpleFofFormula::Equivalence { left, right }
+        | SimpleFofFormula::Xor { left, right }
+        | SimpleFofFormula::Nand { left, right }
+        | SimpleFofFormula::Nor { left, right } => {
+            simple_fof_formulas_order(left).max(simple_fof_formulas_order(right))
+        }
+        SimpleFofFormula::Conjunction(formulas)
+        | SimpleFofFormula::Disjunction(formulas)
+        | SimpleFofFormula::Negation(formulas)
+        | SimpleFofFormula::Universal { formulas, .. }
+        | SimpleFofFormula::Existential { formulas, .. } => simple_fof_formulas_order(formulas),
+    }
 }
 
 fn old_tptp_input_formula_clause_type(role: &str) -> FormulaProperties {

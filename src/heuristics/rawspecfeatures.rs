@@ -34,10 +34,19 @@ pub struct RawSpecFeatureCell {
 pub fn raw_spec_features_compute(features: &mut RawSpecFeatureCell, state: &ProofState) {
     let signature = state.terms().signature();
     let axioms = state.axioms();
-    features.sentence_no = axioms.members();
-    features.term_size = axioms.standard_weight();
+    let raw_formula_features = state.raw_formula_features();
+    features.sentence_no = axioms.members() - raw_formula_features.lowered_clause_no
+        + raw_formula_features.sentence_no;
+    features.term_size = axioms.standard_weight() - raw_formula_features.lowered_clause_term_size
+        + raw_formula_features.term_size;
     features.hypothesis_count = 0;
     features.conjecture_count = axioms.count_conjectures(&mut features.hypothesis_count);
+    features.conjecture_count = features.conjecture_count
+        - raw_formula_features.lowered_conjecture_count
+        + raw_formula_features.conjecture_count;
+    features.hypothesis_count = features.hypothesis_count
+        - raw_formula_features.lowered_hypothesis_count
+        + raw_formula_features.hypothesis_count;
 
     features.sig_size = signature.count_symbols(true) + signature.count_symbols(false);
     features.predc_size = signature.count_arity_symbols(0, true);
@@ -46,12 +55,12 @@ pub fn raw_spec_features_compute(features: &mut RawSpecFeatureCell, state: &Proo
     features.fun_size = signature.count_symbols(false) - features.func_size;
     features.has_choice_sym = signature.has_choice_sym();
 
-    features.order = 1;
-    features.conj_order = 1;
+    features.order = 1.max(raw_formula_features.order);
+    features.conj_order = 1.max(raw_formula_features.conj_order);
     features.num_of_definitions = 0;
     features.perc_of_form_defs = 0.0;
-    features.num_lambdas = 0;
-    features.app_var_lits = false;
+    features.num_lambdas = raw_formula_features.num_lambdas;
+    features.app_var_lits = raw_formula_features.app_var_lits;
     features.class.clear();
 }
 

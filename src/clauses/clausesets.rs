@@ -68,22 +68,22 @@ impl PartialOrd for EvalIndexEntry {
 
 impl Ord for EvalIndexEntry {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.priority.cmp(&other.priority) {
-            Ordering::Equal => {}
-            ordering => return ordering,
-        }
-
-        match self.eval_count.cmp(&other.eval_count) {
-            Ordering::Equal => Ordering::Equal,
-            ordering => {
-                let heuristic_order = cmp_f32_c(self.heuristic, other.heuristic);
-                if heuristic_order == Ordering::Equal {
-                    ordering
-                } else {
-                    heuristic_order
+        let eval_order = match self.priority.cmp(&other.priority) {
+            Ordering::Equal => match self.eval_count.cmp(&other.eval_count) {
+                Ordering::Equal => Ordering::Equal,
+                ordering => {
+                    let heuristic_order = cmp_f32_c(self.heuristic, other.heuristic);
+                    if heuristic_order == Ordering::Equal {
+                        ordering
+                    } else {
+                        heuristic_order
+                    }
                 }
-            }
-        }
+            },
+            ordering => return ordering,
+        };
+
+        eval_order.then_with(|| self.object.cmp(&other.object))
     }
 }
 
@@ -2020,6 +2020,32 @@ mod tests {
         assert_eq!(set.eval_no(), 2);
         assert_eq!(set.find_best(0).map(Clause::ident), None);
         assert!(set.iter().all(|clause| clause.evaluations().is_none()));
+    }
+
+    #[test]
+    fn eval_indices_keep_cloned_evaluation_cells_distinct() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "a");
+        let b = typed_const(&mut bank, "b");
+        let c = typed_const(&mut bank, "c");
+        let first = clause_with_evaluations(
+            clause_from(vec![literal(&mut bank, &a, &b, true)]),
+            &[(40, 1.0)],
+        );
+        let mut second = clause_from(vec![literal(&mut bank, &b, &c, true)]);
+        second.add_eval_cell(first.evaluations().unwrap().clone());
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let mut set = ClauseSet::from_clauses([first, second]);
+
+        assert_eq!(set.eval_order_objects(0).len(), 2);
+        assert_eq!(set.find_best(0).map(Clause::ident), Some(first_id));
+        assert_eq!(
+            set.extract_best(0).map(|clause| clause.ident()),
+            Some(first_id)
+        );
+        assert_eq!(set.find_best(0).map(Clause::ident), Some(second_id));
+        assert_eq!(set.members(), 1);
     }
 
     #[test]

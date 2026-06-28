@@ -70,6 +70,39 @@ pub struct ProofStateStatistics {
     pub gc_used_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RawFormulaFeatures {
+    pub sentence_no: i64,
+    pub term_size: i64,
+    pub lowered_clause_no: i64,
+    pub lowered_clause_term_size: i64,
+    pub conjecture_count: i64,
+    pub hypothesis_count: i64,
+    pub lowered_conjecture_count: i64,
+    pub lowered_hypothesis_count: i64,
+    pub order: i32,
+    pub conj_order: i32,
+    pub num_lambdas: i32,
+    pub app_var_lits: bool,
+}
+
+impl RawFormulaFeatures {
+    pub fn add(&mut self, other: Self) {
+        self.sentence_no += other.sentence_no;
+        self.term_size += other.term_size;
+        self.lowered_clause_no += other.lowered_clause_no;
+        self.lowered_clause_term_size += other.lowered_clause_term_size;
+        self.conjecture_count += other.conjecture_count;
+        self.hypothesis_count += other.hypothesis_count;
+        self.lowered_conjecture_count += other.lowered_conjecture_count;
+        self.lowered_hypothesis_count += other.lowered_hypothesis_count;
+        self.order = self.order.max(other.order);
+        self.conj_order = self.conj_order.max(other.conj_order);
+        self.num_lambdas += other.num_lambdas;
+        self.app_var_lits |= other.app_var_lits;
+    }
+}
+
 #[derive(Debug)]
 pub struct ProofStateProcessedSets<'a> {
     pub pos_rules: &'a mut ClauseSet,
@@ -111,6 +144,7 @@ pub struct ProofState {
     def_store_cspec: Option<FvCollect>,
     state_is_complete: bool,
     has_interpreted_symbols: bool,
+    raw_formula_features: RawFormulaFeatures,
     statistics: ProofStateStatistics,
     answer_outputs: Vec<String>,
 }
@@ -163,6 +197,7 @@ impl ProofState {
             def_store_cspec: None,
             state_is_complete: true,
             has_interpreted_symbols: false,
+            raw_formula_features: RawFormulaFeatures::default(),
             statistics: ProofStateStatistics::default(),
             answer_outputs: Vec::new(),
         })
@@ -475,6 +510,15 @@ impl ProofState {
     }
 
     #[must_use]
+    pub const fn raw_formula_features(&self) -> &RawFormulaFeatures {
+        &self.raw_formula_features
+    }
+
+    pub fn add_raw_formula_features(&mut self, features: RawFormulaFeatures) {
+        self.raw_formula_features.add(features);
+    }
+
+    #[must_use]
     pub const fn statistics(&self) -> &ProofStateStatistics {
         &self.statistics
     }
@@ -556,6 +600,7 @@ impl ProofState {
         self.tmp_store.clear();
         self.eval_store.clear();
         self.archive.clear();
+        self.raw_formula_features = RawFormulaFeatures::default();
         if let Some(watchlist) = self.watchlist.as_mut() {
             watchlist.clear();
         }
