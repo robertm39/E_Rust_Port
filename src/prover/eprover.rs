@@ -8,7 +8,8 @@ use std::path::Path;
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
-    current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
+    current_resource_usage, format_resource_usage, get_core_number, get_system_phys_memory,
+    set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -48,7 +49,9 @@ use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCel
 use crate::heuristics::litselection::NO_GENERATION;
 use crate::heuristics::new_autoschedule::{
     get_heuristic_with_name, get_preprocessing_schedule, get_search_schedule,
-    heuristic_parms_strategy_print_string, strategies_print_predefined_string,
+    heuristic_parms_strategy_print_string, initialize_placeholder_search_schedule,
+    schedule_times_init_multi_core, strategies_print_predefined_string, ScheduleCell,
+    DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_filter_unprocessed, proof_state_init,
@@ -4682,6 +4685,8 @@ fn run_main_saturation(
 struct AutoModeContext {
     limits: SpecLimits,
     raw_features: RawSpecFeatureCell,
+    preprocessing_schedule: Vec<ScheduleCell>,
+    selected_preprocessing_index: usize,
 }
 
 fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
@@ -4690,14 +4695,7 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     state: &crate::clauses::proofstate::ProofState,
     params: &mut HeuristicParmsCell,
 ) -> Result<Option<AutoModeContext>, EProverError> {
-    if config.strategy_scheduling {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "strategy scheduling process execution is not ported yet",
-        )
-        .into());
-    }
-    if !config.flags.contains(EProverFlag::Auto) {
+    if !(config.flags.contains(EProverFlag::Auto) || config.strategy_scheduling) {
         return Ok(None);
     }
 
@@ -4705,11 +4703,7 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     let mut raw_features = RawSpecFeatureCell::default();
     raw_spec_features_compute(&mut raw_features, state);
     raw_spec_features_classify(&mut raw_features, &limits, Some(RAW_DEFAULT_MASK));
-    let preproc_schedule = get_preprocessing_schedule(&raw_features.class)?;
-    let preproc_name = first_schedule_heuristic_name(&preproc_schedule.schedule)?;
-    get_heuristic_with_name(preproc_name, params)?;
-    overlay_explicit_heuristic_options(config, params)?;
-
+    let mut preprocessing_schedule = get_preprocessing_schedule(&raw_features.class)?.schedule;
     output.write_stdout_side_channel(
         format!(
             "{DEFAULT_COMCHAR_RAW} Preprocessing class: {}.\n",
@@ -4717,13 +4711,27 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
         )
         .as_bytes(),
     )?;
-    output.write_stdout_side_channel(
-        format!("{DEFAULT_COMCHAR_RAW} Configuration: {preproc_name}\n").as_bytes(),
-    )?;
+    let selected_preprocessing_index = if config.strategy_scheduling {
+        select_scheduled_preprocessing_cell(output, config, &mut preprocessing_schedule)?
+    } else {
+        0
+    };
+    let preproc_name =
+        schedule_heuristic_name(&preprocessing_schedule, selected_preprocessing_index)?;
+    get_heuristic_with_name(preproc_name, params)?;
+    overlay_explicit_heuristic_options(config, params)?;
+
+    if !config.strategy_scheduling {
+        output.write_stdout_side_channel(
+            format!("{DEFAULT_COMCHAR_RAW} Configuration: {preproc_name}\n").as_bytes(),
+        )?;
+    }
 
     Ok(Some(AutoModeContext {
         limits,
         raw_features,
+        preprocessing_schedule,
+        selected_preprocessing_index,
     }))
 }
 
@@ -4750,19 +4758,25 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     features.perc_of_form_defs = auto_context.raw_features.perc_of_form_defs;
     spec_features_add_eval(&mut features, &auto_context.limits);
     let class = spec_type_string(&features, DEFAULT_CLASS_MASK);
-    let search_schedule = get_search_schedule(&class)?;
-    let search_name = first_schedule_heuristic_name(&search_schedule.schedule)?;
-
-    get_heuristic_with_name(search_name, params)?;
-    params.inst_choice_max_depth = choice_max_depth;
-    overlay_explicit_heuristic_options(config, params)?;
-
+    let mut search_schedule = get_search_schedule(&class)?.schedule;
     output.write_stdout_side_channel(
         format!("{DEFAULT_COMCHAR_RAW} Search class: {class}\n").as_bytes(),
     )?;
-    output.write_stdout_side_channel(
-        format!("{DEFAULT_COMCHAR_RAW} Configuration: {search_name}\n").as_bytes(),
-    )?;
+    let search_name = if config.strategy_scheduling {
+        select_scheduled_search_cell(output, config, auto_context, &mut search_schedule)?
+    } else {
+        first_schedule_heuristic_name(&search_schedule)?.to_owned()
+    };
+
+    get_heuristic_with_name(&search_name, params)?;
+    params.inst_choice_max_depth = choice_max_depth;
+    overlay_explicit_heuristic_options(config, params)?;
+
+    if !config.strategy_scheduling {
+        output.write_stdout_side_channel(
+            format!("{DEFAULT_COMCHAR_RAW} Configuration: {search_name}\n").as_bytes(),
+        )?;
+    }
     Ok(())
 }
 
@@ -4773,6 +4787,130 @@ fn first_schedule_heuristic_name(
         .first()
         .map(|cell| cell.heuristic_name.as_str())
         .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty"))
+}
+
+fn schedule_heuristic_name(schedule: &[ScheduleCell], index: usize) -> Result<&str, Diagnostic> {
+    schedule
+        .get(index)
+        .map(|cell| cell.heuristic_name.as_str())
+        .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty"))
+}
+
+fn select_scheduled_preprocessing_cell<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    schedule: &mut Vec<ScheduleCell>,
+) -> Result<usize, EProverError> {
+    let mut cores = configured_schedule_cores(config);
+    let serialize = config.serialize_schedule || cores == 1;
+    let report = schedule_times_init_multi_core(
+        schedule,
+        schedule_time_used_seconds(),
+        configured_schedule_time_limit(config),
+        true,
+        &mut cores,
+        serialize,
+    );
+    write_schedule_report(
+        output,
+        report.scheduled,
+        report.cores,
+        report.limit,
+        report.total_time,
+    )?;
+    if schedule.is_empty() {
+        return Err(Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty").into());
+    }
+    Ok(0)
+}
+
+fn select_scheduled_search_cell<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    auto_context: &AutoModeContext,
+    search_schedule: &mut Vec<ScheduleCell>,
+) -> Result<String, EProverError> {
+    let preprocessing_tail =
+        &auto_context.preprocessing_schedule[auto_context.selected_preprocessing_index..];
+    initialize_placeholder_search_schedule(
+        search_schedule,
+        preprocessing_tail,
+        config.force_preprocessing_schedule,
+    )?;
+
+    let selected_preprocessing =
+        &auto_context.preprocessing_schedule[auto_context.selected_preprocessing_index];
+    let mut cores = selected_preprocessing.cores.max(1);
+    let report = schedule_times_init_multi_core(
+        search_schedule,
+        schedule_time_used_seconds(),
+        f64_from_u64_for_schedule(selected_preprocessing.time_absolute),
+        false,
+        &mut cores,
+        false,
+    );
+    write_schedule_report(
+        output,
+        report.scheduled,
+        report.cores,
+        report.limit,
+        report.total_time,
+    )?;
+    first_schedule_heuristic_name(search_schedule)
+        .map(str::to_owned)
+        .map_err(EProverError::from)
+}
+
+fn write_schedule_report(
+    output: &mut impl Write,
+    scheduled: usize,
+    cores: i32,
+    limit: u64,
+    total_time: u64,
+) -> Result<(), EProverError> {
+    write_comment_line(
+        output,
+        &format!("Scheduled {scheduled} strats onto {cores} cores with {limit} seconds ({total_time} total)"),
+    )
+}
+
+fn configured_schedule_cores(config: &EProverConfig) -> i32 {
+    if config.schedule_cores == -1 {
+        return i32_from_usize_saturating(get_core_number()).max(1);
+    }
+    i32_from_i64_saturating(config.schedule_cores).max(1)
+}
+
+fn configured_schedule_time_limit(config: &EProverConfig) -> f64 {
+    let limit = config
+        .schedule_time_limit
+        .and_then(|limit| u64::try_from(limit).ok())
+        .unwrap_or(DEFAULT_SCHED_TIME_LIMIT);
+    f64_from_u64_for_schedule(limit)
+}
+
+fn schedule_time_used_seconds() -> f64 {
+    let usage = current_resource_usage();
+    usage.user_time_seconds + usage.system_time_seconds
+}
+
+fn i32_from_usize_saturating(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+fn i32_from_i64_saturating(value: i64) -> i32 {
+    i32::try_from(value).unwrap_or_else(|_| {
+        if value.is_negative() {
+            i32::MIN
+        } else {
+            i32::MAX
+        }
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn f64_from_u64_for_schedule(value: u64) -> f64 {
+    value as f64
 }
 
 fn proof_search_global_indices<'sig>(
@@ -10957,27 +11095,33 @@ mod tests {
     }
 
     #[test]
-    fn run_auto_schedule_reports_pending_process_scheduler() {
+    fn run_auto_schedule_uses_generated_schedules_in_process() {
         let _guard = global_state_lock();
-        let path = temp_path("proof-auto-schedule-pending");
+        let path = temp_path("proof-auto-schedule-in-process");
         std::fs::write(&path, "cnf(a, axiom, ($false)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
-            ["eprover", "--auto-schedule", "--tstp-in", path_arg.as_str()],
+        let status = run(
+            [
+                "eprover",
+                "--auto-schedule=1",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert_eq!(
-            error.message(),
-            "strategy scheduling process execution is not ported yet"
-        );
-        assert!(stdout.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
+        assert!(output.contains("% Scheduled 1 strats onto 1 cores with "));
+        assert!(output.contains("% Search class: FUUNFGFFSF00SSFFFFFNN\n"));
+        assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
+        assert!(!output.contains("strategy scheduling process execution is not ported yet"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
