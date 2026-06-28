@@ -4208,7 +4208,13 @@ fn run_syntax_only(
     let files = config.files.clone();
     for file in &files {
         let before = clauses.len();
-        let parsed_file = parse_clause_file(file, config.parse_format, &mut bank, &mut clauses)?;
+        let parsed_file = parse_clause_file(
+            file,
+            config.parse_format,
+            FormulaPreprocessing::PARSE_ONLY,
+            &mut bank,
+            &mut clauses,
+        )?;
         if parsed_file.formula_conjecture_seen {
             config.flags.set(EProverFlag::FormulaConjectureSeen);
         }
@@ -5070,8 +5076,13 @@ fn parse_input_files_into_axioms(
     for file in &files {
         let before = state.axioms().len();
         let mut parsed = ClauseSet::new();
-        let parsed_file =
-            parse_clause_file(file, config.parse_format, state.terms_mut(), &mut parsed)?;
+        let parsed_file = parse_clause_file(
+            file,
+            config.parse_format,
+            FormulaPreprocessing::from_config(config),
+            state.terms_mut(),
+            &mut parsed,
+        )?;
         if parsed_file.formula_conjecture_seen {
             config.flags.set(EProverFlag::FormulaConjectureSeen);
         }
@@ -6094,6 +6105,7 @@ fn proof_search_inference_system_complete(
 fn parse_clause_file(
     file: &str,
     parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
@@ -6115,10 +6127,12 @@ fn parse_clause_file(
     let mut formula_conjecture_seen = false;
     match detected_format {
         IoFormat::Tstp => {
-            formula_conjecture_seen = parse_tstp_entry_list(&mut scanner, bank, clauses, None)?;
+            formula_conjecture_seen =
+                parse_tstp_entry_list(&mut scanner, bank, clauses, None, formula_preprocessing)?;
         }
         IoFormat::Tptp => {
-            formula_conjecture_seen = parse_tptp_entry_list(&mut scanner, bank, clauses, None)?;
+            formula_conjecture_seen =
+                parse_tptp_entry_list(&mut scanner, bank, clauses, None, formula_preprocessing)?;
         }
         _ => {
             clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
@@ -6337,6 +6351,7 @@ fn parse_tptp_entry_list(
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
+    formula_preprocessing: FormulaPreprocessing,
 ) -> Result<bool, Diagnostic> {
     let mut formula_conjecture_seen = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -6349,7 +6364,7 @@ fn parse_tptp_entry_list(
                 clauses.insert(clause);
             }
         } else if scanner.test_id("input_formula") {
-            let parsed = parse_simple_tptp_formula_clause(scanner, bank)?;
+            let parsed = parse_simple_tptp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 formula_conjecture_seen |= parsed.formula_conjecture_seen;
                 for clause in parsed.clauses {
@@ -6367,6 +6382,7 @@ fn parse_tptp_entry_list(
                     bank,
                     clauses,
                     Some(&mut include_selectors),
+                    formula_preprocessing,
                 )?;
             }
         } else {
@@ -6391,6 +6407,7 @@ fn parse_tstp_entry_list(
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
+    formula_preprocessing: FormulaPreprocessing,
 ) -> Result<bool, Diagnostic> {
     let mut formula_conjecture_seen = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -6403,7 +6420,7 @@ fn parse_tstp_entry_list(
                 clauses.insert(clause);
             }
         } else if scanner.test_id("fof|tff|tcf") {
-            let parsed = parse_simple_tstp_formula_clause(scanner, bank)?;
+            let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 formula_conjecture_seen |= parsed.formula_conjecture_seen;
                 for clause in parsed.clauses {
@@ -6421,6 +6438,7 @@ fn parse_tstp_entry_list(
                     bank,
                     clauses,
                     Some(&mut include_selectors),
+                    formula_preprocessing,
                 )?;
             }
         } else if scanner.test_id("thf") {
@@ -6518,6 +6536,29 @@ struct SimpleFofBoundVariable {
     variable: Option<Term>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FormulaPreprocessing {
+    annotate_questions: bool,
+    add_answer_literals: bool,
+    conjectures_are_questions: bool,
+}
+
+impl FormulaPreprocessing {
+    const PARSE_ONLY: Self = Self {
+        annotate_questions: false,
+        add_answer_literals: false,
+        conjectures_are_questions: false,
+    };
+
+    fn from_config(config: &EProverConfig) -> Self {
+        Self {
+            annotate_questions: true,
+            add_answer_literals: config.answer_limit > 0,
+            conjectures_are_questions: config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+        }
+    }
+}
+
 fn parse_simple_tstp_app_encode_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -6605,6 +6646,7 @@ fn parse_simple_tptp_app_encode_formula(
 fn parse_simple_tstp_formula_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    formula_preprocessing: FormulaPreprocessing,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
@@ -6643,14 +6685,25 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::COMMA)?;
 
     let mut clause_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
+    if annotate_question {
+        clause_type = CP_TYPE_CONJECTURE;
+    }
     let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
     let formula_position = token_pos_rep(scanner.current_token());
-    let formulas = parse_simple_fof_formulas(scanner, bank)?;
+    let mut formulas = parse_simple_fof_formulas(scanner, bank)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
+    }
+    if annotate_question {
+        formulas = simple_fof_annotate_question_formulas(
+            formulas,
+            formula_preprocessing.add_answer_literals,
+            bank,
+        )?;
     }
     let literal_lists =
         simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
@@ -6684,6 +6737,7 @@ fn parse_simple_tstp_formula_clause(
 fn parse_simple_tptp_formula_clause(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    formula_preprocessing: FormulaPreprocessing,
 ) -> Result<ParsedSimpleFofClause, Diagnostic> {
     bank.vars().clear_ext_names();
     let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
@@ -6701,11 +6755,22 @@ fn parse_simple_tptp_formula_clause(
     scanner.accept_tok(TokenType::COMMA)?;
 
     let mut clause_type = old_tptp_input_formula_clause_type(&role);
+    let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
+    if annotate_question {
+        clause_type = CP_TYPE_CONJECTURE;
+    }
     let formula_conjecture_seen = clause_type == CP_TYPE_CONJECTURE;
     if formula_conjecture_seen {
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
-    let formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
+    let mut formulas = parse_simple_old_tptp_fof_formulas(scanner, bank)?;
+    if annotate_question {
+        formulas = simple_fof_annotate_question_formulas(
+            formulas,
+            formula_preprocessing.add_answer_literals,
+            bank,
+        )?;
+    }
     let literal_lists =
         simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
@@ -6742,6 +6807,73 @@ fn old_tptp_input_formula_clause_type(role: &str) -> FormulaProperties {
         "hypothesis" => CP_TYPE_HYPOTHESIS,
         _ => CP_TYPE_AXIOM,
     }
+}
+
+fn should_annotate_question(
+    clause_type: FormulaProperties,
+    preprocessing: FormulaPreprocessing,
+) -> bool {
+    preprocessing.annotate_questions
+        && (clause_type == CP_TYPE_QUESTION
+            || (clause_type == CP_TYPE_CONJECTURE && preprocessing.conjectures_are_questions))
+}
+
+fn simple_fof_annotate_question_formulas(
+    formulas: Vec<SimpleFofFormula>,
+    add_answer_literals: bool,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if !add_answer_literals || formulas.len() != 1 {
+        return Ok(formulas);
+    }
+
+    let mut formulas = formulas;
+    let formula = formulas.pop().expect("formula length checked");
+    let SimpleFofFormula::Existential { bound, formulas } = formula else {
+        return Ok(vec![formula]);
+    };
+    if bound.is_empty() {
+        return Ok(vec![SimpleFofFormula::Existential { bound, formulas }]);
+    }
+
+    let (bound, mut formulas) = simple_fof_collect_leading_existentials(bound, formulas);
+    let answer = simple_fof_answer_literal_formula(&bound, bank)?;
+    formulas.push(answer);
+    Ok(vec![SimpleFofFormula::Existential { bound, formulas }])
+}
+
+fn simple_fof_collect_leading_existentials(
+    mut bound: Vec<Term>,
+    formulas: Vec<SimpleFofFormula>,
+) -> (Vec<Term>, Vec<SimpleFofFormula>) {
+    let mut formulas = formulas;
+    while formulas.len() == 1 {
+        match formulas.pop().expect("formula length checked") {
+            SimpleFofFormula::Existential {
+                bound: nested_bound,
+                formulas: nested_formulas,
+            } => {
+                bound.extend(nested_bound);
+                formulas = nested_formulas;
+            }
+            formula => return (bound, vec![formula]),
+        }
+    }
+    (bound, formulas)
+}
+
+fn simple_fof_answer_literal_formula(
+    variables: &[Term],
+    bank: &mut TermBank,
+) -> Result<SimpleFofFormula, Diagnostic> {
+    let answer_payload = bank.alloc_new_skolem(variables, None)?;
+    let answer = Term::top_alloc(bank.signature().answer_code(), 1);
+    answer.set_type(Some(bank.signature().type_bank().bool_type()));
+    answer.set_argument(0, answer_payload);
+    let answer = bank.term_top_insert(answer)?;
+    let true_term = bank.true_term().clone();
+    let literal = Eqn::alloc(answer, true_term, bank, false)?;
+    Ok(SimpleFofFormula::Literal(literal))
 }
 
 fn simple_fof_formulas_to_clause_literal_lists(
@@ -13621,6 +13753,33 @@ mod tests {
                 default_preprocessing_debug_line()
             )
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_annotates_existential_question_with_answer_literal() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-question-answer");
+        std::fs::write(
+            &path,
+            "fof(hume, axiom, philosopher(hume)).\n\
+             fof(phil_wise, axiom, ![X]:(philosopher(X) => wise(X))).\n\
+             fof(is_there_wisdom, question, ?[X]:wise(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed
+            .contains("% SZS status Theorem\n% SZS answers Tuple [[hume]|_]\n\n% Proof found!\n"));
+        assert!(!printed.contains("% No proof found!"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
