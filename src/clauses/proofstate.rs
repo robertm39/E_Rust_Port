@@ -2,8 +2,9 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_answer_output_string, Clause};
-use crate::clauses::clause_props::{CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
+use crate::clauses::clause_props::{CP_IS_DEAD, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{ClauseDerivationRef, DerivationParentRef};
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
@@ -396,6 +397,52 @@ impl ProofState {
             ..
         } = self;
         (terms, definition_store, definition_assocs)
+    }
+
+    #[must_use]
+    pub fn clause_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<&Clause> {
+        self.live_and_archive_clause_sets()
+            .into_iter()
+            .find_map(|set| set.find_by_derivation_ref(parent))
+    }
+
+    #[must_use]
+    pub fn clause_parent_is_dead(&self, parent: DerivationParentRef) -> bool {
+        match parent {
+            DerivationParentRef::Clause(parent) => {
+                let mut saw_live_parent = false;
+                for set in self.live_and_archive_clause_sets() {
+                    if let Some(clause) = set.find_by_derivation_ref(parent) {
+                        if clause.query_prop(CP_IS_DEAD) {
+                            return true;
+                        }
+                        saw_live_parent = true;
+                    }
+                }
+                !saw_live_parent
+            }
+            DerivationParentRef::Demodulator(_) => false,
+        }
+    }
+
+    fn live_and_archive_clause_sets(&self) -> Vec<&ClauseSet> {
+        let mut sets = vec![
+            &self.axioms,
+            &self.ax_archive,
+            &self.processed_pos_rules,
+            &self.processed_pos_eqns,
+            &self.processed_neg_units,
+            &self.processed_non_units,
+            &self.unprocessed,
+            &self.tmp_store,
+            &self.eval_store,
+            &self.archive,
+            &self.definition_store,
+        ];
+        if let Some(watchlist) = self.watchlist.as_ref() {
+            sets.push(watchlist);
+        }
+        sets
     }
 
     #[must_use]
@@ -998,8 +1045,9 @@ mod tests {
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
-        CP_IS_ORIENTED, CP_IS_S_INDEXED, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
+        CP_IS_DEAD, CP_IS_ORIENTED, CP_IS_S_INDEXED, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
     };
+    use crate::clauses::derivation::{ClauseDerivationRef, DerivationParentRef};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
@@ -1121,6 +1169,55 @@ mod tests {
         assert!(state.def_store_cspec().is_none());
         assert_eq!(state.statistics(), &ProofStateStatistics::default());
         assert!(state.terms().signature().distinct_code() > 0);
+    }
+
+    #[test]
+    fn proof_state_parent_lookup_uses_ident_and_source() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut first = simple_clause(&mut state, "parent_lookup_first", 20_001);
+        first.set_csscpa_source(1);
+        let mut second = simple_clause(&mut state, "parent_lookup_second", 20_001);
+        second.set_csscpa_source(2);
+        state.unprocessed_mut().insert(first);
+        state.archive_mut().insert(second);
+
+        assert_eq!(
+            state
+                .clause_by_derivation_ref(ClauseDerivationRef::new(20_001, 1))
+                .map(Clause::query_csscpa_source),
+            Some(1)
+        );
+        assert_eq!(
+            state
+                .clause_by_derivation_ref(ClauseDerivationRef::new(20_001, 2))
+                .map(Clause::query_csscpa_source),
+            Some(2)
+        );
+        assert!(!state.clause_parent_is_dead(DerivationParentRef::Clause(
+            ClauseDerivationRef::new(20_001, 1)
+        )));
+        assert!(state.clause_parent_is_dead(DerivationParentRef::Clause(
+            ClauseDerivationRef::new(20_001, 3)
+        )));
+    }
+
+    #[test]
+    fn proof_state_parent_liveness_treats_matching_dead_archive_as_dead() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut live = simple_clause(&mut state, "parent_live_copy", 20_002);
+        live.set_csscpa_source(7);
+        let mut dead = simple_clause(&mut state, "parent_dead_copy", 20_002);
+        dead.set_csscpa_source(7);
+        dead.set_prop(CP_IS_DEAD);
+        state.unprocessed_mut().insert(live);
+        state.archive_mut().insert(dead);
+
+        assert!(state
+            .clause_by_derivation_ref(ClauseDerivationRef::new(20_002, 7))
+            .is_some());
+        assert!(state.clause_parent_is_dead(DerivationParentRef::Clause(
+            ClauseDerivationRef::new(20_002, 7)
+        )));
     }
 
     #[test]

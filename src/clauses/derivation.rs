@@ -55,7 +55,7 @@ pub const DC_EQ_RES: i64 = DO_EQ_RES | ARG1_CNF;
 pub const DC_DIS_EQ_DECOMPOSE: i64 = DO_DIS_EQ_DECOMPOSE | ARG1_CNF;
 pub const DC_SAT_GEN: i64 = DO_SAT_GEN | ARG1_CNF;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ClauseDerivationRef {
     ident: i64,
     source: u64,

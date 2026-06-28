@@ -8,7 +8,7 @@ use crate::clauses::clause_props::{
     CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
 };
 use crate::clauses::clausefunc::{
-    clause_archive, clause_archive_copy, clause_remove_ac_resolved,
+    clause_archive, clause_archive_copy, clause_is_orphaned_with, clause_remove_ac_resolved,
     clause_remove_superfluous_literals, clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
@@ -17,7 +17,8 @@ use crate::clauses::context_sr::{
     clause_contextual_simplify_reflect, clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS,
+    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
+    DC_EVAL_ANSWERS,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
@@ -52,9 +53,9 @@ use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
-    hcb_single_weight_clause_select, hcb_standard_clause_select, AcHandling, GroundingStrategy,
-    HcbSelectFunction, HeuristicParmsCell, ParamodulationType as HcbParamodulationType,
-    SplitClassType, SplitType,
+    hcb_single_weight_clause_select_with, hcb_standard_clause_select_with, AcHandling,
+    GroundingStrategy, HcbSelectFunction, HeuristicParmsCell,
+    ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -69,6 +70,7 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{RewriteLevel, TP_IS_REWRITABLE};
+use std::collections::BTreeSet;
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -1606,13 +1608,60 @@ fn clause_set_storage_estimate(set: &ClauseSet) -> i64 {
         .saturating_add(set.literals())
 }
 
+#[derive(Clone, Debug, Default)]
+struct ParentLivenessSnapshot {
+    live: BTreeSet<ClauseDerivationRef>,
+    dead: BTreeSet<ClauseDerivationRef>,
+}
+
+impl ParentLivenessSnapshot {
+    fn from_state(state: &ProofState) -> Self {
+        let mut snapshot = Self::default();
+        snapshot.collect_set(state.axioms());
+        snapshot.collect_set(state.ax_archive());
+        snapshot.collect_set(state.processed_pos_rules());
+        snapshot.collect_set(state.processed_pos_eqns());
+        snapshot.collect_set(state.processed_neg_units());
+        snapshot.collect_set(state.processed_non_units());
+        snapshot.collect_set(state.unprocessed());
+        snapshot.collect_set(state.tmp_store());
+        snapshot.collect_set(state.eval_store());
+        snapshot.collect_set(state.archive());
+        snapshot.collect_set(state.definition_store());
+        if let Some(watchlist) = state.watchlist() {
+            snapshot.collect_set(watchlist);
+        }
+        snapshot
+    }
+
+    fn collect_set(&mut self, set: &ClauseSet) {
+        for clause in set.iter() {
+            let parent = ClauseDerivationRef::from(clause);
+            if clause.query_prop(CP_IS_DEAD) {
+                self.dead.insert(parent);
+            } else {
+                self.live.insert(parent);
+            }
+        }
+    }
+
+    fn parent_is_dead(&self, parent: DerivationParentRef) -> bool {
+        match parent {
+            DerivationParentRef::Clause(parent) => {
+                self.dead.contains(&parent) || !self.live.contains(&parent)
+            }
+            DerivationParentRef::Demodulator(_) => false,
+        }
+    }
+}
+
 /// Applies the currently ported local effects of C
 /// `cleanup_unprocessed_clauses`.
 ///
 /// This preserves the C gate order: orphan deletion, special forward
 /// contraction/reweighting, then delete-bad under the storage limit. The
-/// orphan check is supplied by the caller because the current derivation stack
-/// stores compact parent references rather than exact live C clause pointers.
+/// orphan check is supplied by the caller for tests and alternate owners; the
+/// default proof-state wrapper supplies a compact parent-liveness snapshot.
 ///
 /// # Errors
 ///
@@ -1709,11 +1758,7 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
 }
 
 /// Applies [`proof_state_cleanup_unprocessed_clauses_with`] using the current
-/// storage estimate and a conservative no-orphan predicate.
-///
-/// The default orphan predicate remains false until derivation parent records
-/// can identify exact live/dead proof-state clause handles instead of compact
-/// identifiers.
+/// storage estimate and a proof-state snapshot of compact parent liveness.
 ///
 /// # Errors
 ///
@@ -1723,7 +1768,10 @@ pub fn proof_state_cleanup_unprocessed_clauses(
     control: &mut ProofControl,
 ) -> Result<CleanupUnprocessedOutcome, Diagnostic> {
     let current_storage = proof_state_storage_estimate(state);
-    proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |_| false)
+    let parent_liveness = ParentLivenessSnapshot::from_state(state);
+    proof_state_cleanup_unprocessed_clauses_with(state, control, current_storage, |parent| {
+        parent_liveness.parent_is_dead(parent)
+    })
 }
 
 /// Applies C `ProofStateFilterUnprocessed` to the state-owned unprocessed set.
@@ -2164,6 +2212,7 @@ pub fn proof_state_select_unprocessed_clause(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
+    let parent_liveness = ParentLivenessSnapshot::from_state(state);
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -2182,10 +2231,14 @@ pub fn proof_state_select_unprocessed_clause(
 
     let selected = match hcb.hcb_select() {
         HcbSelectFunction::StandardClauseSelect => {
-            hcb_standard_clause_select(hcb, state.unprocessed_mut())
+            hcb_standard_clause_select_with(hcb, state.unprocessed_mut(), |clause| {
+                clause_is_orphaned_with(clause, |parent| parent_liveness.parent_is_dead(parent))
+            })
         }
         HcbSelectFunction::SingleWeightClauseSelect => {
-            hcb_single_weight_clause_select(hcb, state.unprocessed_mut())
+            hcb_single_weight_clause_select_with(hcb, state.unprocessed_mut(), |clause| {
+                clause_is_orphaned_with(clause, |parent| parent_liveness.parent_is_dead(parent))
+            })
         }
     };
     Ok(selected)
@@ -3851,17 +3904,17 @@ mod tests {
         proof_control_alloc, proof_control_clause_set_filter_reweigth,
         proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_check_ac_status,
-        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
-        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_subsumption,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
-        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
-        proof_state_init_indexing, proof_state_init_with_global_indices,
-        proof_state_insert_new_clauses, proof_state_insert_processed_clause,
-        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
-        proof_state_process_clause_with_global_indices,
+        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
+        proof_state_eval_clause_set, proof_state_filter_unprocessed,
+        proof_state_forward_contract_clause, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
+        proof_state_forward_subsumption, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
+        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
+        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
+        proof_state_move_to_tmp_store, proof_state_move_to_tmp_store_with_global_indices,
+        proof_state_process_clause, proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_global_indices,
         proof_state_saturate, proof_state_saturate_with_global_indices,
@@ -5112,6 +5165,34 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_cleanup_unprocessed_default_deletes_archived_dead_parent_orphans() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut parent = Clause::empty();
+        parent.set_ident(4_117);
+        let mut orphan = Clause::empty();
+        orphan.set_ident(4_118);
+        clause_push_derivation(&mut orphan, DC_ORDERED_FACTOR, Some(&parent), None);
+        parent.set_prop(CP_IS_DEAD);
+        state.archive_mut().insert(parent);
+        let survivor = unit_clause_with_id(state.terms_mut(), "pc_cleanup_default_survivor", 4_119);
+        state.unprocessed_mut().insert(orphan);
+        state.unprocessed_mut().insert(survivor);
+        state.statistics_mut().backward_rewritten_count = 1;
+
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().filter_orphans_limit = 0;
+
+        let outcome = proof_state_cleanup_unprocessed_clauses(&mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.orphaned_deleted, 1);
+        assert_eq!(state.unprocessed().members(), 1);
+        assert!(state.unprocessed().find_by_id(4_118).is_none());
+        assert!(state.unprocessed().find_by_id(4_119).is_some());
+        assert_eq!(state.statistics().other_redundant_count, 1);
+    }
+
+    #[test]
     fn proof_state_cleanup_unprocessed_forward_contracts_and_reweights() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (trivial, survivor) = {
@@ -5814,6 +5895,32 @@ mod tests {
 
         assert_eq!(outcome, ProcessClauseOutcome::NoClause);
         assert_eq!(state.statistics().processed_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_skips_orphaned_best_unprocessed_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut parent = Clause::empty();
+        parent.set_ident(4_144);
+        let mut orphan = unit_clause_with_id(state.terms_mut(), "pc_process_orphan", 4_145);
+        clause_push_derivation(&mut orphan, DC_ORDERED_FACTOR, Some(&parent), None);
+        parent.set_prop(CP_IS_DEAD);
+        state.archive_mut().insert(parent);
+        let survivor = unit_clause_with_id(state.terms_mut(), "pc_process_after_orphan", 4_146);
+
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, orphan);
+        queue_unprocessed_for_process(&mut state, &mut control, survivor);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(matches!(outcome, ProcessClauseOutcome::Processed { .. }));
+        assert!(state.unprocessed().find_by_id(4_145).is_none());
+        assert!(state.unprocessed().find_by_id(4_146).is_none());
+        assert!(state.processed_pos_eqns().find_by_id(4_146).is_some());
+        assert_eq!(state.processed_cardinality(), 1);
     }
 
     #[test]

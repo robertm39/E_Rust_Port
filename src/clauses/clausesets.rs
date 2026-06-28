@@ -11,6 +11,7 @@ use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_CONJECTURE,
 };
 use crate::clauses::clausepos::ClausePos;
+use crate::clauses::derivation::ClauseDerivationRef;
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EqnSide;
 use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
@@ -490,6 +491,13 @@ impl ClauseSet {
     #[must_use]
     pub fn find_by_id(&self, ident: i64) -> Option<&Clause> {
         self.clauses.iter().find(|clause| clause.ident() == ident)
+    }
+
+    #[must_use]
+    pub fn find_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<&Clause> {
+        self.clauses.iter().find(|clause| {
+            clause.ident() == parent.ident() && clause.query_csscpa_source() == parent.source()
+        })
     }
 
     pub fn find_by_id_mut(&mut self, ident: i64) -> Option<&mut Clause> {

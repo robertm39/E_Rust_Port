@@ -960,8 +960,9 @@ pub fn hcb_standard_clause_select<Data>(
 /// Selects and extracts the next clause using the C `HCBStandardClauseSelect`
 /// schedule, deleting clauses reported as orphaned by `is_orphaned`.
 ///
-/// The default `hcb_standard_clause_select` passes a predicate that always
-/// returns false until derivation-backed orphan detection is ported.
+/// The default `hcb_standard_clause_select` keeps the low-level no-op
+/// predicate; proof-control callers use the `_with` form with proof-state
+/// parent-liveness data.
 ///
 /// # Panics
 ///
