@@ -12,6 +12,7 @@ use crate::basics::os_wrapper::{
     set_memory_limit,
 };
 use crate::basics::partial_orderings::HoOrderKind;
+use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
@@ -5527,7 +5528,7 @@ fn write_proof_success_object_output(
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
     match config.proof_output {
-        1 => write_proof_success_list_output(output, config, state.terms(), clause, next_doc_ident),
+        1 => write_proof_success_list_output(output, config, state, clause, next_doc_ident),
         level if level >= 2 => {
             let mut roots = vec![clause];
             if config.flags.contains(EProverFlag::FullDerivation) {
@@ -5544,22 +5545,147 @@ fn write_proof_success_object_output(
 fn write_proof_success_list_output(
     output: &mut impl Write,
     config: &EProverConfig,
-    bank: &TermBank,
+    state: &ProofState,
     clause: &Clause,
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
     write_comment_line(output, "SZS output start CNFRefutation")?;
-    let doc_ident = proof_object_success_doc_ident(config, clause, next_doc_ident);
-    let parent_ident = proof_object_success_parent_ident(config, clause);
-    match effective_doc_output_format(config) {
-        DocOutputFormat::Pcl => write_pcl_proof_success_doc_with_parent(
+    let graph = state.proof_object_graph_for_roots([clause]);
+    if graph.clauses.is_empty() {
+        let doc_ident = proof_object_success_doc_ident(config, clause, next_doc_ident);
+        let parent_ident = proof_object_success_parent_ident(config, clause);
+        write_proof_success_list_fallback(
             output,
             config,
-            bank,
+            state.terms(),
             clause,
             doc_ident,
             parent_ident,
-        )?,
+        )?;
+    } else {
+        for (proof_clause, is_root) in proof_object_list_display_clauses(&graph) {
+            write_saturation_proof_object_clause(
+                output,
+                config,
+                state.terms(),
+                &proof_clause,
+                is_root,
+            )?;
+        }
+    }
+    write_comment_line(output, "SZS output end CNFRefutation")?;
+    Ok(())
+}
+
+fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Clause, bool)> {
+    let print_clauses: Vec<(usize, &Clause)> = graph
+        .clauses
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(index, clause)| (index, *clause))
+        .collect();
+    let mut display_ids_by_index = vec![0; graph.clauses.len()];
+    let mut fallback_display_ids = BTreeMap::new();
+    for (print_index, (graph_index, clause)) in print_clauses.iter().enumerate() {
+        let display_id = usize_to_i64(print_index.saturating_add(1));
+        display_ids_by_index[*graph_index] = display_id;
+        fallback_display_ids
+            .entry(ClauseDerivationRef::from(*clause))
+            .or_insert(display_id);
+    }
+
+    let root = graph.clauses.first().copied();
+    print_clauses
+        .into_iter()
+        .map(|(graph_index, clause)| {
+            let mut display = clause.clone();
+            display.set_ident(display_ids_by_index[graph_index]);
+            if let Some(derivation) = clause.derivation() {
+                display.set_derivation(Some(remap_derivation_for_display(
+                    derivation,
+                    graph,
+                    graph_index,
+                    &display_ids_by_index,
+                    &fallback_display_ids,
+                )));
+            }
+            let is_root = root.is_some_and(|root| std::ptr::eq(root, clause));
+            (display, is_root)
+        })
+        .collect()
+}
+
+fn remap_derivation_for_display(
+    derivation: &PStack<DerivationEntry>,
+    graph: &ProofObjectGraph<'_>,
+    child_index: usize,
+    display_ids_by_index: &[i64],
+    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+) -> PStack<DerivationEntry> {
+    let mut remapped = PStack::new();
+    for entry in derivation.as_slice() {
+        remapped.push(match *entry {
+            DerivationEntry::ClauseParent(parent) => {
+                let ident = proof_object_display_parent_ident(
+                    graph,
+                    child_index,
+                    parent,
+                    display_ids_by_index,
+                    fallback_display_ids,
+                );
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, parent.source()))
+            }
+            entry => entry,
+        });
+    }
+    remapped
+}
+
+fn proof_object_display_parent_ident(
+    graph: &ProofObjectGraph<'_>,
+    child_index: usize,
+    parent: ClauseDerivationRef,
+    display_ids_by_index: &[i64],
+    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+) -> i64 {
+    graph
+        .edges
+        .iter()
+        .find(|edge| {
+            edge.child_index == child_index
+                && ClauseDerivationRef::from(graph.clauses[edge.parent_index]) == parent
+        })
+        .map_or_else(
+            || {
+                fallback_display_ids
+                    .get(&parent)
+                    .copied()
+                    .unwrap_or(parent.ident())
+            },
+            |edge| display_ids_by_index[edge.parent_index],
+        )
+}
+
+fn write_proof_success_list_fallback(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+) -> Result<(), EProverError> {
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => {
+            write_pcl_proof_success_doc_with_parent(
+                output,
+                config,
+                bank,
+                clause,
+                doc_ident,
+                parent_ident,
+            )?;
+        }
         DocOutputFormat::Tstp => {
             write_tstp_proof_success_doc_with_parent(
                 output,
@@ -5572,7 +5698,6 @@ fn write_proof_success_list_output(
         }
         _ => write_comment_line(output, "Output format not implemented.")?,
     }
-    write_comment_line(output, "SZS output end CNFRefutation")?;
     Ok(())
 }
 
@@ -5625,7 +5750,7 @@ fn write_stopped_proof_output(
 
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output start {status}")?;
     for clause in stopped_proof_object_roots(config, state) {
-        write_saturation_proof_object_clause(output, config, state.terms(), clause)?;
+        write_saturation_proof_object_clause(output, config, state.terms(), clause, true)?;
     }
     writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS output end {status}")?;
     Ok(())
@@ -5636,6 +5761,7 @@ fn write_saturation_proof_object_clause(
     config: &EProverConfig,
     bank: &TermBank,
     clause: &Clause,
+    is_root: bool,
 ) -> Result<(), EProverError> {
     let mut rendered = String::new();
     match effective_doc_output_format(config) {
@@ -5647,12 +5773,14 @@ fn write_saturation_proof_object_clause(
             } else {
                 rendered.push_str(&source_info_pcl_string(clause.info()));
             }
-            if config.pcl_output.compact {
-                rendered.push(':');
-            } else {
-                rendered.push_str(" : ");
+            if is_root {
+                if config.pcl_output.compact {
+                    rendered.push(':');
+                } else {
+                    rendered.push_str(" : ");
+                }
+                rendered.push_str(proof_object_root_marker(clause));
             }
-            rendered.push_str(proof_object_root_marker(clause));
             rendered.push('\n');
         }
         DocOutputFormat::Tstp => {
@@ -5675,9 +5803,12 @@ fn write_saturation_proof_object_clause(
                     rendered.push_str(&source_info);
                 }
             }
-            rendered.push_str(", [");
-            rendered.push_str(proof_object_root_marker(clause));
-            rendered.push_str("]).");
+            if is_root {
+                rendered.push_str(", [");
+                rendered.push_str(proof_object_root_marker(clause));
+                rendered.push(']');
+            }
+            rendered.push_str(").");
             rendered.push('\n');
         }
         _ => write_comment_line(output, "Output format not implemented.")?,
@@ -14980,7 +15111,8 @@ mod tests {
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("     2 : :[] : 1 : 'proof'\n"));
+        assert!(printed.contains("     1 : :[--equal(a, a)] : initial("));
+        assert!(printed.contains("     2 : :[] : cn(1) : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -15038,7 +15170,10 @@ mod tests {
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("cnf(c_0_2, plain, ($false), c_0_1,['proof']).\n"));
+        assert!(printed.contains("cnf(c_0_1, axiom, ($false), file("));
+        assert!(printed.contains(
+            "cnf(c_0_2, axiom, ($false), inference(cn,[status(thm)],[c_0_1]), ['proof']).\n"
+        ));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -15400,15 +15535,27 @@ mod tests {
             ..EProverConfig::default()
         };
         let mut output = Vec::new();
-        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause).unwrap();
+        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, true).unwrap();
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains("initial(\"file.p\", named) : 'proof'\n"));
 
+        let mut output = Vec::new();
+        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, false).unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("initial(\"file.p\", named)\n"));
+        assert!(!printed.contains("'proof'"));
+
         config.doc_output_format = DocOutputFormat::Tstp;
         let mut output = Vec::new();
-        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause).unwrap();
+        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, true).unwrap();
         let printed = String::from_utf8(output).unwrap();
         assert!(printed.contains(", file('file.p', named), ['proof']).\n"));
+
+        let mut output = Vec::new();
+        write_saturation_proof_object_clause(&mut output, &config, &bank, &clause, false).unwrap();
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains(", file('file.p', named)).\n"));
+        assert!(!printed.contains("'proof'"));
     }
 
     #[test]
