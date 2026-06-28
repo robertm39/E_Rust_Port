@@ -26,6 +26,7 @@ pub mod garbage_coll;
 pub mod global_indices;
 pub mod groundconstr;
 pub mod grounding;
+pub mod inferencedoc;
 pub mod neweval;
 pub mod overlap_index;
 pub mod paramodulation;

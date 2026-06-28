@@ -240,6 +240,7 @@ Source files reviewed: `CLAUSES/ccl_inferencedoc.h`, `CLAUSES/ccl_inferencedoc.c
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - The PCL `print_initial` branch contains unconditional `printf("XX\n")` debug markers around `pcl_print_start`, and those writes target stdout rather than the passed documentation stream. Keep this accidental behavior visible for compatibility; a future cleanup should decide whether to remove the markers or make all proof-documentation output use one stream.
+- `PCLTypeStr` deliberately returns `""` for every clause type except conjecture, question, and negated conjecture, so PCL step prefixes collapse plain/axiom, hypothesis, lemma, watchlist, and unknown roles. Rust ports this helper for compatibility; a later cleaned proof-documentation API may expose fuller role names outside C-compatible PCL formatting.
 - `DocClauseQuote` clears `CPInputFormula` and assigns a new `ClauseIdentCounter` id while printing a self-descendant documentation step. Rust mirrors the proof-success quote by rendering from a clone for the supported executable path; full proof-documentation support should decide whether mutable global documentation ids remain part of the ported model or become session-owned state.
 
 ### Porting Focus

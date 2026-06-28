@@ -37,6 +37,7 @@ use crate::clauses::eqnlist::EqnList;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
+use crate::clauses::inferencedoc::pcl_type_str;
 use crate::clauses::proofstate::{
     proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
     WatchlistSource as ProofStateWatchlistSource,
@@ -5490,7 +5491,7 @@ fn write_pcl_doc_step_start(
     } else {
         write!(output, "{:6} : ", clause.ident())?;
     }
-    write!(output, "{}:", pcl_type_string(clause.query_tptp_type()))?;
+    write!(output, "{}:", pcl_type_str(clause.query_tptp_type()))?;
     if print_clause {
         clause_write_pcl_with_options(
             output,
@@ -5533,15 +5534,6 @@ const fn effective_doc_output_format(config: &EProverConfig) -> DocOutputFormat 
     match config.doc_output_format {
         DocOutputFormat::NoFormat => DocOutputFormat::Pcl,
         format => format,
-    }
-}
-
-const fn pcl_type_string(type_: FormulaProperties) -> &'static str {
-    match type_ {
-        CP_TYPE_CONJECTURE => "conj",
-        CP_TYPE_QUESTION => "que",
-        CP_TYPE_NEG_CONJECTURE => "neg",
-        _ => "",
     }
 }
 
