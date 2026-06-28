@@ -4984,8 +4984,21 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     )?;
-    if let SaturateOutcome::Returned { clause, .. } = outcome {
-        write_proof_object_output(output, config, state.terms(), clause, next_doc_ident)?;
+    match outcome {
+        SaturateOutcome::Returned { clause, .. } => {
+            write_proof_object_output(output, config, state.terms(), clause, next_doc_ident)?;
+        }
+        SaturateOutcome::Stopped { .. }
+            if should_write_saturation_proof_object(
+                config,
+                state,
+                outcome,
+                inference_system_complete,
+            ) =>
+        {
+            write_saturation_proof_object_output(output, config, state)?;
+        }
+        SaturateOutcome::Stopped { .. } => {}
     }
     Ok(())
 }
@@ -5490,6 +5503,83 @@ fn write_proof_object_output(
         _ => write_comment_line(output, "Output format not implemented.")?,
     }
     write_comment_line(output, "SZS output end CNFRefutation")?;
+    Ok(())
+}
+
+fn should_write_saturation_proof_object(
+    config: &EProverConfig,
+    state: &ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
+) -> bool {
+    config.proof_output == 1
+        && state.statistics().answer_count == 0
+        && matches!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::Saturated,
+                ..
+            }
+        )
+        && inference_system_complete
+        && state.state_is_complete()
+        && !state.has_interpreted_symbols()
+}
+
+fn write_saturation_proof_object_output(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &ProofState,
+) -> Result<(), EProverError> {
+    write_comment_line(output, "SZS output start Saturation")?;
+    write_saturation_proof_object_set(output, config, state.terms(), state.processed_pos_rules())?;
+    write_saturation_proof_object_set(output, config, state.terms(), state.processed_pos_eqns())?;
+    write_saturation_proof_object_set(output, config, state.terms(), state.processed_neg_units())?;
+    write_saturation_proof_object_set(output, config, state.terms(), state.processed_non_units())?;
+    write_comment_line(output, "SZS output end Saturation")?;
+    Ok(())
+}
+
+fn write_saturation_proof_object_set(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    set: &ClauseSet,
+) -> Result<(), EProverError> {
+    for clause in set.iter() {
+        write_saturation_proof_object_clause(output, config, bank, clause)?;
+    }
+    Ok(())
+}
+
+fn write_saturation_proof_object_clause(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+) -> Result<(), EProverError> {
+    let mut rendered = String::new();
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => {
+            write_pcl_doc_step_start(&mut rendered, config, bank, clause, true)
+                .map_err(proof_doc_write_error)?;
+            rendered.push_str("'final'\n");
+        }
+        DocOutputFormat::Tstp => {
+            clause_write_tstp_with_type_suffixes(
+                &mut rendered,
+                bank,
+                clause,
+                config.pcl_output.full_terms,
+                true,
+                ProblemType::FirstOrder,
+                config.encoding.print_types,
+            )?;
+            rendered.push('\n');
+        }
+        _ => write_comment_line(output, "Output format not implemented.")?,
+    }
+    output.write_all(rendered.as_bytes())?;
     Ok(())
 }
 
@@ -14250,6 +14340,98 @@ mod tests {
         ));
         assert!(printed.contains("cnf(c_0_2, plain, ($false), c_0_1,['proof']).\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_list_prints_saturation_block_for_no_proof_tstp() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-saturation-tstp");
+        std::fs::write(&path, "cnf(keep, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--proof-object=1", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains(
+            "\n% No proof found!\n% SZS status Satisfiable\n% SZS output start Saturation\n"
+        ));
+        assert!(printed.contains("cnf("));
+        assert!(printed.contains("(p(a))"));
+        assert!(printed.contains("% SZS output end Saturation\n"));
+        assert!(!printed.contains("CNFRefutation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_list_prints_saturation_block_for_no_proof_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-saturation-pcl");
+        std::fs::write(&path, "cnf(keep, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--pcl-out",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% SZS output start Saturation\n"));
+        assert!(printed.contains("p(a)"));
+        assert!(printed.contains("'final'\n"));
+        assert!(printed.contains("% SZS output end Saturation\n"));
+        assert!(!printed.contains("CNFRefutation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_list_skips_saturation_block_for_incomplete_no_proof() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-incomplete-no-saturation");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--proof-object=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("\n% Clause set closed under restricted calculus!\n"));
+        assert!(!printed.contains("SZS output start Saturation"));
+        assert!(!printed.contains("SZS output end Saturation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
