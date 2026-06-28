@@ -1892,16 +1892,15 @@ pub fn proof_state_queue_generated_clause_for_eval(
 /// checks, empty-clause return, aggressive forward subsumption, eval-store
 /// admission, HCB evaluation, and the final move to `unprocessed`. Destructive
 /// equality resolution is available for the first-order destructive
-/// variable-literal path, and controlled clause splitting is available for the
-/// fresh-definition path. Definition reuse remains a separate C-owned
-/// formula-store behavior; when that option is enabled for pending generated
-/// clauses, this helper reports an explicit diagnostic instead of silently
-/// skipping it.
+/// variable-literal path, and controlled clause splitting is available for
+/// fresh definitions plus clause-level reused definitions. Split-definition
+/// formula archives and proof-output side effects remain with the future
+/// formula/proof-documentation owners.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic from forward contraction, literal selection, HCB
-/// evaluation, or from an enabled but not-yet-ported generated-clause gate.
+/// evaluation, or split-definition lookup/allocation.
 pub fn proof_state_insert_new_clauses(
     state: &mut ProofState,
     control: &mut ProofControl,
