@@ -7,7 +7,10 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_is_eval_gc, deriv_stack_extract_parents, ClauseDerivationRef, DerivationParentRef,
+    clause_is_dummy_quote, clause_is_eval_gc, demodulator_clause_refs,
+    deriv_stack_count_search_inferences, deriv_stack_extract_parents,
+    deriv_stack_indicates_initial_clause, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_QUOTE,
 };
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
@@ -135,10 +138,46 @@ pub struct ProofStateGcAnalysis {
     pub used_given_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProofObjectAnalysis {
+    pub clause_step_count: u64,
+    pub formula_step_count: u64,
+    pub clause_conjecture_count: u64,
+    pub formula_conjecture_count: u64,
+    pub initial_clause_count: u64,
+    pub initial_formula_count: u64,
+    pub generating_inference_count: u64,
+    pub simplifying_inference_count: u64,
+}
+
+impl ProofObjectAnalysis {
+    #[must_use]
+    pub const fn total_step_count(self) -> u64 {
+        self.clause_step_count + self.formula_step_count
+    }
+
+    #[must_use]
+    pub const fn conjecture_count(self) -> u64 {
+        self.clause_conjecture_count + self.formula_conjecture_count
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct ProofStateTrainingExamples<'a> {
     pub positive: Vec<&'a Clause>,
     pub negative: Vec<&'a Clause>,
+}
+
+#[derive(Clone, Copy)]
+enum ProofObjectParentResolution {
+    ProofStep,
+    QuoteSource,
+}
+
+#[derive(Clone, Copy)]
+struct ProofObjectParentEdge {
+    parent: DerivationParentRef,
+    resolution: ProofObjectParentResolution,
 }
 
 #[derive(Clone, Debug)]
@@ -463,6 +502,23 @@ impl ProofState {
     }
 
     #[must_use]
+    pub fn proof_clause_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<&Clause> {
+        self.proof_clause_sets()
+            .into_iter()
+            .find_map(|set| set.find_by_derivation_ref(parent))
+    }
+
+    #[must_use]
+    pub fn proof_quote_source_by_derivation_ref(
+        &self,
+        parent: ClauseDerivationRef,
+    ) -> Option<&Clause> {
+        self.proof_quote_source_clause_sets()
+            .into_iter()
+            .find_map(|set| set.find_by_derivation_ref(parent))
+    }
+
+    #[must_use]
     pub fn clause_by_derivation_ref_mut(
         &mut self,
         parent: ClauseDerivationRef,
@@ -536,6 +592,46 @@ impl ProofState {
             &self.tmp_store,
             &self.eval_store,
             &self.archive,
+            &self.definition_store,
+        ];
+        if let Some(watchlist) = self.watchlist.as_ref() {
+            sets.push(watchlist);
+        }
+        sets
+    }
+
+    fn proof_clause_sets(&self) -> Vec<&ClauseSet> {
+        let mut sets = vec![
+            &self.archive,
+            &self.processed_pos_rules,
+            &self.processed_pos_eqns,
+            &self.processed_neg_units,
+            &self.processed_non_units,
+            &self.ax_archive,
+            &self.axioms,
+            &self.unprocessed,
+            &self.tmp_store,
+            &self.eval_store,
+            &self.definition_store,
+        ];
+        if let Some(watchlist) = self.watchlist.as_ref() {
+            sets.push(watchlist);
+        }
+        sets
+    }
+
+    fn proof_quote_source_clause_sets(&self) -> Vec<&ClauseSet> {
+        let mut sets = vec![
+            &self.axioms,
+            &self.ax_archive,
+            &self.archive,
+            &self.processed_pos_rules,
+            &self.processed_pos_eqns,
+            &self.processed_neg_units,
+            &self.processed_non_units,
+            &self.unprocessed,
+            &self.tmp_store,
+            &self.eval_store,
             &self.definition_store,
         ];
         if let Some(watchlist) = self.watchlist.as_ref() {
@@ -646,6 +742,40 @@ impl ProofState {
         examples
     }
 
+    #[must_use]
+    pub fn proof_object_analysis_for_roots<'a, I>(&self, roots: I) -> ProofObjectAnalysis
+    where
+        I: IntoIterator<Item = &'a Clause>,
+    {
+        let mut analysis = ProofObjectAnalysis::default();
+        let mut visited = Vec::new();
+        let mut pending_edges = Vec::new();
+
+        for root in roots {
+            let root = self.proof_object_first_clause(root);
+            Self::analyse_proof_object_clause(
+                root,
+                &mut analysis,
+                &mut visited,
+                &mut pending_edges,
+            );
+        }
+
+        while let Some(edge) = pending_edges.pop() {
+            for clause in self.proof_object_edge_clauses(edge) {
+                let clause = self.proof_object_first_clause(clause);
+                Self::analyse_proof_object_clause(
+                    clause,
+                    &mut analysis,
+                    &mut visited,
+                    &mut pending_edges,
+                );
+            }
+        }
+
+        analysis
+    }
+
     fn gc_analysis(&self) -> ProofStateGcAnalysis {
         let mut analysis = ProofStateGcAnalysis::default();
         for set in self.gc_clause_sets() {
@@ -660,6 +790,74 @@ impl ProofState {
             }
         }
         analysis
+    }
+
+    fn analyse_proof_object_clause(
+        clause: &Clause,
+        analysis: &mut ProofObjectAnalysis,
+        visited: &mut Vec<*const Clause>,
+        pending_edges: &mut Vec<ProofObjectParentEdge>,
+    ) {
+        let key = std::ptr::from_ref(clause);
+        if visited.contains(&key) {
+            return;
+        }
+        visited.push(key);
+
+        analysis.clause_step_count += 1;
+        if clause.is_conjecture() {
+            analysis.clause_conjecture_count += 1;
+        }
+        if deriv_stack_indicates_initial_clause(clause.derivation()) {
+            analysis.initial_clause_count += 1;
+        }
+        let (generating, simplifying) = deriv_stack_count_search_inferences(clause.derivation());
+        analysis.generating_inference_count += generating;
+        analysis.simplifying_inference_count += simplifying;
+
+        pending_edges.extend(proof_object_parent_edges(clause.derivation()));
+    }
+
+    fn proof_object_first_clause<'a>(&'a self, clause: &'a Clause) -> &'a Clause {
+        let mut current = clause;
+        let mut visited = Vec::new();
+        while clause_is_dummy_quote(current) {
+            let key = std::ptr::from_ref(current);
+            if visited.contains(&key) {
+                break;
+            }
+            visited.push(key);
+            let Some(parent) = dummy_quote_parent_ref(current)
+                .and_then(|parent| self.proof_quote_source_by_derivation_ref(parent))
+            else {
+                break;
+            };
+            if std::ptr::eq(parent, current) {
+                break;
+            }
+            current = parent;
+        }
+        current
+    }
+
+    fn proof_object_edge_clauses(&self, edge: ProofObjectParentEdge) -> Vec<&Clause> {
+        match edge.parent {
+            DerivationParentRef::Clause(parent) => {
+                let clause = match edge.resolution {
+                    ProofObjectParentResolution::ProofStep => {
+                        self.proof_clause_by_derivation_ref(parent)
+                    }
+                    ProofObjectParentResolution::QuoteSource => {
+                        self.proof_quote_source_by_derivation_ref(parent)
+                    }
+                };
+                clause.into_iter().collect()
+            }
+            DerivationParentRef::Demodulator(demodulator) => demodulator_clause_refs(demodulator)
+                .into_iter()
+                .filter_map(|parent| self.proof_clause_by_derivation_ref(parent))
+                .collect(),
+        }
     }
 
     fn mark_proof_clause_parent_refs(&mut self, parents: Vec<DerivationParentRef>) -> u64 {
@@ -1302,6 +1500,75 @@ impl ProofState {
     }
 }
 
+fn proof_object_parent_edges(
+    derivation: Option<&crate::basics::pstacks::PStack<DerivationEntry>>,
+) -> Vec<ProofObjectParentEdge> {
+    let Some(derivation) = derivation else {
+        return Vec::new();
+    };
+
+    let entries = derivation.as_slice();
+    let mut edges = Vec::new();
+    let mut index = 0;
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+        let resolution = if op == DC_CNF_QUOTE {
+            ProofObjectParentResolution::QuoteSource
+        } else {
+            ProofObjectParentResolution::ProofStep
+        };
+
+        if op_has_cnf_arg1(op) {
+            push_proof_object_parent_edge(entries, &mut index, resolution, &mut edges);
+        } else if op_has_arg1(op) {
+            index += 1;
+        }
+
+        if op_has_cnf_arg2(op) {
+            push_proof_object_parent_edge(entries, &mut index, resolution, &mut edges);
+        } else if op_has_arg2(op) {
+            index += 1;
+        }
+    }
+    edges
+}
+
+fn push_proof_object_parent_edge(
+    entries: &[DerivationEntry],
+    index: &mut usize,
+    resolution: ProofObjectParentResolution,
+    edges: &mut Vec<ProofObjectParentEdge>,
+) {
+    if let Some(entry) = entries.get(*index) {
+        match entry {
+            DerivationEntry::ClauseParent(parent) => edges.push(ProofObjectParentEdge {
+                parent: DerivationParentRef::Clause(*parent),
+                resolution,
+            }),
+            DerivationEntry::Demodulator(demodulator) => edges.push(ProofObjectParentEdge {
+                parent: DerivationParentRef::Demodulator(*demodulator),
+                resolution: ProofObjectParentResolution::ProofStep,
+            }),
+            DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {}
+        }
+    }
+    *index += 1;
+}
+
+fn dummy_quote_parent_ref(clause: &Clause) -> Option<ClauseDerivationRef> {
+    let derivation = clause.derivation()?;
+    match derivation.as_slice() {
+        [DerivationEntry::Operation(DC_CNF_QUOTE), DerivationEntry::ClauseParent(parent)] => {
+            Some(*parent)
+        }
+        _ => None,
+    }
+}
+
 pub fn proof_state_alloc(free_symbol_props: FunctionProperties) -> Result<ProofState, Diagnostic> {
     ProofState::new(free_symbol_props)
 }
@@ -1316,7 +1583,8 @@ fn activate_watchlist(watchlist: &mut ClauseSet, terms: &TermBank) {
 #[cfg(test)]
 mod tests {
     use super::{
-        proof_state_alloc, ProofState, ProofStateGcAnalysis, ProofStateStatistics, WatchlistSource,
+        proof_state_alloc, ProofObjectAnalysis, ProofState, ProofStateGcAnalysis,
+        ProofStateStatistics, WatchlistSource,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1576,6 +1844,65 @@ mod tests {
                 clause_count: 2,
                 given_count: 1,
                 used_given_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_analysis_counts_reachable_clause_steps() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut source = simple_clause(&mut state, "proof_analysis_source", 20_006);
+        source.set_csscpa_source(21);
+        let mut selected = simple_clause(&mut state, "proof_analysis_selected", 20_007);
+        selected.set_csscpa_source(22);
+        clause_push_derivation(&mut selected, DC_CNF_QUOTE, Some(&source), None);
+        clause_push_derivation(&mut selected, DC_CNF_EVAL_GC, None, None);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&selected), None);
+
+        state.axioms_mut().insert(source);
+        state.archive_mut().insert(selected);
+
+        assert_eq!(
+            state.proof_object_analysis_for_roots([&root]),
+            ProofObjectAnalysis {
+                clause_step_count: 3,
+                formula_step_count: 0,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 0,
+                initial_clause_count: 1,
+                initial_formula_count: 0,
+                generating_inference_count: 1,
+                simplifying_inference_count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn proof_state_proof_object_analysis_follows_quote_source_for_duplicate_refs() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = simple_clause(&mut state, "proof_analysis_duplicate_original", 20_008);
+        let mut selected_copy =
+            simple_clause(&mut state, "proof_analysis_duplicate_selected", 20_008);
+        clause_push_derivation(&mut selected_copy, DC_CNF_QUOTE, Some(&original), None);
+        clause_push_derivation(&mut selected_copy, DC_CNF_EVAL_GC, None, None);
+        let mut root = Clause::alloc(EqnList::new());
+        clause_push_derivation(&mut root, DC_EQ_RES, Some(&selected_copy), None);
+
+        state.axioms_mut().insert(original);
+        state.archive_mut().insert(selected_copy);
+
+        assert_eq!(
+            state.proof_object_analysis_for_roots([&root]),
+            ProofObjectAnalysis {
+                clause_step_count: 3,
+                formula_step_count: 0,
+                clause_conjecture_count: 0,
+                formula_conjecture_count: 0,
+                initial_clause_count: 1,
+                initial_formula_count: 0,
+                generating_inference_count: 1,
+                simplifying_inference_count: 0,
             }
         );
     }

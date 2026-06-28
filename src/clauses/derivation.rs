@@ -372,6 +372,21 @@ pub fn deriv_stack_count_search_inferences(
     (generating_count, simplifying_count)
 }
 
+#[must_use]
+pub fn demodulator_clause_refs(demodulator: RewriteDemodulator) -> Vec<ClauseDerivationRef> {
+    let id = demodulator.id();
+    let mut refs = Vec::with_capacity(2);
+    if let Ok(ident) = i64::try_from(id) {
+        refs.push(ClauseDerivationRef::new(ident, 0));
+    }
+    if let Ok(id) = i128::try_from(id) {
+        if let Ok(negative_ident) = i64::try_from(1_i128 - id) {
+            refs.push(ClauseDerivationRef::new(negative_ident, 0));
+        }
+    }
+    refs
+}
+
 fn read_parent_arg(entries: &[DerivationEntry], index: &mut usize) -> DerivationParentRef {
     let entry = entries
         .get(*index)

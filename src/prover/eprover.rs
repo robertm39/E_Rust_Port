@@ -28,8 +28,8 @@ use crate::clauses::clause_props::{
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    op_has_arg1, op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef,
-    DerivationEntry,
+    demodulator_clause_refs, op_has_arg1, op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2,
+    ClauseDerivationRef, DerivationEntry,
 };
 use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
@@ -37,7 +37,8 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::proofstate::{
-    proof_state_alloc, ProofState, RawFormulaFeatures, WatchlistSource as ProofStateWatchlistSource,
+    proof_state_alloc, ProofObjectAnalysis, ProofState, RawFormulaFeatures,
+    WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::heuristics::clausesetfeatures::{
@@ -82,7 +83,7 @@ use crate::terms::simpletypes::{type_app_encoded_name, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
-use crate::terms::termtypes::{term_identity_id, RewriteDemodulator, RewriteLevel, Term};
+use crate::terms::termtypes::{term_identity_id, RewriteLevel, Term};
 use crate::terms::typebanks::TypeBank;
 
 const MEGA: u64 = 1_048_576;
@@ -4692,6 +4693,13 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         next_doc_ident,
     )?;
+    write_supported_proof_object_statistics(
+        output,
+        config,
+        &state,
+        &outcome,
+        inference_system_complete,
+    )?;
     process_success_proof_object_gc(output, config, &mut state, &outcome)?;
     let saturated_success = match &outcome {
         SaturateOutcome::Returned { clause, .. } => Some(clause.as_ref()),
@@ -5622,6 +5630,129 @@ fn write_saturation_proof_object_clause(
     Ok(())
 }
 
+fn write_supported_proof_object_statistics(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    state: &ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
+) -> Result<(), EProverError> {
+    if config.proof_object_level <= 0 || !config.flags.contains(EProverFlag::ProofStatistics) {
+        return Ok(());
+    }
+
+    let analysis = match outcome {
+        SaturateOutcome::Returned { clause, .. } => {
+            let mut roots = vec![clause.as_ref()];
+            if config.flags.contains(EProverFlag::FullDerivation) {
+                roots.extend(proof_object_saturation_roots(state));
+                roots.extend(state.unprocessed().iter());
+            }
+            state.proof_object_analysis_for_roots(roots)
+        }
+        SaturateOutcome::Stopped { .. }
+            if should_analyse_saturation_proof_object(
+                config,
+                state,
+                outcome,
+                inference_system_complete,
+            ) =>
+        {
+            state.proof_object_analysis_for_roots(proof_object_saturation_roots(state))
+        }
+        SaturateOutcome::Stopped { .. } => return Ok(()),
+    };
+
+    write_proof_object_analysis(output, analysis)
+}
+
+fn should_analyse_saturation_proof_object(
+    config: &EProverConfig,
+    state: &ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
+) -> bool {
+    config.proof_object_level > 0
+        && state.statistics().answer_count == 0
+        && matches!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::Saturated,
+                ..
+            }
+        )
+        && inference_system_complete
+        && state.state_is_complete()
+        && !state.has_interpreted_symbols()
+}
+
+fn proof_object_saturation_roots(state: &ProofState) -> Vec<&Clause> {
+    state
+        .processed_pos_rules()
+        .iter()
+        .chain(state.processed_pos_eqns().iter())
+        .chain(state.processed_neg_units().iter())
+        .chain(state.processed_non_units().iter())
+        .collect()
+}
+
+fn write_proof_object_analysis(
+    output: &mut impl Write,
+    analysis: ProofObjectAnalysis,
+) -> Result<(), EProverError> {
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object total steps             : {}",
+        analysis.total_step_count()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object clause steps            : {}",
+        analysis.clause_step_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object formula steps           : {}",
+        analysis.formula_step_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object conjectures             : {}",
+        analysis.conjecture_count()
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object clause conjectures      : {}",
+        analysis.clause_conjecture_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object formula conjectures     : {}",
+        analysis.formula_conjecture_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object initial clauses used    : {}",
+        analysis.initial_clause_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object initial formulas used   : {}",
+        analysis.initial_formula_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object generating inferences   : {}",
+        analysis.generating_inference_count
+    )?;
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Proof object simplifying inferences  : {}",
+        analysis.simplifying_inference_count
+    )?;
+    Ok(())
+}
+
 fn proof_object_success_doc_ident(
     config: &EProverConfig,
     clause: &Clause,
@@ -5831,18 +5962,6 @@ fn clause_set_find_clause_by_ref(
         clause.ident() == parent_key.0
             && (parent_key.1 == 0 || clause.query_csscpa_source() == parent_key.1)
     })
-}
-
-fn demodulator_clause_refs(demodulator: RewriteDemodulator) -> Vec<ClauseDerivationRef> {
-    let id = demodulator.id();
-    let mut refs = Vec::with_capacity(2);
-    if let Ok(ident) = i64::try_from(id) {
-        refs.push(ClauseDerivationRef::new(ident, 0));
-    }
-    if let Ok(negative_ident) = i64::try_from(1_i128 - id as i128) {
-        refs.push(ClauseDerivationRef::new(negative_ident, 0));
-    }
-    refs
 }
 
 const fn clause_derivation_ref_key(parent_ref: ClauseDerivationRef) -> (i64, u64) {
@@ -14788,6 +14907,41 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_statistics_with_record_gcs_prints_success_proof_object_analysis() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-statistics-record-gcs");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--proof-statistics",
+                "--record-gcs",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(printed.contains("% Proof object total steps             : 2\n"));
+        assert!(printed.contains("% Proof object clause steps            : 2\n"));
+        assert!(printed.contains("% Proof object formula steps           : 0\n"));
+        assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
+        assert!(printed.contains("% Proof object generating inferences   : 0\n"));
+        assert!(printed.contains("% Proof object simplifying inferences  : 1\n"));
+        assert!(!printed.contains("SZS output start CNFRefutation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_training_examples_prints_counts_and_requested_sections() {
         let _guard = global_state_lock();
         let path = temp_path("proof-object-training-examples");
@@ -14879,6 +15033,40 @@ mod tests {
         assert!(printed.contains("(p(a))"));
         assert!(printed.contains("% SZS output end Saturation\n"));
         assert!(!printed.contains("CNFRefutation"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_statistics_prints_saturation_proof_object_analysis() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-statistics-saturation");
+        std::fs::write(&path, "cnf(keep, axiom, (p(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--proof-object=1",
+                "--proof-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% SZS output start Saturation\n"));
+        assert!(printed.contains("% Proof object total steps             : 1\n"));
+        assert!(printed.contains("% Proof object clause steps            : 1\n"));
+        assert!(printed.contains("% Proof object formula steps           : 0\n"));
+        assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
+        assert!(printed.contains("% Proof object generating inferences   : 0\n"));
+        assert!(printed.contains("% Proof object simplifying inferences  : 0\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
