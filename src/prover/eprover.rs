@@ -4621,8 +4621,8 @@ fn run_proof_search<W: Write + ?Sized>(
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
     }
-    load_configured_watchlist(config, &mut state)?;
     let next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
+    let next_doc_ident = load_configured_watchlist(output, config, &mut state, next_doc_ident)?;
 
     apply_auto_mode_search_selection(
         output,
@@ -5362,19 +5362,22 @@ fn apply_clause_relevance_pruning(
     removed
 }
 
-fn load_configured_watchlist(
+fn load_configured_watchlist<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-) -> Result<(), EProverError> {
+    next_doc_ident: i64,
+) -> Result<i64, EProverError> {
     let Some(source) = &config.search.watchlist.source else {
-        return Ok(());
+        state.load_watchlist(ProofStateWatchlistSource::Disabled, config.parse_format)?;
+        return Ok(next_doc_ident);
     };
     let proof_state_source = match source {
         WatchlistSource::Inline => ProofStateWatchlistSource::Inline,
         WatchlistSource::File(path) => ProofStateWatchlistSource::File(Path::new(path)),
     };
     state.load_watchlist(proof_state_source, config.parse_format)?;
-    Ok(())
+    write_watchlist_initial_clause_docs(output, config, state, next_doc_ident)
 }
 
 fn write_initial_clause_docs<W: Write + ?Sized>(
@@ -5387,8 +5390,35 @@ fn write_initial_clause_docs<W: Write + ?Sized>(
     }
 
     let (bank, axioms) = state.terms_and_axioms_mut();
-    let mut ident = 0_i64;
-    for clause in axioms.iter_mut() {
+    write_clause_set_initial_docs(output, config, bank, axioms, 1)
+}
+
+fn write_watchlist_initial_clause_docs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    next_doc_ident: i64,
+) -> Result<i64, EProverError> {
+    if config.output_level < 2 {
+        return Ok(next_doc_ident);
+    }
+
+    let (bank, watchlist) = state.terms_and_watchlist_mut();
+    let Some(watchlist) = watchlist else {
+        return Ok(next_doc_ident);
+    };
+    write_clause_set_initial_docs(output, config, bank, watchlist, next_doc_ident)
+}
+
+fn write_clause_set_initial_docs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    bank: &TermBank,
+    set: &mut ClauseSet,
+    start_ident: i64,
+) -> Result<i64, EProverError> {
+    let mut ident = start_ident.saturating_sub(1);
+    for clause in set.iter_mut() {
         ident = ident.saturating_add(1);
         clause.set_ident(ident);
         write_initial_clause_doc(output, config, bank, clause)?;
@@ -16194,8 +16224,18 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        assert!(printed
-            .contains("\n     2 : :[++p(a)] : 1 : 'final_subsumes_wl'\n\n% Watchlist is empty!\n"));
+        let input_doc =
+            format!("     1 : :[++p(a)] : XX\ninitial(\"{input_arg}\", at_line_1_column_1)\n");
+        let watch_doc = format!(
+            "     2 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1)\n",
+            watch_path.to_string_lossy()
+        );
+        let final_doc = "     3 : :[++p(a)] : 1 : 'final_subsumes_wl'\n\n% Watchlist is empty!\n";
+        let input_doc_pos = printed.find(&input_doc).unwrap();
+        let watch_doc_pos = printed.find(&watch_doc).unwrap();
+        let final_doc_pos = printed.find(final_doc).unwrap();
+        assert!(input_doc_pos < watch_doc_pos);
+        assert!(watch_doc_pos < final_doc_pos);
         assert!(printed.contains("% SZS status ResourceOut\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();

@@ -295,6 +295,13 @@ impl ProofState {
         (terms, axioms)
     }
 
+    pub fn terms_and_watchlist_mut(&mut self) -> (&mut TermBank, Option<&mut ClauseSet>) {
+        let Self {
+            terms, watchlist, ..
+        } = self;
+        (terms, watchlist.as_mut())
+    }
+
     pub fn terms_and_unprocessed_mut(&mut self) -> (&mut TermBank, &mut ClauseSet) {
         let Self {
             terms, unprocessed, ..
@@ -1165,7 +1172,8 @@ impl ProofState {
     ///
     /// File sources are parsed into the existing watchlist set and then require
     /// end-of-file. Inline sources skip parsing but still activate the current
-    /// watchlist. Disabled sources drop the optional watchlist.
+    /// watchlist. Disabled sources drop the optional watchlist. C's initial
+    /// documentation output is emitted by the executable compatibility layer.
     ///
     /// # Errors
     ///
