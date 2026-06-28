@@ -14686,6 +14686,40 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_print_sat_info_comments_saturated_clauses() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-print-sat-info");
+        std::fs::write(&path, "a=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--no-generation",
+                "--print-saturated=e",
+                "--print-sat-info",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("% Processed positive unit clauses:\n"));
+        assert!(
+            printed.lines().any(|line| line.contains("<- . % info(")),
+            "{printed}"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_closes_with_configured_global_pm_indexes() {
         let _guard = global_state_lock();
         let path = temp_path("proof-global-pm-indexes");
