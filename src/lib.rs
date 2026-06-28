@@ -1,4 +1,6 @@
-#![forbid(unsafe_code)]
+// Unsafe remains denied by default; standards-compliant DLL FFI modules may
+// locally allow it with documented safety invariants.
+#![deny(unsafe_code)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::module_name_repetitions)]
 
