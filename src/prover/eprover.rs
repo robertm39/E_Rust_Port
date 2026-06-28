@@ -22,9 +22,9 @@ use crate::clauses::clause::{
     clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
-    clause_type_from_identifier, FormulaProperties, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_AXIOM,
-    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
-    CP_TYPE_QUESTION,
+    clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
+    CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
+    CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -5006,6 +5006,14 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
     inference_system_complete: bool,
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
+    write_stopped_result_doc_quotes(
+        output,
+        config,
+        state,
+        outcome,
+        inference_system_complete,
+        next_doc_ident,
+    )?;
     write_proof_search_result(
         output,
         config,
@@ -5027,6 +5035,108 @@ fn write_proof_search_result_outputs<W: Write + ?Sized>(
         }
     }
     Ok(())
+}
+
+fn write_stopped_result_doc_quotes<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
+    next_doc_ident: i64,
+) -> Result<(), EProverError> {
+    if config.output_level < 2 {
+        return Ok(());
+    }
+
+    let Some((prop, comment)) =
+        stopped_result_doc_quote_spec(config, state, outcome, inference_system_complete)
+    else {
+        return Ok(());
+    };
+
+    write_proof_state_prop_doc_quote(output, config, state, prop, comment, next_doc_ident)?;
+    Ok(())
+}
+
+fn stopped_result_doc_quote_spec(
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    outcome: &SaturateOutcome,
+    inference_system_complete: bool,
+) -> Option<(FormulaProperties, &'static str)> {
+    match outcome {
+        SaturateOutcome::Returned { .. } => None,
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::WatchlistEmpty,
+            ..
+        } => Some((CP_SUBSUMES_WATCH, "final_subsumes_wl")),
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::Saturated,
+            ..
+        } if state.unprocessed().is_empty()
+            && state.state_is_complete()
+            && (inference_system_complete
+                || config.search.completeness.assume_inference_system_complete) =>
+        {
+            Some((CP_IGNORE_PROPS, "final"))
+        }
+        SaturateOutcome::Stopped { .. } => Some((CP_IGNORE_PROPS, "exists")),
+    }
+}
+
+fn write_proof_state_prop_doc_quote<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &crate::clauses::proofstate::ProofState,
+    prop: FormulaProperties,
+    comment: &str,
+    mut doc_ident: i64,
+) -> Result<(), EProverError> {
+    for set in [
+        state.processed_pos_rules(),
+        state.processed_pos_eqns(),
+        state.processed_neg_units(),
+        state.processed_non_units(),
+        state.unprocessed(),
+    ] {
+        doc_ident = write_clause_set_prop_doc_quote(
+            output,
+            config,
+            state.terms(),
+            set,
+            prop,
+            comment,
+            doc_ident,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_clause_set_prop_doc_quote<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    bank: &TermBank,
+    set: &ClauseSet,
+    prop: FormulaProperties,
+    comment: &str,
+    mut doc_ident: i64,
+) -> Result<i64, EProverError> {
+    for clause in set.iter() {
+        if clause.query_prop(prop) {
+            write_clause_quote_doc(
+                output,
+                config,
+                bank,
+                clause,
+                doc_ident,
+                clause.ident(),
+                comment,
+            )?;
+            doc_ident = doc_ident.saturating_add(1);
+        }
+    }
+    Ok(doc_ident)
 }
 
 fn process_success_proof_object_gc<W: Write + ?Sized>(
@@ -5430,7 +5540,7 @@ fn write_proof_success_doc(
     }
 }
 
-fn proof_success_doc_clause_with_parent(
+fn clause_quote_doc_clause_with_parent(
     clause: &Clause,
     doc_ident: i64,
     parent_ident: i64,
@@ -5439,6 +5549,41 @@ fn proof_success_doc_clause_with_parent(
     quoted.del_prop(CP_INPUT_FORMULA);
     quoted.set_ident(doc_ident);
     (quoted, parent_ident)
+}
+
+fn write_clause_quote_doc<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+    comment: &str,
+) -> Result<(), EProverError> {
+    match effective_doc_output_format(config) {
+        DocOutputFormat::Pcl => write_pcl_clause_quote_doc_with_parent(
+            output,
+            config,
+            bank,
+            clause,
+            doc_ident,
+            parent_ident,
+            comment,
+        ),
+        DocOutputFormat::Tstp => write_tstp_clause_quote_doc_with_parent(
+            output,
+            config,
+            bank,
+            clause,
+            doc_ident,
+            parent_ident,
+            comment,
+        ),
+        _ => {
+            write_comment_line(output, "Output format not implemented.")?;
+            Ok(())
+        }
+    }
 }
 
 fn write_pcl_proof_success_doc(
@@ -5459,7 +5604,27 @@ fn write_pcl_proof_success_doc_with_parent(
     doc_ident: i64,
     parent_ident: i64,
 ) -> Result<(), EProverError> {
-    let (quoted, old_id) = proof_success_doc_clause_with_parent(clause, doc_ident, parent_ident);
+    write_pcl_clause_quote_doc_with_parent(
+        output,
+        config,
+        bank,
+        clause,
+        doc_ident,
+        parent_ident,
+        "proof",
+    )
+}
+
+fn write_pcl_clause_quote_doc_with_parent(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+    comment: &str,
+) -> Result<(), EProverError> {
+    let (quoted, old_id) = clause_quote_doc_clause_with_parent(clause, doc_ident, parent_ident);
     let mut rendered = String::new();
     write_pcl_doc_step_start(
         &mut rendered,
@@ -5471,9 +5636,9 @@ fn write_pcl_proof_success_doc_with_parent(
     .map_err(proof_doc_write_error)?;
     write!(&mut rendered, "{old_id}").map_err(proof_doc_write_error)?;
     if config.pcl_output.compact {
-        rendered.push_str(":'proof'\n");
+        writeln!(&mut rendered, ":'{comment}'").map_err(proof_doc_write_error)?;
     } else {
-        rendered.push_str(" : 'proof'\n");
+        writeln!(&mut rendered, " : '{comment}'").map_err(proof_doc_write_error)?;
     }
     output.write_all(rendered.as_bytes())?;
     Ok(())
@@ -5504,7 +5669,27 @@ fn write_tstp_proof_success_doc_with_parent(
     doc_ident: i64,
     parent_ident: i64,
 ) -> Result<(), EProverError> {
-    let (quoted, old_id) = proof_success_doc_clause_with_parent(clause, doc_ident, parent_ident);
+    write_tstp_clause_quote_doc_with_parent(
+        output,
+        config,
+        bank,
+        clause,
+        doc_ident,
+        parent_ident,
+        "proof",
+    )
+}
+
+fn write_tstp_clause_quote_doc_with_parent(
+    output: &mut impl Write,
+    config: &EProverConfig,
+    bank: &TermBank,
+    clause: &Clause,
+    doc_ident: i64,
+    parent_ident: i64,
+    comment: &str,
+) -> Result<(), EProverError> {
+    let (quoted, old_id) = clause_quote_doc_clause_with_parent(clause, doc_ident, parent_ident);
     let mut rendered = String::new();
     clause_write_tstp_with_type_suffixes(
         &mut rendered,
@@ -5515,7 +5700,7 @@ fn write_tstp_proof_success_doc_with_parent(
         crate::basics::simple_stuff::ProblemType::FirstOrder,
         config.encoding.print_types,
     )?;
-    writeln!(&mut rendered, ", c_0_{old_id},['proof']).").map_err(proof_doc_write_error)?;
+    writeln!(&mut rendered, ", c_0_{old_id},['{comment}']).").map_err(proof_doc_write_error)?;
     output.write_all(rendered.as_bytes())?;
     Ok(())
 }
@@ -15051,9 +15236,36 @@ mod tests {
             default_preprocessing_debug_line()
         );
         assert!(printed.starts_with(&expected_prefix));
+        assert!(printed.contains(
+            "\n     2 : :[++p(a)] : 1 : 'exists'\n\n% Clause set closed under restricted calculus!\n"
+        ));
         assert!(printed.contains("\n% Clause set closed under restricted calculus!\n"));
         assert!(printed.contains("% SZS status GaveUp\n"));
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_quotes_final_saturated_clauses_in_default_pcl() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-final-docs-pcl");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--output-level=2", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("\n     2 : :[++p(a)] : 1 : 'final'\n\n% No proof found!\n"));
+        assert!(printed.contains("% SZS status Satisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -15949,6 +16161,42 @@ mod tests {
                 default_preprocessing_debug_line()
             )
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&input_path).unwrap();
+        std::fs::remove_file(&watch_path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_quotes_watchlist_subsumers_in_default_pcl() {
+        let _guard = global_state_lock();
+        let input_path = temp_path("proof-watch-final-doc-input");
+        let watch_path = temp_path("proof-watch-final-doc-list");
+        std::fs::write(&input_path, "p(a).\n").unwrap();
+        std::fs::write(&watch_path, "p(a).\n").unwrap();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let watch_arg = format!("--watchlist={}", watch_path.to_string_lossy());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--output-level=2",
+                "--no-generation",
+                watch_arg.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(printed
+            .contains("\n     2 : :[++p(a)] : 1 : 'final_subsumes_wl'\n\n% Watchlist is empty!\n"));
+        assert!(printed.contains("% SZS status ResourceOut\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&input_path).unwrap();
         std::fs::remove_file(&watch_path).unwrap();

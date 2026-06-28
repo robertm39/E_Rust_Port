@@ -256,6 +256,7 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 - `ClauseSetFVIndexify` extracts clauses from the front into a stack and then pops them back into the set as indexed clauses, so the final set order is reversed. Rust preserves that LIFO reinsertion and `CPIsSIndexed` marking for both the transition explicit-anchor helper and the owned optional FV-anchor path.
 - `ClauseSetIndexedInsertClauseSet` recomputes each source clause's standard weight before indexed insertion and keeps source iteration order. Rust preserves that behavior through explicit-anchor wrappers and the owned optional FV-anchor API.
 - `ClauseSetExtractEntry` deletes `CPIsSIndexed` clauses from `set->fvindex` and clears the property during extraction. Rust mirrors that lifecycle for owned FV anchors while keeping the explicit-anchor helpers as transition APIs until full proof-state set ownership is wired.
+- `ClauseSetPropDocQuote` filters with the same all-bits property query as `ClauseQueryProp`, so `CPIgnoreProps` intentionally quotes every clause. Rust mirrors that filter for supported final proof-search documentation quotes before the result banner.
 
 ### Change-Later Observations
 
