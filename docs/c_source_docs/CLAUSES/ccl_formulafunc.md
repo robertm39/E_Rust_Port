@@ -181,6 +181,7 @@ Source files reviewed: `CLAUSES/ccl_formulafunc.h`, `CLAUSES/ccl_formulafunc.c`.
 ### Change-Later Observations
 
 - `WFormulaAnnotateQuestion` mutates `question` formulas, and optionally `conjecture` formulas under `--conjectures-are-questions`, into `conjecture` before conjecture negation. `TFormulaAnnotateQuestion` only adds a `~$answer(esk(...))` literal when the formula starts with one or more leading existential quantifiers; non-leading existential variables are not included in the answer tuple. Rust now mirrors that behavior in the supported temporary formula bridge for proof/CNF/prune parsing while keeping syntax-only printing role-preserving. A later full `WFormula` port should keep this preprocessing step explicit instead of hiding role mutation in raw parsing.
+- `FormulaAndClauseSetParse` routes every parsed entry whose resulting type is `CPTypeWatchClause` into the caller-provided `wlset`, including recursively parsed includes after selector filtering, while all non-watchlist entries go to the normal formula set. Rust now mirrors this for supported TPTP/TSTP input by splitting lowered clauses into normal input and inline watchlist sets; a later parser API should make the two output channels explicit instead of coupling watchlist storage to formula-role classification.
 
 ### Porting Focus
 

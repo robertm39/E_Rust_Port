@@ -24,7 +24,7 @@ use crate::clauses::clause::{
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
     CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
-    CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+    CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -4210,6 +4210,7 @@ fn run_syntax_only(
 ) -> Result<(), EProverError> {
     let mut bank = temporary_executable_term_bank(config.free_symbol_properties)?;
     let mut clauses = ClauseSet::new();
+    let mut watchlist = ClauseSet::new();
 
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
     let files = config.files.clone();
@@ -4221,6 +4222,7 @@ fn run_syntax_only(
             FormulaPreprocessing::PARSE_ONLY,
             &mut bank,
             &mut clauses,
+            &mut watchlist,
         )?;
         if parsed_file.formula_conjecture_seen {
             config.flags.set(EProverFlag::FormulaConjectureSeen);
@@ -5227,12 +5229,14 @@ fn parse_input_files_into_axioms(
     for file in &files {
         let before = state.axioms().len();
         let mut parsed = ClauseSet::new();
+        let mut parsed_watchlist = ClauseSet::new();
         let parsed_file = parse_clause_file(
             file,
             config.parse_format,
             FormulaPreprocessing::from_config(config),
             state.terms_mut(),
             &mut parsed,
+            &mut parsed_watchlist,
         )?;
         if parsed_file.formula_conjecture_seen {
             config.flags.set(EProverFlag::FormulaConjectureSeen);
@@ -5242,6 +5246,15 @@ fn parse_input_files_into_axioms(
         parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
         state.add_raw_formula_features(parsed_file.raw_formula_features);
         state.axioms_mut().insert_set(&mut parsed);
+        if !parsed_watchlist.is_empty() {
+            let watchlist = state.watchlist_mut().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "Cannot store inline watchlist clauses after the watchlist has been disabled",
+                )
+            })?;
+            watchlist.insert_set(&mut parsed_watchlist);
+        }
         if config.flags.contains(EProverFlag::RequireNonempty) && parsed_count == 0 {
             return Err(Diagnostic::new(
                 ErrorCode::INPUT_SEMANTIC_ERROR,
@@ -6832,6 +6845,7 @@ fn parse_clause_file(
     formula_preprocessing: FormulaPreprocessing,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
+    watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
     set_problem_type(ProblemType::FirstOrder)?;
     let mut scanner = if file == "-" {
@@ -6852,14 +6866,26 @@ fn parse_clause_file(
     let mut raw_formula_features = RawFormulaFeatures::default();
     match detected_format {
         IoFormat::Tstp => {
-            let parsed =
-                parse_tstp_entry_list(&mut scanner, bank, clauses, None, formula_preprocessing)?;
+            let parsed = parse_tstp_entry_list(
+                &mut scanner,
+                bank,
+                clauses,
+                watchlist,
+                None,
+                formula_preprocessing,
+            )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
         }
         IoFormat::Tptp => {
-            let parsed =
-                parse_tptp_entry_list(&mut scanner, bank, clauses, None, formula_preprocessing)?;
+            let parsed = parse_tptp_entry_list(
+                &mut scanner,
+                bank,
+                clauses,
+                watchlist,
+                None,
+                formula_preprocessing,
+            )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
         }
@@ -7094,6 +7120,7 @@ fn parse_tptp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
+    watchlist: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
 ) -> Result<ParsedEntryList, Diagnostic> {
@@ -7105,15 +7132,17 @@ fn parse_tptp_entry_list(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
-                clauses.insert(clause);
+                insert_input_or_watchlist_clause(clauses, watchlist, clause);
             }
         } else if scanner.test_id("input_formula") {
             let parsed = parse_simple_tptp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
-                result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
-                result.raw_formula_features.add(parsed.raw_formula_features);
+                if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
+                    result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                    result.raw_formula_features.add(parsed.raw_formula_features);
+                }
                 for clause in parsed.clauses {
-                    clauses.insert(clause);
+                    insert_input_or_watchlist_clause(clauses, watchlist, clause);
                 }
             }
         } else if scanner.test_id("include") {
@@ -7126,6 +7155,7 @@ fn parse_tptp_entry_list(
                     &mut included,
                     bank,
                     clauses,
+                    watchlist,
                     Some(&mut include_selectors),
                     formula_preprocessing,
                 )?);
@@ -7151,6 +7181,7 @@ fn parse_tstp_entry_list(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     clauses: &mut ClauseSet,
+    watchlist: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
 ) -> Result<ParsedEntryList, Diagnostic> {
@@ -7162,15 +7193,17 @@ fn parse_tstp_entry_list(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
-                clauses.insert(clause);
+                insert_input_or_watchlist_clause(clauses, watchlist, clause);
             }
         } else if scanner.test_id("fof|tff|tcf") {
             let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
-                result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
-                result.raw_formula_features.add(parsed.raw_formula_features);
+                if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
+                    result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
+                    result.raw_formula_features.add(parsed.raw_formula_features);
+                }
                 for clause in parsed.clauses {
-                    clauses.insert(clause);
+                    insert_input_or_watchlist_clause(clauses, watchlist, clause);
                 }
             }
         } else if scanner.test_id("include") {
@@ -7183,6 +7216,7 @@ fn parse_tstp_entry_list(
                     &mut included,
                     bank,
                     clauses,
+                    watchlist,
                     Some(&mut include_selectors),
                     formula_preprocessing,
                 )?);
@@ -7204,6 +7238,18 @@ fn parse_tstp_entry_list(
         check_tstp_include_selectors_found(scanner, selector_tree)?;
     }
     Ok(result)
+}
+
+fn insert_input_or_watchlist_clause(
+    clauses: &mut ClauseSet,
+    watchlist: &mut ClauseSet,
+    clause: Clause,
+) {
+    if clause.query_tptp_type() == CP_TYPE_WATCH_CLAUSE {
+        watchlist.insert(clause);
+    } else {
+        clauses.insert(clause);
+    }
 }
 
 fn thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
@@ -7273,6 +7319,7 @@ fn check_tstp_include_selectors_found(
 
 struct ParsedSimpleFofClause {
     name: String,
+    raw_formula_type: FormulaProperties,
     clauses: Vec<Clause>,
     formula_conjecture_seen: bool,
     raw_formula_features: RawFormulaFeatures,
@@ -7416,6 +7463,7 @@ fn parse_simple_tstp_formula_clause(
         scanner.accept_tok(TokenType::FULLSTOP)?;
         return Ok(ParsedSimpleFofClause {
             name,
+            raw_formula_type: CP_TYPE_AXIOM,
             clauses: Vec::new(),
             formula_conjecture_seen: false,
             raw_formula_features: RawFormulaFeatures::default(),
@@ -7481,6 +7529,7 @@ fn parse_simple_tstp_formula_clause(
         simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
     Ok(ParsedSimpleFofClause {
         name,
+        raw_formula_type,
         clauses,
         formula_conjecture_seen,
         raw_formula_features,
@@ -7551,6 +7600,7 @@ fn parse_simple_tptp_formula_clause(
         simple_fof_raw_formula_features_with_lowered_clauses(raw_formula_features, &clauses);
     Ok(ParsedSimpleFofClause {
         name,
+        raw_formula_type,
         clauses,
         formula_conjecture_seen,
         raw_formula_features,
@@ -16197,6 +16247,94 @@ mod tests {
     }
 
     #[test]
+    fn run_output_level_two_documents_inline_watchlist_after_input_clauses() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-inline-watch-docs");
+        std::fs::write(
+            &path,
+            "tcf(watch, watchlist, p(a)).\ncnf(input, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--output-level=2",
+                "--no-generation",
+                "--watchlist=Use inline watchlist type",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        let input_doc = format!("cnf(c_0_1, axiom, (p(a)), file('{path_arg}', input)).\n");
+        let watch_doc = format!("cnf(c_0_2, watchlist, (p(a)), file('{path_arg}', watch)).\n");
+        let final_doc =
+            "cnf(c_0_3, plain, (p(a)), c_0_1,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+        let input_doc_pos = printed.find(&input_doc).unwrap();
+        let watch_doc_pos = printed.find(&watch_doc).unwrap();
+        let final_doc_pos = printed.find(final_doc).unwrap();
+        assert!(input_doc_pos < watch_doc_pos);
+        assert!(watch_doc_pos < final_doc_pos);
+        assert!(printed.contains("% SZS status ResourceOut\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_uses_selected_inline_watchlist_from_include() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-inline-watch-include-inc");
+        let path = temp_path("proof-inline-watch-include-main");
+        std::fs::write(
+            &include_path,
+            "tcf(selected, watchlist, p(a)).\n\
+             tcf(unselected, watchlist, q(a)).\n",
+        )
+        .unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}',[selected]).\ncnf(input, axiom, p(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--no-generation",
+                "--watchlist=Use inline watchlist type",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}\n% Watchlist is empty!\n% SZS status ResourceOut\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_quotes_watchlist_subsumers_in_default_pcl() {
         let _guard = global_state_lock();
         let input_path = temp_path("proof-watch-final-doc-input");
@@ -17705,6 +17843,34 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             "\n% Parsing successful!\n% SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_error_on_empty_ignores_tcf_watchlist_formula_role() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tcf-watchlist-role-empty");
+        std::fs::write(&path, "tcf(watch, watchlist, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--syntax-only",
+                "--error-on-empty",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+        assert!(error.message().contains("did not contain any clauses"));
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
