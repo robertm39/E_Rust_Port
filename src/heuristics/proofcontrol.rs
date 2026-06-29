@@ -3691,6 +3691,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         if clause.evaluate_answer_literals(state.terms()) != 0 {
             clause_push_derivation(&mut clause, DC_EVAL_ANSWERS, None, None);
         }
+        state.push_extract_root(clause.clone());
         return Ok(ProcessClauseOutcome::Returned { clause, reason });
     }
 
@@ -3789,6 +3790,17 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             processed_ident,
             control.heuristic_parms().lambda_demod,
         )?;
+    }
+    if answer_detected {
+        let root = proof_state_processed_clause_by_class(state, class, processed_ident)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "processed answer clause disappeared before extraction-root recording",
+                )
+            })?;
+        state.push_extract_root(root);
     }
     if control.heuristic_parms().watchlist_simplify {
         let processed_clause =
@@ -4151,45 +4163,62 @@ fn proof_state_saturate_impl(
             }
             ProcessClauseOutcome::Replaced { empty } => {
                 if let Some(clause) = empty {
-                    return Ok(SaturateOutcome::Returned {
-                        clause: Box::new(clause),
-                        reason: SaturateReturnReason::ReplacingInference,
+                    return Ok(proof_state_saturate_return_with_extract_root(
+                        state,
+                        clause,
+                        SaturateReturnReason::ReplacingInference,
                         processed_steps,
-                    });
+                    ));
                 }
             }
             ProcessClauseOutcome::Processed {
                 generated_empty, ..
             } => {
                 if let Some(clause) = generated_empty {
-                    return Ok(SaturateOutcome::Returned {
-                        clause: Box::new(clause),
-                        reason: SaturateReturnReason::GeneratedClause,
+                    return Ok(proof_state_saturate_return_with_extract_root(
+                        state,
+                        clause,
+                        SaturateReturnReason::GeneratedClause,
                         processed_steps,
-                    });
+                    ));
                 }
             }
         }
 
         let cleanup = proof_state_cleanup_unprocessed_clauses(state, control)?;
         if let Some(clause) = cleanup.unsatisfiable {
-            return Ok(SaturateOutcome::Returned {
-                clause: Box::new(clause),
-                reason: SaturateReturnReason::Cleanup,
+            return Ok(proof_state_saturate_return_with_extract_root(
+                state,
+                clause,
+                SaturateReturnReason::Cleanup,
                 processed_steps,
-            });
+            ));
         }
 
         if let Some(clause) =
             proof_state_saturate_sat_check_gate(state, control, &mut sat_check_thresholds)?
         {
-            state.push_extract_root(clause.clone());
-            return Ok(SaturateOutcome::Returned {
-                clause: Box::new(clause),
-                reason: SaturateReturnReason::SatCheck,
+            return Ok(proof_state_saturate_return_with_extract_root(
+                state,
+                clause,
+                SaturateReturnReason::SatCheck,
                 processed_steps,
-            });
+            ));
         }
+    }
+}
+
+fn proof_state_saturate_return_with_extract_root(
+    state: &mut ProofState,
+    clause: Clause,
+    reason: SaturateReturnReason,
+    processed_steps: i64,
+) -> SaturateOutcome {
+    state.push_extract_root(clause.clone());
+    SaturateOutcome::Returned {
+        clause: Box::new(clause),
+        reason,
+        processed_steps,
     }
 }
 
@@ -5342,9 +5371,9 @@ mod tests {
         proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
         ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
         LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        ProcessClauseReturnReason, ProcessedClauseClass, ProofStateWatchlistOutcome,
+        ReplacingInferenceOutcome, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -5554,6 +5583,18 @@ mod tests {
         let right = typed_const(bank, &format!("{stem}_right"));
         let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
             bank, &left, &right, positive,
+        )]));
+        clause.set_ident(ident);
+        clause
+    }
+
+    fn answer_clause_with_id(bank: &mut TermBank, stem: &str, ident: i64) -> Clause {
+        let witness = typed_const(bank, &format!("{stem}_witness"));
+        let answer_code = bank.signature().answer_code();
+        let answer = unary_predicate(bank, answer_code, &witness);
+        let truth = bank.true_term().clone();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+            bank, &answer, &truth, true,
         )]));
         clause.set_ident(ident);
         clause
@@ -8804,6 +8845,84 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_process_clause_records_answer_limit_extract_root() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let selected = answer_clause_with_id(state.terms_mut(), "pc_process_answer_limit", 4_160);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Returned { clause, reason } = outcome else {
+            panic!("first answer should hit the configured answer limit");
+        };
+        assert_eq!(reason, ProcessClauseReturnReason::AnswerLimit);
+        assert!(clause.is_empty());
+        assert_eq!(state.extract_roots(), std::slice::from_ref(&clause));
+        assert_eq!(state.statistics().answer_count, 1);
+        assert_eq!(state.answer_outputs().len(), 2);
+    }
+
+    #[test]
+    fn proof_state_process_clause_records_non_returning_answer_extract_root() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let selected =
+            answer_clause_with_id(state.terms_mut(), "pc_process_answer_continue", 4_161);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+
+        let outcome = proof_state_process_clause(&mut state, &mut control, 2)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            answer_detected,
+            generated_empty,
+            ..
+        } = outcome
+        else {
+            panic!("answer below the limit should keep processing");
+        };
+        assert!(answer_detected);
+        assert!(generated_empty.is_none());
+        assert_eq!(state.extract_roots().len(), 1);
+        let root = &state.extract_roots()[0];
+        assert_eq!(root.ident(), 4_161);
+        assert!(root.is_sem_false());
+        assert!(!root.is_empty());
+        assert_eq!(state.statistics().answer_count, 1);
+        assert_eq!(state.processed_cardinality(), 1);
+    }
+
+    #[test]
+    fn proof_state_saturate_return_with_extract_root_records_root() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut empty = Clause::empty();
+        empty.set_ident(4_162);
+
+        let outcome = super::proof_state_saturate_return_with_extract_root(
+            &mut state,
+            empty,
+            SaturateReturnReason::GeneratedClause,
+            3,
+        );
+
+        let SaturateOutcome::Returned {
+            clause,
+            reason,
+            processed_steps,
+        } = outcome
+        else {
+            panic!("helper should return a proof-success outcome");
+        };
+        assert_eq!(reason, SaturateReturnReason::GeneratedClause);
+        assert_eq!(processed_steps, 3);
+        assert_eq!(state.extract_roots(), std::slice::from_ref(clause.as_ref()));
+    }
+
+    #[test]
     fn proof_state_saturate_processes_until_unprocessed_empty() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
@@ -8927,10 +9046,15 @@ mod tests {
         )
         .unwrap_or_else(|err| panic!("{err}"));
 
-        let SaturateOutcome::Returned { clause, .. } = outcome else {
+        let SaturateOutcome::Returned { clause, reason, .. } = outcome else {
             panic!("predicate Horn chain should close");
         };
         assert!(clause.is_empty());
+        assert_eq!(
+            reason,
+            SaturateReturnReason::ProcessClause(ProcessClauseReturnReason::EmptyClause)
+        );
+        assert_eq!(state.extract_roots(), std::slice::from_ref(clause.as_ref()));
     }
 
     #[test]
