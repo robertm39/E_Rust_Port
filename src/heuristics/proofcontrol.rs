@@ -4451,9 +4451,9 @@ pub fn proof_state_move_eval_store_to_unprocessed_with_docs(
 
 /// Runs C `check_ac_status` for one newly processed clause.
 ///
-/// Returns true when this call newly activates AC handling. C also prints the
-/// updated signature status in that case; proof-output integration remains a
-/// later outer-layer concern.
+/// Returns true when this call newly activates AC handling. Use
+/// [`proof_state_check_ac_status_with_output`] when the C `OutputLevel`
+/// side effect should be rendered too.
 #[must_use]
 pub fn proof_state_check_ac_status(
     state: &mut ProofState,
@@ -4470,6 +4470,34 @@ pub fn proof_state_check_ac_status(
         return true;
     }
     false
+}
+
+/// Runs C `check_ac_status` and renders the represented `OutputLevel` output.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the output sink fails while printing the signature
+/// AC status or activation line.
+pub fn proof_state_check_ac_status_with_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> Result<bool, Diagnostic> {
+    let activated = proof_state_check_ac_status(state, control, clause);
+    if activated && output_level != 0 {
+        state
+            .terms()
+            .signature()
+            .print_ac_status(output)
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        std::io::Write::write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        std::io::Write::write_all(output, b" AC handling enabled dynamically\n")
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    }
+    Ok(activated)
 }
 
 /// Runs the AC-axiom scan portion of C `ProofStateInit`.
@@ -4714,18 +4742,19 @@ mod tests {
         proof_control_alloc, proof_control_clause_set_filter_reweigth,
         proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_check_ac_status,
-        proof_state_check_watchlist_with_docs, proof_state_cleanup_unprocessed_clauses,
-        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
-        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
-        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
-        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_docs, proof_state_init_with_global_indices,
-        proof_state_insert_new_clauses, proof_state_insert_new_clauses_with_docs,
-        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
+        proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
+        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
+        proof_state_eval_clause_set, proof_state_filter_unprocessed,
+        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
+        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
+        proof_state_init_indexing, proof_state_init_with_docs,
+        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
+        proof_state_insert_new_clauses_with_docs, proof_state_insert_processed_clause,
+        proof_state_move_eval_store_to_unprocessed,
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_global_indices,
@@ -8559,6 +8588,64 @@ mod tests {
         assert!(!already_active);
         assert!(control.ac_handling_active());
         assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+    }
+
+    #[test]
+    fn proof_state_check_ac_status_with_output_reports_dynamic_activation_once() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, f_code) =
+            commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_print_f", 4_094);
+        let mut control = proof_control_alloc();
+        let mut output = Vec::new();
+
+        let activated = proof_state_check_ac_status_with_output(
+            &mut output,
+            1,
+            &mut state,
+            &mut control,
+            &clause,
+        )
+        .unwrap();
+        let already_active = proof_state_check_ac_status_with_output(
+            &mut output,
+            1,
+            &mut state,
+            &mut control,
+            &clause,
+        )
+        .unwrap();
+
+        assert!(activated);
+        assert!(!already_active);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% pc_dynamic_ac_print_f is commutative\n% AC handling enabled dynamically\n"
+        );
+    }
+
+    #[test]
+    fn proof_state_check_ac_status_with_output_obeys_zero_output_level() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, f_code) =
+            commutativity_axiom(state.terms_mut(), "pc_dynamic_ac_quiet_f", 4_095);
+        let mut control = proof_control_alloc();
+        let mut output = Vec::new();
+
+        let activated = proof_state_check_ac_status_with_output(
+            &mut output,
+            0,
+            &mut state,
+            &mut control,
+            &clause,
+        )
+        .unwrap();
+
+        assert!(activated);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert!(output.is_empty());
     }
 
     #[test]
