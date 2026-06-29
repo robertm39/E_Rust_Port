@@ -9,14 +9,14 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
     ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
-    DC_NORMALIZE,
+    DC_FLEX_RESOLVE, DC_NORMALIZE,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::signature::{FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE};
-use crate::terms::simpletypes::{arrow_type_flattened, Type};
+use crate::terms::simpletypes::{arrow_type_flattened, type_is_predicate, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_standard_weight};
@@ -25,6 +25,7 @@ use crate::terms::termtypes::{
     TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS,
 };
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 #[must_use]
 pub fn pstack_clause_print_lop_string(
@@ -353,6 +354,118 @@ pub fn clause_eliminate_naked_boolean_variables(
     let result = clause.literals().find_true(bank).is_some();
     substitution.delete();
     Ok(result)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FlexResolveVarSign {
+    Positive,
+    Negative,
+    InEquality,
+}
+
+/// Applies C `ResolveFlexClause`.
+///
+/// A resolvable clause is replaced by the empty clause and marked with the
+/// `flex_resolve` derivation operation.
+///
+/// # Panics
+///
+/// Panics if a non-equational literal has `$true` as its left term, matching
+/// the C assertion in `ResolveFlexClause`.
+pub fn clause_resolve_flex_clause(clause: &mut Clause, bank: &TermBank) -> bool {
+    let mut variable_signs = BTreeMap::new();
+
+    let is_resolvable = clause
+        .literals()
+        .as_slice()
+        .iter()
+        .all(|literal| flex_literal_is_resolvable(literal, bank, &mut variable_signs));
+
+    if is_resolvable {
+        clause.replace_literals(EqnList::new());
+        clause.set_weight(clause.standard_weight());
+        clause_push_derivation(clause, DC_FLEX_RESOLVE, None, None);
+    }
+
+    is_resolvable
+}
+
+fn flex_literal_is_resolvable(
+    literal: &Eqn,
+    bank: &TermBank,
+    variable_signs: &mut BTreeMap<i64, FlexResolveVarSign>,
+) -> bool {
+    if literal.is_equ_lit(bank) {
+        return flex_equ_literal_is_resolvable(literal, variable_signs);
+    }
+
+    assert!(
+        literal.left() != bank.true_term(),
+        "non-equational flex literal must not be $true"
+    );
+
+    let Some(variable_code) = top_level_free_var_code(literal.left()) else {
+        return false;
+    };
+    let sign = if literal.is_positive() {
+        FlexResolveVarSign::Positive
+    } else {
+        FlexResolveVarSign::Negative
+    };
+
+    if let Some(previous) = variable_signs.get(&variable_code).copied() {
+        previous == sign
+    } else {
+        variable_signs.insert(variable_code, sign);
+        true
+    }
+}
+
+fn flex_equ_literal_is_resolvable(
+    literal: &Eqn,
+    variable_signs: &mut BTreeMap<i64, FlexResolveVarSign>,
+) -> bool {
+    if !literal.is_negative()
+        || !literal.left().is_top_level_free_var()
+        || !literal.right().is_top_level_free_var()
+    {
+        return false;
+    }
+
+    if !literal
+        .left()
+        .type_()
+        .is_some_and(|type_| type_is_predicate(&type_))
+    {
+        return true;
+    }
+
+    let left_code = top_level_free_var_code(literal.left())
+        .unwrap_or_else(|| panic!("left flex equality term must have a free-variable head"));
+    let right_code = top_level_free_var_code(literal.right())
+        .unwrap_or_else(|| panic!("right flex equality term must have a free-variable head"));
+
+    if variable_signs.contains_key(&left_code) || variable_signs.contains_key(&right_code) {
+        return false;
+    }
+
+    variable_signs.insert(left_code, FlexResolveVarSign::InEquality);
+    variable_signs.insert(right_code, FlexResolveVarSign::InEquality);
+    true
+}
+
+fn top_level_free_var_code(term: &Term) -> Option<i64> {
+    if term.is_free_var() {
+        Some(term.f_code())
+    } else if term.is_applied_free_var() {
+        Some(
+            term.argument(0)
+                .unwrap_or_else(|| panic!("applied free variable must have a head"))
+                .f_code(),
+        )
+    } else {
+        None
+    }
 }
 
 /// Applies C `BooleanSimplification` to a clause.
@@ -1202,10 +1315,11 @@ mod tests {
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
         clause_flip_literal_sign_index, clause_is_orphaned_with, clause_recognize_injectivity,
         clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
-        clause_remove_superfluous_literals, clause_set_archive_copy, clause_set_canonize,
-        clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
-        clause_set_replace_injectivity_defs, clause_unit_simplify_test, close_with_db_var,
-        pstack_clause_print_lop_string, tformula_simplify_decoded,
+        clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_archive_copy,
+        clause_set_canonize, clause_set_delete_orphans_with,
+        clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
+        clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
+        tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1217,8 +1331,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
-        DC_REWRITE,
+        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_FLEX_RESOLVE, DC_NORMALIZE,
+        DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
@@ -1256,6 +1370,23 @@ mod tests {
     fn bool_var(bank: &TermBank, code: i64) -> Term {
         let type_ = bank.signature().type_bank().bool_type();
         bank.vars().var_assert_alloc(code, &type_)
+    }
+
+    fn predicate_var(bank: &mut TermBank, code: i64) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
+        bank.vars().var_assert_alloc(code, &predicate_type)
+    }
+
+    fn applied_predicate_var(bank: &mut TermBank, code: i64, arg_name: &str) -> Term {
+        let predicate = predicate_var(bank, code);
+        let argument = typed_const(bank, arg_name);
+        let applied = bank.term_apply_arg(&predicate, &argument);
+        bank.term_top_insert(applied).unwrap()
     }
 
     fn typed_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
@@ -1888,6 +2019,71 @@ mod tests {
         assert!(clause.is_trivial(&bank));
         assert!(variable.binding().is_none());
         assert_eq!(clause.weight(), clause.standard_weight());
+    }
+
+    #[test]
+    fn resolve_flex_clause_negative_applied_predicate_equality_derives_empty() {
+        let mut bank = test_bank();
+        let left = applied_predicate_var(&mut bank, -40, "a");
+        let right = applied_predicate_var(&mut bank, -41, "b");
+        let mut clause = clause_from(vec![literal(&mut bank, &left, &right, false)]);
+
+        assert!(clause_resolve_flex_clause(&mut clause, &bank));
+
+        assert!(clause.is_empty());
+        assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_FLEX_RESOLVE)]
+        );
+    }
+
+    #[test]
+    fn resolve_flex_clause_negative_free_variable_equality_derives_empty() {
+        let mut bank = test_bank();
+        let left = typed_var(&bank, -42);
+        let right = typed_var(&bank, -43);
+        let mut clause = clause_from(vec![literal(&mut bank, &left, &right, false)]);
+
+        assert!(clause_resolve_flex_clause(&mut clause, &bank));
+
+        assert!(clause.is_empty());
+        assert_eq!(clause.weight(), clause.standard_weight());
+    }
+
+    #[test]
+    fn resolve_flex_clause_rejects_conflicting_predicate_literal_signs() {
+        let mut bank = test_bank();
+        let predicate = applied_predicate_var(&mut bank, -44, "a");
+        let true_term = bank.true_term().clone();
+        let positive = literal(&mut bank, &predicate, &true_term, true);
+        let negative = literal(&mut bank, &predicate, &true_term, false);
+        let mut clause = clause_from(vec![positive, negative]);
+        let original = clause.clone();
+
+        assert!(!clause_resolve_flex_clause(&mut clause, &bank));
+
+        assert_eq!(clause.literal_number(), original.literal_number());
+        assert_eq!(clause.weight(), original.weight());
+        assert!(clause.derivation().is_none());
+    }
+
+    #[test]
+    fn resolve_flex_clause_rejects_predicate_variable_also_seen_in_equality() {
+        let mut bank = test_bank();
+        let left = applied_predicate_var(&mut bank, -45, "a");
+        let right = applied_predicate_var(&mut bank, -46, "b");
+        let true_term = bank.true_term().clone();
+        let equality = literal(&mut bank, &left, &right, false);
+        let predicate = literal(&mut bank, &left, &true_term, true);
+        let mut clause = clause_from(vec![equality, predicate]);
+        let original = clause.clone();
+
+        assert!(!clause_resolve_flex_clause(&mut clause, &bank));
+
+        assert_eq!(clause.literal_number(), original.literal_number());
+        assert_eq!(clause.weight(), original.weight());
+        assert!(clause.derivation().is_none());
     }
 
     #[test]

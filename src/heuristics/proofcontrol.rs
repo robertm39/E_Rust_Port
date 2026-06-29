@@ -9,8 +9,9 @@ use crate::clauses::clause_props::{
     CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
 };
 use crate::clauses::clausefunc::{
-    clause_archive, clause_archive_copy, clause_boolean_simplification, clause_is_orphaned_with,
-    clause_remove_ac_resolved, clause_remove_superfluous_literals, clause_set_delete_orphans_with,
+    clause_archive, clause_archive_copy, clause_boolean_simplification,
+    clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_remove_ac_resolved,
+    clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -1916,6 +1917,11 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
         if clause.is_empty() {
             return Ok(Some(fv_index_pack_clause(clause.clone(), None)));
         }
+        if problem_type() == ProblemType::HigherOrder
+            && clause_resolve_flex_clause(clause, state.terms())
+        {
+            return Ok(Some(fv_index_pack_clause(clause.clone(), None)));
+        }
 
         if control.ac_handling_active() && clause.is_ac_redundant(state.terms()) {
             let keep_orientable_unit = clause.is_unit()
@@ -1942,11 +1948,11 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
 
         debug_assert!(!clause.is_trivial(state.terms()));
 
-        if problem_type() == ProblemType::HigherOrder {
-            return Err(Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "forward_contract_keep higher-order flex/naked-boolean hooks are not ported yet",
-            ));
+        if problem_type() == ProblemType::HigherOrder
+            && clause_eliminate_naked_boolean_variables(clause, state.terms_mut())?
+        {
+            counts.trivial += 1;
+            return Ok(None);
         }
 
         if proof_state_forward_subsumption_with_control(

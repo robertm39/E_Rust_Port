@@ -127,6 +127,11 @@ Source files reviewed: `CLAUSES/ccl_clausefunc.h`, `CLAUSES/ccl_clausefunc.c`.
 - `ClauseRecognizeInjectivity` accepts a narrow two-literal shape, uses `TermStandardWeight == DEFAULT_FWEIGHT + arity * DEFAULT_VWEIGHT` plus free-variable assertions to confirm the negative sides are variable tuples, temporarily marks shared variables with `TPOpFlag`/`TPCheckFlag`, and builds a positive inverse typed-Skolem equation marked `CPIsPureInjectivity`. Rust preserves the recognition surface and temporary flag reset, while the remaining proof-documentation and proof-control integration around generated definitions is still pending.
 - `ClauseSetInjectivityIsDefined` deliberately ignores the freshly generated inverse-Skolem head and tests only the generated definition arguments plus RHS modulo renaming. `ClauseSetReplaceInjectivityDefs` moves the first recognized original to the archive and appends the generated replacement later, but when a duplicate generated definition is detected it frees only the replacement and leaves the duplicate original in the active set. Rust preserves this C behavior; after compatibility is secured, duplicate original handling may be worth revisiting with proof-search/reference-output tests.
 
+### Change-Later Observations
+
+- `ClauseEliminateNakedBooleanVariables` uses term-variable bindings as temporary substitution state and rewrites eliminated naked literals through a `$true` sentinel before copying the literal list. Rust preserves the observable substitution and tautology behavior while making binding cleanup explicit; after compatibility tests cover this path, a local assignment map would be easier to reason about than mutating variable cells.
+- The true-literal branch in `ClauseEliminateNakedBooleanVariables` can leave C cached clause weights stale. Rust refreshes the cached weight after the represented mutation to preserve current clause/index invariants; revisit only if a reference trace shows stale weights are observable.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

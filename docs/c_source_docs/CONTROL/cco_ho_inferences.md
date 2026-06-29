@@ -155,8 +155,12 @@ Source files reviewed: `CONTROL/cco_ho_inferences.h`, `CONTROL/cco_ho_inferences
 ### Rust Port Status Notes
 
 - `BooleanSimplification` is partially staged in Rust through `src/clauses/clausefunc.rs` and called from `forward_contract_keep` at the C call site. The port covers decoded two-argument Boolean formula simplification, unary decoded `and`/`or` constant-to-DB-lambda cases, closed-lambda decoded quantifier matrix removal, true-literal redundancy detection, superfluous-literal cleanup, and `DCNormalize` derivation metadata.
+- `ResolveFlexClause` is staged in Rust as `clause_resolve_flex_clause` and called from the higher-order `forward_contract_keep` hook. The port covers the C top-level-free-variable test for negative equality literals, the predicate-literal sign bookkeeping, the predicate-variable/equality conflict rule, empty-clause replacement, and `DCFlexResolve` derivation metadata.
 
 ### Change-Later Observations
 
 - `BooleanSimplification` lives in this higher-order control unit, but `cco_forward_contraction.c` calls it unconditionally for every clause after `ForwardModifyClause`. Keep that cross-module dependency while matching C behavior; after compatibility is secured, consider moving shared decoded-Boolean simplification into a formula/clause normalization module with the higher-order callers depending on that lower-level API.
+- `ResolveFlexClause` is broader than its comment: it accepts naked top-level free variables as well as applied free variables, and it also reasons about non-equational predicate literals by remembered sign. Keep this for compatibility, but a later higher-order inference API should name the accepted literal classes explicitly.
+- If called directly on an already empty clause, `ResolveFlexClause` would vacuously succeed and push a flex-resolution derivation, although `forward_contract_keep` short-circuits empty clauses before calling it. Rust keeps the call-site short-circuit and the helper's all-literals predicate shape; avoid exposing direct empty-clause flex resolution as a public semantic rule without reference tests.
+- `ResolveFlexClause` drops the literal list and recomputes polarity counts but does not explicitly refresh `clause->weight`. Rust refreshes the cached weight after replacement to preserve current Rust indexing/comparison invariants; revisit only if full C trace comparison proves stale empty-clause weights are observable.
 <!-- END MANUAL REVIEW: c_source_docs -->
