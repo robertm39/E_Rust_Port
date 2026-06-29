@@ -10,6 +10,7 @@ use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityM
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use std::collections::BTreeSet;
 use std::fmt;
 
 const DEFAULT_COMCHAR_RAW: &str = "%";
@@ -132,6 +133,12 @@ impl<'a> DRelation<'a> {
             .and_then(Option::as_ref)
     }
 
+    pub fn entry_mut(&mut self, f_code: FunCode) -> Option<&mut DRel<'a>> {
+        self.relation
+            .get_mut(f_code_index(f_code))
+            .and_then(Option::as_mut)
+    }
+
     pub fn add_clause(
         &mut self,
         generality: &mut GenDistrib,
@@ -234,6 +241,44 @@ impl AxiomType {
             Self::Formula => 2,
         }
     }
+
+    #[must_use]
+    pub const fn from_queue_tag(tag: PQueueInt) -> Option<Self> {
+        match tag {
+            0 => Some(Self::NoType),
+            1 => Some(Self::Clause),
+            2 => Some(Self::Formula),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClauseSineParams {
+    pub gen_measure: GeneralityMeasure,
+    pub use_hypotheses: bool,
+    pub benevolence: f64,
+    pub generosity: i64,
+    pub max_recursion_depth: i64,
+    pub max_set_size: i64,
+    pub max_set_fraction: f64,
+    pub add_no_symbol_axioms: bool,
+}
+
+impl ClauseSineParams {
+    #[must_use]
+    pub const fn g_sine(gen_measure: GeneralityMeasure) -> Self {
+        Self {
+            gen_measure,
+            use_hypotheses: false,
+            benevolence: 1.0,
+            generosity: i64::MAX,
+            max_recursion_depth: i32::MAX as i64,
+            max_set_size: i64::MAX,
+            max_set_fraction: 1.0,
+            add_no_symbol_axioms: false,
+        }
+    }
 }
 
 pub fn pstack_clause_del_prop(stack: &mut PStack<&mut Clause>, prop: FormulaProperties) {
@@ -277,6 +322,133 @@ pub fn select_threshold_clause_sets<'a>(
     }
 
     usize_to_i64(res_clauses.len())
+}
+
+/// Clause-only equivalent of C `SelectDefiningAxioms`.
+///
+/// Returns the number of newly selected clauses pushed by this defining-axiom
+/// traversal. The queue must contain C-shaped adjacent type/pointer entries
+/// produced by [`pqueue_store_clause`].
+///
+/// # Panics
+///
+/// Panics if the queue is malformed, if it contains formula entries, or if a
+/// selected clause contains a function code outside `signature_size`.
+pub fn select_defining_axioms_clause_sets<'a>(
+    drel: &mut DRelation<'a>,
+    internal_symbols: FunCode,
+    signature_size: usize,
+    max_recursion_depth: i64,
+    max_set_size: i64,
+    axioms: &mut PQueue<IntOrP<&'a Clause>>,
+    res_clauses: &mut PStack<&'a Clause>,
+) -> i64 {
+    let mut dist_array = vec![0; signature_size];
+    let mut selected = BTreeSet::new();
+    let mut symbol_stack = Vec::new();
+    let mut selected_count = 0;
+    let mut recursion_level = 0;
+    axioms.store_int(AxiomType::NoType.queue_tag());
+
+    while !axioms.is_empty() {
+        if selected_count > max_set_size || recursion_level > max_recursion_depth {
+            break;
+        }
+        let type_ = axioms
+            .get_next_int()
+            .and_then(AxiomType::from_queue_tag)
+            .expect("SInE axiom queue must contain an axiom type tag");
+        match type_ {
+            AxiomType::NoType => {
+                recursion_level += 1;
+                if !axioms.is_empty() {
+                    axioms.store_int(AxiomType::NoType.queue_tag());
+                }
+            }
+            AxiomType::Clause => {
+                let clause = axioms
+                    .get_next_pointer()
+                    .expect("SInE clause queue tag must be followed by a clause");
+                if !selected.insert(std::ptr::from_ref(clause)) {
+                    continue;
+                }
+                res_clauses.push(clause);
+                clause.add_symbol_dist_exist(&mut dist_array, &mut symbol_stack);
+                selected_count += 1;
+                enqueue_new_symbol_relations(
+                    drel,
+                    internal_symbols,
+                    &mut dist_array,
+                    &mut symbol_stack,
+                    axioms,
+                );
+            }
+            AxiomType::Formula => {
+                panic!("formula SInE selection is not represented in the clause-only queue");
+            }
+        }
+    }
+
+    selected_count
+}
+
+/// Clause-only equivalent of C `SelectAxioms`.
+///
+/// `generality` must already contain the symbol distribution for `clause_sets`,
+/// matching the C `StructFOFSpecInitDistrib`/`StructFOFSpecAddProblem` setup.
+///
+/// # Panics
+///
+/// Panics under the same clause-only queue and function-code preconditions as
+/// [`select_defining_axioms_clause_sets`].
+pub fn select_axioms_clause_sets<'a>(
+    generality: &mut GenDistrib,
+    clause_sets: &PStack<&'a ClauseSet>,
+    seed_start: usize,
+    params: ClauseSineParams,
+    res_clauses: &mut PStack<&'a Clause>,
+) -> i64 {
+    let mut drel = DRelation::new();
+    let mut selq = PQueue::new();
+
+    drel.add_clause_sets(
+        generality,
+        params.gen_measure,
+        params.benevolence,
+        params.generosity,
+        clause_sets,
+    );
+    let mut seeds = 0;
+    for set in clause_sets.as_slice().iter().skip(seed_start) {
+        seeds += clause_set_find_ax_selection_seeds(set, &mut selq, params.use_hypotheses);
+    }
+    if seeds == 0 {
+        return 0;
+    }
+
+    let ax_cardinality = clause_set_ref_stack_cardinality(clause_sets);
+    let max_result_size =
+        max_sine_result_size(ax_cardinality, params.max_set_size, params.max_set_fraction);
+    let mut selected_count = 0;
+    if params.add_no_symbol_axioms {
+        if let Some(no_symbol_axioms) = drel.entry(0) {
+            for clause in no_symbol_axioms.d_clauses().as_slice() {
+                res_clauses.push(*clause);
+            }
+        }
+        selected_count = usize_to_i64(res_clauses.len());
+    }
+
+    selected_count
+        + select_defining_axioms_clause_sets(
+            &mut drel,
+            generality.internal_symbols(),
+            generality.size(),
+            params.max_recursion_depth,
+            max_result_size,
+            &mut selq,
+            res_clauses,
+        )
 }
 
 /// Writes the C `PStackClausePrintTSTP` shape.
@@ -328,6 +500,39 @@ fn tstp_stack_write_error(_error: fmt::Error) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause stack")
 }
 
+fn enqueue_new_symbol_relations<'a>(
+    drel: &mut DRelation<'a>,
+    internal_symbols: FunCode,
+    dist_array: &mut [i64],
+    symbol_stack: &mut Vec<FunCode>,
+    axioms: &mut PQueue<IntOrP<&'a Clause>>,
+) {
+    for &f_code in symbol_stack.iter() {
+        if f_code > internal_symbols {
+            if let Some(frel) = drel.entry_mut(f_code) {
+                if !frel.is_activated() {
+                    frel.set_activated(true);
+                    for clause in frel.d_clauses().as_slice() {
+                        pqueue_store_clause(axioms, clause);
+                    }
+                }
+            }
+        }
+        dist_array[f_code_index(f_code)] = 0;
+    }
+    symbol_stack.clear();
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "C assigns the double max-set fraction product to a long"
+)]
+fn max_sine_result_size(ax_cardinality: i64, max_set_size: i64, max_set_fraction: f64) -> i64 {
+    let fraction_size = (max_set_fraction * ax_cardinality as f64) as i64;
+    max_set_size.min(fraction_size)
+}
+
 fn f_code_index(f_code: FunCode) -> usize {
     usize::try_from(f_code).unwrap_or_else(|_| panic!("function code must fit usize: {f_code}"))
 }
@@ -340,7 +545,8 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
-        pstack_clause_print_tstp_string, select_threshold_clause_sets, AxiomType, DRel, DRelation,
+        pstack_clause_print_tstp_string, select_axioms_clause_sets, select_threshold_clause_sets,
+        AxiomType, ClauseSineParams, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -706,5 +912,143 @@ mod tests {
 
         assert_eq!(select_threshold_clause_sets(&sets, 1, 1, &mut result), 1);
         assert_eq!(result.as_slice()[0].ident(), existing.ident());
+    }
+
+    #[test]
+    fn select_axioms_clause_sets_follows_drelation_layers_and_recursion_limit() {
+        let mut bank = test_bank();
+        let goal_symbol = typed_const(&mut bank, "gsine_goal");
+        let bridge_symbol = typed_const(&mut bank, "gsine_bridge");
+        let far_symbol = typed_const(&mut bank, "gsine_far");
+        let unrelated_symbol = typed_const(&mut bank, "gsine_unrelated");
+        let mut goal = clause_from(vec![literal(&mut bank, &goal_symbol, &goal_symbol, true)]);
+        goal.set_ident(10);
+        goal.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut bridge = clause_from(vec![literal(&mut bank, &goal_symbol, &bridge_symbol, true)]);
+        bridge.set_ident(20);
+        bridge.set_tptp_type(CP_TYPE_AXIOM);
+        let mut far = clause_from(vec![literal(&mut bank, &bridge_symbol, &far_symbol, true)]);
+        far.set_ident(30);
+        far.set_tptp_type(CP_TYPE_AXIOM);
+        let mut unrelated = clause_from(vec![literal(
+            &mut bank,
+            &unrelated_symbol,
+            &unrelated_symbol,
+            true,
+        )]);
+        unrelated.set_ident(40);
+        unrelated.set_tptp_type(CP_TYPE_AXIOM);
+        let set = ClauseSet::from_clauses([goal, bridge, far, unrelated]);
+        let mut sets = PStack::new();
+        sets.push(&set);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&sets);
+        let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
+        params.benevolence = 10.0;
+        params.max_recursion_depth = 2;
+        let mut selected = PStack::new();
+
+        let selected_count =
+            select_axioms_clause_sets(&mut generality, &sets, 0, params, &mut selected);
+
+        assert_eq!(selected_count, 3);
+        assert_eq!(
+            selected
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
+    }
+
+    #[test]
+    fn select_axioms_clause_sets_stops_after_c_recursion_marker_limit() {
+        let mut bank = test_bank();
+        let goal_symbol = typed_const(&mut bank, "gsine_limited_goal");
+        let bridge_symbol = typed_const(&mut bank, "gsine_limited_bridge");
+        let far_symbol = typed_const(&mut bank, "gsine_limited_far");
+        let mut goal = clause_from(vec![literal(&mut bank, &goal_symbol, &goal_symbol, true)]);
+        goal.set_ident(10);
+        goal.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut bridge = clause_from(vec![literal(&mut bank, &goal_symbol, &bridge_symbol, true)]);
+        bridge.set_ident(20);
+        bridge.set_tptp_type(CP_TYPE_AXIOM);
+        let mut far = clause_from(vec![literal(&mut bank, &bridge_symbol, &far_symbol, true)]);
+        far.set_ident(30);
+        far.set_tptp_type(CP_TYPE_AXIOM);
+        let set = ClauseSet::from_clauses([goal, bridge, far]);
+        let mut sets = PStack::new();
+        sets.push(&set);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&sets);
+        let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
+        params.benevolence = 10.0;
+        params.max_recursion_depth = 1;
+        let mut selected = PStack::new();
+
+        let selected_count =
+            select_axioms_clause_sets(&mut generality, &sets, 0, params, &mut selected);
+
+        assert_eq!(selected_count, 2);
+        assert_eq!(
+            selected
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+    }
+
+    #[test]
+    fn select_axioms_clause_sets_returns_empty_selection_without_seeds() {
+        let mut bank = test_bank();
+        let axiom_symbol = typed_const(&mut bank, "gsine_no_seed");
+        let mut axiom = clause_from(vec![literal(&mut bank, &axiom_symbol, &axiom_symbol, true)]);
+        axiom.set_ident(10);
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let set = ClauseSet::from_clauses([axiom]);
+        let mut sets = PStack::new();
+        sets.push(&set);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&sets);
+        let params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
+        let mut selected = PStack::new();
+
+        assert_eq!(
+            select_axioms_clause_sets(&mut generality, &sets, 0, params, &mut selected),
+            0
+        );
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn select_axioms_clause_sets_preserves_no_symbol_duplicate_quirk() {
+        let mut goal = Clause::empty();
+        goal.set_ident(10);
+        goal.set_tptp_type(CP_TYPE_CONJECTURE);
+        let set = ClauseSet::from_clauses([goal]);
+        let bank = test_bank();
+        let mut sets = PStack::new();
+        sets.push(&set);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&sets);
+        let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
+        params.add_no_symbol_axioms = true;
+        let mut selected = PStack::new();
+
+        let selected_count =
+            select_axioms_clause_sets(&mut generality, &sets, 0, params, &mut selected);
+
+        assert_eq!(selected_count, 2);
+        assert_eq!(
+            selected
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![10, 10]
+        );
     }
 }
