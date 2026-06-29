@@ -6,6 +6,7 @@ use crate::basics::stringtrees::StrTree;
 use crate::inout::fileops::{file_name_base_name, file_name_dir_name, file_name_is_absolute};
 use crate::inout::initio::tptp_dir;
 use crate::inout::streams::{InputStream, InputStreamStack, StreamType};
+use std::io;
 use std::path::Path;
 
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
@@ -904,6 +905,24 @@ pub fn token_pos_rep(token: &Token) -> String {
     pos_rep(token.stream_type, &token.source, token.line, token.column)
 }
 
+#[must_use]
+pub fn token_print_string(token: &Token) -> String {
+    format!(
+        "Token:    {} = {}\nPosition: {}   Literal:  {}\nNumval:   {:6}   Skipped:  {}\nComment:  {}\n",
+        token.kind.bits(),
+        describe_token(token.kind),
+        token_pos_rep(token),
+        token.literal(),
+        token.numval(),
+        if token.skipped() { "true" } else { "false" },
+        String::from_utf8_lossy(token.comment_bytes())
+    )
+}
+
+pub fn print_token(output: &mut impl io::Write, token: &Token) -> io::Result<()> {
+    output.write_all(token_print_string(token).as_bytes())
+}
+
 const TOKEN_PRINT_REP: &[(TokenType, &str)] = &[
     (TokenType::NO_TOKEN, "No token (probably EOF)"),
     (
@@ -1046,8 +1065,8 @@ fn automatic_include_prefix() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        describe_token, test_id, test_idnum, token_pos_rep, IoFormat, Scanner, TokenType,
-        EMPTY_INCLUDE_SELECTOR_SENTINEL,
+        describe_token, print_token, test_id, test_idnum, token_pos_rep, token_print_string,
+        IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::stringtrees::StrTree;
@@ -1185,6 +1204,26 @@ mod tests {
         );
         assert_eq!(scanner.current_token().source_bytes(), b"-");
         assert_eq!(token_pos_rep(scanner.current_token()), "-:1:(Column 3):");
+    }
+
+    #[test]
+    fn token_print_string_matches_c_debug_shape() {
+        let scanner = Scanner::from_file_content("-", b"  abc".to_vec(), false).unwrap();
+        let token = scanner.current_token();
+        let expected = format!(
+            "Token:    8 = Identifier not terminating in a number\n\
+             Position: {}   Literal:  abc\n\
+             Numval:   {:6}   Skipped:  true\n\
+             Comment:  \n",
+            token_pos_rep(token),
+            0
+        );
+
+        assert_eq!(token_print_string(token), expected);
+
+        let mut printed = Vec::new();
+        print_token(&mut printed, token).unwrap();
+        assert_eq!(printed, expected.as_bytes());
     }
 
     #[test]

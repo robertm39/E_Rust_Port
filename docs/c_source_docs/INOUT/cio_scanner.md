@@ -224,7 +224,7 @@ Source files reviewed: `INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/scanner.rs` ports the core token bit layout, token lookahead queue, token descriptions, position formatting, identifier/idnum tests, format auto-detection, string/file/in-memory source construction, automatic `include_key` file splicing, and explicit `ScannerParseInclude`-style include parsing with selector and skip-name trees.
+- `src/inout/scanner.rs` ports the core token bit layout, token lookahead queue, token descriptions, position formatting, `PrintToken`-style debug rendering, identifier/idnum tests, format auto-detection, string/file/in-memory source construction, automatic `include_key` file splicing, and explicit `ScannerParseInclude`-style include parsing with selector and skip-name trees.
 - The scanner now stores its active input sources in `InputStreamStack`, so automatic include splicing pushes included files as the current top stream and pops back to the parent stream at EOF like C `OpenStackedInput`/`CloseStackedInput`.
 - Tests cover token classification, lookahead, comments and skipped-token state, syntax diagnostics, format auto-detection, default-dir plus `TPTP` include lookup, explicit include parsing, selector handling, skip-tree handling, and nested automatic include splicing back to parent streams.
 
@@ -232,6 +232,7 @@ Source files reviewed: `INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`.
 
 - C automatic include splicing is driven by `include_key`, but this checkout initializes that field to `NULL` and exposes no public setter. Rust keeps an explicit constructor for compatibility tests and supported callers; decide later whether a broader public switch is needed when every parser path uses the same include owner.
 - C scanner file streams hold live `FILE*` handles and close them through `DestroyScanner`; Rust loads file bytes eagerly into `InputStream`. This avoids close-time ownership hazards but should be benchmarked and possibly replaced with a lazy backend before large-file parser parity is claimed.
+- C `PrintToken` writes directly to a `FILE*`. Rust exposes the same text shape as both a string renderer and an `io::Write` helper so callers can choose their output owner; keep this wrapper split unless a byte-level C FILE bridge is required.
 - `ScannerParseInclude` and automatic include splicing are separate C paths with slightly different state flow. Rust keeps both represented; the full parser should choose one policy per caller rather than mixing implicit and explicit include behavior accidentally.
 
 ### Porting Focus
