@@ -83,6 +83,18 @@ Source files reviewed: `CLAUSES/ccl_gd_transformation.h`, `CLAUSES/ccl_gd_transf
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/clauses/gd_transformation.rs` ports the clause-level goal-definition transform over the represented Rust `ClauseSet`, including conjecture-clause filtering, selected positive/negative literal collection, non-constant ground-term definition, recursive subterm definition mode, definition normal forms through already introduced definitions, fresh typed `edef` constant creation, positive unit equality clauses, and `DCIntroDef` derivation entries.
+- Supported executable prune/proof-search paths now apply `--goal-defs` and `--goal-subterm-defs` after represented SInE/relevance pruning and BCE, and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. Generated definitions are inserted into the represented axiom set, so initial docs and the saturation initial-clause count can observe them.
+- Full formula-owner preprocessing and exact integration with later predicate elimination remain pending; the current call site matches the C ordering relative to BCE and the currently unported predicate-elimination pass by running after BCE.
+
+### Change-Later Observations
+
+- C traverses collected goal terms through a `PTree`, so generated definition names and insertion order can depend on raw pointer order. Rust reuses the existing deterministic `BTreeMap` keyed by term identity for ground-term collection, which is stable inside the Rust port but may differ from C definition order. Preserve this until reference traces decide whether exact pointer-order compatibility matters.
+- C keys the definition table by term-bank `entry_no` and can define a normalized left-hand side that is already an introduced definition constant if an original compound term normalizes to it. Rust mirrors that entry-number map and the resulting behavior, even though a later cleaned transform might avoid constant-to-constant follow-up definitions.
+- `ClauseSetGDTransform` mutates the same clause set that it scans, but only after collecting all candidate terms. Rust keeps the same two-phase shape to avoid borrowing aliases; a future proof-state owner with stable clause handles should keep that mutation boundary explicit.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

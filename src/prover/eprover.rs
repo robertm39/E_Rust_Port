@@ -40,6 +40,7 @@ use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
+use crate::clauses::gd_transformation::clause_set_gd_transform;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{
     pcl_print_end, pcl_print_start, ClauseCreationInference, ClauseCreationParents,
@@ -4613,6 +4614,12 @@ fn run_prune_only<W: Write + ?Sized>(
         bce_max_occs,
         &mut state,
     )?;
+    apply_goal_definition_transformation(
+        &mut state,
+        config.preprocessing.goal_definitions.positive,
+        config.preprocessing.goal_definitions.negative,
+        config.preprocessing.goal_definitions.subterms,
+    )?;
     let _next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
     write_comment_line_after_blank(output, "Pruning successful!")?;
     write_tstp_status(output, "Unknown")?;
@@ -4641,6 +4648,12 @@ fn run_proof_search<W: Write + ?Sized>(
         heuristic_params.bce,
         heuristic_params.bce_max_occs,
         &mut state,
+    )?;
+    apply_goal_definition_transformation(
+        &mut state,
+        heuristic_params.add_goal_defs_pos,
+        heuristic_params.add_goal_defs_neg,
+        heuristic_params.add_goal_defs_subterms,
     )?;
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
@@ -5543,6 +5556,22 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
     };
     output.write_stdout_side_channel(bce_output.as_bytes())?;
     Ok(result.eliminated_count)
+}
+
+fn apply_goal_definition_transformation(
+    state: &mut crate::clauses::proofstate::ProofState,
+    positive: bool,
+    negative: bool,
+    subterms: bool,
+) -> Result<i64, EProverError> {
+    if !positive && !negative {
+        return Ok(0);
+    }
+
+    let (bank, axioms) = state.terms_and_axioms_mut();
+    Ok(clause_set_gd_transform(
+        bank, axioms, positive, negative, subterms,
+    )?)
 }
 
 fn load_configured_watchlist<W: Write + ?Sized>(
@@ -12564,6 +12593,41 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_goal_defs_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-goal-defs");
+        std::fs::write(&path, "cnf(goal, negated_conjecture, (f(a)=a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--goal-defs=All",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!(
+            "cnf(c_0_1, negated_conjecture, (f(a)=a), file('{path_arg}', goal)).\n"
+        )));
+        assert!(printed.contains("cnf(c_0_2, plain, (f(a)=edef"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_lambda_def_clears_represented_clause_axioms() {
         let _guard = global_state_lock();
         let path = temp_path("prune-lambda-def-clauses");
@@ -15773,6 +15837,37 @@ mod tests {
         assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
         assert!(printed.contains("% Parsed axioms                        : 2\n"));
         assert!(printed.contains("% Initial clauses                      : 2\n"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_applies_selected_goal_defs_preprocessing() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-goal-defs");
+        std::fs::write(&path, "cnf(goal, negated_conjecture, (f(a)=a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--goal-defs=All",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% Parsed axioms                        : 1\n"));
+        assert!(printed.contains("% Initial clauses                      : 1\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();

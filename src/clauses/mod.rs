@@ -24,6 +24,7 @@ pub mod findex;
 pub mod freqvectors;
 pub mod g_lithash;
 pub mod garbage_coll;
+pub mod gd_transformation;
 pub mod global_indices;
 pub mod groundconstr;
 pub mod grounding;
