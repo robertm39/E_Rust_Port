@@ -220,7 +220,7 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - SAT/propositional integration has a separate assignment/result vocabulary; keep conversions and ownership boundaries explicit.
-- `TBInsertInstantiatedDeref` combines one-step dereferencing with the LFHO applied-variable prefix rule: after expanding a bound applied free variable, arguments from the binding prefix keep `DEREF_NEVER` while later original arguments keep the caller's deref mode. Rust mirrors this for the bank-local, no-cache expansion path; global owner-bank/cache-backed `TermDeref` remains a separate termtypes slice.
+- The recursive insertion family (`TBInsert`, `TBInsertIgnoreVar`, `TBInsertNoProps`, cached no-props, `TBInsertOpt`, `TBInsertRepl`) and `TBInsertInstantiatedDeref` combine one-step dereferencing with the LFHO applied-variable prefix rule: after expanding a bound applied free variable, arguments from the binding prefix keep `DEREF_NEVER` while later original arguments keep the caller's deref mode. Rust mirrors this for the bank-local, no-cache, no-WHNF expansion paths; global owner-bank/cache-backed `TermDeref` and the `DEREF_ALWAYS` WHNF branch remain separate termtypes/lambda slices.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 

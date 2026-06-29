@@ -513,8 +513,7 @@ impl TermBank {
     /// Panics if a ground term is not shared, or if a free/DB variable has no
     /// type, matching the C preconditions for `TBInsertOpt`.
     pub fn insert_opt(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
-        let mut current_deref = deref;
-        let term = term_deref(term, &mut current_deref);
+        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
         if term_is_ground_for_insert(&term) {
             assert!(
                 term.is_shared(),
@@ -522,7 +521,7 @@ impl TermBank {
             );
             return Ok(term);
         }
-        self.insert_with_mode(&term, current_deref, InsertMode::ShareVariables)
+        self.insert_opt_derefed(&term, current_deref, limit)
     }
 
     /// Inserts a term with one subterm replaced after instantiation.
@@ -546,8 +545,7 @@ impl TermBank {
             return Ok(repl.clone());
         }
 
-        let mut current_deref = deref;
-        let term = term_deref(term, &mut current_deref);
+        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
         if term.is_free_var() {
             let type_ = term.type_().expect("free variable must have a type");
             return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
@@ -561,7 +559,12 @@ impl TermBank {
         copy.set_properties(TP_IGNORE_PROPS);
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared = self.insert_repl(&arg, current_deref, old, repl)?;
+            let shared = self.insert_repl(
+                &arg,
+                Self::convert_lfho_deref(index, limit, current_deref),
+                old,
+                repl,
+            )?;
             copy.set_argument(index, shared);
         }
         self.term_top_insert(copy)
@@ -625,7 +628,7 @@ impl TermBank {
             return Ok(term.clone());
         }
 
-        let (term, current_deref, limit) = self.instantiated_deref_root(term, deref)?;
+        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
         if term.is_any_var() || term_is_ground_for_insert(&term) {
             return Ok(term);
         }
@@ -643,7 +646,7 @@ impl TermBank {
         self.term_top_insert(copy)
     }
 
-    fn instantiated_deref_root(
+    fn deref_root_no_whnf(
         &mut self,
         term: &Term,
         deref: DerefType,
@@ -1320,12 +1323,20 @@ impl TermBank {
         deref: DerefType,
         mode: InsertMode,
     ) -> Result<Term, Diagnostic> {
-        let mut current_deref = deref;
-        let term = term_deref(term, &mut current_deref);
+        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
+        self.insert_derefed_with_mode(&term, current_deref, limit, mode)
+    }
 
+    fn insert_derefed_with_mode(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+        limit: usize,
+        mode: InsertMode,
+    ) -> Result<Term, Diagnostic> {
         if term.is_free_var() {
             if mode == InsertMode::KeepVariables {
-                return Ok(term);
+                return Ok(term.clone());
             }
             let type_ = term.type_().expect("free variable must have a type");
             return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
@@ -1335,13 +1346,45 @@ impl TermBank {
             return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
         }
 
-        let copy = Term::top_copy_without_args(&term);
+        let copy = Term::top_copy_without_args(term);
         if mode == InsertMode::NoProperties {
             copy.set_properties(TP_IGNORE_PROPS);
         }
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared = self.insert_with_mode(&arg, current_deref, mode)?;
+            let shared =
+                self.insert_with_mode(&arg, Self::convert_lfho_deref(index, limit, deref), mode)?;
+            copy.set_argument(index, shared);
+        }
+        self.term_top_insert(copy)
+    }
+
+    fn insert_opt_derefed(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+        limit: usize,
+    ) -> Result<Term, Diagnostic> {
+        if term_is_ground_for_insert(term) {
+            assert!(
+                term.is_shared(),
+                "optimized ground insertion expects sharing"
+            );
+            return Ok(term.clone());
+        }
+        if term.is_free_var() {
+            let type_ = term.type_().expect("free variable must have a type");
+            return Ok(self.vars.var_assert_alloc(term.f_code(), &type_));
+        }
+        if term.is_db_var() {
+            let type_ = term.type_().expect("DB variable must have a type");
+            return Ok(self.db_vars.request_db_var(&type_, term.f_code()));
+        }
+
+        let copy = Term::top_copy_without_args(term);
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shared = self.insert_opt(&arg, Self::convert_lfho_deref(index, limit, deref))?;
             copy.set_argument(index, shared);
         }
         self.term_top_insert(copy)
@@ -1384,8 +1427,7 @@ impl TermBank {
         deref: DerefType,
         cache: &mut BTreeMap<usize, Term>,
     ) -> Result<Term, Diagnostic> {
-        let mut current_deref = deref;
-        let term = term_deref(term, &mut current_deref);
+        let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
         let cache_key = term_identity_id(&term);
         if let Some(cached) = cache.get(&cache_key) {
             return Ok(cached.clone());
@@ -1402,7 +1444,11 @@ impl TermBank {
             copy.set_properties(TP_IGNORE_PROPS);
             for (index, arg) in term.argument_clones().into_iter().enumerate() {
                 let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-                let shared = self.insert_no_props_cached_inner(&arg, current_deref, cache)?;
+                let shared = self.insert_no_props_cached_inner(
+                    &arg,
+                    Self::convert_lfho_deref(index, limit, current_deref),
+                    cache,
+                )?;
                 copy.set_argument(index, shared);
             }
             self.term_top_insert(copy)?
@@ -1620,6 +1666,89 @@ mod tests {
         };
         sig.declare_type(f_code, type_).unwrap();
         (TermBank::new(sig).unwrap(), f_code)
+    }
+
+    struct AppliedPrefixFixture {
+        bank: TermBank,
+        f_code: i64,
+        app: Term,
+        y: Term,
+        b: Term,
+        c: Term,
+        old: Term,
+        repl: Term,
+    }
+
+    fn applied_prefix_fixture(prefix: &str) -> AppliedPrefixFixture {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+
+        let f_code = sig.insert_id(&format!("{prefix}_f"), 0, false);
+        sig.declare_type(f_code, i_type.clone()).unwrap();
+        let b_code = sig.insert_id(&format!("{prefix}_b"), 0, false);
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        let c_code = sig.insert_id(&format!("{prefix}_c"), 0, false);
+        sig.declare_type(c_code, i_type.clone()).unwrap();
+        let old_code = sig.insert_id(&format!("{prefix}_old"), 0, false);
+        sig.declare_type(old_code, i_type.clone()).unwrap();
+        let repl_code = sig.insert_id(&format!("{prefix}_repl"), 0, false);
+        sig.declare_type(repl_code, i_type.clone()).unwrap();
+
+        let mut bank = TermBank::new(sig).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let c = bank.create_const_term(c_code).unwrap();
+        let old = bank.create_const_term(old_code).unwrap();
+        let repl = bank.create_const_term(repl_code).unwrap();
+
+        let y = Term::const_cell_alloc(-4);
+        y.set_type(Some(i_type.clone()));
+        y.set_binding(Some(b.clone()));
+        let z = Term::const_cell_alloc(-6);
+        z.set_type(Some(i_type.clone()));
+        z.set_binding(Some(c.clone()));
+
+        let head_binding = Term::top_alloc(f_code, 1);
+        head_binding.set_type(Some(i_type.clone()));
+        head_binding.set_argument(0, y.clone());
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(i_type.clone()));
+        head.set_binding(Some(head_binding));
+
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, z);
+
+        AppliedPrefixFixture {
+            bank,
+            f_code,
+            app,
+            y,
+            b,
+            c,
+            old,
+            repl,
+        }
+    }
+
+    fn assert_expanded_with_bank_var(fixture: &AppliedPrefixFixture, inserted: &Term) {
+        assert_eq!(inserted.f_code(), fixture.f_code);
+        assert_eq!(inserted.arity(), 2);
+        let prefix = inserted.argument(0).unwrap();
+        assert!(prefix.is_free_var());
+        assert_eq!(prefix.f_code(), fixture.y.f_code());
+        assert!(prefix.binding().is_none());
+        assert_ne!(prefix, fixture.b.clone());
+        assert_eq!(inserted.argument(1), Some(fixture.c.clone()));
+        assert!(inserted.is_shared());
+    }
+
+    fn assert_expanded_with_original_var(fixture: &AppliedPrefixFixture, inserted: &Term) {
+        assert_eq!(inserted.f_code(), fixture.f_code);
+        assert_eq!(inserted.arity(), 2);
+        assert_eq!(inserted.argument(0), Some(fixture.y.clone()));
+        assert_eq!(inserted.argument(1), Some(fixture.c.clone()));
+        assert!(inserted.is_shared());
     }
 
     fn parse_simple(source: &str) -> (TermBank, Term) {
@@ -1866,6 +1995,40 @@ mod tests {
     }
 
     #[test]
+    fn recursive_insertion_expands_applied_deref_with_prefix_limit() {
+        let mut fixture = applied_prefix_fixture("insert_app_deref");
+        let app = fixture.app.clone();
+        let inserted = fixture.bank.insert(&app, DerefType::Once).unwrap();
+        assert_expanded_with_bank_var(&fixture, &inserted);
+
+        let mut fixture = applied_prefix_fixture("insert_ignore_app_deref");
+        let app = fixture.app.clone();
+        let inserted = fixture
+            .bank
+            .insert_ignore_var(&app, DerefType::Once)
+            .unwrap();
+        assert_expanded_with_original_var(&fixture, &inserted);
+
+        let mut fixture = applied_prefix_fixture("insert_no_props_app_deref");
+        let app = fixture.app.clone();
+        let inserted = fixture.bank.insert_no_props(&app, DerefType::Once).unwrap();
+        assert_expanded_with_bank_var(&fixture, &inserted);
+    }
+
+    #[test]
+    fn cached_no_props_expands_applied_deref_with_prefix_limit() {
+        let mut fixture = applied_prefix_fixture("cached_app_deref");
+        fixture.app.set_f_count(INSERT_NO_PROPS_CACHE_THRESHOLD + 1);
+        let app = fixture.app.clone();
+        let inserted = fixture
+            .bank
+            .insert_no_props_cached(&app, DerefType::Once)
+            .unwrap();
+
+        assert_expanded_with_bank_var(&fixture, &inserted);
+    }
+
+    #[test]
     fn optimized_insertion_reuses_shared_ground_terms_and_follows_bindings() {
         let (mut bank, f_code) = bank_with_symbol("f", 1);
         let a_code = bank.signature_mut().insert_id("a", 0, false);
@@ -1889,6 +2052,15 @@ mod tests {
         let inserted = bank.insert_opt(&unshared, DerefType::Always).unwrap();
         assert_eq!(inserted.argument(0), Some(a));
         assert!(inserted.is_shared());
+    }
+
+    #[test]
+    fn optimized_insertion_expands_applied_deref_with_prefix_limit() {
+        let mut fixture = applied_prefix_fixture("opt_app_deref");
+        let app = fixture.app.clone();
+        let inserted = fixture.bank.insert_opt(&app, DerefType::Once).unwrap();
+
+        assert_expanded_with_bank_var(&fixture, &inserted);
     }
 
     #[test]
@@ -1930,6 +2102,20 @@ mod tests {
 
         let no_change = bank.insert_repl_plain(&keep, &old, &plain).unwrap();
         assert_eq!(no_change, keep);
+    }
+
+    #[test]
+    fn replacement_insertion_expands_applied_deref_with_prefix_limit() {
+        let mut fixture = applied_prefix_fixture("repl_app_deref");
+        let app = fixture.app.clone();
+        let old = fixture.old.clone();
+        let repl = fixture.repl.clone();
+        let inserted = fixture
+            .bank
+            .insert_repl(&app, DerefType::Once, &old, &repl)
+            .unwrap();
+
+        assert_expanded_with_bank_var(&fixture, &inserted);
     }
 
     #[test]
