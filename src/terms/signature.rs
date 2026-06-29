@@ -195,6 +195,7 @@ pub struct Signature {
     f_info: Vec<FuncCell>,
     f_index: BTreeMap<String, FunCode>,
     type_bank: TypeBank,
+    support_lists: bool,
     typed_symbols: bool,
     eqn_code: FunCode,
     neqn_code: FunCode,
@@ -236,6 +237,7 @@ impl Signature {
             f_info: vec![FuncCell::dummy()],
             f_index: BTreeMap::new(),
             type_bank,
+            support_lists,
             typed_symbols: false,
             eqn_code: 0,
             neqn_code: 0,
@@ -298,6 +300,11 @@ impl Signature {
     #[must_use]
     pub const fn internal_symbols(&self) -> FunCode {
         self.internal_symbols
+    }
+
+    #[must_use]
+    pub const fn supports_lists(&self) -> bool {
+        self.support_lists
     }
 
     #[must_use]
@@ -1709,6 +1716,7 @@ mod tests {
     fn allocation_inserts_true_false_and_optional_lists_like_c() {
         let sig = signature();
 
+        assert!(!sig.supports_lists());
         assert_eq!(sig.f_count(), SIG_FALSE_CODE);
         assert_eq!(sig.internal_symbols(), SIG_FALSE_CODE);
         assert_eq!(sig.external_symbols(), 0);
@@ -1733,6 +1741,7 @@ mod tests {
         assert_eq!(sig.distinct_code(), 0);
 
         let with_lists = Signature::new_with_list_support(TypeBank::new(), true);
+        assert!(with_lists.supports_lists());
         assert_eq!(with_lists.f_count(), SIG_CONS_CODE);
         assert_eq!(with_lists.internal_symbols(), SIG_CONS_CODE);
         assert_eq!(with_lists.find_f_code("$nil"), SIG_NIL_CODE);

@@ -6,7 +6,7 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
-use crate::terms::signature::{Signature, SIG_TRUE_CODE};
+use crate::terms::signature::{Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE};
 use crate::terms::signature::{
     SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE,
 };
@@ -203,7 +203,7 @@ impl TermBank {
     /// This follows the `TermPrint` macro dispatch: first-order problems use
     /// the conventional first-order surface, while higher-order problems use
     /// the currently ported `TermPrintHO` application surface. FOOL formula,
-    /// list, `let`, and lambda pretty-printing remain part of the full
+    /// `let`, and lambda pretty-printing remain part of the full
     /// formula-printer integration.
     ///
     /// # Panics
@@ -427,6 +427,9 @@ impl TermBank {
         if term.is_db_var() {
             return write!(output, "db({})", term.f_code());
         }
+        if self.should_print_cons_list(term) {
+            return self.write_cons_list(output, term);
+        }
 
         self.write_symbol(output, term.f_code())?;
         if !term.is_const() {
@@ -448,6 +451,9 @@ impl TermBank {
         if term.is_db_var() {
             return write!(output, "db({})", term.f_code());
         }
+        if self.should_print_cons_list(&term) {
+            return self.write_cons_list_deref(output, &term, current_deref);
+        }
 
         self.write_symbol(output, term.f_code())?;
         if !term.is_const() {
@@ -465,6 +471,8 @@ impl TermBank {
             write!(output, "{}", var_print_string(term.f_code()))?;
         } else if term.is_db_var() {
             write!(output, "db({})", term.f_code())?;
+        } else if self.should_print_cons_list(term) {
+            self.write_cons_list_with_type_suffixes(output, term)?;
         } else {
             self.write_symbol(output, term.f_code())?;
             if !term.is_const() {
@@ -472,6 +480,80 @@ impl TermBank {
             }
         }
         self.write_type_suffix(output, term)
+    }
+
+    fn should_print_cons_list(&self, term: &Term) -> bool {
+        self.sig.supports_lists()
+            && (term.f_code() == SIG_NIL_CODE || term.f_code() == SIG_CONS_CODE)
+    }
+
+    fn write_cons_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+        output.write_str("[")?;
+        let mut list = term.clone();
+        if list.f_code() == SIG_CONS_CODE {
+            self.write_plain_term(output, &initialized_arg(&list, 0))?;
+            list = initialized_arg(&list, 1);
+            while list.f_code() == SIG_CONS_CODE {
+                output.write_str(",")?;
+                self.write_plain_term(output, &initialized_arg(&list, 0))?;
+                list = initialized_arg(&list, 1);
+            }
+            assert_eq!(
+                list.f_code(),
+                SIG_NIL_CODE,
+                "C list printing requires a proper $nil tail"
+            );
+        }
+        output.write_str("]")
+    }
+
+    fn write_cons_list_deref(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+    ) -> fmt::Result {
+        output.write_str("[")?;
+        let mut list = term.clone();
+        if list.f_code() == SIG_CONS_CODE {
+            self.write_plain_term_deref(output, &initialized_arg(&list, 0), deref)?;
+            list = initialized_arg(&list, 1);
+            while list.f_code() == SIG_CONS_CODE {
+                output.write_str(",")?;
+                self.write_plain_term_deref(output, &initialized_arg(&list, 0), deref)?;
+                list = initialized_arg(&list, 1);
+            }
+            assert_eq!(
+                list.f_code(),
+                SIG_NIL_CODE,
+                "C list printing requires a proper $nil tail"
+            );
+        }
+        output.write_str("]")
+    }
+
+    fn write_cons_list_with_type_suffixes(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+    ) -> fmt::Result {
+        output.write_str("[")?;
+        let mut list = term.clone();
+        if list.f_code() == SIG_CONS_CODE {
+            self.write_plain_term_with_type_suffixes(output, &initialized_arg(&list, 0))?;
+            list = initialized_arg(&list, 1);
+            while list.f_code() == SIG_CONS_CODE {
+                output.write_str(",")?;
+                self.write_plain_term_with_type_suffixes(output, &initialized_arg(&list, 0))?;
+                list = initialized_arg(&list, 1);
+            }
+            assert_eq!(
+                list.f_code(),
+                SIG_NIL_CODE,
+                "C list printing requires a proper $nil tail"
+            );
+        }
+        output.write_str("]")
     }
 
     fn write_plain_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
@@ -1932,8 +2014,8 @@ mod tests {
     use crate::inout::scanner::Scanner;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
-        Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_FALSE_CODE,
-        SIG_ITE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+        Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_CONS_CODE,
+        SIG_FALSE_CODE, SIG_ITE_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
@@ -2046,6 +2128,23 @@ mod tests {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         let term = bank.parse_term_simple(&mut scanner).unwrap();
         (bank, term)
+    }
+
+    fn cons_cell(head: Term, tail: Term) -> Term {
+        let cons = Term::top_alloc(SIG_CONS_CODE, 2);
+        cons.set_argument(0, head);
+        cons.set_argument(1, tail);
+        cons
+    }
+
+    fn list_term(bank: &mut TermBank, elements: &[Term]) -> Term {
+        let mut list = bank.create_const_term(SIG_NIL_CODE).unwrap();
+        for element in elements.iter().rev() {
+            list = bank
+                .insert(&cons_cell(element.clone(), list), DerefType::Never)
+                .unwrap();
+        }
+        list
     }
 
     #[test]
@@ -2192,6 +2291,69 @@ mod tests {
             bank.term_ho_deref_string(&parsed, DerefType::Never),
             "f @ a @ (g @ b) @ X1"
         );
+    }
+
+    #[test]
+    fn first_order_list_printing_uses_bracket_notation_when_signature_supports_lists() {
+        let mut sig = Signature::new_with_list_support(TypeBank::new(), true);
+        let a_code = sig.insert_id("list_print_a", 0, false);
+        let b_code = sig.insert_id("list_print_b", 0, false);
+        let mut bank = TermBank::new(sig).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let empty = bank.create_const_term(SIG_NIL_CODE).unwrap();
+        let list = list_term(&mut bank, &[a, b]);
+
+        assert_eq!(bank.term_string(&empty, true), "[]");
+        assert_eq!(bank.term_string(&list, true), "[list_print_a,list_print_b]");
+        assert_eq!(
+            bank.term_debug_deref_string(&list, ProblemType::FirstOrder, DerefType::Never),
+            "[list_print_a,list_print_b]"
+        );
+    }
+
+    #[test]
+    fn first_order_list_printing_keeps_symbols_when_lists_are_not_supported() {
+        let mut sig = Signature::new(TypeBank::new());
+        let nil_code = sig.insert_id("$nil", 0, true);
+        assert_eq!(nil_code, SIG_NIL_CODE);
+        let mut bank = TermBank::new(sig).unwrap();
+        let nil = bank.create_const_term(SIG_NIL_CODE).unwrap();
+
+        assert_eq!(bank.term_string(&nil, true), "$nil");
+    }
+
+    #[test]
+    fn first_order_list_printing_dereferences_elements_not_tail_shape() {
+        let mut sig = Signature::new_with_list_support(TypeBank::new(), true);
+        let a_code = sig.insert_id("list_deref_a", 0, false);
+        let mut bank = TermBank::new(sig).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let nil = bank.create_const_term(SIG_NIL_CODE).unwrap();
+        let var = Term::const_cell_alloc(-2);
+        var.set_binding(Some(a));
+        let list = cons_cell(var, nil);
+
+        assert_eq!(
+            bank.term_debug_deref_string(&list, ProblemType::FirstOrder, DerefType::Never),
+            "[X1]"
+        );
+        assert_eq!(
+            bank.term_debug_deref_string(&list, ProblemType::FirstOrder, DerefType::Always),
+            "[list_deref_a]"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "C list printing requires a proper $nil tail")]
+    fn first_order_list_printing_rejects_improper_tails_like_c_assertion() {
+        let mut sig = Signature::new_with_list_support(TypeBank::new(), true);
+        let a_code = sig.insert_id("list_bad_tail_a", 0, false);
+        let mut bank = TermBank::new(sig).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let list = cons_cell(a.clone(), a);
+
+        let _ = bank.term_string(&list, true);
     }
 
     #[test]

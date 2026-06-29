@@ -267,10 +267,12 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 ### Compatibility Notes
 
 - `SigInsertInternalCodes` reserves fixed function codes for `$true`, `$false`, `$@_var`, named/DB lambdas, `$ite`, `$let`, and related built-ins before normal user symbols are parsed. Rust proof-state allocation and executable temporary parser banks now perform that reservation before inserting user symbols; otherwise an ordinary user predicate can receive `SIG_PHONY_APP_CODE` and be misclassified as a phony application.
+- `SigSupportLists` is process-global in C and affects `SigAlloc`: when true, `$nil` and `$cons` are inserted as fixed internal symbols immediately after `$false`. Rust makes this state explicit on each `Signature` so term printers can distinguish real list-enabled signatures from ordinary user symbols named `$nil` or `$cons`.
 
 ### Change Later Candidates
 
 - Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so temporary syntax-only/app-encode paths cannot bypass fixed-code reservation accidentally.
+- If command-line parsing eventually allows list support to change after some signatures exist, compare C's global `SigSupportLists` timing against Rust's per-signature flag before exposing a higher-level API.
 
 ### Porting Focus
 
