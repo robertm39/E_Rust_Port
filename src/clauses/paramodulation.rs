@@ -11,6 +11,9 @@ use crate::clauses::derivation::{clause_push_derivation, DC_PARAMOD, DC_SIM_PARA
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT};
 use crate::clauses::eqnlist::EqnList;
+use crate::clauses::inferencedoc::{
+    ClauseCreationInference, ClauseCreationParents, ProofDocSession,
+};
 use crate::clauses::overlap_index::{
     clause_collect_from_terms_pos, clause_collect_into_terms_pos, OverlapIndex,
 };
@@ -25,7 +28,7 @@ use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
 use crate::terms::termvars::VarBank;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 pub const PARAMOD_OVERLAP_NON_EQ_LITERALS: bool = true;
 
@@ -154,6 +157,67 @@ pub fn compute_clause_clause_paramodulants(
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
+    compute_clause_clause_paramodulants_impl::<String>(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        with,
+        store,
+        pm_type,
+        None,
+    )
+}
+
+/// Computes first-order paramodulants between two clauses while emitting
+/// represented C `DocClauseCreationDefault(..., inf_paramod/inf_sim_paramod,
+/// ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_clause_clause_paramodulants`],
+/// plus any proof-documentation write diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible docs wrapper mirrors ComputeClauseClauseParamodulants inputs"
+)]
+pub fn compute_clause_clause_paramodulants_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    with: &Clause,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+) -> Result<i64, Diagnostic> {
+    compute_clause_clause_paramodulants_impl(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        with,
+        store,
+        pm_type,
+        Some((output, session)),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper keeps source, target, and optional proof docs explicit"
+)]
+fn compute_clause_clause_paramodulants_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    with: &Clause,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
     debug_assert!(clause.literals().query_prop_number(EP_IS_MAXIMAL) != 0);
     debug_assert_eq!(
         clause.literals().query_prop_number(EP_IS_MAXIMAL),
@@ -176,6 +240,7 @@ pub fn compute_clause_clause_paramodulants(
         parent_alias,
         with,
         pm_type,
+        &mut doc_context,
     )?;
 
     if !std::ptr::eq(parent_alias, with) {
@@ -190,6 +255,7 @@ pub fn compute_clause_clause_paramodulants(
             with,
             parent_alias,
             pm_type,
+            &mut doc_context,
         )?;
     }
 
@@ -211,9 +277,70 @@ pub fn compute_all_paramodulants(
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
+    compute_all_paramodulants_impl::<String>(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        with_set,
+        store,
+        pm_type,
+        None,
+    )
+}
+
+/// Computes first-order paramodulants against a clause set while emitting
+/// represented C `DocClauseCreationDefault(..., inf_paramod/inf_sim_paramod,
+/// ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_all_paramodulants`], plus any
+/// proof-documentation write diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible docs wrapper mirrors ComputeAllParamodulants inputs"
+)]
+pub fn compute_all_paramodulants_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    with_set: &ClauseSet,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+) -> Result<i64, Diagnostic> {
+    compute_all_paramodulants_impl(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        with_set,
+        store,
+        pm_type,
+        Some((output, session)),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper keeps selected clause, partner set, and optional proof docs explicit"
+)]
+fn compute_all_paramodulants_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    with_set: &ClauseSet,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for with in with_set.iter() {
-        paramod_count += compute_clause_clause_paramodulants(
+        paramod_count += compute_clause_clause_paramodulants_impl(
             bank,
             ocb,
             clause,
@@ -221,6 +348,9 @@ pub fn compute_all_paramodulants(
             with,
             store,
             pm_type,
+            doc_context
+                .as_mut()
+                .map(|(output, session)| (&mut **output, &mut **session)),
         )?;
     }
     Ok(paramod_count)
@@ -256,6 +386,74 @@ pub fn compute_all_paramodulants_indexed(
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
 ) -> Result<i64, Diagnostic> {
+    compute_all_paramodulants_indexed_impl::<String>(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        into_index,
+        negp_index,
+        from_index,
+        store,
+        pm_type,
+        None,
+    )
+}
+
+/// Computes indexed first-order paramodulants while emitting represented C
+/// `DocClauseCreationDefault(..., inf_paramod/inf_sim_paramod, ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_all_paramodulants_indexed`], plus
+/// any proof-documentation write diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible docs wrapper mirrors ComputeAllParamodulantsIndexed inputs"
+)]
+pub fn compute_all_paramodulants_indexed_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    into_index: &OverlapIndex<'_>,
+    negp_index: &OverlapIndex<'_>,
+    from_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+) -> Result<i64, Diagnostic> {
+    compute_all_paramodulants_indexed_impl(
+        bank,
+        ocb,
+        clause,
+        parent_alias,
+        into_index,
+        negp_index,
+        from_index,
+        store,
+        pm_type,
+        Some((output, session)),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed wrapper keeps source clause, indexes, and optional proof docs explicit"
+)]
+fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    parent_alias: &Clause,
+    into_index: &OverlapIndex<'_>,
+    negp_index: &OverlapIndex<'_>,
+    from_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+    pm_type: ParamodulationType,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
     let mut paramod_count = compute_into_paramodulants_indexed(
         bank,
         ocb,
@@ -265,6 +463,7 @@ pub fn compute_all_paramodulants_indexed(
         negp_index,
         store,
         pm_type,
+        &mut doc_context,
     )?;
     paramod_count += compute_from_paramodulants_indexed(
         bank,
@@ -274,6 +473,7 @@ pub fn compute_all_paramodulants_indexed(
         from_index,
         store,
         pm_type,
+        &mut doc_context,
     )?;
     Ok(paramod_count)
 }
@@ -291,6 +491,7 @@ fn compute_into_paramodulants_indexed(
     negp_index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let mut positions = Vec::new();
@@ -307,6 +508,7 @@ fn compute_into_paramodulants_indexed(
             store,
             parent_alias,
             pm_type,
+            doc_context,
         )?;
         if from_pos
             .literal()
@@ -322,6 +524,7 @@ fn compute_into_paramodulants_indexed(
                 store,
                 parent_alias,
                 pm_type,
+                doc_context,
             )?;
         }
     }
@@ -329,6 +532,10 @@ fn compute_into_paramodulants_indexed(
     Ok(paramod_count)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed wrapper keeps selected source, index, and optional docs explicit"
+)]
 fn compute_from_paramodulants_indexed(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -337,6 +544,7 @@ fn compute_from_paramodulants_indexed(
     from_index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
     pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let mut positions = Vec::new();
@@ -357,6 +565,7 @@ fn compute_from_paramodulants_indexed(
                 store,
                 parent_alias,
                 pm_type,
+                doc_context,
             )?;
         }
     }
@@ -377,6 +586,7 @@ fn compute_from_position_into_index(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for occurrence in unifiable_occurrences(index, overlap_term) {
@@ -388,11 +598,16 @@ fn compute_from_position_into_index(
             store,
             parent_alias,
             pm_type,
+            doc_context,
         )?;
     }
     Ok(paramod_count)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed helper keeps source occurrence, target occurrence, and optional docs explicit"
+)]
 fn compute_from_position_into_occurrence(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -401,6 +616,7 @@ fn compute_from_position_into_occurrence(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let Some(effective_pm_type) =
@@ -442,6 +658,14 @@ fn compute_from_position_into_occurrence(
             };
             paramod_count += 1;
             update_paramodulant_info(&mut paramodulant, into_clause_pos.clause(), parent_alias);
+            document_paramodulant_creation(
+                doc_context,
+                bank,
+                &mut paramodulant,
+                effective_pm_type,
+                into_clause_pos.clause(),
+                parent_alias,
+            )?;
             clause_push_derivation(
                 &mut paramodulant,
                 paramodulation_derivation_code(effective_pm_type),
@@ -473,6 +697,7 @@ fn compute_indexed_sources_into_position(
     store: &mut ClauseSet,
     parent_alias: &Clause,
     pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
@@ -515,6 +740,14 @@ fn compute_indexed_sources_into_position(
                 };
                 paramod_count += 1;
                 update_paramodulant_info(&mut paramodulant, from_clause_pos.clause(), parent_alias);
+                document_paramodulant_creation(
+                    doc_context,
+                    bank,
+                    &mut paramodulant,
+                    effective_pm_type,
+                    parent_alias,
+                    from_clause_pos.clause(),
+                )?;
                 clause_push_derivation(
                     &mut paramodulant,
                     paramodulation_derivation_code(effective_pm_type),
@@ -1374,6 +1607,7 @@ fn compute_directed_clause_paramodulants(
     metadata_parent1: &Clause,
     metadata_parent2: &Clause,
     pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for pair in paramodulation_pair_positions(bank, source, target, no_top, pm_type) {
@@ -1400,6 +1634,14 @@ fn compute_directed_clause_paramodulants(
         };
         paramod_count += 1;
         update_paramodulant_info(&mut paramodulant, metadata_parent1, metadata_parent2);
+        document_paramodulant_creation(
+            doc_context,
+            bank,
+            &mut paramodulant,
+            effective_pm_type,
+            metadata_parent2,
+            source_parent,
+        )?;
         clause_push_derivation(
             &mut paramodulant,
             paramodulation_derivation_code(effective_pm_type),
@@ -1409,6 +1651,35 @@ fn compute_directed_clause_paramodulants(
         store.insert(paramodulant);
     }
     Ok(paramod_count)
+}
+
+fn document_paramodulant_creation(
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
+    bank: &TermBank,
+    paramodulant: &mut Clause,
+    pm_type: ParamodulationType,
+    parent1: &Clause,
+    parent2: &Clause,
+) -> Result<(), Diagnostic> {
+    if let Some((output, session)) = doc_context.as_mut() {
+        session.doc_clause_creation(
+            &mut **output,
+            bank,
+            paramodulant,
+            paramodulation_creation_inference(pm_type),
+            ClauseCreationParents::binary(parent1, parent2),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+const fn paramodulation_creation_inference(pm_type: ParamodulationType) -> ClauseCreationInference {
+    if matches!(pm_type, ParamodulationType::Plain) {
+        ClauseCreationInference::Paramodulation
+    } else {
+        ClauseCreationInference::SimultaneousParamodulation
+    }
 }
 
 fn update_paramodulant_info(child: &mut Clause, parent1: &Clause, parent2: &Clause) {
@@ -1512,11 +1783,12 @@ fn effective_paramodulation_type(
 mod tests {
     use super::{
         clause_ordered_paramod, clause_ordered_super_sim_paramod, compute_all_paramodulants,
-        compute_all_paramodulants_indexed, compute_clause_clause_paramodulants,
-        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
-        ParamodulationType,
+        compute_all_paramodulants_indexed, compute_all_paramodulants_with_docs,
+        compute_clause_clause_paramodulants, paramod_from_side_positions, paramod_into_positions,
+        paramodulation_pair_positions, ParamodulationType,
     };
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausepos::ClausePos;
@@ -1531,6 +1803,7 @@ mod tests {
     };
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::global_indices::GlobalIndices;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
@@ -2015,6 +2288,58 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(store.members(), 2);
+    }
+
+    #[test]
+    fn compute_all_paramodulants_with_docs_prints_plain_creation_step() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_doc_source_left");
+        let source_right = typed_const(&mut bank, "pm_doc_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_doc_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_doc_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let f_of_replacement = typed_unary(&mut bank, f_code, &source_right);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        source.set_ident(70);
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        target.set_ident(71);
+        let with_set = ClauseSet::from_clauses([target.clone()]);
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let count = compute_all_paramodulants_with_docs(
+            &mut output,
+            &mut session,
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &with_set,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert!(output.contains(" : pm(71,70)\n"));
+        let stored = store.iter().next().expect("one documented paramodulant");
+        assert_eq!(stored.ident(), 1);
+        assert_eq!(stored.literals().as_slice()[0].left(), &f_of_replacement);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
     }
 
     #[test]

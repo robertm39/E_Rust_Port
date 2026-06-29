@@ -39,6 +39,7 @@ use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession}
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::paramodulation::{
     compute_all_paramodulants, compute_all_paramodulants_indexed,
+    compute_all_paramodulants_indexed_with_docs, compute_all_paramodulants_with_docs,
     ParamodulationType as ClauseParamodulationType,
 };
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
@@ -3147,8 +3148,8 @@ pub fn proof_state_generate_new_clauses(
 }
 
 /// Runs the ported first-order selected-clause generators while emitting
-/// represented proof-documentation output for generated equality factors and
-/// equality resolvents.
+/// represented proof-documentation output for generated equality factors,
+/// equality resolvents, and paramodulants.
 ///
 /// # Errors
 ///
@@ -3187,7 +3188,7 @@ pub fn proof_state_generate_new_clauses_with_global_indices(
 
 /// Runs the ported first-order selected-clause generators with caller-owned
 /// global indices while emitting represented proof-documentation output for
-/// generated equality factors and equality resolvents.
+/// generated equality factors, equality resolvents, and paramodulants.
 ///
 /// # Errors
 ///
@@ -3327,6 +3328,7 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
                 enable_neg_unit_paramod,
                 pm_type,
                 indices,
+                &mut doc_context,
             )?;
         }
 
@@ -3380,21 +3382,38 @@ fn compute_selected_paramodulants(
     enable_neg_unit_paramod: bool,
     pm_type: ClauseParamodulationType,
     indices: Option<&GlobalIndices<'_>>,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     if let Some((into_index, negp_index, from_index)) =
         indices.and_then(GlobalIndices::pm_paramodulation_indexes)
     {
-        let count = compute_all_paramodulants_indexed(
-            terms,
-            ocb,
-            source_for_paramod,
-            parent_alias,
-            into_index,
-            negp_index,
-            from_index,
-            generation.tmp_store,
-            pm_type,
-        )?;
+        let count = if let Some((output, session)) = doc_context.as_mut() {
+            compute_all_paramodulants_indexed_with_docs(
+                &mut **output,
+                session,
+                terms,
+                ocb,
+                source_for_paramod,
+                parent_alias,
+                into_index,
+                negp_index,
+                from_index,
+                generation.tmp_store,
+                pm_type,
+            )?
+        } else {
+            compute_all_paramodulants_indexed(
+                terms,
+                ocb,
+                source_for_paramod,
+                parent_alias,
+                into_index,
+                negp_index,
+                from_index,
+                generation.tmp_store,
+                pm_type,
+            )?
+        };
         Ok(i64_to_u64_saturating(count))
     } else {
         compute_unindexed_selected_paramodulants(
@@ -3405,10 +3424,15 @@ fn compute_selected_paramodulants(
             generation,
             enable_neg_unit_paramod,
             pm_type,
+            doc_context,
         )
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "selected-clause paramodulation keeps source, partner stores, strategy gates, and optional docs explicit"
+)]
 fn compute_unindexed_selected_paramodulants(
     terms: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -3417,9 +3441,11 @@ fn compute_unindexed_selected_paramodulants(
     generation: &mut ProofStateGenerationContext<'_>,
     enable_neg_unit_paramod: bool,
     pm_type: ClauseParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     let tmp_store = &mut *generation.tmp_store;
-    let mut count = compute_all_paramodulants(
+    let mut count = compute_all_paramodulants_maybe_docs(
+        doc_context,
         terms,
         ocb,
         source_for_paramod,
@@ -3428,7 +3454,8 @@ fn compute_unindexed_selected_paramodulants(
         tmp_store,
         pm_type,
     )?;
-    count += compute_all_paramodulants(
+    count += compute_all_paramodulants_maybe_docs(
+        doc_context,
         terms,
         ocb,
         source_for_paramod,
@@ -3438,7 +3465,8 @@ fn compute_unindexed_selected_paramodulants(
         pm_type,
     )?;
     if enable_neg_unit_paramod && !parent_alias.is_negative() {
-        count += compute_all_paramodulants(
+        count += compute_all_paramodulants_maybe_docs(
+            doc_context,
             terms,
             ocb,
             source_for_paramod,
@@ -3448,7 +3476,8 @@ fn compute_unindexed_selected_paramodulants(
             pm_type,
         )?;
     }
-    count += compute_all_paramodulants(
+    count += compute_all_paramodulants_maybe_docs(
+        doc_context,
         terms,
         ocb,
         source_for_paramod,
@@ -3458,6 +3487,45 @@ fn compute_unindexed_selected_paramodulants(
         pm_type,
     )?;
     Ok(i64_to_u64_saturating(count))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "selected-clause paramodulation keeps source, parent alias, partner set, and optional docs explicit"
+)]
+fn compute_all_paramodulants_maybe_docs(
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
+    terms: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    source_for_paramod: &Clause,
+    parent_alias: &Clause,
+    with_set: &ClauseSet,
+    tmp_store: &mut ClauseSet,
+    pm_type: ClauseParamodulationType,
+) -> Result<i64, Diagnostic> {
+    if let Some((output, session)) = doc_context.as_mut() {
+        compute_all_paramodulants_with_docs(
+            &mut **output,
+            session,
+            terms,
+            ocb,
+            source_for_paramod,
+            parent_alias,
+            with_set,
+            tmp_store,
+            pm_type,
+        )
+    } else {
+        compute_all_paramodulants(
+            terms,
+            ocb,
+            source_for_paramod,
+            parent_alias,
+            with_set,
+            tmp_store,
+            pm_type,
+        )
+    }
 }
 
 /// Processes one selected clause through the currently ported C `ProcessClause`.
@@ -5255,7 +5323,8 @@ mod tests {
         proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
         proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
         proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_docs,
-        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
+        proof_state_generate_new_clauses_with_global_indices,
+        proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
         proof_state_init_global_indices, proof_state_init_indexing, proof_state_init_with_docs,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
@@ -8403,6 +8472,48 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_generate_new_clauses_with_docs_quotes_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, partner) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_doc_pm_source");
+            let replacement = typed_const(terms, "pc_generate_doc_pm_replacement");
+            let rhs = typed_const(terms, "pc_generate_doc_pm_rhs");
+            let f_of_source = typed_unary(terms, "pc_generate_doc_pm_f", &source);
+            let mut partner_lit = literal(terms, &source, &replacement, true);
+            let mut selected_lit = literal(terms, &f_of_source, &rhs, true);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            partner.set_ident(4_147);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_146);
+            (selected, partner)
+        };
+        state.processed_pos_eqns_mut().insert(partner);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_generate_new_clauses_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+            &selected,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert!(output.contains(" : pm(4146,4147)\n"));
+        assert_eq!(state.tmp_store().members(), 1);
+        assert_eq!(state.tmp_store().iter().next().unwrap().ident(), 1);
+    }
+
+    #[test]
     fn proof_state_generate_new_clauses_paramodulates_predicate_fact_into_rule() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (selected_fact, processed_rule, mortal_socrates, truth) = {
@@ -8490,6 +8601,51 @@ mod tests {
             .left()
             .argument(0)
             .is_some_and(|arg| arg == replacement));
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_with_global_indices_and_docs_quotes_paramodulation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, mut indexed_partner) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_idx_doc_pm_source");
+            let replacement = typed_const(terms, "pc_generate_idx_doc_pm_replacement");
+            let rhs = typed_const(terms, "pc_generate_idx_doc_pm_rhs");
+            let f_source = typed_unary(terms, "pc_generate_idx_doc_pm_f", &source);
+            let mut selected_lit = literal(terms, &source, &replacement, true);
+            let mut partner_lit = literal(terms, &f_source, &rhs, true);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_151);
+            let mut partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            partner.set_ident(4_152);
+            (selected, partner)
+        };
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_partner, state.terms(), false);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_generate_new_clauses_with_global_indices_and_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+            &selected,
+            &indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert!(output.contains(" : pm(4152,4151)\n"));
+        assert_eq!(state.tmp_store().members(), 1);
+        assert_eq!(state.tmp_store().iter().next().unwrap().ident(), 1);
     }
 
     #[test]
