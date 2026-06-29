@@ -3563,7 +3563,18 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         let processed_clause =
             proof_state_processed_clause_by_class(state, class, processed_ident).cloned();
         if let Some(processed_clause) = processed_clause {
-            let _simplified = proof_state_simplify_watchlist(state, control, &processed_clause)?;
+            if let Some((output, session, _output_level)) = doc_context.as_mut() {
+                let _simplified = proof_state_simplify_watchlist_with_docs(
+                    &mut **output,
+                    session,
+                    state,
+                    control,
+                    &processed_clause,
+                )?;
+            } else {
+                let _simplified =
+                    proof_state_simplify_watchlist(state, control, &processed_clause)?;
+            }
         }
     }
 
@@ -8908,6 +8919,67 @@ mod tests {
         let literal = &simplified.literals().as_slice()[0];
         assert_eq!(literal.left(), &target);
         assert_eq!(literal.right(), &other);
+        assert!(state.statistics().rw_count >= 1);
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_threads_watchlist_simplification_docs() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, watched, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_process_watch_simpl_doc_target");
+            let other = typed_const(terms, "pc_process_watch_simpl_doc_other");
+            let compound = typed_unary(terms, "pc_process_watch_simpl_doc_f", &target);
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &compound, &target, true,
+            )]));
+            selected.set_ident(4_158);
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &compound, &other, true),
+                literal(terms, &other, &target, true),
+                literal(terms, &target, &target, false),
+            ]));
+            watched.set_ident(4_159);
+            watched.set_prop(CP_INPUT_FORMULA);
+            watched.set_weight(watched.standard_weight());
+            (selected, watched, target, other)
+        };
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 4, ProblemType::FirstOrder);
+        session.pcl_shell_level = 1;
+        let mut output = String::new();
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            4,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(matches!(outcome, ProcessClauseOutcome::Processed { .. }));
+        assert_eq!(session.id_source.current_ident(), 2);
+        assert!(output.contains("rw(4159,4158)"));
+        assert!(output.contains("cn(1)"));
+        assert_eq!(state.watchlist().unwrap().members(), 1);
+        assert!(state
+            .archive()
+            .find_by_id(4_159)
+            .unwrap()
+            .query_prop(CP_IS_DEAD));
+        let simplified = state.watchlist().unwrap().find_by_id(2).unwrap();
+        assert_eq!(simplified.literal_number(), 1);
+        assert!(!simplified.query_prop(CP_INPUT_FORMULA));
+        let literal = &simplified.literals().as_slice()[0];
+        let kept_expected_equality = (literal.left() == &target && literal.right() == &other)
+            || (literal.left() == &other && literal.right() == &target);
+        assert!(kept_expected_equality);
         assert!(state.statistics().rw_count >= 1);
     }
 
