@@ -18,9 +18,9 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
-    reject_term_bank_distinct_argument_list, term_apply_arg as term_apply_arg_unshared, term_copy,
-    term_is_ground_compute, term_parse_operator, term_sig_insert, term_standard_weight,
-    var_print_string,
+    reject_term_bank_distinct_argument_list, term_apply_arg as term_apply_arg_unshared,
+    term_array_no_duplicates, term_copy, term_is_ground_compute, term_parse_operator,
+    term_sig_insert, term_standard_weight, var_print_string,
 };
 use crate::terms::termtypes::{
     term_deref, term_identity_id, DerefType, Term, TermProperties, DEFAULT_FWEIGHT,
@@ -2830,7 +2830,14 @@ impl TermBank {
         }
 
         if term.is_applied_free_var() {
-            term.set_prop(TP_HAS_APP_VAR | TP_HAS_NON_PATTERN_VAR);
+            term.set_prop(TP_HAS_APP_VAR);
+            if normalize_pattern_app_var_no_eta(term).is_some() {
+                f_count = 0;
+                v_count = 1;
+                weight = DEFAULT_VWEIGHT;
+            } else {
+                term.set_prop(TP_HAS_NON_PATTERN_VAR);
+            }
         }
 
         term.set_v_count(v_count);
@@ -2839,6 +2846,28 @@ impl TermBank {
         if v_count == 0 {
             term.set_prop(TP_IS_GROUND);
         }
+    }
+}
+
+fn normalize_pattern_app_var_no_eta(term: &Term) -> Option<Term> {
+    if term.is_free_var() {
+        return Some(term.clone());
+    }
+    assert!(term.is_applied_free_var(), "expected applied free variable");
+
+    let mut args = Vec::with_capacity(term.arity());
+    for index in 0..term.arity() {
+        let arg = initialized_arg(term, index);
+        if index != 0 && !arg.is_db_var() {
+            return None;
+        }
+        args.push(arg);
+    }
+
+    if term_array_no_duplicates(&args) {
+        Some(term.clone())
+    } else {
+        None
     }
 }
 
@@ -4832,7 +4861,32 @@ mod tests {
     }
 
     #[test]
-    fn applied_free_var_is_marked_non_pattern_until_normalization_is_ported() {
+    fn applied_free_var_with_db_args_is_pattern_and_counts_as_single_var() {
+        let mut type_bank = TypeBank::new();
+        let i_type = type_bank.i_type();
+        let arrow =
+            type_bank.insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let sig = Signature::new(type_bank);
+        let mut bank = TermBank::new(sig).unwrap();
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(arrow));
+        let arg = bank.request_db_var(&i_type, 0);
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, head);
+        app.set_argument(1, arg);
+
+        let shared = bank.insert_ignore_var(&app, DerefType::Never).unwrap();
+
+        assert!(shared.query_prop(TP_HAS_APP_VAR));
+        assert!(!shared.query_prop(TP_HAS_NON_PATTERN_VAR));
+        assert!(shared.is_pattern());
+        assert_eq!(shared.v_count(), 1);
+        assert_eq!(shared.f_count(), 0);
+        assert_eq!(shared.weight(), DEFAULT_VWEIGHT);
+    }
+
+    #[test]
+    fn applied_free_var_with_non_db_arg_is_marked_non_pattern() {
         let mut type_bank = TypeBank::new();
         let arrow = type_bank.insert_type_shared(alloc_arrow_type(vec![
             type_bank.i_type(),
