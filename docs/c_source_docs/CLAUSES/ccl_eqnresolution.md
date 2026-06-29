@@ -88,8 +88,8 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 ### Rust Port Status Notes
 
 - Rust now ports the first-order `ComputeEqRes` paths used by destructive equality resolution and all-resolvent generation, including MGU construction, C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, false-literal removal, duplicate removal, negative-literal iteration with an explicit maximal-literal filter, and insertion of first-order generated resolvents into a caller-owned clause set.
-- The first-order all-resolvent wrapper and destructive variable-normalization wrapper now attach `DCEqRes` and `DCDesEqRes` derivation entries, respectively.
-- Higher-order CSU enumeration through the `res_cls` stack, `subst_is_ho` propagation, lambda normalization of copied resolvents, and proof-documentation output remain pending.
+- The first-order all-resolvent wrapper and destructive variable-normalization wrapper now attach `DCEqRes` and `DCDesEqRes` derivation entries, respectively, and expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
+- Higher-order CSU enumeration through the `res_cls` stack, `subst_is_ho` propagation, and lambda normalization of copied resolvents remain pending.
 
 ### Change-Later Observations
 

@@ -25,8 +25,8 @@ use crate::clauses::derivation::{
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::{
-    clause_er_normalize_var, compute_all_eqn_resolvents, compute_all_eqn_resolvents_with_docs,
-    EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+    clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
+    compute_all_eqn_resolvents_with_docs, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
 };
 use crate::clauses::factor::{
     compute_all_equality_factors, compute_all_equality_factors_with_docs,
@@ -2548,6 +2548,19 @@ fn proof_state_aggressive_forward_subsumed(
     subsumed
 }
 
+fn proof_state_clause_er_normalize_var_maybe_docs<W: fmt::Write>(
+    state: &mut ProofState,
+    clause: Clause,
+    strong: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<(Clause, i64), Diagnostic> {
+    if let Some((output, session)) = doc_context.as_mut() {
+        clause_er_normalize_var_with_docs(&mut **output, session, state.terms_mut(), clause, strong)
+    } else {
+        clause_er_normalize_var(state.terms_mut(), clause, strong)
+    }
+}
+
 /// Drains `tmp_store` through the currently ported local body of C
 /// `insert_new_clauses`.
 ///
@@ -2555,10 +2568,10 @@ fn proof_state_aggressive_forward_subsumed(
 /// checks, empty-clause return, aggressive forward subsumption, eval-store
 /// admission, HCB evaluation, and the final move to `unprocessed`. Destructive
 /// equality resolution is available for the first-order destructive
-/// variable-literal path, and controlled clause splitting is available for
-/// fresh definitions plus clause-level reused definitions. Split-definition
-/// formula archives and proof-output side effects remain with the future
-/// formula/proof-documentation owners.
+/// variable-literal path, with opt-in proof-documentation output, and controlled
+/// clause splitting is available for fresh definitions plus clause-level reused
+/// definitions. Split-definition formula archives and proof-output side effects
+/// remain with the future formula/proof-documentation owners.
 ///
 /// # Errors
 ///
@@ -2648,8 +2661,12 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
             && control.heuristic_parms().er_varlit_destructive
         {
             let strong = control.heuristic_parms().er_strong_destructive;
-            let (normalized, clause_count) =
-                clause_er_normalize_var(state.terms_mut(), clause, strong)?;
+            let (normalized, clause_count) = proof_state_clause_er_normalize_var_maybe_docs(
+                state,
+                clause,
+                strong,
+                &mut doc_context,
+            )?;
             clause = normalized;
             if clause_count != 0 {
                 let count = i64_to_u64_saturating(clause_count);
@@ -2736,6 +2753,32 @@ pub fn proof_state_replacing_inferences(
     control: &mut ProofControl,
     packed: FvPackedClause,
 ) -> Result<ReplacingInferenceOutcome, Diagnostic> {
+    proof_state_replacing_inferences_impl::<String>(state, control, packed, None)
+}
+
+/// Applies C `replacing_inferences` while emitting represented proof
+/// documentation for already-ported replacement branches.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_replacing_inferences`], plus
+/// any proof-documentation write diagnostic.
+pub fn proof_state_replacing_inferences_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    packed: FvPackedClause,
+) -> Result<ReplacingInferenceOutcome, Diagnostic> {
+    proof_state_replacing_inferences_impl(state, control, packed, Some((output, session)))
+}
+
+fn proof_state_replacing_inferences_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    packed: FvPackedClause,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<ReplacingInferenceOutcome, Diagnostic> {
     if problem_type() == ProblemType::HigherOrder {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -2747,8 +2790,12 @@ pub fn proof_state_replacing_inferences(
 
     if control.heuristic_parms().er_varlit_destructive {
         let strong = control.heuristic_parms().er_strong_destructive;
-        let (normalized, clause_count) =
-            clause_er_normalize_var(state.terms_mut(), clause, strong)?;
+        let (normalized, clause_count) = proof_state_clause_er_normalize_var_maybe_docs(
+            state,
+            clause,
+            strong,
+            &mut doc_context,
+        )?;
         clause = normalized;
         if clause_count != 0 {
             let count = i64_to_u64_saturating(clause_count);
@@ -2756,7 +2803,11 @@ pub fn proof_state_replacing_inferences(
             statistics.other_redundant_count += count;
             statistics.resolv_count += count;
             state.tmp_store_mut().insert(clause);
-            let empty = proof_state_insert_new_clauses(state, control)?;
+            let empty = if let Some((output, session)) = doc_context.as_mut() {
+                proof_state_insert_new_clauses_with_docs(&mut **output, session, state, control)?
+            } else {
+                proof_state_insert_new_clauses(state, control)?
+            };
             return Ok(ReplacingInferenceOutcome::Replaced { empty });
         }
     }
@@ -2777,7 +2828,16 @@ pub fn proof_state_replacing_inferences(
                 for split_clause in clauses {
                     state.tmp_store_mut().insert(split_clause);
                 }
-                let empty = proof_state_insert_new_clauses(state, control)?;
+                let empty = if let Some((output, session)) = doc_context.as_mut() {
+                    proof_state_insert_new_clauses_with_docs(
+                        &mut **output,
+                        session,
+                        state,
+                        control,
+                    )?
+                } else {
+                    proof_state_insert_new_clauses(state, control)?
+                };
                 return Ok(ReplacingInferenceOutcome::Replaced { empty });
             }
         }
@@ -3589,7 +3649,13 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     }
     state.statistics_mut().proc_non_trivial_count += 1;
 
-    let mut clause = match proof_state_replacing_inferences(state, control, packed)? {
+    let replacing = if let Some((output, session, _output_level)) = doc_context.as_mut() {
+        proof_state_replacing_inferences_with_docs(&mut **output, session, state, control, packed)?
+    } else {
+        proof_state_replacing_inferences(state, control, packed)?
+    };
+
+    let mut clause = match replacing {
         ReplacingInferenceOutcome::Survivor(clause) => clause,
         ReplacingInferenceOutcome::Replaced { empty } => {
             return Ok(ProcessClauseOutcome::Replaced { empty });
@@ -5199,15 +5265,16 @@ mod tests {
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_docs, proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_reset_processed_with_docs,
-        proof_state_reset_processed_with_global_indices, proof_state_saturate,
-        proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
-        proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
-        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
-        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
-        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessedClauseClass,
-        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SaturateOutcome,
-        SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_replacing_inferences_with_docs, proof_state_reset_processed,
+        proof_state_reset_processed_with_docs, proof_state_reset_processed_with_global_indices,
+        proof_state_saturate, proof_state_saturate_with_global_indices,
+        proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
+        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
+        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
+        LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -7618,6 +7685,52 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_insert_new_clauses_with_docs_quotes_destructive_er() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, rhs) = {
+            let terms = state.terms_mut();
+            let x = typed_var(terms, -34);
+            let y = typed_var(terms, -36);
+            let rhs = typed_const(terms, "pc_insert_new_doc_er_rhs");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &x, &rhs, true),
+                literal(terms, &x, &y, false),
+            ]));
+            clause.set_ident(4_082);
+            (clause, rhs)
+        };
+        state.tmp_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewDocDestructiveErTest");
+        control.heuristic_parms_mut().er_aggressive = true;
+        control.heuristic_parms_mut().er_varlit_destructive = true;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let empty = proof_state_insert_new_clauses_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(output.contains(" : er(4082)\n"));
+        assert!(state.unprocessed().find_by_id(4_082).is_none());
+        let queued = state.unprocessed().find_by_id(1).unwrap();
+        assert_eq!(queued.literal_number(), 1);
+        assert_eq!(queued.proof_depth(), 1);
+        assert_eq!(queued.proof_size(), 1);
+        assert_eq!(queued.literals().as_slice()[0].right(), &rhs);
+    }
+
+    #[test]
     fn proof_state_insert_new_clauses_requeues_fresh_split_result() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let clause = {
@@ -7772,6 +7885,50 @@ mod tests {
         assert_eq!(queued.literal_number(), 1);
         assert_eq!(queued.proof_depth(), 1);
         assert_eq!(queued.proof_size(), 1);
+        assert_eq!(queued.literals().as_slice()[0].right(), &rhs);
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_with_docs_quotes_destructive_er() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, rhs) = {
+            let terms = state.terms_mut();
+            let x = typed_var(terms, -54);
+            let y = typed_var(terms, -56);
+            let rhs = typed_const(terms, "pc_replacing_doc_er_rhs");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &x, &rhs, true),
+                literal(terms, &x, &y, false),
+            ]));
+            clause.set_ident(4_086);
+            (clause, rhs)
+        };
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ReplacingDocDestructiveErTest");
+        control.heuristic_parms_mut().er_varlit_destructive = true;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_replacing_inferences_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+            packed,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, ReplacingInferenceOutcome::Replaced { empty: None });
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(output.contains(" : er(4086)\n"));
+        assert!(state.unprocessed().find_by_id(4_086).is_none());
+        let queued = state.unprocessed().find_by_id(1).unwrap();
+        assert_eq!(queued.literal_number(), 1);
         assert_eq!(queued.literals().as_slice()[0].right(), &rhs);
     }
 

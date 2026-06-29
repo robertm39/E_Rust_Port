@@ -82,10 +82,10 @@ Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c
 
 ### Rust Port Status Notes
 
-- Rust now ports `ClauseERNormalizeVar` for the first-order destructive equality-resolution path used by generated-clause insertion: it scans negative pure-variable literals, optionally accepts one-variable-side literals for the strong mode, repeatedly computes one equality resolvent, replaces the original clause's literals, increments proof depth/size, and returns the inference count so the caller can requeue the mutated clause.
+- Rust now ports `ClauseERNormalizeVar` for the first-order destructive equality-resolution path used by generated-clause insertion and selected-clause replacement: it scans negative pure-variable literals, optionally accepts one-variable-side literals for the strong mode, repeatedly computes one equality resolvent, replaces the original clause's literals, increments proof depth/size, emits represented `DocClauseModificationDefault(..., inf_eres, clause)` output for opt-in proof-documentation callers, and returns the inference count so the caller can requeue the mutated clause.
 - Rust now ports the first-order `ComputeAllEqnResolvents` insertion wrapper: it skips clauses with no negative literals or `CPNoGeneration`, iterates candidate negative literals through the explicit maximal-literal filter, inserts generated resolvents into a caller-owned clause set, copies proof depth/size, TPTP type, and SOS state, and returns the generated count.
 - First-order derivation pushes are ported for `DCEqRes` on generated resolvents and `DCDesEqRes` on destructive equality-resolution replacements.
-- Higher-order CSU enumeration, `subst_is_ho` propagation, lambda normalization, and proof-documentation output remain pending.
+- Higher-order CSU enumeration, `subst_is_ho` propagation, and lambda normalization remain pending; first-order all-resolvent creation and destructive-replacement modification proof-documentation output are available through opt-in wrappers.
 
 ### Change-Later Observations
 

@@ -6,7 +6,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_DES_EQ_RES, DC_EQ_RES};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::inferencedoc::{
-    ClauseCreationInference, ClauseCreationParents, ProofDocSession,
+    ClauseCreationInference, ClauseCreationParents, ClauseModificationInference, ProofDocSession,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
@@ -225,8 +225,34 @@ fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
 /// Returns diagnostics from [`compute_eq_res`].
 pub fn clause_er_normalize_var(
     bank: &mut TermBank,
+    clause: Clause,
+    strong: bool,
+) -> Result<(Clause, i64), Diagnostic> {
+    clause_er_normalize_var_impl::<String>(bank, clause, strong, None)
+}
+
+/// Performs C `ClauseERNormalizeVar` while emitting represented
+/// `DocClauseModificationDefault(..., inf_eres, clause)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`clause_er_normalize_var`], plus any
+/// proof-documentation write diagnostic.
+pub fn clause_er_normalize_var_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    clause: Clause,
+    strong: bool,
+) -> Result<(Clause, i64), Diagnostic> {
+    clause_er_normalize_var_impl(bank, clause, strong, Some((output, session)))
+}
+
+fn clause_er_normalize_var_impl<W: fmt::Write>(
+    bank: &mut TermBank,
     mut clause: Clause,
     strong: bool,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<(Clause, i64), Diagnostic> {
     let mut count = 0;
     if clause.negative_literal_count() == 0 || clause.query_prop(CP_NO_GENERATION) {
@@ -252,6 +278,17 @@ pub fn clause_er_normalize_var(
         clause.set_proof_depth(clause.proof_depth().saturating_add(1));
         clause.set_proof_size(clause.proof_size().saturating_add(1));
         clause.replace_literals(resolvent.into_literals());
+        if let Some((output, session)) = doc_context.as_mut() {
+            let partner = clause.clone();
+            session.doc_clause_modification(
+                &mut **output,
+                bank,
+                &mut clause,
+                ClauseModificationInference::DestructiveEqualityResolution,
+                Some(&partner),
+                None,
+            )?;
+        }
         clause_push_derivation(&mut clause, DC_DES_EQ_RES, None, None);
     }
 
@@ -261,8 +298,9 @@ pub fn clause_er_normalize_var(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_er_normalize_var, compute_all_eqn_resolvents, compute_all_eqn_resolvents_with_docs,
-        compute_eq_res, first_eq_res_literal_index, next_eq_res_literal_index,
+        clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
+        compute_all_eqn_resolvents_with_docs, compute_eq_res, first_eq_res_literal_index,
+        next_eq_res_literal_index,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -569,6 +607,35 @@ mod tests {
                 DerivationEntry::Operation(DC_DES_EQ_RES),
                 DerivationEntry::Operation(DC_DES_EQ_RES),
             ]
+        );
+    }
+
+    #[test]
+    fn er_normalize_var_with_docs_prints_modification_steps() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let rhs = typed_const(&mut bank, "er_norm_doc_rhs");
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &x, &rhs, true),
+            lit(&mut bank, &x, &y, false),
+        ]));
+        clause.set_ident(61);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let (clause, count) =
+            clause_er_normalize_var_with_docs(&mut output, &mut session, &mut bank, clause, false)
+                .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(output.contains(" : er(61)\n"));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_DES_EQ_RES)]
         );
     }
 
