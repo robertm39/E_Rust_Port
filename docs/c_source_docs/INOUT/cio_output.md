@@ -87,10 +87,20 @@ Source files reviewed: `INOUT/cio_output.h`, `INOUT/cio_output.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/output.rs` ports the process-global output level, stdout/file output destination handling, `OutOpen`/`OutClose`-style open and flush behavior, `OpenGlobalOut`/`CloseGlobalOut`-style global target switching, raw `GlobalOutFD` compatibility values for supported platforms, `OUTPRINT`-style level gating, and `PrintDashedStatuses` formatting.
+- The native MSVC Windows file-descriptor compatibility path uses a narrowly scoped external-DLL boundary to duplicate an owned file handle into a C-runtime descriptor while keeping close ownership explicit.
+- Tests cover output-level gating, `-` as stdout, file writes and diagnostics, global output reset, supported-platform descriptor values, and all dashed-status cases.
+
+### Change-Later Observations
+
+- `OpenGlobalOut` stores both the `FILE*` and `fileno(GlobalOut)`, letting low-memory and signal paths write through a raw descriptor tied to process-global output. Rust mirrors this for stdout, Unix files, and native MSVC Windows files by duplicating handle ownership before creating a C-runtime descriptor; a later explicit output/session API should decide whether raw-descriptor writes remain only as a signal-compatibility shim.
+- `OutClose` uses `FILE*` identity to skip `fclose(stdout)` but still checks stream error state after `fflush`. Rust represents stdout and files as an enum and reports flush failures through diagnostics; any future C `FILE*` bridge should re-audit that close/flush ownership boundary instead of assuming Rust's enum split maps one-to-one to C pointer identity.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
-- Change-later candidate: `OpenGlobalOut` stores both the `FILE*` and `fileno(GlobalOut)`, letting low-memory and signal paths write through a raw descriptor tied to process-global output. Rust mirrors this for stdout, Unix files, and native MSVC Windows files by duplicating handle ownership before creating a C-runtime descriptor; a later explicit output/session API should decide whether raw-descriptor writes remain only as a signal-compatibility shim.
 <!-- END MANUAL REVIEW: c_source_docs -->

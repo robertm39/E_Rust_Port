@@ -118,6 +118,17 @@ Source files reviewed: `INOUT/cio_network.h`, `INOUT/cio_network.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack, partial single-read/write status behavior, blocking send/receive loops, string send/receive wrappers, and safe `TcpListener`/`TcpStream` socket constructors.
+- Tests cover message status values, new-message shape, packed header bytes, NUL truncation, partial writes, send loops, partial header/payload reads, closed-connection reporting, empty-payload status, receive loops, string wrappers, and ephemeral server binding.
+
+### Change-Later Observations
+
+- `TCPMsgRead` prints header and payload read progress directly to stdout, treats an empty-payload message as a closed connection after reading the header, and appends payload data through C-string APIs after partial reads. Rust keeps the wire format and empty-payload status quirk, but appends only initialized bytes and omits the debug prints; revisit this only if byte-for-byte debug output compatibility becomes required.
+- `create_server_sock_nofail` sets `SO_REUSEADDR` before binding. The current Rust wrapper uses only `std::net::TcpListener::bind`, so exact reuse semantics are not represented without adding a platform socket option layer.
+- `create_client_sock_nofail` continues iterating after a successful connection, which can leak or replace an earlier successful socket depending on later address records. Rust returns the first successful `TcpStream`; preserve that divergence unless a compatibility test shows a caller relies on the C loop's final-address behavior.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

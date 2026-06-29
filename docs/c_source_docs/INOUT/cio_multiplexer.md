@@ -100,6 +100,18 @@ Source files reviewed: `INOUT/cio_multiplexer.h`, `INOUT/cio_multiplexer.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/multiplexer.rs` ports `TCPChannel` as an owned `Read + Write` stream plus FIFO inbound and outbound `TcpMessage` queues.
+- The Rust channel preserves the C read-side shape: allocate a new inbound message when the queue is empty or the last inbound message is complete, otherwise continue filling the latest incomplete message.
+- The write side drains the outbound queue one single-message write call at a time, exposes queue-length and readiness helpers for tests, and reports closed-stream writes/reads as `NWError` equivalents.
+- Tests cover empty-channel allocation shape, reading multiple messages through the latest-incomplete rule, outbound send/write draining, inbound-message preservation while writing, and close/error behavior.
+
+### Change-Later Observations
+
+- C `TCPChannelSendMsg` stores messages in `channel->out` and `TCPChannelHasOutMsg` checks that outbound queue, but `TCPChannelWrite` checks and drains `channel->in`. Rust writes from the outbound queue to match the comments and caller contract; revisit against the C server/client paths before claiming byte-for-byte multiplexer compatibility.
+- C channel ownership is a raw socket descriptor closed by both `TCPChannelClose` and `TCPChannelFree` when nonnegative. Rust uses `Option<S>` stream ownership to prevent double-close through safe APIs; a future descriptor-level bridge should document whether double-close assertions or silent free-time close behavior are required.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
