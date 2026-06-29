@@ -627,7 +627,7 @@ pub fn proof_state_init_indexing(
 /// `Uniq` ordering of axioms, copying axioms into `unprocessed`, initial-clause
 /// watchlist checks, active-HCB evaluation, `prefer_initial_clauses` priority
 /// adjustment, SOS marking, and AC scanning. Proof-documentation/derivation
-/// pushes and state-owned global-index storage remain pending.
+/// ownership and state-owned global-index storage remain pending.
 ///
 /// # Errors
 ///
@@ -638,13 +638,37 @@ pub fn proof_state_init(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
+    proof_state_init_impl::<String>(state, control, None)
+}
+
+/// Initializes the ported proof-state portions of C `ProofStateInit` while
+/// emitting represented initial-clause `eval` proof-documentation quotes.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_init`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_init_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
+    proof_state_init_impl(state, control, Some((output, session)))
+}
+
+fn proof_state_init_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
     debug_assert!(state.processed_pos_rules().is_empty());
     debug_assert!(state.processed_pos_eqns().is_empty());
     debug_assert!(state.processed_neg_units().is_empty());
     debug_assert!(state.processed_non_units().is_empty());
 
     let watchlist_indexed = proof_state_init_indexing(state, control)?;
-    let axiom_outcome = proof_state_init_axioms(state, control)?;
+    let axiom_outcome = proof_state_init_axioms_impl(state, control, &mut doc_context)?;
     let ac_handling_active = proof_state_init_ac_handling(state, control);
     Ok(ProofStateInitOutcome {
         watchlist_indexed,
@@ -677,6 +701,25 @@ pub fn proof_state_init_with_global_indices<'sig>(
     Ok(outcome)
 }
 
+/// Runs C `ProofStateInit` with proof-documentation quotes, then initializes
+/// caller-owned global indices.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_init_with_docs`].
+pub fn proof_state_init_with_global_indices_and_docs<'sig>(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &'sig mut ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices<'sig>,
+    problem_type: ProblemType,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
+    let outcome = proof_state_init_with_docs(output, session, state, control)?;
+    proof_state_init_global_indices(state, control, indices, problem_type);
+    Ok(outcome)
+}
+
 /// Runs the axiom-queue portion of C `ProofStateInit` after indexing setup.
 ///
 /// # Errors
@@ -686,6 +729,32 @@ pub fn proof_state_init_with_global_indices<'sig>(
 pub fn proof_state_init_axioms(
     state: &mut ProofState,
     control: &mut ProofControl,
+) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
+    let mut doc_context = None;
+    proof_state_init_axioms_impl::<String>(state, control, &mut doc_context)
+}
+
+/// Runs the axiom-queue portion of C `ProofStateInit` while emitting
+/// represented initial-clause `eval` proof-documentation quotes.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_init_axioms`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_init_axioms_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
+    let mut doc_context = Some((output, session));
+    proof_state_init_axioms_impl(state, control, &mut doc_context)
+}
+
+fn proof_state_init_axioms_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
@@ -733,6 +802,9 @@ pub fn proof_state_init_axioms(
             watchlist_removed += watchlist_outcome.removed;
 
             hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut new);
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_quote(output, state.terms(), 6, &mut new, Some("eval"), None)?;
+            }
             clause_push_derivation(&mut new, DC_CNF_QUOTE, Some(&source), None);
             if record_gc_selection {
                 clause_push_derivation(&mut new, DC_CNF_EVAL_GC, None, None);
@@ -4426,11 +4498,11 @@ mod tests {
         proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
         proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
         proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
-        proof_state_init_indexing, proof_state_init_with_global_indices,
-        proof_state_insert_new_clauses, proof_state_insert_processed_clause,
-        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
-        proof_state_process_clause_with_global_indices,
+        proof_state_init_indexing, proof_state_init_with_docs,
+        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
+        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
+        proof_state_move_to_tmp_store, proof_state_move_to_tmp_store_with_global_indices,
+        proof_state_process_clause, proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_docs,
         proof_state_reset_processed_with_global_indices, proof_state_saturate,
@@ -4991,6 +5063,41 @@ mod tests {
                     DerivationEntry::Operation(DC_CNF_EVAL_GC),
                 ][..]
             )
+        );
+    }
+
+    #[test]
+    fn proof_state_init_with_docs_emits_initial_eval_quote() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut axiom = unit_clause_with_id(state.terms_mut(), "pc_init_doc_eval", 4_019);
+        axiom.set_prop(CP_INPUT_FORMULA);
+        let axiom_id = axiom.ident();
+        state.axioms_mut().insert(axiom);
+
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InitDocEval");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let outcome =
+            proof_state_init_with_docs(&mut rendered, &mut session, &mut state, &mut control)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.initial_clauses, 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("1 : :"));
+        assert!(rendered.contains("4019 : 'eval'"));
+        let copied = state.unprocessed().find_by_id(1).unwrap();
+        assert!(copied.query_prop(CP_INITIAL));
+        assert!(!copied.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            copied.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_CNF_QUOTE),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(axiom_id, 0)),
+            ]
         );
     }
 
