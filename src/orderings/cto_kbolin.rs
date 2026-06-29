@@ -4,7 +4,7 @@ use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
-use crate::terms::termtypes::{term_deref, DerefType, Term};
+use crate::terms::termtypes::{term_deref, DerefType, Term, TP_PRED_POS};
 
 /// Compare two first-order terms with C `KBO6Compare`.
 ///
@@ -16,9 +16,9 @@ use crate::terms::termtypes::{term_deref, DerefType, Term};
 ///
 /// # Panics
 ///
-/// Panics if a higher-order surface needs Lambda-order normalization, WHNF
-/// dereferencing, applied-variable dereference expansion, if term argument
-/// slots are uninitialized, or if the OCB lacks KBO weight/precedence storage.
+/// Panics if a higher-order surface needs Lambda-order normalization or WHNF
+/// dereferencing, if term argument slots are uninitialized, or if the OCB lacks
+/// KBO weight/precedence storage.
 pub fn kbo6_compare(
     ocb: &mut OrderControlBlock,
     signature: &Signature,
@@ -172,13 +172,17 @@ fn mfy_vwb_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
     mfy_vwb(ocb, term, deref, false);
 }
 
+fn mfy_vwb_lfho_lhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
+    mfy_vwb_lfho(ocb, term, deref, true);
+}
+
+fn mfy_vwb_lfho_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
+    mfy_vwb_lfho(ocb, term, deref, false);
+}
+
 fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
     let mut stack = vec![(term.clone(), deref)];
     while let Some((candidate, mut current_deref)) = stack.pop() {
-        assert!(
-            !lfho_bound_applied_free_var_needs_expansion(&candidate, current_deref),
-            "LFHO KBO6 applied-variable dereferencing is not ported yet"
-        );
         let current = term_deref(&candidate, &mut current_deref);
         if current.is_free_var() {
             if lhs {
@@ -194,6 +198,30 @@ fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool
             }
             for arg in current.argument_clones().into_iter().flatten() {
                 stack.push((arg, current_deref));
+            }
+        }
+    }
+}
+
+fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
+    let mut stack = vec![(term.clone(), deref)];
+    while let Some((candidate, current_deref)) = stack.pop() {
+        let (current, current_deref, limit) = lfho_deref_no_whnf(&candidate, current_deref);
+        if current.is_free_var() {
+            if lhs {
+                inc_vb(ocb, &current);
+            } else {
+                dec_vb(ocb, &current);
+            }
+        } else {
+            if lhs {
+                ocb.wb += ocb.fun_weight(current.f_code());
+            } else {
+                ocb.wb -= ocb.fun_weight(current.f_code());
+            }
+            for (index, arg) in current.argument_clones().into_iter().enumerate() {
+                let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                stack.push((arg, convert_lfho_deref(index, limit, current_deref)));
             }
         }
     }
@@ -306,14 +334,14 @@ fn kbo_lin_cmp_lfho_no_whnf(
                 }
                 if index < s.arity() || index < t.arity() {
                     for rest in index..s.arity() {
-                        mfy_vwb_lhs(
+                        mfy_vwb_lfho_lhs(
                             ocb,
                             &initialized_arg(&s, rest),
                             convert_lfho_deref(rest, limit_s, deref_s),
                         );
                     }
                     for rest in index..t.arity() {
-                        mfy_vwb_rhs(
+                        mfy_vwb_lfho_rhs(
                             ocb,
                             &initialized_arg(&t, rest),
                             convert_lfho_deref(rest, limit_t, deref_t),
@@ -343,7 +371,7 @@ fn kbo_lin_cmp_lfho_no_whnf(
             };
         } else {
             inc_vb(ocb, &s);
-            mfy_vwb_rhs(ocb, &t, deref_t);
+            mfy_vwb_lfho_rhs(ocb, &t, deref_t);
             res = if ocb.pos_bal == 0 {
                 CompareResult::Lesser
             } else {
@@ -352,15 +380,15 @@ fn kbo_lin_cmp_lfho_no_whnf(
         }
     } else if t.is_free_var() {
         dec_vb(ocb, &t);
-        mfy_vwb_lhs(ocb, &s, deref_s);
+        mfy_vwb_lfho_lhs(ocb, &s, deref_s);
         res = if ocb.neg_bal == 0 {
             CompareResult::Greater
         } else {
             CompareResult::Uncomparable
         };
     } else {
-        mfy_vwb_lhs(ocb, &s, deref_s);
-        mfy_vwb_rhs(ocb, &t, deref_t);
+        mfy_vwb_lfho_lhs(ocb, &s, deref_s);
+        mfy_vwb_lfho_rhs(ocb, &t, deref_t);
         if ocb.wb > 0 {
             res = greater_or_uncomparable(ocb);
         } else if ocb.wb < 0 {
@@ -382,14 +410,50 @@ fn kbo_lin_cmp_lfho_no_whnf(
 }
 
 fn lfho_deref_no_whnf(term: &Term, deref: DerefType) -> (Term, DerefType, usize) {
-    assert!(
-        !lfho_bound_applied_free_var_needs_expansion(term, deref),
-        "LFHO KBO6 applied-variable dereferencing is not ported yet"
-    );
     let limit = lfho_deref_limit(term, deref);
+    if deref == DerefType::Once
+        && term.is_applied_free_var()
+        && term
+            .argument(0)
+            .is_some_and(|head| head.binding().is_some())
+    {
+        return (expand_lfho_applied_free_var_once(term), deref, limit);
+    }
     let mut current_deref = deref;
     let term = term_deref(term, &mut current_deref);
     (term, current_deref, limit)
+}
+
+fn expand_lfho_applied_free_var_once(term: &Term) -> Term {
+    assert!(term.is_applied_free_var(), "expected applied free variable");
+    assert!(
+        term.arity() > 1,
+        "applied free variable must have arguments"
+    );
+    let head = term.argument(0).expect("applied free variable has a head");
+    let binding = head.binding().expect("applied free variable head is bound");
+
+    if binding.is_any_var() || binding.is_lambda() {
+        let expanded = Term::top_alloc(term.f_code(), term.arity());
+        expanded.set_properties(term.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        expanded.set_argument(0, binding);
+        for index in 1..term.arity() {
+            expanded.set_argument(index, initialized_arg(term, index));
+        }
+        expanded
+    } else {
+        let expanded = Term::top_alloc(binding.f_code(), binding.arity() + term.arity() - 1);
+        expanded.set_properties(binding.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        for index in 0..binding.arity() {
+            expanded.set_argument(index, initialized_arg(&binding, index));
+        }
+        for index in 1..term.arity() {
+            expanded.set_argument(binding.arity() + index - 1, initialized_arg(term, index));
+        }
+        expanded
+    }
 }
 
 fn lfho_deref_limit(term: &Term, deref: DerefType) -> usize {
@@ -415,14 +479,6 @@ fn convert_lfho_deref(index: usize, limit: usize, deref: DerefType) -> DerefType
     } else {
         deref
     }
-}
-
-fn lfho_bound_applied_free_var_needs_expansion(term: &Term, deref: DerefType) -> bool {
-    deref == DerefType::Once
-        && term.is_applied_free_var()
-        && term
-            .argument(0)
-            .is_some_and(|head| head.binding().is_some())
 }
 
 fn cmp_arities(left: &Term, right: &Term) -> CompareResult {
@@ -912,8 +968,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "LFHO KBO6 applied-variable dereferencing is not ported yet")]
-    fn kbo6_lfho_deref_once_bound_applied_free_var_stays_diagnostic() {
+    fn kbo6_lfho_deref_once_expands_bound_applied_free_var() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
@@ -928,13 +983,57 @@ mod tests {
         subst.add_binding(&head, &head_binding);
         let mut ocb = ocb(bank.signature());
 
-        kbo6_compare(
-            &mut ocb,
-            bank.signature(),
-            &applied,
-            &a,
-            DerefType::Once,
-            DerefType::Never,
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                bank.signature(),
+                &applied,
+                &a,
+                DerefType::Once,
+                DerefType::Never,
+            ),
+            CompareResult::Greater
         );
+
+        subst.backtrack();
+    }
+
+    #[test]
+    fn kbo6_lfho_deref_once_skips_expanded_binding_prefix_arguments() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let type_ = bank.signature().type_bank().default_type();
+        let f = symbol(bank.signature_mut(), "kbo6_lfho_applied_prefix_f", 0);
+        let y = bank.vars().get_fresh_var(&type_);
+        let z = bank.vars().get_fresh_var(&type_);
+        let b = typed_const(&mut bank, "kbo6_lfho_applied_prefix_b");
+        let c = typed_const(&mut bank, "kbo6_lfho_applied_prefix_c");
+        let head_binding = app(f, std::slice::from_ref(&y));
+        head_binding.set_type(Some(type_.clone()));
+        let head_type = head_binding.type_().expect("binding must have a type");
+        let head = bank.vars().get_fresh_var(&head_type);
+        let applied = app(SIG_PHONY_APP_CODE, &[head.clone(), z.clone()]);
+        applied.set_type(Some(type_));
+        let expected = app(f, &[y.clone(), c.clone()]);
+        let mut subst = Substitution::new();
+        subst.add_binding(&head, &head_binding);
+        subst.add_binding(&y, &b);
+        subst.add_binding(&z, &c);
+        let mut ocb = ocb(bank.signature());
+
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                bank.signature(),
+                &applied,
+                &expected,
+                DerefType::Once,
+                DerefType::Never,
+            ),
+            CompareResult::Equal
+        );
+
+        subst.backtrack();
     }
 }
