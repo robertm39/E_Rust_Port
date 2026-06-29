@@ -3348,10 +3348,11 @@ pub fn proof_state_process_clause(
 
 /// Processes one selected clause while emitting represented C proof output.
 ///
-/// This includes C's `OutputLevel` 1 selected-clause text and the target-level 6
-/// `new_given` proof-documentation quote, plus represented documentation from
-/// the final `insert_new_clauses` tail. The plain helper remains output-free for
-/// callers that do not own a proof-output stream yet.
+/// This includes C's selected-clause `check_ac_status` `OutputLevel` text,
+/// `OutputLevel` 1 selected-clause text, the target-level 6 `new_given`
+/// proof-documentation quote, plus represented documentation from the final
+/// `insert_new_clauses` tail. The plain helper remains output-free for callers
+/// that do not own a proof-output stream yet.
 ///
 /// # Errors
 ///
@@ -3491,7 +3492,17 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     }
 
     debug_assert!(packed.clause().weight() == packed.clause().standard_weight());
-    let ac_activated = proof_state_check_ac_status(state, control, packed.clause());
+    let ac_activated = if let Some((output, _session, output_level)) = doc_context.as_mut() {
+        proof_state_check_ac_status_with_fmt_output(
+            &mut **output,
+            *output_level,
+            state,
+            control,
+            packed.clause(),
+        )?
+    } else {
+        proof_state_check_ac_status(state, control, packed.clause())
+    };
     if let Some((output, session, output_level)) = doc_context.as_mut() {
         proof_state_document_processing_with_docs(
             &mut **output,
@@ -3630,6 +3641,29 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
         generation,
         generated_empty,
     })
+}
+
+fn proof_state_check_ac_status_with_fmt_output(
+    output: &mut impl fmt::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> Result<bool, Diagnostic> {
+    let mut rendered = Vec::new();
+    let activated = proof_state_check_ac_status_with_output(
+        &mut rendered,
+        output_level,
+        state,
+        control,
+        clause,
+    )?;
+    if !rendered.is_empty() {
+        let rendered = std::str::from_utf8(&rendered)
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        fmt::Write::write_str(output, rendered).map_err(proof_control_write_error)?;
+    }
+    Ok(activated)
 }
 
 fn proof_state_document_processing_with_docs(
@@ -7878,6 +7912,52 @@ mod tests {
         assert!(state.processed_pos_eqns().find_by_id(4_153).is_none());
         assert!(state.processed_neg_units().find_by_id(4_153).is_none());
         assert!(state.processed_non_units().find_by_id(4_153).is_none());
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_reports_dynamic_ac_activation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, f_code) =
+            commutativity_axiom(state.terms_mut(), "pc_process_dynamic_ac_f", 4_162);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            6,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            class,
+            ac_activated,
+            ..
+        } = outcome
+        else {
+            panic!("selected commutativity axiom should survive processing");
+        };
+        assert!(ac_activated);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert!(output.contains(
+            "% pc_process_dynamic_ac_f is commutative\n% AC handling enabled dynamically\n"
+        ));
+        assert!(output.contains(" : 4162 : 'new_given'\n"));
+        assert!(match class {
+            ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(1),
+            ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(1),
+            ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(1),
+            ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(1),
+        }
+        .is_some());
     }
 
     #[test]
