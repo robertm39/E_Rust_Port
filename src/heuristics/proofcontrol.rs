@@ -6,7 +6,7 @@ use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
-    CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
+    CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
 };
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
@@ -21,11 +21,13 @@ use crate::clauses::context_sr::{
     clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
-    DC_EVAL_ANSWERS,
+    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CNF_EVAL_GC,
+    DC_CNF_QUOTE, DC_EVAL_ANSWERS,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
+use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+use crate::clauses::eqnlist::EqnList;
 use crate::clauses::eqnresolution::{
     clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
     compute_all_eqn_resolvents_with_docs, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
@@ -70,7 +72,7 @@ use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
     hcb_single_weight_clause_select_with, hcb_standard_clause_select_with, AcHandling,
-    GroundingStrategy, HcbSelectFunction, HeuristicParmsCell,
+    ExtInferenceType, GroundingStrategy, HcbSelectFunction, HeuristicParmsCell,
     ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
@@ -85,9 +87,16 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::inout::signals::time_is_up;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
+use crate::terms::lambda::{apply_terms, beta_normalize_db};
+use crate::terms::simpletypes::type_get_max_arity;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{RewriteLevel, TP_IS_REWRITABLE};
-use std::{collections::BTreeSet, fmt, time::Instant};
+use crate::terms::termtypes::{DerefType, RewriteLevel, TP_IS_REWRITABLE};
+use crate::terms::termvars::VarBank;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    time::Instant,
+};
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -3172,10 +3181,11 @@ fn proof_state_backward_simplify_impl<W: fmt::Write>(
 
 /// Runs the currently ported generators from C `generate_new_clauses`.
 ///
-/// The available slice covers first-order equality factoring, equality
-/// resolution, disequality decomposition, and unindexed plain/simultaneous
-/// paramodulation, in the same order as the C helper. Higher-order generation
-/// and indexed paramodulation remain explicit staging diagnostics.
+/// The available slice covers higher-order argument congruence plus first-order
+/// equality factoring, equality resolution, disequality decomposition, and
+/// unindexed plain/simultaneous paramodulation in the same order as the C
+/// helper. The remaining higher-order generators and state-owned indexed
+/// paramodulation remain explicit staging diagnostics.
 ///
 /// # Errors
 ///
@@ -3186,7 +3196,14 @@ pub fn proof_state_generate_new_clauses(
     control: &mut ProofControl,
     clause: &Clause,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    proof_state_generate_new_clauses_impl::<String>(state, control, clause, None, None)
+    proof_state_generate_new_clauses_impl::<String>(
+        state,
+        control,
+        clause,
+        problem_type(),
+        None,
+        None,
+    )
 }
 
 /// Runs the ported first-order selected-clause generators while emitting
@@ -3204,7 +3221,14 @@ pub fn proof_state_generate_new_clauses_with_docs(
     control: &mut ProofControl,
     clause: &Clause,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    proof_state_generate_new_clauses_impl(state, control, clause, None, Some((output, session)))
+    proof_state_generate_new_clauses_impl(
+        state,
+        control,
+        clause,
+        problem_type(),
+        None,
+        Some((output, session)),
+    )
 }
 
 /// Runs the ported first-order selected-clause generators with caller-owned
@@ -3225,7 +3249,14 @@ pub fn proof_state_generate_new_clauses_with_global_indices(
     clause: &Clause,
     indices: &GlobalIndices<'_>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    proof_state_generate_new_clauses_impl::<String>(state, control, clause, Some(indices), None)
+    proof_state_generate_new_clauses_impl::<String>(
+        state,
+        control,
+        clause,
+        problem_type(),
+        Some(indices),
+        None,
+    )
 }
 
 /// Runs the ported first-order selected-clause generators with caller-owned
@@ -3249,9 +3280,160 @@ pub fn proof_state_generate_new_clauses_with_global_indices_and_docs(
         state,
         control,
         clause,
+        problem_type(),
         Some(indices),
         Some((output, session)),
     )
+}
+
+fn compute_ho_inferences(
+    state: &mut ProofState,
+    control: &ProofControl,
+    clause: &Clause,
+    problem_type: ProblemType,
+) -> Result<i64, Diagnostic> {
+    if problem_type != ProblemType::HigherOrder {
+        return Ok(0);
+    }
+
+    let parms = control.heuristic_parms();
+    check_unsupported_ho_generation(parms)?;
+
+    if parms.arg_cong == ExtInferenceType::NoLits {
+        return Ok(0);
+    }
+
+    let (terms, generation) = state.terms_and_generation_context_mut();
+    compute_arg_cong(terms, clause, generation.tmp_store, parms.arg_cong)
+}
+
+fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Diagnostic> {
+    if parms.neg_ext != ExtInferenceType::NoLits {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order negative/positive extensionality generation is not ported yet",
+        ));
+    }
+    if parms.inverse_recognition {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order inverse-recognition generation is not ported yet",
+        ));
+    }
+    if parms.ext_rules_max_depth >= 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order extensional superposition generation is not ported yet",
+        ));
+    }
+    if parms.elim_leibniz_max_depth >= 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order Leibniz-equality elimination is not ported yet",
+        ));
+    }
+    if parms.prim_enum_max_depth >= 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order primitive enumeration is not ported yet",
+        ));
+    }
+    if parms.inst_choice_max_depth >= 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "higher-order choice instantiation is not ported yet",
+        ));
+    }
+    Ok(())
+}
+
+fn compute_arg_cong(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    mode: ExtInferenceType,
+) -> Result<i64, Diagnostic> {
+    let mut generated = 0;
+    let freshvars = fresh_var_bank_for_arg_cong_clause(bank, clause);
+    for (literal_index, literal) in clause.literals().as_slice().iter().enumerate() {
+        let Some(literal_type) = literal.left().type_() else {
+            continue;
+        };
+        let needed_args = type_get_max_arity(&literal_type);
+        let literal_matches = literal.is_positive()
+            && needed_args > 0
+            && (matches!(mode, ExtInferenceType::AllLits)
+                || matches!(mode, ExtInferenceType::MaxLits) && literal.is_maximal());
+        if !literal_matches {
+            continue;
+        }
+
+        let mut fresh_args = Vec::with_capacity(needed_args);
+        for arg_index in 0..needed_args {
+            let fresh_arg = freshvars.get_fresh_var(&literal_type.args()[arg_index]);
+            let fresh_arg = bank.insert(&fresh_arg, DerefType::Never)?;
+            fresh_args.push(fresh_arg);
+
+            let new_left = apply_terms(bank, literal.left(), &fresh_args)?;
+            let new_right = apply_terms(bank, literal.right(), &fresh_args)?;
+            debug_assert_eq!(new_left.type_(), new_right.type_());
+            let new_literal = Eqn::alloc(new_left, new_right, bank, true)?;
+            let mut new_literals = clause
+                .literals()
+                .copy_except_index(Some(literal_index), bank)?;
+            new_literals.insert_first(new_literal);
+            beta_normalize_eqn_list(bank, &mut new_literals)?;
+
+            let mut new_clause = Clause::alloc(new_literals);
+            set_ho_generation_proof_object(&mut new_clause, clause, None, DC_ARG_CONG, 0);
+            store.insert(new_clause);
+            generated += 1;
+        }
+    }
+    Ok(generated)
+}
+
+fn fresh_var_bank_for_arg_cong_clause(bank: &TermBank, clause: &Clause) -> VarBank {
+    let freshvars = VarBank::new(bank.signature().type_bank());
+    let mut variables: BTreeMap<usize, _> = BTreeMap::new();
+    let _ = clause.collect_variables(&mut variables);
+    let max_var = variables
+        .values()
+        .map(|variable| -variable.f_code())
+        .max()
+        .unwrap_or(0);
+    let default_type = bank.signature().type_bank().default_type();
+    while freshvars.fresh_count() < max_var {
+        let _ = freshvars.get_fresh_var(&default_type);
+    }
+    freshvars.set_v_counts_to_used();
+    freshvars
+}
+
+fn beta_normalize_eqn_list(bank: &mut TermBank, literals: &mut EqnList) -> Result<(), Diagnostic> {
+    for literal in literals.as_mut_slice() {
+        let left = beta_normalize_db(bank, literal.left())?;
+        let right = beta_normalize_db(bank, literal.right())?;
+        literal.set_left_raw(left);
+        literal.set_right_raw(right);
+    }
+    Ok(())
+}
+
+fn set_ho_generation_proof_object(
+    new_clause: &mut Clause,
+    orig_clause: &Clause,
+    parent2: Option<&Clause>,
+    derivation_code: i64,
+    depth_incr: i64,
+) {
+    let parent2_depth = parent2.map_or(0, Clause::proof_depth);
+    let parent2_size = parent2.map_or(0, Clause::proof_size);
+    new_clause.set_proof_depth(orig_clause.proof_depth().max(parent2_depth) + depth_incr);
+    new_clause.set_proof_size(orig_clause.proof_size() + parent2_size + 1);
+    new_clause.set_tptp_type(orig_clause.query_tptp_type());
+    new_clause.set_prop(orig_clause.give_props(CP_IS_SOS));
+    clause_push_derivation(new_clause, derivation_code, Some(orig_clause), parent2);
 }
 
 #[expect(
@@ -3262,15 +3444,11 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
+    problem_type: ProblemType,
     indices: Option<&GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order selected-clause generation is not ported yet",
-        ));
-    }
+    let _ = compute_ho_inferences(state, control, clause, problem_type)?;
     let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
     let enable_neg_unit_paramod = control.heuristic_parms().enable_neg_unit_paramod;
     let diseq_decomposition = control.heuristic_parms().diseq_decomposition;
@@ -5395,7 +5573,7 @@ mod tests {
         proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
         proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
         proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_with_docs,
+        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
@@ -5425,14 +5603,14 @@ mod tests {
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED,
-        CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW, CP_SUBSUMES_WATCH,
-        CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
+        CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW, CP_NO_GENERATION,
+        CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_NORMALIZE, DC_ORDERED_FACTOR,
-        DC_SR,
+        DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_NORMALIZE,
+        DC_ORDERED_FACTOR, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -5448,7 +5626,7 @@ mod tests {
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::heuristics::hcb::{
-        AcHandling, GroundingStrategy, HeuristicParmsCell,
+        AcHandling, ExtInferenceType, GroundingStrategy, HeuristicParmsCell,
         ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
         HCB_DEFAULT_HEURISTIC,
     };
@@ -5478,6 +5656,23 @@ mod tests {
         if bank.signature().get_type(f_code).is_none() {
             bank.signature_mut()
                 .declare_final_type(f_code, type_)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_arrow_const(bank: &mut TermBank, name: &str, arg_count: usize) -> Term {
+        let i_type = bank.signature().type_bank().default_type();
+        let mut type_args = vec![i_type.clone(); arg_count];
+        type_args.push(i_type);
+        let symbol_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(type_args));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, symbol_type)
                 .unwrap();
         }
         bank.create_const_term(f_code).unwrap()
@@ -8689,6 +8884,174 @@ mod tests {
         assert!(output.contains(" : ef(4145)\n"));
         assert_eq!(state.tmp_store().members(), 1);
         assert_eq!(state.tmp_store().iter().next().unwrap().ident(), 1);
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_arg_cong_generates_prefix_applications() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (left_code, right_code, existing_var_code, clause) = {
+            let terms = state.terms_mut();
+            let left = typed_arrow_const(terms, "pc_generate_arg_cong_left", 2);
+            let right = typed_arrow_const(terms, "pc_generate_arg_cong_right", 2);
+            let existing_var = typed_var(terms, -2);
+            let existing_const = typed_const(terms, "pc_generate_arg_cong_existing_const");
+            let mut arg_cong_literal = literal(terms, &left, &right, true);
+            let residual = literal(terms, &existing_var, &existing_const, true);
+            arg_cong_literal.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![arg_cong_literal, residual]));
+            clause.set_ident(4_170);
+            clause.set_proof_depth(4);
+            clause.set_proof_size(9);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (left.f_code(), right.f_code(), existing_var.f_code(), clause)
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::AllLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.statistics().factor_count, 0);
+        assert_eq!(state.statistics().resolv_count, 0);
+        assert_eq!(state.statistics().paramod_count, 0);
+        assert_eq!(state.tmp_store().members(), 2);
+        let generated = state.tmp_store().iter().collect::<Vec<_>>();
+        let first_literal = &generated[0].literals().as_slice()[0];
+        let second_literal = &generated[1].literals().as_slice()[0];
+        assert!(first_literal.is_positive());
+        assert!(second_literal.is_positive());
+        assert_eq!(first_literal.left().f_code(), left_code);
+        assert_eq!(first_literal.right().f_code(), right_code);
+        assert_eq!(first_literal.left().arity(), 1);
+        assert_eq!(first_literal.right().arity(), 1);
+        assert_eq!(second_literal.left().f_code(), left_code);
+        assert_eq!(second_literal.right().f_code(), right_code);
+        assert_eq!(second_literal.left().arity(), 2);
+        assert_eq!(second_literal.right().arity(), 2);
+        assert_eq!(
+            first_literal.left().argument(0),
+            first_literal.right().argument(0)
+        );
+        assert_ne!(
+            first_literal.left().argument(0).unwrap().f_code(),
+            existing_var_code
+        );
+        assert_eq!(
+            second_literal.left().argument(0),
+            second_literal.right().argument(0)
+        );
+        assert_eq!(
+            second_literal.left().argument(1),
+            second_literal.right().argument(1)
+        );
+        assert_eq!(
+            first_literal.left().argument(0),
+            second_literal.left().argument(0)
+        );
+
+        for generated_clause in generated {
+            assert_eq!(generated_clause.proof_depth(), 4);
+            assert_eq!(generated_clause.proof_size(), 10);
+            assert!(generated_clause.query_prop(CP_IS_SOS));
+            assert!(!generated_clause.query_prop(CP_NO_GENERATION));
+            assert_eq!(
+                generated_clause.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(DC_ARG_CONG),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_170, 0)),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_arg_cong_respects_max_filter() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let maximal_left_code;
+        let nonmax_left_code;
+        let clause = {
+            let terms = state.terms_mut();
+            let maximal_left = typed_arrow_const(terms, "pc_generate_arg_cong_max_left", 1);
+            let maximal_right = typed_arrow_const(terms, "pc_generate_arg_cong_max_right", 1);
+            let nonmax_left = typed_arrow_const(terms, "pc_generate_arg_cong_nonmax_left", 1);
+            let nonmax_right = typed_arrow_const(terms, "pc_generate_arg_cong_nonmax_right", 1);
+            maximal_left_code = maximal_left.f_code();
+            nonmax_left_code = nonmax_left.f_code();
+            let mut maximal = literal(terms, &maximal_left, &maximal_right, true);
+            let nonmax = literal(terms, &nonmax_left, &nonmax_right, true);
+            maximal.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![maximal, nonmax]));
+            clause.set_ident(4_171);
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::MaxLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 2);
+        assert_eq!(
+            generated.literals().as_slice()[0].left().f_code(),
+            maximal_left_code
+        );
+        assert_eq!(
+            generated.literals().as_slice()[1].left().f_code(),
+            nonmax_left_code
+        );
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_neg_ext_remains_specific_diagnostic() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let left = typed_arrow_const(terms, "pc_generate_ho_diag_left", 1);
+            let right = typed_arrow_const(terms, "pc_generate_ho_diag_right", 1);
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]));
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().neg_ext = ExtInferenceType::AllLits;
+
+        let err = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), ErrorCode::OTHER_ERROR);
+        assert!(err
+            .message()
+            .contains("negative/positive extensionality generation"));
+        assert_eq!(state.tmp_store().members(), 0);
     }
 
     #[test]
