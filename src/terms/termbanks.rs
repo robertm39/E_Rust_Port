@@ -1357,6 +1357,10 @@ impl TermBank {
         scanner: &mut Scanner,
         check_distinct_argument_lists: bool,
     ) -> Result<Term, Diagnostic> {
+        if self.sig.supports_lists() && scanner.test_tok(TokenType::OPEN_SQUARE) {
+            return self.parse_cons_list(scanner, check_distinct_argument_lists);
+        }
+
         let mut id = DynamicString::new();
         let id_type = term_parse_operator(scanner, &mut id)?;
         let name = id.view().into_owned();
@@ -1395,6 +1399,40 @@ impl TermBank {
             term.set_argument(index, arg);
         }
         self.term_top_insert(term)
+    }
+
+    fn parse_cons_list(
+        &mut self,
+        scanner: &mut Scanner,
+        check_distinct_argument_lists: bool,
+    ) -> Result<Term, Diagnostic> {
+        scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+        let mut elements = Vec::new();
+        if !scanner.test_tok(TokenType::CLOSE_SQUARE) {
+            elements.push(
+                self.parse_term_simple_with_distinct_checks(
+                    scanner,
+                    check_distinct_argument_lists,
+                )?,
+            );
+            while scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                elements.push(self.parse_term_simple_with_distinct_checks(
+                    scanner,
+                    check_distinct_argument_lists,
+                )?);
+            }
+        }
+        scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+
+        let mut list = self.create_const_term(SIG_NIL_CODE)?;
+        for element in elements.into_iter().rev() {
+            let cons = Term::top_alloc(SIG_CONS_CODE, 2);
+            cons.set_argument(0, element);
+            cons.set_argument(1, list);
+            list = self.term_top_insert(cons)?;
+        }
+        Ok(list)
     }
 
     /// Creates and inserts a new Skolem term or definition atom.
@@ -2354,6 +2392,47 @@ mod tests {
         let list = cons_cell(a.clone(), a);
 
         let _ = bank.term_string(&list, true);
+    }
+
+    #[test]
+    fn term_bank_parser_reads_list_literals_as_shared_cons_terms() {
+        let mut bank =
+            TermBank::new(Signature::new_with_list_support(TypeBank::new(), true)).unwrap();
+        let mut scanner = Scanner::from_user_string("[a,X,[b]]", false).unwrap();
+        let list = bank.parse_term_simple(&mut scanner).unwrap();
+
+        assert_eq!(bank.term_string(&list, true), "[a,X1,[b]]");
+        assert!(list.is_shared());
+        assert_eq!(list.f_code(), SIG_CONS_CODE);
+        let tail = list.argument(1).unwrap();
+        assert!(tail.is_shared());
+        assert_eq!(tail.f_code(), SIG_CONS_CODE);
+        assert_eq!(tail.argument(1).unwrap().f_code(), SIG_CONS_CODE);
+    }
+
+    #[test]
+    fn term_bank_parser_reads_empty_list_literal() {
+        let mut bank =
+            TermBank::new(Signature::new_with_list_support(TypeBank::new(), true)).unwrap();
+        let mut scanner = Scanner::from_user_string("[]", false).unwrap();
+        let list = bank.parse_term_simple(&mut scanner).unwrap();
+
+        assert_eq!(list.f_code(), SIG_NIL_CODE);
+        assert!(list.is_shared());
+        assert_eq!(bank.term_string(&list, true), "[]");
+    }
+
+    #[test]
+    fn checked_term_bank_list_parser_preserves_distinct_argument_diagnostics() {
+        let mut bank =
+            TermBank::new(Signature::new_with_list_support(TypeBank::new(), true)).unwrap();
+        let mut scanner = Scanner::from_user_string("[12(a)]", false).unwrap();
+        let error = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
     }
 
     #[test]

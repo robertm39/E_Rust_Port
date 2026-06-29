@@ -227,12 +227,14 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 ### Compatibility Notes
 
 - `TBTermParseReal` rejects argument lists after integer, rational, floating-point, or object tokens while the corresponding `signature->distinct_props` bit remains set, and the diagnostics point to `--free-numbers` or `--free-objects`. Rust exposes a checked bank parser for clause/equation parsing to preserve that behavior.
+- `TBTermParseReal` treats `[` as a term start when `SigSupportLists` is true and delegates to `tb_parse_cons_list`, which recursively parses elements through `TBTermParseReal` and then inserts the resulting `$nil`/`$cons` spine into the term bank.
 - `TBTermParseSimple` is intentionally looser: despite parsing the same token classes and inserting the same function-property bits, it does not reject distinct numeric/object symbols with argument lists. Rust keeps the simple parser permissive and uses the checked variant only for clause paths that correspond to C `TBTermParse`.
 - `TBPrintTerm` reaches conventional term printing through `TermPrint(..., DEREF_NEVER)`. Rust keeps the compact/DAG bank printers in this module and adds explicit term-bank writers for the currently ported first-order and higher-order conventional term surfaces rather than reading process-global `problemType`.
 
 ### Change Later Candidates
 
 - The full and simple term-bank parsers share much of their syntax shape but enforce different distinct-symbol policies. Future Rust parser APIs should keep that difference explicit until full `TBTermParseReal` parity, formula/list/`let`/`ite` parsing, and caller audits prove a single parser entry point is safe.
+- `tb_parse_cons_list` reconstructs shared lists through a stack of tail-placeholder cells rather than inserting a straightforward head-to-tail spine. Rust builds and inserts a valid `$nil`-terminated `$cons` chain from the parsed element vector; compare against C reference traces before deciding whether any placeholder-stack edge behavior is observable.
 - Full conventional term printing still spans `cte_termfunc` FOOL/list/lambda/type-print branches. Keep the term-bank writer APIs explicit until those branches are complete, then decide whether a single problem-type-dispatched compatibility wrapper is needed for executable output parity.
 
 ### Porting Focus

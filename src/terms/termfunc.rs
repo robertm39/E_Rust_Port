@@ -6,13 +6,13 @@ use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::signature::{
     Signature, FP_INTERPRETED, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
-    SIG_ITE_CODE, SIG_LET_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+    SIG_CONS_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::{type_drop_first_arg, types_cmp, var_order};
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
     term_del_prop_opt, term_deref, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT,
-    DEFAULT_VWEIGHT, TP_IS_GROUND, TP_OP_FLAG, TP_PRED_POS,
+    DEFAULT_VWEIGHT, TP_IS_GROUND, TP_OP_FLAG, TP_PRED_POS, TP_TOP_POS,
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
@@ -107,6 +107,10 @@ pub fn term_parse(
     sig: &mut Signature,
     vars: &VarBank,
 ) -> Result<Term, Diagnostic> {
+    if sig.supports_lists() && scanner.test_tok(TokenType::OPEN_SQUARE) {
+        return term_parse_cons_list(scanner, sig, vars);
+    }
+
     let mut id = DynamicString::new();
     let id_type = term_parse_operator(scanner, &mut id)?;
     let name = id.view().into_owned();
@@ -137,6 +141,37 @@ pub fn term_parse(
     }
     handle.set_f_code(f_code);
     Ok(handle)
+}
+
+fn term_parse_cons_list(
+    scanner: &mut Scanner,
+    sig: &mut Signature,
+    vars: &VarBank,
+) -> Result<Term, Diagnostic> {
+    scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+    let mut elements = Vec::new();
+    if !scanner.test_tok(TokenType::CLOSE_SQUARE) {
+        elements.push(term_parse(scanner, sig, vars)?);
+        while scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            let element = term_parse(scanner, sig, vars)?;
+            term_del_prop_opt(&element, TP_TOP_POS);
+            elements.push(element);
+        }
+    }
+    scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+
+    let default_type = sig.type_bank().default_type();
+    let mut list = Term::const_cell_alloc(SIG_NIL_CODE);
+    list.set_type(Some(default_type.clone()));
+    for element in elements.into_iter().rev() {
+        let cons = Term::top_alloc(SIG_CONS_CODE, 2);
+        cons.set_type(Some(default_type.clone()));
+        cons.set_argument(0, element);
+        cons.set_argument(1, list);
+        list = cons;
+    }
+    Ok(list)
 }
 
 pub fn term_parse_arg_list(
@@ -1707,7 +1742,8 @@ mod tests {
     use crate::terms::functypes::FuncSymbType;
     use crate::terms::signature::{
         Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, FP_TYPED_APPLICATION,
-        SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
+        SIG_CONS_CODE, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE, SIG_NIL_CODE,
+        SIG_PHONY_APP_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, type_drop_first_arg, Type};
     use crate::terms::termpos::TermPos;
@@ -1732,6 +1768,14 @@ mod tests {
 
     fn parse_unshared(source: &str) -> (Signature, VarBank, Term) {
         let mut sig = Signature::new(TypeBank::new());
+        let vars = VarBank::new(sig.type_bank());
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        let term = term_parse(&mut scanner, &mut sig, &vars).unwrap();
+        (sig, vars, term)
+    }
+
+    fn parse_unshared_with_lists(source: &str) -> (Signature, VarBank, Term) {
+        let mut sig = Signature::new_with_list_support(TypeBank::new(), true);
         let vars = VarBank::new(sig.type_bank());
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         let term = term_parse(&mut scanner, &mut sig, &vars).unwrap();
@@ -2060,6 +2104,33 @@ mod tests {
         assert_eq!(sig.find_name(term.f_code()), Some("F"));
         assert_eq!(term.arity(), 1);
         assert!(term.f_code() > 0);
+    }
+
+    #[test]
+    fn term_parse_reads_list_literals_when_signature_supports_lists() {
+        let (sig, vars, term) = parse_unshared_with_lists("[a,X,[b]]");
+
+        assert_eq!(term.f_code(), SIG_CONS_CODE);
+        assert_eq!(term.arity(), 2);
+        assert_eq!(sig.find_name(term.argument(0).unwrap().f_code()), Some("a"));
+        let tail = term.argument(1).unwrap();
+        assert_eq!(tail.f_code(), SIG_CONS_CODE);
+        assert_eq!(tail.argument(0).unwrap(), vars.ext_name_find("X").unwrap());
+        let nested = tail.argument(1).unwrap().argument(0).unwrap();
+        assert_eq!(nested.f_code(), SIG_CONS_CODE);
+        assert_eq!(
+            term_simple_string(&term, &sig),
+            "$cons(a,$cons(X1,$cons($cons(b,$nil),$nil)))"
+        );
+    }
+
+    #[test]
+    fn term_parse_reads_empty_list_literal() {
+        let (sig, _vars, term) = parse_unshared_with_lists("[]");
+
+        assert_eq!(term.f_code(), SIG_NIL_CODE);
+        assert_eq!(term.arity(), 0);
+        assert_eq!(term_simple_string(&term, &sig), "$nil");
     }
 
     #[test]
