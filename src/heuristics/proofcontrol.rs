@@ -8,6 +8,7 @@ use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
     CP_IS_SOS, CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
 };
+use crate::clauses::clausecpos::unpack_clause_pos;
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
@@ -15,6 +16,7 @@ use crate::clauses::clausefunc::{
     clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
     clause_set_recognize_choice, tformula_fcode_alloc,
 };
+use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
 use crate::clauses::context_sr::{
@@ -24,7 +26,7 @@ use crate::clauses::context_sr::{
 use crate::clauses::derivation::{
     clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CHOICE_AX,
     DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
-    DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM,
+    DC_EXT_SUP, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -34,7 +36,10 @@ use crate::clauses::eqnresolution::{
     clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
     compute_all_eqn_resolvents_with_docs, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
 };
-use crate::clauses::ext_index::{term_has_ext_eligible_subterm, type_ext_eligible};
+use crate::clauses::ext_index::{
+    collect_ext_sup_from_pos, collect_ext_sup_into_pos, term_has_ext_eligible_subterm,
+    type_ext_eligible,
+};
 use crate::clauses::factor::{
     compute_all_equality_factors, compute_all_equality_factors_with_docs,
 };
@@ -94,10 +99,12 @@ use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
 };
 use crate::terms::match_mgu::occur_check;
+use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::simpletypes::{
     alloc_arrow_type, arrow_type_flattened, is_choice_type, type_get_max_arity, type_identity_cmp,
     type_is_predicate, Type,
 };
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_has_f_code;
 use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
@@ -3316,13 +3323,14 @@ fn compute_ho_inferences(
     control: &ProofControl,
     clause: &Clause,
     problem_type: ProblemType,
+    indices: Option<&GlobalIndices<'_>>,
 ) -> Result<i64, Diagnostic> {
     if problem_type != ProblemType::HigherOrder {
         return Ok(0);
     }
 
     let parms = control.heuristic_parms();
-    check_unsupported_ho_generation(parms)?;
+    let ext_rule_indices = ext_rule_indices(parms, indices)?;
 
     let mut generated = 0;
     let mut neg_ext_count = 0;
@@ -3341,6 +3349,29 @@ fn compute_ho_inferences(
         }
         if parms.inverse_recognition {
             generated += compute_inverse_recognition(terms, clause, generation.tmp_store)?;
+        }
+        if let Some(indices) = ext_rule_indices {
+            let renamed_clause = clause.copy_disjoint(terms)?;
+            generated += compute_ext_sup(
+                terms,
+                &renamed_clause,
+                clause,
+                generation.tmp_store,
+                indices,
+                parms.ext_rules_max_depth,
+            )?;
+            generated += compute_ext_eq_res(
+                terms,
+                clause,
+                generation.tmp_store,
+                parms.ext_rules_max_depth,
+            )?;
+            generated += compute_ext_eq_fact(
+                terms,
+                clause,
+                generation.tmp_store,
+                parms.ext_rules_max_depth,
+            )?;
         }
         if parms.elim_leibniz_max_depth >= 0 {
             generated += compute_leibniz_elimination(
@@ -3374,21 +3405,262 @@ fn compute_ho_inferences(
     Ok(generated)
 }
 
-fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Diagnostic> {
+fn ext_rule_indices<'indices, 'sig>(
+    parms: &HeuristicParmsCell,
+    indices: Option<&'indices GlobalIndices<'sig>>,
+) -> Result<Option<&'indices GlobalIndices<'sig>>, Diagnostic> {
     if parms.ext_rules_max_depth >= 0 {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order extensional superposition generation is not ported yet",
-        ));
+        let indices = indices.ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "higher-order extensional superposition generation requires caller-owned ExtSup indexes",
+            )
+        })?;
+        if !indices.has_ext_into_index() || !indices.has_ext_from_index() {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "higher-order extensional superposition generation requires caller-owned ExtSup indexes",
+            ));
+        }
+        return Ok(Some(indices));
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Computes C `ComputeExtSup` over caller-owned extension indexes.
+///
+/// `renamed_clause` must be a disjoint variable copy of `orig_clause` with the
+/// same identifier and proof metrics, matching the C `tmp_copy` argument.
+///
+/// # Errors
+///
+/// Returns diagnostics from term replacement, instantiated insertion,
+/// optimized literal copying, beta normalization, and literal allocation.
+pub fn compute_ext_sup(
+    bank: &mut TermBank,
+    renamed_clause: &Clause,
+    orig_clause: &Clause,
+    store: &mut ClauseSet,
+    indices: &GlobalIndices<'_>,
+    limit: i32,
+) -> Result<i64, Diagnostic> {
+    if orig_clause.proof_depth() > i64::from(limit) {
+        return Ok(0);
+    }
+
+    let mut generated = 0;
+    generated += compute_ext_sup_from(bank, renamed_clause, orig_clause, store, indices)?;
+    generated += compute_ext_sup_into(bank, renamed_clause, orig_clause, store, indices)?;
+    Ok(generated)
+}
+
+fn compute_ext_sup_from(
+    bank: &mut TermBank,
+    renamed_clause: &Clause,
+    orig_clause: &Clause,
+    store: &mut ClauseSet,
+    indices: &GlobalIndices<'_>,
+) -> Result<i64, Diagnostic> {
+    let mut positions = Vec::new();
+    collect_ext_sup_from_pos(renamed_clause, &mut positions);
+    let mut generated = 0;
+    for entry in positions.iter().rev() {
+        let from_pos = unpack_clause_pos(entry.pos(), renamed_clause.clone());
+        let Some(into_partners) = indices.find_ext_into_symbol(entry.f_code()) else {
+            continue;
+        };
+        for partner in into_partners.entries() {
+            for into_cpos in partner.positions() {
+                let into_pos = unpack_clause_pos(*into_cpos, partner.clause().clone());
+                generated += make_ext_sup(
+                    bank,
+                    &from_pos,
+                    &into_pos,
+                    store,
+                    orig_clause,
+                    ExtSupSelectedRole::From,
+                )?;
+            }
+        }
+    }
+    Ok(generated)
+}
+
+fn compute_ext_sup_into(
+    bank: &mut TermBank,
+    renamed_clause: &Clause,
+    orig_clause: &Clause,
+    store: &mut ClauseSet,
+    indices: &GlobalIndices<'_>,
+) -> Result<i64, Diagnostic> {
+    let mut positions = Vec::new();
+    collect_ext_sup_into_pos(renamed_clause, &mut positions);
+    let mut generated = 0;
+    for entry in positions.iter().rev() {
+        let into_pos = unpack_clause_pos(entry.pos(), renamed_clause.clone());
+        let Some(from_partners) = indices.find_ext_from_symbol(entry.f_code()) else {
+            continue;
+        };
+        for partner in from_partners.entries() {
+            for from_cpos in partner.positions() {
+                let from_pos = unpack_clause_pos(*from_cpos, partner.clause().clone());
+                generated += make_ext_sup(
+                    bank,
+                    &from_pos,
+                    &into_pos,
+                    store,
+                    orig_clause,
+                    ExtSupSelectedRole::Into,
+                )?;
+            }
+        }
+    }
+    Ok(generated)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExtSupSelectedRole {
+    From,
+    Into,
+}
+
+fn make_ext_sup(
+    bank: &mut TermBank,
+    from_pos: &ClausePos,
+    into_pos: &ClausePos,
+    store: &mut ClauseSet,
+    orig_clause: &Clause,
+    selected_role: ExtSupSelectedRole,
+) -> Result<i64, Diagnostic> {
+    if ext_sup_positive_top_duplicate(from_pos, into_pos) {
+        return Ok(0);
+    }
+
+    let from_t = from_pos
+        .get_subterm()
+        .expect("ExtSup from position must select a subterm");
+    let into_t = into_pos
+        .get_subterm()
+        .expect("ExtSup into position must select a subterm");
+    let mut disagreements = Vec::new();
+    if !find_ext_disagreements(bank, &from_t, &into_t, &mut disagreements) {
+        return Ok(0);
+    }
+
+    let from_clause = from_pos
+        .clause()
+        .expect("ExtSup from position must be backed by a clause");
+    let into_clause = into_pos
+        .clause()
+        .expect("ExtSup into position must be backed by a clause");
+    let from_index = from_pos
+        .literal_index()
+        .expect("ExtSup from position must select a literal");
+    let into_index = into_pos
+        .literal_index()
+        .expect("ExtSup into position must select a literal");
+    let into_literal = into_pos
+        .literal()
+        .expect("ExtSup into position must select a literal");
+
+    let freshvars = fresh_var_bank_for_ext_sup_clauses(bank, from_clause, into_clause);
+    let mut subst = Substitution::new();
+    let result = (|| {
+        let _ = from_clause.literals().subst_norm(&mut subst, &freshvars);
+        let _ = into_clause.literals().subst_norm(&mut subst, &freshvars);
+
+        let mut new_literals = ext_disagreement_literals_instantiated(bank, &disagreements)?;
+        let from_rhs = from_pos
+            .get_other_side()
+            .expect("ExtSup from position must select an opposite side");
+        let into_rhs = into_pos
+            .get_other_side()
+            .expect("ExtSup into position must select an opposite side");
+        let new_lhs = tb_term_pos_replace(
+            bank,
+            &from_rhs,
+            into_pos.term_pos(),
+            DerefType::Always,
+            0,
+            Some(&into_t),
+        )?;
+        let new_rhs = bank.insert_opt(&into_rhs, DerefType::Always)?;
+
+        let into_copy = into_clause
+            .literals()
+            .copy_opt_except_index(Some(into_index), bank)?;
+        let from_copy = from_clause
+            .literals()
+            .copy_opt_except_index(Some(from_index), bank)?;
+        new_literals.append(into_copy);
+        new_literals.append(from_copy);
+        new_literals.append(EqnList::from_vec(vec![Eqn::alloc(
+            new_lhs,
+            new_rhs,
+            bank,
+            into_literal.is_positive(),
+        )?]));
+        new_literals.remove_resolved(bank);
+        new_literals.remove_duplicates(bank);
+        beta_normalize_eqn_list(bank, &mut new_literals)?;
+
+        let mut new_clause = Clause::alloc(new_literals);
+        new_clause.set_proof_size(into_clause.proof_size() + from_clause.proof_size() + 1);
+        new_clause.set_proof_depth(into_clause.proof_depth().max(from_clause.proof_depth()) + 1);
+        new_clause.set_prop(into_clause.give_props(CP_IS_SOS) | from_clause.give_props(CP_IS_SOS));
+        let (parent1, parent2) = match selected_role {
+            ExtSupSelectedRole::From => (into_clause, orig_clause),
+            ExtSupSelectedRole::Into => (orig_clause, from_clause),
+        };
+        clause_push_derivation(&mut new_clause, DC_EXT_SUP, Some(parent1), Some(parent2));
+        store.insert(new_clause);
+        Ok(1)
+    })();
+    subst.backtrack();
+    result
+}
+
+fn ext_sup_positive_top_duplicate(from_pos: &ClausePos, into_pos: &ClausePos) -> bool {
+    let from_literal = from_pos
+        .literal()
+        .expect("ExtSup from position must select a literal");
+    let into_literal = into_pos
+        .literal()
+        .expect("ExtSup into position must select a literal");
+    if !from_literal.is_positive() || !into_literal.is_positive() || !into_pos.is_top() {
+        return false;
+    }
+    let from_other = from_pos
+        .get_other_side()
+        .expect("ExtSup from position must select an opposite side");
+    let into_other = into_pos
+        .get_other_side()
+        .expect("ExtSup into position must select an opposite side");
+    from_other == into_other
+        || from_pos
+            .clause()
+            .expect("ExtSup from position must be backed by a clause")
+            .ident()
+            < into_pos
+                .clause()
+                .expect("ExtSup into position must be backed by a clause")
+                .ident()
+}
+
+fn ext_disagreement_literals_instantiated(
+    bank: &mut TermBank,
+    disagreements: &[(Term, Term)],
+) -> Result<EqnList, Diagnostic> {
+    let mut literals = Vec::with_capacity(disagreements.len());
+    for (left, right) in disagreements {
+        let lhs = bank.insert_instantiated_for_problem(right, ProblemType::HigherOrder)?;
+        let rhs = bank.insert_instantiated_for_problem(left, ProblemType::HigherOrder)?;
+        literals.push(Eqn::alloc(lhs, rhs, bank, false)?);
+    }
+    Ok(EqnList::from_vec(literals))
 }
 
 /// Computes the local `ComputeExtEqRes` part of C higher-order extension rules.
-///
-/// The remaining indexed `ComputeExtSup` caller is still gated separately; this
-/// helper is available for the extensional-rule integration once that index
-/// owner is wired.
 ///
 /// # Errors
 ///
@@ -4832,6 +5104,24 @@ fn fresh_var_bank_for_arg_cong_clause(bank: &TermBank, clause: &Clause) -> VarBa
     freshvars
 }
 
+fn fresh_var_bank_for_ext_sup_clauses(bank: &TermBank, first: &Clause, second: &Clause) -> VarBank {
+    let freshvars = VarBank::new(bank.signature().type_bank());
+    let mut variables: BTreeMap<usize, _> = BTreeMap::new();
+    let _ = first.collect_variables(&mut variables);
+    let _ = second.collect_variables(&mut variables);
+    let max_var = variables
+        .values()
+        .map(|variable| -variable.f_code())
+        .max()
+        .unwrap_or(0);
+    let default_type = bank.signature().type_bank().default_type();
+    while freshvars.fresh_count() < max_var {
+        let _ = freshvars.get_fresh_var(&default_type);
+    }
+    freshvars.set_v_counts_to_used();
+    freshvars
+}
+
 fn beta_normalize_eqn_list(bank: &mut TermBank, literals: &mut EqnList) -> Result<(), Diagnostic> {
     for literal in literals.as_mut_slice() {
         let left = beta_normalize_db(bank, literal.left())?;
@@ -4870,7 +5160,7 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     indices: Option<&GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    let _ = compute_ho_inferences(state, control, clause, problem_type)?;
+    let _ = compute_ho_inferences(state, control, clause, problem_type, indices)?;
     let enable_eq_factoring = control.heuristic_parms().enable_eq_factoring;
     let enable_neg_unit_paramod = control.heuristic_parms().enable_neg_unit_paramod;
     let diseq_decomposition = control.heuristic_parms().diseq_decomposition;
@@ -6983,20 +7273,20 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_terms, compute_ext_eq_fact, compute_ext_eq_res, do_literal_selection,
-        do_literal_selection_with_bank, do_literal_selection_with_selector, proof_control_alloc,
-        proof_control_clause_set_filter_reweigth, proof_control_clause_set_reweight,
-        proof_control_init, proof_control_init_heuristics, proof_control_reset_sat_solver,
-        proof_state_check_ac_status, proof_state_check_ac_status_with_output,
-        proof_state_check_watchlist_with_docs, proof_state_cleanup_unprocessed_clauses,
-        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
-        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
-        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
-        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
-        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
-        proof_state_generate_new_clauses_with_docs,
+        apply_terms, compute_ext_eq_fact, compute_ext_eq_res, compute_ext_sup,
+        do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
+        proof_control_alloc, proof_control_clause_set_filter_reweigth,
+        proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
+        proof_control_reset_sat_solver, proof_state_check_ac_status,
+        proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
+        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
+        proof_state_eval_clause_set, proof_state_filter_unprocessed,
+        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
+        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
@@ -7034,8 +7324,8 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
-        DC_CONTEXT_SR, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_NEG_EXT,
-        DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
+        DC_CONTEXT_SR, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_INV_REC, DC_LEIBNIZ_ELIM,
+        DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -10959,6 +11249,186 @@ mod tests {
             compute_ext_eq_fact(&mut bank, &clause, &mut ClauseSet::new(), 3).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn compute_ext_sup_generates_indexed_condition_and_replacement_literal() {
+        let mut bank = test_bank();
+        let (p_code, q_code, u_code, v_code, selected, mut partner) = {
+            let head = predicate_argument_binary_const(&mut bank, "pc_ext_sup_h");
+            let p = unary_predicate_const(&mut bank, "pc_ext_sup_p");
+            let q = unary_predicate_const(&mut bank, "pc_ext_sup_q");
+            let arg = typed_const(&mut bank, "pc_ext_sup_a");
+            let u = typed_const(&mut bank, "pc_ext_sup_u");
+            let v = typed_const(&mut bank, "pc_ext_sup_v");
+            let selected_left = apply_terms(&mut bank, &head, &[p.clone(), arg.clone()]).unwrap();
+            let partner_left = apply_terms(&mut bank, &head, &[q.clone(), arg]).unwrap();
+
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                &mut bank,
+                &selected_left,
+                &u,
+                true,
+            )]));
+            selected.set_ident(4_186);
+            selected.set_proof_depth(3);
+            selected.set_proof_size(7);
+            selected.set_tptp_type(CP_TYPE_CONJECTURE);
+            selected.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+
+            let mut partner = Clause::alloc(EqnList::from_vec(vec![literal(
+                &mut bank,
+                &partner_left,
+                &v,
+                true,
+            )]));
+            partner.set_ident(4_185);
+            partner.set_proof_depth(2);
+            partner.set_proof_size(5);
+            partner.set_tptp_type(CP_TYPE_AXIOM);
+
+            (
+                p.f_code(),
+                q.f_code(),
+                u.f_code(),
+                v.f_code(),
+                selected,
+                partner,
+            )
+        };
+        let renamed = selected.copy_disjoint(&mut bank).unwrap();
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &index_signature,
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            3,
+            ProblemType::HigherOrder,
+        );
+        indices.insert_clause(&mut partner, &bank, false);
+        let mut store = ClauseSet::new();
+
+        assert_eq!(
+            compute_ext_sup(&mut bank, &renamed, &selected, &mut store, &indices, 3).unwrap(),
+            1
+        );
+
+        let generated = store.iter().next().expect("ExtSup should generate");
+        assert_eq!(generated.literal_number(), 2);
+        assert_eq!(generated.positive_literal_count(), 1);
+        assert_eq!(generated.negative_literal_count(), 1);
+        assert_eq!(generated.proof_depth(), 4);
+        assert_eq!(generated.proof_size(), 13);
+        assert_ne!(generated.query_tptp_type(), CP_TYPE_CONJECTURE);
+        assert!(generated.query_prop(CP_IS_SOS));
+        assert!(!generated.query_prop(CP_NO_GENERATION));
+        assert!(derivation_contains_operation(generated, DC_EXT_SUP));
+        assert!(derivation_contains_parent(generated, 4_185));
+        assert!(derivation_contains_parent(generated, 4_186));
+
+        let positive = generated
+            .literals()
+            .as_slice()
+            .iter()
+            .find(|literal| literal.is_positive())
+            .expect("ExtSup should keep replacement literal");
+        assert_eq!(positive.left().f_code(), u_code);
+        assert_eq!(positive.right().f_code(), v_code);
+
+        let condition = generated
+            .literals()
+            .as_slice()
+            .iter()
+            .find(|literal| literal.is_negative())
+            .expect("ExtSup should emit disagreement condition");
+        assert_eq!(condition.left().f_code(), q_code);
+        assert_eq!(condition.right().f_code(), p_code);
+
+        assert_eq!(
+            compute_ext_sup(
+                &mut bank,
+                &renamed,
+                &selected,
+                &mut ClauseSet::new(),
+                &indices,
+                2,
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_with_global_indices_runs_ext_rules() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, mut partner, u_code, v_code) = {
+            let terms = state.terms_mut();
+            let head = predicate_argument_binary_const(terms, "pc_generate_ext_sup_h");
+            let p = unary_predicate_const(terms, "pc_generate_ext_sup_p");
+            let q = unary_predicate_const(terms, "pc_generate_ext_sup_q");
+            let arg = typed_const(terms, "pc_generate_ext_sup_a");
+            let u = typed_const(terms, "pc_generate_ext_sup_u");
+            let v = typed_const(terms, "pc_generate_ext_sup_v");
+            let selected_left = apply_terms(terms, &head, &[p, arg.clone()]).unwrap();
+            let partner_left = apply_terms(terms, &head, &[q, arg]).unwrap();
+
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &selected_left,
+                &u,
+                true,
+            )]));
+            selected.set_ident(4_188);
+            selected.set_proof_depth(1);
+            selected.set_proof_size(2);
+
+            let mut partner = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &partner_left,
+                &v,
+                true,
+            )]));
+            partner.set_ident(4_187);
+            partner.set_proof_depth(1);
+            partner.set_proof_size(3);
+            (selected, partner, u.f_code(), v.f_code())
+        };
+        let index_signature = state.terms().signature().clone();
+        let mut indices = GlobalIndices::new_for_problem(
+            &index_signature,
+            "NoIndex",
+            "NoIndex",
+            "NoIndex",
+            4,
+            ProblemType::HigherOrder,
+        );
+        indices.insert_clause(&mut partner, state.terms(), false);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().ext_rules_max_depth = 4;
+
+        let outcome = proof_state_generate_new_clauses_with_global_indices(
+            &mut state,
+            &mut control,
+            &selected,
+            &indices,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert!(derivation_contains_operation(generated, DC_EXT_SUP));
+        assert!(generated
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| literal.is_positive()
+                && literal.left().f_code() == u_code
+                && literal.right().f_code() == v_code));
     }
 
     #[test]
