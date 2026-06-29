@@ -210,7 +210,7 @@ fn collect_into_pos_term(term: &Term, mut pos: CompactPos, positions: &mut Vec<E
 }
 
 fn maybe_normalize_app_var(term: &Term) -> bool {
-    term.is_applied_free_var()
+    term.is_free_var() || (term.is_applied_free_var() && term.is_pattern())
 }
 
 fn term_type_is_arrow(term: &Term) -> bool {
@@ -269,6 +269,21 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn applied_free_var(bank: &mut TermBank, arg: &Term) -> Term {
+        let head_type = alloc_arrow_type(vec![
+            arg.type_()
+                .unwrap_or_else(|| bank.signature().type_bank().default_type()),
+            bank.signature().type_bank().default_type(),
+        ]);
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(head_type));
+        let term = Term::top_alloc(crate::terms::signature::SIG_PHONY_APP_CODE, 2);
+        term.set_type(Some(bank.signature().type_bank().default_type()));
+        term.set_argument(0, head);
+        term.set_argument(1, arg.clone());
+        bank.insert_ignore_var(&term, DerefType::Never).unwrap()
+    }
+
     fn eqn(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
@@ -316,6 +331,50 @@ mod tests {
         assert_eq!(positions[0].pos(), DEFAULT_FWEIGHT);
         assert_eq!(positions[1].f_code(), outer.f_code());
         assert_eq!(positions[1].pos(), 0);
+    }
+
+    #[test]
+    fn collect_into_positions_skips_pattern_applied_free_vars() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let db = bank.request_db_var(&individual, 0);
+        let app = applied_free_var(&mut bank, &db);
+        let rhs = typed_const(&mut bank, "ext_pattern_app_rhs", individual);
+        let clause = singleton_clause(eqn(&mut bank, &app, &rhs, true), 4);
+        let mut positions = Vec::new();
+
+        assert!(app.is_pattern());
+        collect_ext_sup_into_pos(&clause, &mut positions);
+
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn collect_into_positions_descends_into_non_pattern_applied_free_vars() {
+        let mut bank = test_bank();
+        let individual = bank.signature().type_bank().default_type();
+        let arrow_type = alloc_arrow_type(vec![individual.clone(), individual.clone()]);
+        let arrow = typed_const(&mut bank, "ext_nonpattern_app_arrow", arrow_type);
+        let inner = typed_unary(
+            &mut bank,
+            "ext_nonpattern_app_inner",
+            &arrow,
+            individual.clone(),
+        );
+        let app = applied_free_var(&mut bank, &inner);
+        let rhs = typed_const(&mut bank, "ext_nonpattern_app_rhs", individual);
+        let clause = singleton_clause(eqn(&mut bank, &app, &rhs, true), 5);
+        let mut positions = Vec::new();
+
+        assert!(!app.is_pattern());
+        collect_ext_sup_into_pos(&clause, &mut positions);
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].f_code(), inner.f_code());
+        assert_eq!(
+            positions[0].pos(),
+            term_standard_weight(&app.argument(0).expect("app head is initialized"))
+        );
     }
 
     #[test]
