@@ -289,6 +289,46 @@ pub fn term_copy_keep_vars(source: &Term, deref: DerefType) -> Term {
     copy
 }
 
+/// Checks whether a term cell repeats on a single branch.
+///
+/// A shared DAG subterm that appears in different branches is not an
+/// inconsistency; only a repeat before the recursion unwinds from that branch
+/// is reported.
+#[must_use]
+pub fn term_check_consistency(term: &Term, deref: DerefType) -> Option<Term> {
+    let mut branch = BTreeSet::new();
+    term_check_consistency_rek(term, deref, &mut branch)
+}
+
+fn term_check_consistency_rek(
+    term: &Term,
+    deref: DerefType,
+    branch: &mut BTreeSet<usize>,
+) -> Option<Term> {
+    let (term, current_deref, limit) = lfho_deref_no_whnf(term, deref);
+    let key = term_identity_id(&term);
+    if !branch.insert(key) {
+        return Some(term);
+    }
+
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let Some(arg) = arg else {
+            continue;
+        };
+        if let Some(repeated) = term_check_consistency_rek(
+            &arg,
+            convert_lfho_deref(index, limit, current_deref),
+            branch,
+        ) {
+            return Some(repeated);
+        }
+    }
+
+    let removed = branch.remove(&key);
+    debug_assert!(removed, "branch entry should be present while unwinding");
+    None
+}
+
 /// Copies a term using a precomputed free-variable renaming map.
 ///
 /// # Panics
@@ -1645,14 +1685,14 @@ mod tests {
     use super::{
         term_add_fun_occ, term_add_symbol_dist_exist, term_add_symbol_distribution_limited,
         term_add_symbol_features, term_add_symbol_features_limited, term_add_type_distribution,
-        term_app_encode, term_apply_arg, term_array_no_duplicates, term_collect_fcodes,
-        term_collect_ground_terms, term_collect_variables, term_compute_function_ranks,
-        term_compute_order, term_copy, term_copy_keep_vars, term_copy_normalize_vars,
-        term_copy_normalize_vars_alpha, term_copy_rename_vars, term_copy_unify_vars,
-        term_create_prefix, term_dag_weight, term_depth, term_find_ite_subterm,
-        term_find_max_var_code, term_has_f_code, term_has_unbound_variables, term_is_db_closed,
-        term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute, term_is_subterm,
-        term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
+        term_app_encode, term_apply_arg, term_array_no_duplicates, term_check_consistency,
+        term_collect_fcodes, term_collect_ground_terms, term_collect_variables,
+        term_compute_function_ranks, term_compute_order, term_copy, term_copy_keep_vars,
+        term_copy_normalize_vars, term_copy_normalize_vars_alpha, term_copy_rename_vars,
+        term_copy_unify_vars, term_create_prefix, term_dag_weight, term_depth,
+        term_find_ite_subterm, term_find_max_var_code, term_has_f_code, term_has_unbound_variables,
+        term_is_db_closed, term_is_def_term, term_is_flat, term_is_ground, term_is_ground_compute,
+        term_is_subterm, term_is_subterm_deref, term_is_untyped, term_lex_compare, term_linearize,
         term_non_linear_weight, term_parse, term_parse_arg_list, term_parse_operator,
         term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
         term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
@@ -1867,6 +1907,31 @@ mod tests {
         assert_eq!(suffix.f_code(), fixture.c.f_code());
         assert_ne!(suffix, fixture.c);
         assert_ne!(copied.argument(0), Some(fixture.b));
+    }
+
+    #[test]
+    fn term_check_consistency_allows_shared_dag_subterms() {
+        let shared = Term::const_cell_alloc(301);
+        let root = Term::top_alloc(300, 2);
+        root.set_argument(0, shared.clone());
+        root.set_argument(1, shared);
+
+        assert_eq!(term_check_consistency(&root, DerefType::Never), None);
+    }
+
+    #[test]
+    fn term_check_consistency_reports_branch_cycles() {
+        let root = Term::top_alloc(310, 1);
+        root.set_argument(0, root.clone());
+
+        assert_eq!(term_check_consistency(&root, DerefType::Never), Some(root));
+    }
+
+    #[test]
+    fn term_check_consistency_handles_applied_deref_prefixes() {
+        let fixture = applied_prefix_fixture();
+
+        assert_eq!(term_check_consistency(&fixture.app, DerefType::Once), None);
     }
 
     #[test]
