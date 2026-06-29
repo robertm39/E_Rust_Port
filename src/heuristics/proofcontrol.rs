@@ -956,7 +956,23 @@ pub fn proof_state_reset_processed(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<i64, Diagnostic> {
-    proof_state_reset_processed_impl(state, control, None)
+    proof_state_reset_processed_impl::<String>(state, control, None, None)
+}
+
+/// Moves all processed clauses back to `unprocessed` while emitting represented
+/// proof-documentation quotes for the evaluated requeued copies.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_reset_processed`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_reset_processed_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<i64, Diagnostic> {
+    proof_state_reset_processed_impl(state, control, None, Some((output, session)))
 }
 
 /// Moves all processed clauses back to `unprocessed`, deleting any
@@ -974,13 +990,30 @@ pub fn proof_state_reset_processed_with_global_indices(
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<i64, Diagnostic> {
-    proof_state_reset_processed_impl(state, control, Some(indices))
+    proof_state_reset_processed_impl::<String>(state, control, Some(indices), None)
 }
 
-fn proof_state_reset_processed_impl(
+/// Moves all processed clauses back to `unprocessed`, deleting caller-owned
+/// global-index entries and emitting represented proof-documentation quotes.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_reset_processed_with_docs`].
+pub fn proof_state_reset_processed_with_global_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<i64, Diagnostic> {
+    proof_state_reset_processed_impl(state, control, Some(indices), Some((output, session)))
+}
+
+fn proof_state_reset_processed_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     mut indices: Option<&mut GlobalIndices<'_>>,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
@@ -988,9 +1021,11 @@ fn proof_state_reset_processed_impl(
             "ProofStateResetProcessed requires initialized proof-control heuristic",
         )
     })?;
-    let prefer_initial = control.heuristic_parms.prefer_initial_clauses;
-    let record_gc_selection = control.record_gc_selection();
-    let lambda_demod = control.heuristic_parms.lambda_demod;
+    let reset_options = ResetProcessedOptions {
+        prefer_initial: control.heuristic_parms.prefer_initial_clauses,
+        record_gc_selection: control.record_gc_selection(),
+        lambda_demod: control.heuristic_parms.lambda_demod,
+    };
     let mut reset = 0;
 
     {
@@ -1005,52 +1040,54 @@ fn proof_state_reset_processed_impl(
         reset += proof_state_reset_processed_set_by(
             state,
             ProcessedSetSlot::PosRules,
-            prefer_initial,
-            record_gc_selection,
+            reset_options,
             &mut evaluate,
             indices.as_deref_mut(),
-            lambda_demod,
+            &mut doc_context,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
             ProcessedSetSlot::PosEqns,
-            prefer_initial,
-            record_gc_selection,
+            reset_options,
             &mut evaluate,
             indices.as_deref_mut(),
-            lambda_demod,
+            &mut doc_context,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
             ProcessedSetSlot::NegUnits,
-            prefer_initial,
-            record_gc_selection,
+            reset_options,
             &mut evaluate,
             indices.as_deref_mut(),
-            lambda_demod,
+            &mut doc_context,
         )?;
         reset += proof_state_reset_processed_set_by(
             state,
             ProcessedSetSlot::NonUnits,
-            prefer_initial,
-            record_gc_selection,
+            reset_options,
             &mut evaluate,
             indices,
-            lambda_demod,
+            &mut doc_context,
         )?;
     }
 
     Ok(reset)
 }
 
-fn proof_state_reset_processed_set_by<E>(
-    state: &mut ProofState,
-    slot: ProcessedSetSlot,
+#[derive(Clone, Copy)]
+struct ResetProcessedOptions {
     prefer_initial: bool,
     record_gc_selection: bool,
+    lambda_demod: bool,
+}
+
+fn proof_state_reset_processed_set_by<E, W: fmt::Write>(
+    state: &mut ProofState,
+    slot: ProcessedSetSlot,
+    options: ResetProcessedOptions,
     evaluate: &mut E,
     mut indices: Option<&mut GlobalIndices<'_>>,
-    lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic>
 where
     E: FnMut(&TermBank, &mut Clause),
@@ -1062,35 +1099,29 @@ where
                 state,
                 slot,
                 indices,
-                lambda_demod,
+                options.lambda_demod,
             );
         }
         let Some(handle) = processed_set_mut_by_slot(state, slot).extract_first() else {
             continue;
         };
-        proof_state_reset_processed_clause(
-            state,
-            handle,
-            prefer_initial,
-            record_gc_selection,
-            evaluate,
-        )?;
+        proof_state_reset_processed_clause(state, handle, options, evaluate, doc_context)?;
         reset += 1;
     }
     Ok(reset)
 }
 
-fn proof_state_reset_processed_clause<E>(
+fn proof_state_reset_processed_clause<E, W: fmt::Write>(
     state: &mut ProofState,
     mut handle: Clause,
-    prefer_initial: bool,
-    record_gc_selection: bool,
+    options: ResetProcessedOptions,
     evaluate: &mut E,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<(), Diagnostic>
 where
     E: FnMut(&TermBank, &mut Clause),
 {
-    if record_gc_selection {
+    if options.record_gc_selection {
         clause_push_derivation(&mut handle, DC_CNF_EVAL_GC, None, None);
     }
     let mut requeued = {
@@ -1099,8 +1130,18 @@ where
     };
     evaluate(state.terms(), &mut requeued);
     requeued.del_prop(CP_IS_ORIENTED);
+    if let Some((output, session)) = doc_context.as_mut() {
+        session.doc_clause_quote(
+            output,
+            state.terms(),
+            6,
+            &mut requeued,
+            Some("move_eval"),
+            None,
+        )?;
+    }
 
-    if prefer_initial {
+    if options.prefer_initial {
         let Some(evaluations) = requeued.evaluations_mut() else {
             return Err(Diagnostic::new(
                 ErrorCode::OTHER_ERROR,
@@ -4391,14 +4432,15 @@ mod tests {
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_reset_processed, proof_state_reset_processed_with_global_indices,
-        proof_state_saturate, proof_state_saturate_with_global_indices,
-        proof_state_simplify_watchlist, proof_state_storage_estimate, select_inherited_literal,
-        BackwardSimplificationOutcome, ForwardContractCounts, ForwardContractOptions,
-        GenerateNewClausesOutcome, LiteralSelectionOutcome, ParentLivenessSnapshot,
-        ProcessClauseOutcome, ProcessedClauseClass, ProofStateWatchlistOutcome,
-        ReplacingInferenceOutcome, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_reset_processed, proof_state_reset_processed_with_docs,
+        proof_state_reset_processed_with_global_indices, proof_state_saturate,
+        proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
+        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
+        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
+        LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -5124,6 +5166,43 @@ mod tests {
                 PRIO_NORMAL - PRIO_LARGEST_REASONABLE
             );
         }
+    }
+
+    #[test]
+    fn proof_state_reset_processed_with_docs_emits_move_eval_quote() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = processed_unit_clause(state.terms_mut(), "pc_reset_doc_quote", 4_044);
+        clause.set_prop(CP_INPUT_FORMULA);
+        state.processed_pos_rules_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        init_fifo_hcb(&mut control, &state, "ResetProcessedDocTest");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let reset = proof_state_reset_processed_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(reset, 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("1 : :"));
+        assert!(rendered.contains("4044 : 'move_eval'"));
+        let archived = state.archive().find_by_id(4_044).unwrap();
+        assert!(archived.query_prop(CP_INPUT_FORMULA));
+        let requeued = state.unprocessed().find_by_id(1).unwrap();
+        assert!(!requeued.query_prop(CP_INPUT_FORMULA | CP_IS_ORIENTED));
+        assert_eq!(
+            requeued.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_CNF_QUOTE),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_044, 0)),
+            ]
+        );
     }
 
     #[test]
