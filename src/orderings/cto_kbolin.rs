@@ -4,22 +4,25 @@ use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
-use crate::terms::termtypes::{term_deref, DerefType, Term, TP_PRED_POS};
+use crate::terms::simpletypes::Type;
+use crate::terms::termtypes::{term_deref, DerefType, Term, TP_IS_DB_VAR, TP_PRED_POS};
 use std::cmp::Ordering;
 
 /// Compare two first-order terms with C `KBO6Compare`.
 ///
 /// This ports the non-`ENABLE_LFHO` first-order `kbolincmp` path plus the
-/// no-WHNF subset of C `kbolincmp_ho` for higher-order surfaces with ordinary
-/// dereferencing under `LFHO_ORDER`. The C wrapper resets OCB balance fields
-/// before comparison and leaves the final comparison balances in the OCB; this
-/// function preserves that entry-reset behavior.
+/// direct LFHO `kbolincmp_ho` path used by `LFHO_ORDER`. Since Rust term cells
+/// do not yet retain owner-bank metadata, `DerefType::Always` uses a local
+/// weak-head dereference rebuilt only for comparison instead of C's cache-backed
+/// `WHNF_deref`. The C wrapper resets OCB balance fields before comparison and
+/// leaves the final comparison balances in the OCB; this function preserves that
+/// entry-reset behavior.
 ///
 /// # Panics
 ///
-/// Panics if a higher-order surface needs Lambda-order normalization or WHNF
-/// dereferencing, if term argument slots are uninitialized, or if the OCB lacks
-/// KBO weight/precedence storage.
+/// Panics if a higher-order surface needs Lambda-order normalization, if term
+/// argument slots are uninitialized, or if the OCB lacks KBO weight/precedence
+/// storage.
 pub fn kbo6_compare(
     ocb: &mut OrderControlBlock,
     signature: &Signature,
@@ -34,11 +37,7 @@ pub fn kbo6_compare(
             ocb.ho_order_kind == HoOrderKind::LfhoOrder,
             "Lambda-order KBO6 term ordering is not ported yet"
         );
-        assert!(
-            deref_s != DerefType::Always && deref_t != DerefType::Always,
-            "LFHO KBO6 WHNF dereferencing is not ported yet"
-        );
-        return kbo_lin_cmp_lfho_no_whnf(ocb, signature, s, t, deref_s, deref_t);
+        return kbo_lin_cmp_lfho(ocb, signature, s, t, deref_s, deref_t);
     }
     kbo_lin_cmp(ocb, signature, s, t, deref_s, deref_t)
 }
@@ -207,7 +206,7 @@ fn mfy_vwb(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool
 fn mfy_vwb_lfho(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
     let mut stack = vec![(term.clone(), deref)];
     while let Some((candidate, current_deref)) = stack.pop() {
-        let (current, current_deref, limit) = lfho_deref_no_whnf(&candidate, current_deref);
+        let (current, current_deref, limit) = lfho_deref_for_kbo(&candidate, current_deref);
         if current.is_free_var() {
             if lhs {
                 inc_vb(ocb, &current);
@@ -297,7 +296,7 @@ fn kbo_lin_cmp(
     res
 }
 
-fn kbo_lin_cmp_lfho_no_whnf(
+fn kbo_lin_cmp_lfho(
     ocb: &mut OrderControlBlock,
     signature: &Signature,
     s: &Term,
@@ -305,8 +304,8 @@ fn kbo_lin_cmp_lfho_no_whnf(
     deref_s: DerefType,
     deref_t: DerefType,
 ) -> CompareResult {
-    let (s, deref_s, limit_s) = lfho_deref_no_whnf(s, deref_s);
-    let (t, deref_t, limit_t) = lfho_deref_no_whnf(t, deref_t);
+    let (s, deref_s, limit_s) = lfho_deref_for_kbo(s, deref_s);
+    let (t, deref_t, limit_t) = lfho_deref_for_kbo(t, deref_t);
     let mut res = CompareResult::Equal;
     if s.f_code() == t.f_code() {
         let mut done = if s.arity() == t.arity() {
@@ -317,7 +316,7 @@ fn kbo_lin_cmp_lfho_no_whnf(
         let mut index = 0;
         while !done {
             res = if s.arity() == t.arity() {
-                kbo_lin_cmp_lfho_no_whnf(
+                kbo_lin_cmp_lfho(
                     ocb,
                     signature,
                     &initialized_arg(&s, index),
@@ -447,8 +446,11 @@ fn lfho_head_compare(
     }
 }
 
-fn lfho_deref_no_whnf(term: &Term, deref: DerefType) -> (Term, DerefType, usize) {
+fn lfho_deref_for_kbo(term: &Term, deref: DerefType) -> (Term, DerefType, usize) {
     let limit = lfho_deref_limit(term, deref);
+    if deref == DerefType::Always {
+        return (whnf_deref_for_kbo(term), deref, limit);
+    }
     if deref == DerefType::Once
         && term.is_applied_free_var()
         && term
@@ -460,6 +462,267 @@ fn lfho_deref_no_whnf(term: &Term, deref: DerefType) -> (Term, DerefType, usize)
     let mut current_deref = deref;
     let term = term_deref(term, &mut current_deref);
     (term, current_deref, limit)
+}
+
+fn whnf_deref_for_kbo(term: &Term) -> Term {
+    let mut deref = DerefType::Always;
+    let term = term_deref(term, &mut deref);
+
+    if term.is_phony_app() && term.argument(0).is_some_and(|head| head.is_lambda()) {
+        let reduced = whnf_step_for_kbo(&term);
+        return whnf_deref_for_kbo(&reduced);
+    }
+
+    if term.is_lambda() {
+        assert_eq!(
+            term.arity(),
+            2,
+            "WHNF dereference expects a binary DB-lambda cell"
+        );
+        let matrix = term
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+        let new_matrix = whnf_deref_for_kbo(&matrix);
+        if new_matrix == matrix {
+            term
+        } else {
+            rebuild_db_lambda_for_kbo(&term, new_matrix)
+        }
+    } else {
+        term
+    }
+}
+
+fn whnf_step_for_kbo(term: &Term) -> Term {
+    if !term.is_phony_app() || !term.argument(0).is_some_and(|head| head.is_lambda()) {
+        return term.clone();
+    }
+
+    let mut num_remaining = term.arity() - 1;
+    assert!(num_remaining > 0, "phony application must have arguments");
+    let mut next_arg = 1;
+    let mut matrix = term
+        .argument(0)
+        .unwrap_or_else(|| panic!("phony application head is uninitialized"));
+    let mut consumed = Vec::new();
+
+    while matrix.is_lambda() && num_remaining != 0 {
+        assert_eq!(
+            matrix.arity(),
+            2,
+            "WHNF reduction expects a binary DB-lambda cell"
+        );
+        let binder = matrix
+            .argument(0)
+            .unwrap_or_else(|| panic!("lambda binder is uninitialized"));
+        assert!(binder.is_db_var(), "DB lambda binder must be a DB variable");
+        let target = term
+            .argument(next_arg)
+            .unwrap_or_else(|| panic!("application argument {next_arg} is uninitialized"));
+        consumed.push(target);
+        next_arg += 1;
+        num_remaining -= 1;
+        matrix = matrix
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+    }
+
+    let total_bound = consumed.len();
+    assert!(
+        total_bound > 0,
+        "WHNF step requires at least one consumed lambda"
+    );
+    let mut bindings = vec![None; total_bound];
+    for (index, target) in consumed.into_iter().enumerate() {
+        let db_index = total_bound - index - 1;
+        bindings[db_index] = Some(target);
+    }
+
+    let mut new_matrix = replace_bound_vars_for_kbo(&matrix, &bindings, 0);
+    if num_remaining != 0 {
+        let mut rest = Vec::with_capacity(num_remaining);
+        for index in next_arg..term.arity() {
+            rest.push(
+                term.argument(index)
+                    .unwrap_or_else(|| panic!("application argument {index} is uninitialized")),
+            );
+        }
+        new_matrix = apply_terms_for_kbo(&new_matrix, &rest, term.type_());
+    }
+    new_matrix
+}
+
+fn replace_bound_vars_for_kbo(term: &Term, bindings: &[Option<Term>], depth: i64) -> Term {
+    let total_bound = i64::try_from(bindings.len()).unwrap_or(i64::MAX);
+    assert!(
+        total_bound > 0,
+        "bound-variable replacement requires bindings"
+    );
+
+    if term.is_db_var() {
+        if term.f_code() < depth {
+            return term.clone();
+        }
+        let loose_index = term.f_code() - depth;
+        if loose_index < total_bound {
+            let binding = bindings[usize::try_from(loose_index).expect("DB index fits usize")]
+                .as_ref()
+                .expect("WHNF binding slot is initialized");
+            return shift_db_for_kbo(binding, depth, 0);
+        }
+        return copy_db_var_for_kbo(term, term.f_code() - total_bound);
+    }
+
+    if term.is_lambda() {
+        assert_eq!(
+            term.arity(),
+            2,
+            "bound-variable replacement expects a binary DB-lambda cell"
+        );
+        let matrix = term
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+        let new_matrix = replace_bound_vars_for_kbo(&matrix, bindings, depth + 1);
+        if new_matrix == matrix {
+            term.clone()
+        } else {
+            rebuild_db_lambda_for_kbo(term, new_matrix)
+        }
+    } else if term.arity() == 0 || !contains_db_subterm_for_kbo(term) {
+        term.clone()
+    } else {
+        let copy = Term::top_copy_without_args(term);
+        let mut changed = false;
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let replaced = replace_bound_vars_for_kbo(&arg, bindings, depth);
+            if replaced != arg {
+                changed = true;
+            }
+            copy.set_argument(index, replaced);
+        }
+        if changed {
+            copy
+        } else {
+            term.clone()
+        }
+    }
+}
+
+fn shift_db_for_kbo(term: &Term, shift_val: i64, depth: i64) -> Term {
+    if shift_val == 0 {
+        return term.clone();
+    }
+
+    if term.is_db_var() {
+        if term.f_code() >= depth {
+            let shifted = term
+                .f_code()
+                .checked_add(shift_val)
+                .expect("DB variable shift fits in FunCode");
+            assert!(shifted >= 0, "DB variable shift produced a negative index");
+            return copy_db_var_for_kbo(term, shifted);
+        }
+        return term.clone();
+    }
+
+    if term.is_lambda() {
+        assert_eq!(
+            term.arity(),
+            2,
+            "DB shifting expects a binary DB-lambda cell"
+        );
+        let matrix = term
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+        let shifted_matrix = shift_db_for_kbo(&matrix, shift_val, depth + 1);
+        if shifted_matrix == matrix {
+            term.clone()
+        } else {
+            rebuild_db_lambda_for_kbo(term, shifted_matrix)
+        }
+    } else if term.arity() == 0 || !contains_db_subterm_for_kbo(term) {
+        term.clone()
+    } else {
+        let copy = Term::top_copy_without_args(term);
+        let mut changed = false;
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let shifted = shift_db_for_kbo(&arg, shift_val, depth);
+            if shifted != arg {
+                changed = true;
+            }
+            copy.set_argument(index, shifted);
+        }
+        if changed {
+            copy
+        } else {
+            term.clone()
+        }
+    }
+}
+
+fn apply_terms_for_kbo(head: &Term, args: &[Term], result_type: Option<Type>) -> Term {
+    if args.is_empty() {
+        return head.clone();
+    }
+
+    let applied = if head.is_any_var() || head.is_lambda() {
+        let applied = Term::top_alloc(crate::terms::signature::SIG_PHONY_APP_CODE, args.len() + 1);
+        applied.set_argument(0, head.clone());
+        for (index, arg) in args.iter().enumerate() {
+            applied.set_argument(index + 1, arg.clone());
+        }
+        applied
+    } else {
+        let applied = Term::top_alloc(head.f_code(), head.arity() + args.len());
+        for (index, arg) in head.argument_clones().into_iter().enumerate() {
+            applied.set_argument(
+                index,
+                arg.unwrap_or_else(|| panic!("head argument {index} is uninitialized")),
+            );
+        }
+        for (index, arg) in args.iter().enumerate() {
+            applied.set_argument(head.arity() + index, arg.clone());
+        }
+        applied
+    };
+    applied.set_type(result_type);
+    applied
+}
+
+fn rebuild_db_lambda_for_kbo(lambda: &Term, matrix: Term) -> Term {
+    assert!(
+        lambda.is_lambda(),
+        "lambda rebuild expects a lambda top cell"
+    );
+    let binder = lambda
+        .argument(0)
+        .unwrap_or_else(|| panic!("lambda binder is uninitialized"));
+    assert!(binder.is_db_var(), "DB lambda binder must be a DB variable");
+    let rebuilt = Term::top_copy_without_args(lambda);
+    rebuilt.set_argument(0, binder);
+    rebuilt.set_argument(1, matrix);
+    rebuilt
+}
+
+fn copy_db_var_for_kbo(source: &Term, f_code: i64) -> Term {
+    assert!(source.is_db_var(), "DB copy expects a DB variable");
+    let copy = Term::const_cell_alloc(f_code);
+    copy.set_prop(TP_IS_DB_VAR);
+    copy.set_type(source.type_());
+    copy
+}
+
+fn contains_db_subterm_for_kbo(term: &Term) -> bool {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_db_var() {
+            return true;
+        }
+        stack.extend(current.argument_clones().into_iter().flatten());
+    }
+    false
 }
 
 fn expand_lfho_applied_free_var_once(term: &Term) -> Term {
@@ -984,24 +1247,29 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "LFHO KBO6 WHNF dereferencing is not ported yet")]
-    fn kbo6_lfho_deref_always_stays_diagnostic() {
+    fn kbo6_lfho_deref_always_weak_head_reduces_lambda_application() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
         let binder_type = bank.signature().type_bank().default_type();
         let a = typed_const(&mut bank, "kbo6_lfho_deref_a");
+        let db0 = bank.request_db_var(&binder_type, 0);
         let lambda =
-            close_with_db_var(&mut bank, &binder_type, &a).unwrap_or_else(|err| panic!("{err}"));
+            close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
+        let applied = app(SIG_PHONY_APP_CODE, &[lambda, a.clone()]);
+        applied.set_type(Some(binder_type));
         let mut ocb = ocb(bank.signature());
 
-        kbo6_compare(
-            &mut ocb,
-            bank.signature(),
-            &lambda,
-            &a,
-            DerefType::Always,
-            DerefType::Never,
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                bank.signature(),
+                &applied,
+                &a,
+                DerefType::Always,
+                DerefType::Never,
+            ),
+            CompareResult::Equal
         );
     }
 
