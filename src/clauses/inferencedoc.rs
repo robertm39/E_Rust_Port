@@ -7,10 +7,10 @@ use crate::clauses::clause::{
     clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE,
-    CP_TYPE_QUESTION, CP_WATCH_ONLY,
+    FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+    CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_WATCH_ONLY,
 };
-use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string};
+use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::terms::termbanks::TermBank;
 
@@ -127,6 +127,43 @@ impl ClauseModificationInference {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormulaCreationInference {
+    Initial,
+    IntroDef,
+    SplitEquiv,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormulaModificationInference {
+    Simplification,
+    NegConjecture,
+    Nnf,
+    ShiftQuantors,
+    VarRename,
+    Skolemize,
+    Distribute,
+    AnnotateQuestion,
+    Other,
+}
+
+impl FormulaModificationInference {
+    #[must_use]
+    pub const fn parent_inference(self) -> Option<FormulaParentInference> {
+        match self {
+            Self::Simplification => Some(FormulaParentInference::Simplification),
+            Self::NegConjecture => Some(FormulaParentInference::NegConjecture),
+            Self::Nnf => Some(FormulaParentInference::Nnf),
+            Self::ShiftQuantors => Some(FormulaParentInference::ShiftQuantors),
+            Self::VarRename => Some(FormulaParentInference::VarRename),
+            Self::Skolemize => Some(FormulaParentInference::Skolemize),
+            Self::Distribute => Some(FormulaParentInference::Distribute),
+            Self::AnnotateQuestion => Some(FormulaParentInference::AnnotateQuestion),
+            Self::Other => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClauseModificationEvidence<'a> {
     pub partner: Option<&'a Clause>,
@@ -162,6 +199,111 @@ impl<'a> ClauseModificationEvidence<'a> {
 impl Default for ClauseModificationEvidence<'_> {
     fn default() -> Self {
         Self::none()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FormulaCreationParents<'a> {
+    pub parent1: Option<&'a FormulaDocView<'a>>,
+    pub parent2: Option<&'a FormulaDocView<'a>>,
+}
+
+impl<'a> FormulaCreationParents<'a> {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            parent1: None,
+            parent2: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn unary(parent: &'a FormulaDocView<'a>) -> Self {
+        Self {
+            parent1: Some(parent),
+            parent2: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormulaDocView<'a> {
+    ident: i64,
+    properties: FormulaProperties,
+    rendered_formula: &'a str,
+    info: Option<&'a ClauseInfo>,
+    is_untyped: bool,
+}
+
+impl<'a> FormulaDocView<'a> {
+    #[must_use]
+    pub const fn new(ident: i64, properties: FormulaProperties, rendered_formula: &'a str) -> Self {
+        Self {
+            ident,
+            properties,
+            rendered_formula,
+            info: None,
+            is_untyped: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_info(mut self, info: &'a ClauseInfo) -> Self {
+        self.info = Some(info);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_untyped(mut self, is_untyped: bool) -> Self {
+        self.is_untyped = is_untyped;
+        self
+    }
+
+    #[must_use]
+    pub const fn ident(&self) -> i64 {
+        self.ident
+    }
+
+    pub fn set_ident(&mut self, ident: i64) {
+        self.ident = ident;
+    }
+
+    #[must_use]
+    pub const fn rendered_formula(&self) -> &'a str {
+        self.rendered_formula
+    }
+
+    #[must_use]
+    pub const fn properties(&self) -> FormulaProperties {
+        self.properties
+    }
+
+    pub fn set_prop(&mut self, prop: FormulaProperties) {
+        self.properties.set(prop);
+    }
+
+    pub fn del_prop(&mut self, prop: FormulaProperties) {
+        self.properties.delete(prop);
+    }
+
+    #[must_use]
+    pub const fn query_prop(&self, prop: FormulaProperties) -> bool {
+        self.properties.query(prop)
+    }
+
+    #[must_use]
+    pub const fn query_tptp_type(&self) -> FormulaProperties {
+        self.properties.query_tptp_type()
+    }
+
+    #[must_use]
+    pub const fn info(&self) -> Option<&'a ClauseInfo> {
+        self.info
+    }
+
+    #[must_use]
+    pub const fn is_untyped(&self) -> bool {
+        self.is_untyped
     }
 }
 
@@ -208,6 +350,16 @@ pub struct ProofDocWriteResult {
 impl ProofDocWriteResult {
     #[must_use]
     pub const fn suppressed() -> Self {
+        Self {
+            printed: false,
+            stdout_before: "",
+            stdout_after: "",
+            stdout_after_offset: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn not_printed() -> Self {
         Self {
             printed: false,
             stdout_before: "",
@@ -443,6 +595,93 @@ impl ProofDocSession {
                     evidence,
                     comment,
                 },
+            ),
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports the represented cases of C `DocFormulaCreation`.
+    ///
+    /// The formula text is supplied pre-rendered until the Rust port has a
+    /// full `WFormula` owner.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied parent shape does not match the requested
+    /// inference, matching C assertions in `DocFormulaCreation`.
+    pub fn doc_formula_creation(
+        &mut self,
+        output: &mut impl fmt::Write,
+        formula: &mut FormulaDocView<'_>,
+        inference: FormulaCreationInference,
+        parent_refs: FormulaCreationParents<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        formula.set_ident(self.id_source.next_ident());
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                self.write_pcl_formula_creation(output, formula, inference, parent_refs, comment)
+            }
+            ProofDocOutputFormat::Tstp => {
+                self.write_tstp_formula_creation(output, formula, inference, parent_refs, comment)
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports the represented cases of C `DocFormulaModification`.
+    ///
+    /// The `Other` variant preserves C's default branch: after clearing
+    /// `CPInputFormula` and assigning a new id, it prints nothing.
+    pub fn doc_formula_modification(
+        &mut self,
+        output: &mut impl fmt::Write,
+        formula: &mut FormulaDocView<'_>,
+        inference: FormulaModificationInference,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        formula.del_prop(CP_INPUT_FORMULA);
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        let old_id = formula.ident();
+        formula.set_ident(self.id_source.next_ident());
+        let Some(parent_inference) = inference.parent_inference() else {
+            return Ok(ProofDocWriteResult::not_printed());
+        };
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => self.write_pcl_formula_modification(
+                output,
+                formula,
+                parent_inference,
+                old_id,
+                comment,
+            ),
+            ProofDocOutputFormat::Tstp => self.write_tstp_formula_modification(
+                output,
+                formula,
+                parent_inference,
+                old_id,
+                comment,
             ),
             ProofDocOutputFormat::NoFormat
             | ProofDocOutputFormat::Lop
@@ -754,6 +993,165 @@ impl ProofDocSession {
         tstp_print_end(output, clause, comment).map_err(doc_write_error)?;
         Ok(ProofDocWriteResult::printed())
     }
+
+    fn write_pcl_formula_creation(
+        &self,
+        output: &mut impl fmt::Write,
+        formula: &FormulaDocView<'_>,
+        inference: FormulaCreationInference,
+        parent_refs: FormulaCreationParents<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        match inference {
+            FormulaCreationInference::Initial => {
+                assert!(
+                    parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
+                    "initial formula documentation must not have parents"
+                );
+                pcl_formula_print_start(
+                    output,
+                    formula.ident(),
+                    formula.query_tptp_type(),
+                    (self.pcl_shell_level < 2).then_some(formula.rendered_formula()),
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                output
+                    .write_str(&source_info_pcl_string(formula.info()))
+                    .map_err(doc_write_error)?;
+            }
+            FormulaCreationInference::IntroDef => {
+                assert!(
+                    parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
+                    "formula definition introduction must not have parents"
+                );
+                pcl_formula_print_start(
+                    output,
+                    formula.ident(),
+                    formula.query_tptp_type(),
+                    (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_formula_intro_def_inference(output).map_err(doc_write_error)?;
+            }
+            FormulaCreationInference::SplitEquiv => {
+                let Some(parent) = parent_refs.parent1 else {
+                    panic!("formula split-equivalence documentation needs parent");
+                };
+                assert!(
+                    parent_refs.parent2.is_none(),
+                    "formula split-equivalence documentation must not have second parent"
+                );
+                pcl_formula_print_start(
+                    output,
+                    formula.ident(),
+                    formula.query_tptp_type(),
+                    (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_formula_parent_inference(
+                    output,
+                    FormulaParentInference::SplitEquiv,
+                    parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+            }
+        }
+        pcl_formula_print_end(output, comment, self.step_options).map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
+    }
+
+    fn write_tstp_formula_creation(
+        &self,
+        output: &mut impl fmt::Write,
+        formula: &FormulaDocView<'_>,
+        inference: FormulaCreationInference,
+        parent_refs: FormulaCreationParents<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        match inference {
+            FormulaCreationInference::Initial => {
+                assert!(
+                    parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
+                    "initial formula documentation must not have parents"
+                );
+                write_tstp_formula_start(output, formula, self.problem_type)
+                    .map_err(doc_write_error)?;
+                output.write_str(", ").map_err(doc_write_error)?;
+                output
+                    .write_str(&source_info_tstp_string(formula.info()))
+                    .map_err(doc_write_error)?;
+            }
+            FormulaCreationInference::IntroDef => {
+                assert!(
+                    parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
+                    "formula definition introduction must not have parents"
+                );
+                write_tstp_formula_start(output, formula, self.problem_type)
+                    .map_err(doc_write_error)?;
+                output.write_str(", ").map_err(doc_write_error)?;
+                write_tstp_formula_intro_def_inference(output).map_err(doc_write_error)?;
+            }
+            FormulaCreationInference::SplitEquiv => {
+                let Some(parent) = parent_refs.parent1 else {
+                    panic!("formula split-equivalence documentation needs parent");
+                };
+                assert!(
+                    parent_refs.parent2.is_none(),
+                    "formula split-equivalence documentation must not have second parent"
+                );
+                write_tstp_formula_start(output, formula, self.problem_type)
+                    .map_err(doc_write_error)?;
+                output.write_str(", ").map_err(doc_write_error)?;
+                write_tstp_formula_parent_inference(
+                    output,
+                    FormulaParentInference::SplitEquiv,
+                    parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+            }
+        }
+        tstp_formula_print_end(output, comment).map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
+    }
+
+    fn write_pcl_formula_modification(
+        &self,
+        output: &mut impl fmt::Write,
+        formula: &FormulaDocView<'_>,
+        inference: FormulaParentInference,
+        old_id: i64,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        pcl_formula_print_start(
+            output,
+            formula.ident(),
+            formula.query_tptp_type(),
+            (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+            self.step_options,
+        )
+        .map_err(doc_write_error)?;
+        write_pcl_formula_parent_inference(output, inference, old_id).map_err(doc_write_error)?;
+        pcl_formula_print_end(output, comment, self.step_options).map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
+    }
+
+    fn write_tstp_formula_modification(
+        &self,
+        output: &mut impl fmt::Write,
+        formula: &FormulaDocView<'_>,
+        inference: FormulaParentInference,
+        old_id: i64,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        write_tstp_formula_start(output, formula, self.problem_type).map_err(doc_write_error)?;
+        output.write_char(',').map_err(doc_write_error)?;
+        write_tstp_formula_parent_inference(output, inference, old_id).map_err(doc_write_error)?;
+        tstp_formula_print_end(output, comment).map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
+    }
 }
 
 #[must_use]
@@ -770,6 +1168,52 @@ fn write_unsupported_doc_format(output: &mut impl fmt::Write) -> fmt::Result {
     writeln!(
         output,
         "{DEFAULT_COMCHAR_RAW} Output format not implemented."
+    )
+}
+
+fn formula_tstp_identifier(formula: &FormulaDocView<'_>) -> String {
+    if formula.ident() >= 0 {
+        format!("c_0_{}", formula.ident())
+    } else {
+        let offset = i128::from(formula.ident()) - i128::from(i64::MIN);
+        format!("i_0_{offset}")
+    }
+}
+
+fn formula_tstp_kind(formula: &FormulaDocView<'_>, problem_type: ProblemType) -> &'static str {
+    if problem_type == ProblemType::HigherOrder {
+        "thf"
+    } else if formula.is_untyped() {
+        "fof"
+    } else {
+        "tff"
+    }
+}
+
+fn formula_tstp_role(formula: &FormulaDocView<'_>) -> &'static str {
+    match formula.query_tptp_type() {
+        CP_TYPE_AXIOM if formula.query_prop(CP_INPUT_FORMULA) => "axiom",
+        CP_TYPE_HYPOTHESIS => "hypothesis",
+        CP_TYPE_CONJECTURE => "conjecture",
+        CP_TYPE_QUESTION => "question",
+        CP_TYPE_LEMMA => "lemma",
+        CP_TYPE_NEG_CONJECTURE => "negated_conjecture",
+        _ => "plain",
+    }
+}
+
+fn write_tstp_formula_start(
+    output: &mut impl fmt::Write,
+    formula: &FormulaDocView<'_>,
+    problem_type: ProblemType,
+) -> fmt::Result {
+    write!(
+        output,
+        "{}({}, {}, {}",
+        formula_tstp_kind(formula, problem_type),
+        formula_tstp_identifier(formula),
+        formula_tstp_role(formula),
+        formula.rendered_formula()
     )
 }
 
@@ -1239,8 +1683,9 @@ mod tests {
         write_tstp_formula_intro_def_inference, write_tstp_formula_parent_inference,
         ClauseBinaryInference, ClauseCreationInference, ClauseCreationParents,
         ClauseModificationEvidence, ClauseModificationInference, ClauseUnaryInference,
-        FormulaParentInference, PclStepPrintOptions, ProofDocOutputFormat, ProofDocSession,
-        ProofDocWriteResult,
+        FormulaCreationInference, FormulaCreationParents, FormulaDocView,
+        FormulaModificationInference, FormulaParentInference, PclStepPrintOptions,
+        ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1288,7 +1733,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert_eq!(result, ProofDocWriteResult::not_printed());
         assert!(rendered.is_empty());
         assert_eq!(clause.ident(), 42);
         assert_eq!(session.id_source.current_ident(), 0);
@@ -1624,6 +2069,254 @@ mod tests {
         assert_eq!(result, ProofDocWriteResult::printed());
         assert_eq!(clause.ident(), 1);
         assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "% Output format not implemented.\n");
+    }
+
+    #[test]
+    fn doc_formula_creation_suppresses_below_level_two_without_assigning_id_or_clearing_input() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(42, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)");
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut formula,
+                FormulaCreationInference::Initial,
+                FormulaCreationParents::none(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(formula.ident(), 42);
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+    }
+
+    #[test]
+    fn doc_formula_creation_prints_pcl_initial_intro_def_and_split_equiv() {
+        let info = ClauseInfo::new(Some("form1"), Some("problem.p"), 3, 4);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut formula =
+            FormulaDocView::new(0, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)").with_info(&info);
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut formula,
+                FormulaCreationInference::Initial,
+                FormulaCreationParents::none(),
+                Some("input"),
+            )
+            .unwrap();
+
+        assert_eq!(formula.ident(), 1);
+        assert_eq!(
+            rendered,
+            "     1 : :p(a) : initial(\"problem.p\", form1) : 'input'\n"
+        );
+
+        rendered.clear();
+        let mut definition = FormulaDocView::new(0, CP_TYPE_AXIOM, "def");
+        session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut definition,
+                FormulaCreationInference::IntroDef,
+                FormulaCreationParents::none(),
+                Some("split"),
+            )
+            .unwrap();
+
+        assert_eq!(definition.ident(), 2);
+        assert_eq!(rendered, "     2 : :def : introduced : 'split'\n");
+
+        rendered.clear();
+        let parent = FormulaDocView::new(10, CP_TYPE_AXIOM, "left <=> right");
+        let mut split = FormulaDocView::new(0, CP_TYPE_NEG_CONJECTURE, "left => right");
+        session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut split,
+                FormulaCreationInference::SplitEquiv,
+                FormulaCreationParents::unary(&parent),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(split.ident(), 3);
+        assert_eq!(rendered, "     3 : neg:left => right : split_equiv(10)\n");
+    }
+
+    #[test]
+    fn doc_formula_creation_prints_tstp_initial_and_split_equiv() {
+        let info = ClauseInfo::new(Some("form1"), Some("problem.p"), 3, 4);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut formula =
+            FormulaDocView::new(0, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)").with_info(&info);
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut formula,
+                FormulaCreationInference::Initial,
+                FormulaCreationParents::none(),
+                Some("input"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "fof(c_0_1, axiom, p(a), file('problem.p', form1),['input']).\n"
+        );
+
+        rendered.clear();
+        let parent = FormulaDocView::new(10, CP_TYPE_AXIOM, "left <=> right");
+        let mut split = FormulaDocView::new(0, CP_TYPE_AXIOM, "left => right");
+        session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut split,
+                FormulaCreationInference::SplitEquiv,
+                FormulaCreationParents::unary(&parent),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "fof(c_0_2, plain, left => right, inference(split_equiv, [status(thm)], [c_0_10])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_formula_modification_suppresses_below_level_two_but_clears_input_formula() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(42, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)");
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_formula_modification(
+                &mut rendered,
+                &mut formula,
+                FormulaModificationInference::Simplification,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(formula.ident(), 42);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+    }
+
+    #[test]
+    fn doc_formula_modification_prints_pcl_and_tstp_parent_steps() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(7, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)");
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_modification(
+                &mut rendered,
+                &mut formula,
+                FormulaModificationInference::Simplification,
+                Some("simp"),
+            )
+            .unwrap();
+
+        assert_eq!(formula.ident(), 1);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            rendered,
+            "     1 : :p(a) : fof_simplification(7) : 'simp'\n"
+        );
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(8, CP_TYPE_NEG_CONJECTURE, "sk");
+        rendered.clear();
+        session
+            .doc_formula_modification(
+                &mut rendered,
+                &mut formula,
+                FormulaModificationInference::Skolemize,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "fof(c_0_1, negated_conjecture, sk,inference(skolemize, [status(esa)], [c_0_8])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_formula_modification_assigns_id_but_prints_nothing_for_unrepresented_op() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(7, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)");
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_formula_modification(
+                &mut rendered,
+                &mut formula,
+                FormulaModificationInference::Other,
+                Some("ignored"),
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(formula.ident(), 1);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 1);
+    }
+
+    #[test]
+    fn doc_formula_helpers_preserve_c_unsupported_format_fallback_after_id_assignment() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::NoFormat, 2, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(7, CP_TYPE_AXIOM | CP_INPUT_FORMULA, "p(a)");
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_creation(
+                &mut rendered,
+                &mut formula,
+                FormulaCreationInference::Initial,
+                FormulaCreationParents::none(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(formula.ident(), 1);
+        assert!(formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "% Output format not implemented.\n");
+
+        rendered.clear();
+        session
+            .doc_formula_modification(
+                &mut rendered,
+                &mut formula,
+                FormulaModificationInference::NegConjecture,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(formula.ident(), 2);
+        assert!(!formula.query_prop(CP_INPUT_FORMULA));
         assert_eq!(rendered, "% Output format not implemented.\n");
     }
 
