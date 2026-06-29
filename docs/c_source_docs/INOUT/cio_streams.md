@@ -102,9 +102,17 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing.
+- Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, and pops back to the previous stream in LIFO order.
+- Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, file-named in-memory sources for stdin-like data, and stacked stream push/pop restoration.
+
 ### Change-Later Observations
 
 - `CreateStream(StreamTypeFile, "-", ...)` treats `-` as stdin while retaining file-stream position formatting with source name `-`. Rust preserves this source identity for in-memory stdin data, but still loads the bytes eagerly; revisit lazy streaming if large-problem parsing or include-stack behavior makes the C `FILE*` window observable.
+- C `CloseStackedInput` asserts that the stack is nonempty and destroys the popped stream. Rust returns `None` on an empty stack, which is safer for reusable callers; add an asserting compatibility wrapper only if a direct C-shaped API becomes necessary.
+- C `DestroyStream` can report `fclose` failures for file streams. Rust owns file-backed stream bytes eagerly, so close-time diagnostics are not represented; revisit only if a lazy `FILE*`-style stream backend is introduced.
 
 ### Porting Focus
 

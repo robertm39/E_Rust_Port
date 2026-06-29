@@ -166,6 +166,50 @@ impl InputStream {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InputStreamStack {
+    streams: Vec<InputStream>,
+}
+
+impl InputStreamStack {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            streams: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.streams.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.streams.is_empty()
+    }
+
+    #[must_use]
+    pub fn top(&self) -> Option<&InputStream> {
+        self.streams.last()
+    }
+
+    #[must_use]
+    pub fn top_mut(&mut self) -> Option<&mut InputStream> {
+        self.streams.last_mut()
+    }
+
+    pub fn open_stacked_input(&mut self, stream: InputStream) -> &mut InputStream {
+        self.streams.push(stream);
+        let top = self.streams.len() - 1;
+        &mut self.streams[top]
+    }
+
+    pub fn close_stacked_input(&mut self) -> Option<InputStream> {
+        self.streams.pop()
+    }
+}
+
 #[must_use]
 pub const fn real_pos(pos: usize) -> usize {
     pos % MAX_LOOKAHEAD
@@ -173,7 +217,7 @@ pub const fn real_pos(pos: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::InputStream;
+    use super::{InputStream, InputStreamStack};
     use std::path::{Path, PathBuf};
 
     fn temp_path(name: &str) -> PathBuf {
@@ -255,5 +299,30 @@ mod tests {
         stream.next_char();
         assert_eq!((stream.line(), stream.column()), (2, 1));
         assert_eq!(stream.current_char(), Some(b'c'));
+    }
+
+    #[test]
+    fn stream_stack_opens_new_top_and_restores_previous_input() {
+        let mut stack = InputStreamStack::new();
+
+        stack.open_stacked_input(InputStream::from_user_string("outer"));
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.top().and_then(InputStream::current_char), Some(b'o'));
+
+        stack.open_stacked_input(InputStream::from_internal_string("inner"));
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.top().and_then(InputStream::current_char), Some(b'i'));
+
+        stack.top_mut().unwrap().next_char();
+        assert_eq!(stack.top().and_then(InputStream::current_char), Some(b'n'));
+
+        let closed = stack.close_stacked_input().unwrap();
+        assert_eq!(closed.current_char(), Some(b'n'));
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.top().and_then(InputStream::current_char), Some(b'o'));
+
+        _ = stack.close_stacked_input();
+        assert!(stack.is_empty());
+        assert!(stack.close_stacked_input().is_none());
     }
 }
