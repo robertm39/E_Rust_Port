@@ -1,3 +1,4 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
@@ -7,10 +8,12 @@ use crate::clauses::derivation::{clause_push_derivation, DC_SR};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndex, FvIndexAnchor};
 use crate::clauses::freqvectors::FvPackedClause;
+use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
+use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 static CLAUSE_CLAUSE_SUBSUMPTION_CALLS: AtomicI64 = AtomicI64::new(0);
@@ -239,6 +242,57 @@ pub fn clause_positive_simplify_reflect_with_strong(
     clause.is_empty()
 }
 
+/// Removes negative literals simplified by positive unit clauses in `set` while
+/// emitting represented proof documentation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-documentation rendering fails.
+pub fn clause_positive_simplify_reflect_with_strong_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    strong_unit_forward_subsumption: bool,
+) -> Result<bool, Diagnostic> {
+    let mut index = 0;
+    while index < clause.literal_number() {
+        let simplifier = {
+            let literal = &clause.literals().as_slice()[index];
+            if literal.is_positive() {
+                None
+            } else if strong_unit_forward_subsumption {
+                find_strong_unit_simplifier(set, literal.left(), literal.right(), true)
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
+            } else {
+                find_positive_unit_simplifier(set, literal.left(), literal.right())
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
+            }
+        };
+
+        if let Some((simplifier_sos, simplifier)) = simplifier {
+            let _ = clause_remove_literal_index(clause, index);
+            if simplifier_sos {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            session.doc_clause_modification(
+                output,
+                bank,
+                clause,
+                ClauseModificationInference::SimplifyReflect,
+                Some(simplifier),
+                None,
+            )?;
+            clause_push_derivation(clause, DC_SR, Some(simplifier), None);
+        } else {
+            index += 1;
+        }
+    }
+    Ok(clause.is_empty())
+}
+
 /// Removes positive literals simplified by negative unit clauses in `set`.
 ///
 /// This plain-set path preserves the C mutation semantics but uses linear
@@ -269,6 +323,53 @@ pub fn clause_negative_simplify_reflect(set: &ClauseSet, clause: &mut Clause) ->
         }
     }
     clause.is_empty()
+}
+
+/// Removes positive literals simplified by negative unit clauses in `set` while
+/// emitting represented proof documentation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-documentation rendering fails.
+pub fn clause_negative_simplify_reflect_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &TermBank,
+    set: &ClauseSet,
+    clause: &mut Clause,
+) -> Result<bool, Diagnostic> {
+    let mut index = 0;
+    while index < clause.literal_number() {
+        let simplifier = {
+            let literal = &clause.literals().as_slice()[index];
+            if literal.is_negative() {
+                None
+            } else {
+                find_negative_top_unit_simplifier(set, literal.left(), literal.right())
+                    .map(|simplifier| (simplifier.is_sos(), simplifier))
+            }
+        };
+
+        if let Some((simplifier_sos, simplifier)) = simplifier {
+            let _ = clause_remove_literal_index(clause, index);
+            if simplifier_sos {
+                clause.set_prop(CP_IS_SOS);
+            }
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            session.doc_clause_modification(
+                output,
+                bank,
+                clause,
+                ClauseModificationInference::SimplifyReflect,
+                Some(simplifier),
+                None,
+            )?;
+            clause_push_derivation(clause, DC_SR, Some(simplifier), None);
+        } else {
+            index += 1;
+        }
+    }
+    Ok(clause.is_empty())
 }
 
 pub fn clause_subsume_order_sort_lits(clause: &mut Clause, bank: &TermBank) {
@@ -922,27 +1023,30 @@ mod tests {
         clause_clause_subsumption_calls, clause_clause_subsumption_calls_rec,
         clause_clause_subsumption_successes, clause_is_subsume_ordered,
         clause_negative_simplify_reflect, clause_positive_simplify_reflect,
-        clause_positive_simplify_reflect_with_strong, clause_set_find_first_subsumed_clause,
-        clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clause,
-        clause_set_find_subsumed_clauses, clause_set_find_subsumed_clauses_with_index,
-        clause_set_find_unit_subsumed_clause, clause_set_find_variant_clause_indexed,
-        clause_set_subsumes_clause, clause_set_subsumes_clause_with_index,
-        clause_subsume_order_sort_lits, clause_subsumes_clause, eqn_subsumes_termpair,
-        eqn_topsubsumes_termpair, fv_index_find_first_subsumed_clause,
-        fv_index_find_subsumed_clauses, fv_index_find_variant_clause,
-        fv_index_subsumes_packed_clause, literal_subsumes_clause,
+        clause_positive_simplify_reflect_with_strong,
+        clause_positive_simplify_reflect_with_strong_and_docs,
+        clause_set_find_first_subsumed_clause, clause_set_find_first_subsumed_clause_with_index,
+        clause_set_find_subsumed_clause, clause_set_find_subsumed_clauses,
+        clause_set_find_subsumed_clauses_with_index, clause_set_find_unit_subsumed_clause,
+        clause_set_find_variant_clause_indexed, clause_set_subsumes_clause,
+        clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
+        clause_subsumes_clause, eqn_subsumes_termpair, eqn_topsubsumes_termpair,
+        fv_index_find_first_subsumed_clause, fv_index_find_subsumed_clauses,
+        fv_index_find_variant_clause, fv_index_subsumes_packed_clause, literal_subsumes_clause,
         unit_clause_clause_subsumption_calls, unit_clause_set_subsumes_clause,
         unit_clause_set_subsumes_clause_with_strong, unit_clause_subsumes_clause,
     };
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
+    use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_SR};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexAnchor};
     use crate::clauses::freqvectors::{FvCollect, FvCollectLayout, FvIndexType};
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1601,6 +1705,50 @@ mod tests {
             &[
                 DerivationEntry::Operation(DC_SR),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(101, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn positive_simplify_reflect_with_docs_emits_step_before_derivation() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "doc_sr_a");
+        let witness = typed_const(&mut bank, "doc_sr_b");
+        let kept = typed_const(&mut bank, "doc_sr_c");
+        let mut positive_unit = clause_from(vec![literal(&mut bank, &variable, &constant, true)]);
+        positive_unit.set_ident(104);
+        let set = ClauseSet::from_clauses([positive_unit]);
+        let mut target = clause_from(vec![
+            literal(&mut bank, &witness, &constant, false),
+            literal(&mut bank, &kept, &constant, true),
+        ]);
+        target.set_ident(205);
+        target.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        assert!(!clause_positive_simplify_reflect_with_strong_and_docs(
+            &mut rendered,
+            &mut session,
+            &bank,
+            &set,
+            &mut target,
+            false,
+        )
+        .unwrap());
+
+        assert_eq!(target.ident(), 1);
+        assert_eq!(target.literal_number(), 1);
+        assert!(!target.is_any_prop_set(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW));
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("sr(205,104)"));
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(104, 0)),
             ]
         );
     }

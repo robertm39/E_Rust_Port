@@ -49,7 +49,9 @@ use crate::clauses::splitting::{
     SplitDefinitionStore,
 };
 use crate::clauses::subsumption::{
-    clause_negative_simplify_reflect, clause_positive_simplify_reflect_with_strong,
+    clause_negative_simplify_reflect, clause_negative_simplify_reflect_with_docs,
+    clause_positive_simplify_reflect_with_strong,
+    clause_positive_simplify_reflect_with_strong_and_docs,
     clause_set_find_first_subsumed_clause_with_index, clause_set_find_subsumed_clauses_with_index,
     clause_set_subsumes_clause_with_index, clause_subsume_order_sort_lits,
     eqn_topsubsumes_termpair, unit_clause_set_subsumes_clause,
@@ -1226,10 +1228,8 @@ pub fn proof_state_forward_modify_clause(
 
 /// Applies C `ForwardModifyClause` while emitting represented proof docs.
 ///
-/// Currently this wires the C `OutputLevel >= 4` rewrite-documentation side
-/// effect from `eqn_li_normalform`; other modification proof-documentation
-/// branches remain at their existing renderer boundaries until their mutation
-/// call sites are threaded through the proof-control session.
+/// This wires represented rewrite, minimization, condensation, and
+/// simplify-reflect modification documentation through an explicit session.
 ///
 /// # Errors
 ///
@@ -1340,15 +1340,7 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
 
             clause.orient_literals(ocb, terms);
 
-            let condensed = if condense_clause {
-                match doc_context.as_mut() {
-                    Some((output, session)) => condense_with_docs(output, session, clause, terms)?,
-                    None => condense(clause, terms)?,
-                }
-            } else {
-                false
-            };
-            if condensed {
+            if forward_modify_condense(terms, clause, condense_clause, &mut doc_context)? {
                 clause.orient_literals(ocb, terms);
             }
 
@@ -1356,16 +1348,19 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 break true;
             }
 
-            if clause.negative_literal_count() != 0 {
-                let _ = clause_positive_simplify_reflect_with_strong(
-                    processed_sets.pos_eqns,
-                    clause,
-                    strong_unit_forward_subsumption,
-                );
-            }
-            if clause.positive_literal_count() != 0 {
-                let _ = clause_negative_simplify_reflect(processed_sets.neg_units, clause);
-            }
+            forward_modify_positive_simplify_reflect(
+                terms,
+                processed_sets.pos_eqns,
+                clause,
+                strong_unit_forward_subsumption,
+                &mut doc_context,
+            )?;
+            forward_modify_negative_simplify_reflect(
+                terms,
+                processed_sets.neg_units,
+                clause,
+                &mut doc_context,
+            )?;
             if clause.query_prop(CP_LIMITED_RW) == limited_rw {
                 break false;
             }
@@ -1376,6 +1371,74 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
         state.statistics_mut().rw_count += u64::try_from(rw_steps).unwrap_or(u64::MAX);
     }
     Ok(trivial)
+}
+
+fn forward_modify_condense<W: fmt::Write>(
+    terms: &mut TermBank,
+    clause: &mut Clause,
+    condense_clause: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<bool, Diagnostic> {
+    if !condense_clause {
+        return Ok(false);
+    }
+    match doc_context.as_mut() {
+        Some((output, session)) => condense_with_docs(output, session, clause, terms),
+        None => condense(clause, terms),
+    }
+}
+
+fn forward_modify_positive_simplify_reflect<W: fmt::Write>(
+    terms: &TermBank,
+    units: &ClauseSet,
+    clause: &mut Clause,
+    strong_unit_forward_subsumption: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<(), Diagnostic> {
+    if clause.negative_literal_count() == 0 {
+        return Ok(());
+    }
+    match doc_context.as_mut() {
+        Some((output, session)) => {
+            let _ = clause_positive_simplify_reflect_with_strong_and_docs(
+                output,
+                session,
+                terms,
+                units,
+                clause,
+                strong_unit_forward_subsumption,
+            )?;
+        }
+        None => {
+            let _ = clause_positive_simplify_reflect_with_strong(
+                units,
+                clause,
+                strong_unit_forward_subsumption,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn forward_modify_negative_simplify_reflect<W: fmt::Write>(
+    terms: &TermBank,
+    units: &ClauseSet,
+    clause: &mut Clause,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<(), Diagnostic> {
+    if clause.positive_literal_count() == 0 {
+        return Ok(());
+    }
+    match doc_context.as_mut() {
+        Some((output, session)) => {
+            let _ =
+                clause_negative_simplify_reflect_with_docs(output, session, terms, units, clause)?;
+        }
+        None => {
+            let _ = clause_negative_simplify_reflect(units, clause);
+        }
+    }
+    Ok(())
 }
 
 /// Tries C `ForwardSubsumption` against the processed clause sets.
@@ -5426,6 +5489,61 @@ mod tests {
         assert_eq!(
             clause.derivation().unwrap().as_slice(),
             &[DerivationEntry::Operation(DC_CONDENSE)]
+        );
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_with_docs_emits_simplify_reflect_step() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (simplifier, mut clause) = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let constant = typed_const(terms, "pc_forward_doc_sr_a");
+            let witness = typed_const(terms, "pc_forward_doc_sr_b");
+            let kept = typed_const(terms, "pc_forward_doc_sr_c");
+            let mut simplifier = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &variable, &constant, true,
+            )]));
+            simplifier.set_ident(4_090);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &witness, &constant, false),
+                literal(terms, &kept, &constant, true),
+            ]));
+            clause.set_ident(4_091);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+            (simplifier, clause)
+        };
+        state.processed_pos_eqns_mut().insert(simplifier);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(clause.literal_number(), 1);
+        assert!(!clause.is_any_prop_set(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW));
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("sr(4091,4090)"));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_090, 0)),
+            ]
         );
     }
 
