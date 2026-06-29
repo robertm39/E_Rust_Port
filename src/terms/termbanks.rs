@@ -242,10 +242,30 @@ impl TermBank {
         term: &Term,
         problem_type: ProblemType,
     ) -> fmt::Result {
+        self.write_term_debug_deref(output, term, problem_type, DerefType::Never)
+    }
+
+    /// Writes the C `TermPrintDbg` shape with an explicit dereference mode.
+    ///
+    /// The higher-order path mirrors the LFHO no-WHNF `DEREF_LIMIT`/
+    /// `CONVERT_DEREF` prefix rule for applied free variables. It deliberately
+    /// does not populate the C `binding_cache`; global cache-backed
+    /// dereferencing remains part of the termtypes/lambda integration slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_term_debug_deref(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        problem_type: ProblemType,
+        deref: DerefType,
+    ) -> fmt::Result {
         if problem_type == ProblemType::HigherOrder {
-            self.write_ho_debug_term(output, term)
+            self.write_ho_debug_term(output, term, deref)
         } else {
-            self.write_plain_term(output, term)
+            self.write_plain_term_deref(output, term, deref)
         }
     }
 
@@ -253,6 +273,18 @@ impl TermBank {
     pub fn term_debug_string(&self, term: &Term, problem_type: ProblemType) -> String {
         let mut output = String::new();
         let _ = self.write_term_debug(&mut output, term, problem_type);
+        output
+    }
+
+    #[must_use]
+    pub fn term_debug_deref_string(
+        &self,
+        term: &Term,
+        problem_type: ProblemType,
+        deref: DerefType,
+    ) -> String {
+        let mut output = String::new();
+        let _ = self.write_term_debug_deref(&mut output, term, problem_type, deref);
         output
     }
 
@@ -347,6 +379,27 @@ impl TermBank {
         Ok(())
     }
 
+    fn write_plain_term_deref(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+    ) -> fmt::Result {
+        let (term, current_deref, _) = Self::print_deref_root_no_whnf(term, deref);
+        if term.is_free_var() {
+            return write!(output, "{}", var_print_string(term.f_code()));
+        }
+        if term.is_db_var() {
+            return write!(output, "db({})", term.f_code());
+        }
+
+        self.write_symbol(output, term.f_code())?;
+        if !term.is_const() {
+            self.write_plain_arg_list_deref(output, &term, current_deref)?;
+        }
+        Ok(())
+    }
+
     fn write_plain_term_with_type_suffixes(
         &self,
         output: &mut impl fmt::Write,
@@ -375,6 +428,25 @@ impl TermBank {
                 .argument(index)
                 .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
             self.write_plain_term(output, &arg)?;
+        }
+        write!(output, ")")
+    }
+
+    fn write_plain_arg_list_deref(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+    ) -> fmt::Result {
+        write!(output, "(")?;
+        for index in 0..term.arity() {
+            if index != 0 {
+                write!(output, ",")?;
+            }
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            self.write_plain_term_deref(output, &arg, deref)?;
         }
         write!(output, ")")
     }
@@ -411,7 +483,13 @@ impl TermBank {
         output.write_str(&rendered)
     }
 
-    fn write_ho_debug_term(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
+    fn write_ho_debug_term(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+    ) -> fmt::Result {
+        let (term, current_deref, limit) = Self::print_deref_root_no_whnf(term, deref);
         if term.is_db_var() {
             write!(output, "db({})", term.f_code())?;
         } else if term.is_free_var() {
@@ -425,15 +503,99 @@ impl TermBank {
             let arg = term
                 .argument(index)
                 .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            if arg.arity() != 0 {
+            let child_deref = Self::convert_lfho_deref(index, limit, current_deref);
+            if arg.arity() != 0
+                || (child_deref != DerefType::Never
+                    && arg.binding().is_some_and(|binding| binding.arity() != 0))
+            {
                 output.write_char('(')?;
-                self.write_ho_debug_term(output, &arg)?;
+                self.write_ho_debug_term(output, &arg, child_deref)?;
                 output.write_char(')')?;
             } else {
-                self.write_ho_debug_term(output, &arg)?;
+                self.write_ho_debug_term(output, &arg, child_deref)?;
             }
         }
         Ok(())
+    }
+
+    fn print_deref_root_no_whnf(term: &Term, deref: DerefType) -> (Term, DerefType, usize) {
+        let limit = Self::deref_limit(term, deref);
+        match deref {
+            DerefType::Never => (term.clone(), deref, limit),
+            DerefType::Always => {
+                let mut current = term.clone();
+                while let Some(next) = Self::print_deref_step_no_whnf(&current) {
+                    current = next;
+                }
+                (current, deref, limit)
+            }
+            DerefType::Once => {
+                let mut current = term.clone();
+                let mut current_deref = deref;
+                let originally_app_var = current.is_applied_free_var();
+                if let Some(next) = Self::print_deref_step_no_whnf(&current) {
+                    current = next;
+                    if !originally_app_var {
+                        current_deref = DerefType::Never;
+                    }
+                }
+                (current, current_deref, limit)
+            }
+        }
+    }
+
+    fn print_deref_step_no_whnf(term: &Term) -> Option<Term> {
+        if term.is_free_var() {
+            return term.binding();
+        }
+        if term.is_applied_free_var()
+            && term
+                .argument(0)
+                .is_some_and(|head| head.binding().is_some())
+        {
+            return Some(Self::print_deref_applied_free_var_once(term));
+        }
+        None
+    }
+
+    fn print_deref_applied_free_var_once(term: &Term) -> Term {
+        assert!(term.is_applied_free_var(), "expected applied free variable");
+        assert!(term.arity() > 1, "applied variable must have arguments");
+        let head = term.argument(0).expect("applied variable has a head");
+        let binding = head.binding().expect("applied variable head is bound");
+
+        let expanded = if binding.is_any_var() || binding.is_lambda() {
+            let expanded = Term::top_alloc(term.f_code(), term.arity());
+            expanded.set_properties(term.give_props(TP_PRED_POS));
+            expanded.set_type(term.type_());
+            expanded.set_argument(0, binding);
+            for index in 1..term.arity() {
+                let arg = term
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                expanded.set_argument(index, arg);
+            }
+            expanded
+        } else {
+            let expanded = Term::top_alloc(binding.f_code(), binding.arity() + term.arity() - 1);
+            expanded.set_properties(binding.give_props(TP_PRED_POS));
+            expanded.set_type(term.type_());
+            for index in 0..binding.arity() {
+                let arg = binding
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("binding argument {index} is uninitialized"));
+                expanded.set_argument(index, arg);
+            }
+            for index in 1..term.arity() {
+                let arg = term
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+                expanded.set_argument(binding.arity() + index - 1, arg);
+            }
+            expanded
+        };
+
+        expanded
     }
 
     fn write_compact_arg_list(&self, output: &mut impl fmt::Write, term: &Term) -> fmt::Result {
@@ -1891,6 +2053,53 @@ mod tests {
         assert_eq!(
             bank.term_debug_string(&parsed, ProblemType::HigherOrder),
             "f a (g b) X1"
+        );
+    }
+
+    #[test]
+    fn debug_deref_string_follows_ordinary_bindings() {
+        let (bank, binding) = parse_simple("f(a)");
+        let var = Term::const_cell_alloc(-2);
+        var.set_binding(Some(binding));
+
+        assert_eq!(
+            bank.term_debug_deref_string(&var, ProblemType::FirstOrder, DerefType::Once),
+            "f(a)"
+        );
+        assert_eq!(
+            bank.term_debug_deref_string(&var, ProblemType::HigherOrder, DerefType::Once),
+            "f a"
+        );
+        assert_eq!(bank.term_debug_string(&var, ProblemType::HigherOrder), "X1");
+    }
+
+    #[test]
+    fn ho_debug_deref_parenthesizes_bound_function_arguments() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut root_scanner = Scanner::from_user_string("h(X)", false).unwrap();
+        let root = bank.parse_term_simple(&mut root_scanner).unwrap();
+        let mut binding_scanner = Scanner::from_user_string("g(a)", false).unwrap();
+        let binding = bank.parse_term_simple(&mut binding_scanner).unwrap();
+        let var = bank.vars().ext_name_find("X").unwrap();
+        var.set_binding(Some(binding));
+
+        assert_eq!(
+            bank.term_debug_deref_string(&root, ProblemType::HigherOrder, DerefType::Once),
+            "h (g a)"
+        );
+    }
+
+    #[test]
+    fn ho_debug_deref_expands_applied_free_vars_with_prefix_limit() {
+        let fixture = applied_prefix_fixture("debug_app_deref");
+
+        assert_eq!(
+            fixture.bank.term_debug_deref_string(
+                &fixture.app,
+                ProblemType::HigherOrder,
+                DerefType::Once,
+            ),
+            "debug_app_deref_f X2 debug_app_deref_c"
         );
     }
 
