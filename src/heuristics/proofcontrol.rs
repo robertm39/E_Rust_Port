@@ -23,17 +23,18 @@ use crate::clauses::context_sr::{
 };
 use crate::clauses::derivation::{
     clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CHOICE_AX,
-    DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_LEIBNIZ_ELIM, DC_NEG_EXT,
-    DC_POS_EXT, DC_PRIM_ENUM,
+    DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
+    DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::{PatEqnDirection, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+use crate::clauses::eqn_props::{EqnSide, PatEqnDirection, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::eqnresolution::{
     clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
     compute_all_eqn_resolvents_with_docs, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
 };
+use crate::clauses::ext_index::{term_has_ext_eligible_subterm, type_ext_eligible};
 use crate::clauses::factor::{
     compute_all_equality_factors, compute_all_equality_factors_with_docs,
 };
@@ -3383,6 +3384,269 @@ fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Dia
     Ok(())
 }
 
+/// Computes the local `ComputeExtEqRes` part of C higher-order extension rules.
+///
+/// The remaining indexed `ComputeExtSup` caller is still gated separately; this
+/// helper is available for the extensional-rule integration once that index
+/// owner is wired.
+///
+/// # Errors
+///
+/// Returns diagnostics from optimized literal copying, beta normalization, and
+/// literal allocation.
+pub fn compute_ext_eq_res(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    limit: i32,
+) -> Result<i64, Diagnostic> {
+    if clause.proof_depth() > i64::from(limit) {
+        return Ok(0);
+    }
+
+    let mut generated = 0;
+    for (literal_index, literal) in clause.literals().as_slice().iter().enumerate() {
+        let literal_matches = literal.is_negative()
+            && literal.is_equ_lit(bank)
+            && !literal.left().type_().is_some_and(|type_| type_.is_arrow())
+            && literal.left().f_code() == literal.right().f_code()
+            && !literal.left().is_phony_app()
+            && !literal.left().is_db_var()
+            && !literal.right().is_db_var()
+            && term_has_ext_eligible_subterm(literal.left())
+            && term_has_ext_eligible_subterm(literal.right());
+        if !literal_matches {
+            continue;
+        }
+        generated += make_ext_eq_res(bank, clause, literal_index, literal, store)?;
+    }
+    Ok(generated)
+}
+
+/// Computes the local `ComputeExtEqFact` part of C higher-order extension rules.
+///
+/// # Errors
+///
+/// Returns diagnostics from optimized literal copying, beta normalization, and
+/// literal allocation.
+pub fn compute_ext_eq_fact(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    limit: i32,
+) -> Result<i64, Diagnostic> {
+    if clause.proof_depth() > i64::from(limit) {
+        return Ok(0);
+    }
+
+    let positions = ext_eq_fact_positions(clause);
+    let mut generated = 0;
+    for (main_index, main_pos) in positions.iter().enumerate() {
+        for partner_pos in &positions[main_index + 1..] {
+            if partner_pos.literal_index <= main_pos.literal_index {
+                continue;
+            }
+            generated += make_ext_eq_fact(bank, clause, main_pos, partner_pos, store)?;
+        }
+    }
+    Ok(generated)
+}
+
+fn make_ext_eq_res(
+    bank: &mut TermBank,
+    clause: &Clause,
+    literal_index: usize,
+    literal: &Eqn,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    let mut disagreements = Vec::new();
+    if !find_ext_disagreements(bank, literal.left(), literal.right(), &mut disagreements) {
+        return Ok(0);
+    }
+
+    let mut new_literals = ext_disagreement_literals(bank, &disagreements)?;
+    let rest = clause
+        .literals()
+        .copy_opt_except_index(Some(literal_index), bank)?;
+    new_literals.append(rest);
+    new_literals.remove_resolved(bank);
+    new_literals.remove_duplicates(bank);
+    beta_normalize_eqn_list(bank, &mut new_literals)?;
+
+    let mut new_clause = Clause::alloc(new_literals);
+    set_ho_generation_proof_object(&mut new_clause, clause, None, DC_EXT_EQ_RES, 1);
+    store.insert(new_clause);
+    Ok(1)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExtEqFactPosition {
+    literal_index: usize,
+    side: EqnSide,
+}
+
+fn ext_eq_fact_positions(clause: &Clause) -> Vec<ExtEqFactPosition> {
+    let mut positions = Vec::new();
+    for (literal_index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if !literal.is_positive() {
+            continue;
+        }
+        if term_has_ext_eligible_subterm(literal.left()) {
+            positions.push(ExtEqFactPosition {
+                literal_index,
+                side: EqnSide::LeftSide,
+            });
+        }
+        if term_has_ext_eligible_subterm(literal.right()) {
+            positions.push(ExtEqFactPosition {
+                literal_index,
+                side: EqnSide::RightSide,
+            });
+        }
+    }
+    positions
+}
+
+fn make_ext_eq_fact(
+    bank: &mut TermBank,
+    clause: &Clause,
+    main_pos: &ExtEqFactPosition,
+    partner_pos: &ExtEqFactPosition,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    let main_literal = &clause.literals().as_slice()[main_pos.literal_index];
+    let partner_literal = &clause.literals().as_slice()[partner_pos.literal_index];
+    let main_term = ext_eq_fact_side(main_literal, main_pos.side);
+    let partner_term = ext_eq_fact_side(partner_literal, partner_pos.side);
+
+    let mut disagreements = Vec::new();
+    if !find_ext_disagreements(bank, &main_term, &partner_term, &mut disagreements) {
+        return Ok(0);
+    }
+
+    let mut new_literals = ext_disagreement_literals(bank, &disagreements)?;
+    let main_other = ext_eq_fact_other_side(main_literal, main_pos.side);
+    let partner_other = ext_eq_fact_other_side(partner_literal, partner_pos.side);
+    new_literals.append(EqnList::from_vec(vec![Eqn::alloc(
+        main_other,
+        partner_other,
+        bank,
+        false,
+    )?]));
+    let rest = clause
+        .literals()
+        .copy_opt_except_index(Some(main_pos.literal_index), bank)?;
+    new_literals.append(rest);
+    new_literals.remove_resolved(bank);
+    new_literals.remove_duplicates(bank);
+    beta_normalize_eqn_list(bank, &mut new_literals)?;
+
+    let mut new_clause = Clause::alloc(new_literals);
+    new_clause.set_proof_size(clause.proof_size() + 1);
+    new_clause.set_proof_depth(clause.proof_depth() + 1);
+    new_clause.set_prop(clause.give_props(CP_IS_SOS));
+    clause_push_derivation(&mut new_clause, DC_EXT_EQ_FACT, Some(clause), None);
+    store.insert(new_clause);
+    Ok(1)
+}
+
+fn ext_eq_fact_side(literal: &Eqn, side: EqnSide) -> Term {
+    match side {
+        EqnSide::LeftSide => literal.left().clone(),
+        EqnSide::RightSide => literal.right().clone(),
+        EqnSide::NoSide | EqnSide::BothSides => {
+            panic!("ExtEqFact position must select exactly one side")
+        }
+    }
+}
+
+fn ext_eq_fact_other_side(literal: &Eqn, side: EqnSide) -> Term {
+    match side {
+        EqnSide::LeftSide => literal.right().clone(),
+        EqnSide::RightSide => literal.left().clone(),
+        EqnSide::NoSide | EqnSide::BothSides => {
+            panic!("ExtEqFact position must select exactly one side")
+        }
+    }
+}
+
+fn ext_disagreement_literals(
+    bank: &mut TermBank,
+    disagreements: &[(Term, Term)],
+) -> Result<EqnList, Diagnostic> {
+    let mut literals = Vec::with_capacity(disagreements.len());
+    for (left, right) in disagreements {
+        literals.push(Eqn::alloc(right.clone(), left.clone(), bank, false)?);
+    }
+    Ok(EqnList::from_vec(literals))
+}
+
+fn find_ext_disagreements(
+    bank: &TermBank,
+    left: &Term,
+    right: &Term,
+    disagreements: &mut Vec<(Term, Term)>,
+) -> bool {
+    if left.type_() != right.type_() || left == right {
+        return false;
+    }
+
+    let start_len = disagreements.len();
+    let mut tasks = vec![(left.clone(), right.clone())];
+    let mut exists_eligible = false;
+
+    while let Some((task_left, task_right)) = tasks.pop() {
+        if task_left == task_right {
+            continue;
+        }
+        if same_ext_disagreement_head_allows_descent(bank, &task_left, &task_right) {
+            debug_assert_eq!(
+                task_left.arity(),
+                task_right.arity(),
+                "same extension-disagreement head must have matching arity"
+            );
+            for index in 0..task_left.arity() {
+                let left_arg = task_left
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("left disagreement argument {index} is missing"));
+                let right_arg = task_right
+                    .argument(index)
+                    .unwrap_or_else(|| panic!("right disagreement argument {index} is missing"));
+                debug_assert_eq!(
+                    left_arg.type_(),
+                    right_arg.type_(),
+                    "matching disagreement arguments must have matching types"
+                );
+                tasks.push((left_arg, right_arg));
+            }
+        } else {
+            exists_eligible |= type_ext_eligible(&task_right)
+                && !task_left.is_free_var()
+                && !task_right.is_free_var();
+            disagreements.push((task_left, task_right));
+        }
+    }
+
+    if !exists_eligible {
+        disagreements.truncate(start_len);
+    }
+    exists_eligible
+}
+
+fn same_ext_disagreement_head_allows_descent(bank: &TermBank, left: &Term, right: &Term) -> bool {
+    if left.is_phony_app() || right.is_phony_app() || left.is_lambda() || right.is_lambda() {
+        return false;
+    }
+    if left.f_code() != right.f_code() {
+        return false;
+    }
+    let is_polymorphic = left.f_code() > 0 && bank.signature().is_polymorphic(left.f_code());
+    !is_polymorphic
+        || left.arity() == 0
+        || left.argument(0).and_then(|arg| arg.type_())
+            == right.argument(0).and_then(|arg| arg.type_())
+}
+
 fn compute_inverse_recognition(
     bank: &mut TermBank,
     clause: &Clause,
@@ -6719,8 +6983,8 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_terms, do_literal_selection, do_literal_selection_with_bank,
-        do_literal_selection_with_selector, proof_control_alloc,
+        apply_terms, compute_ext_eq_fact, compute_ext_eq_res, do_literal_selection,
+        do_literal_selection_with_bank, do_literal_selection_with_selector, proof_control_alloc,
         proof_control_clause_set_filter_reweigth, proof_control_clause_set_reweight,
         proof_control_init, proof_control_init_heuristics, proof_control_reset_sat_solver,
         proof_state_check_ac_status, proof_state_check_ac_status_with_output,
@@ -6770,8 +7034,8 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
-        DC_CONTEXT_SR, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR,
-        DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
+        DC_CONTEXT_SR, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_NEG_EXT,
+        DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -6865,6 +7129,30 @@ mod tests {
         if bank.signature().get_type(f_code).is_none() {
             bank.signature_mut()
                 .declare_final_type(f_code, type_)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn predicate_argument_binary_const(bank: &mut TermBank, name: &str) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type.clone(), bool_type]));
+        let symbol_type =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    predicate_type,
+                    arg_type.clone(),
+                    arg_type,
+                ]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, symbol_type)
                 .unwrap();
         }
         bank.create_const_term(f_code).unwrap()
@@ -10549,6 +10837,128 @@ mod tests {
 
         assert_eq!(outcome, GenerateNewClausesOutcome::default());
         assert_eq!(state.tmp_store().members(), 0);
+    }
+
+    #[test]
+    fn compute_ext_eq_res_generates_disagreement_conditions() {
+        let mut bank = test_bank();
+        let (p_code, q_code, clause) = {
+            let head = predicate_argument_binary_const(&mut bank, "pc_ext_eqres_h");
+            let p = unary_predicate_const(&mut bank, "pc_ext_eqres_p");
+            let q = unary_predicate_const(&mut bank, "pc_ext_eqres_q");
+            let arg = typed_const(&mut bank, "pc_ext_eqres_a");
+            let left = apply_terms(&mut bank, &head, &[p.clone(), arg.clone()]).unwrap();
+            let right = apply_terms(&mut bank, &head, &[q.clone(), arg]).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                &mut bank, &left, &right, false,
+            )]));
+            clause.set_ident(4_183);
+            clause.set_proof_depth(2);
+            clause.set_proof_size(5);
+            clause.set_tptp_type(CP_TYPE_AXIOM);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (p.f_code(), q.f_code(), clause)
+        };
+        let mut store = ClauseSet::new();
+
+        assert_eq!(
+            compute_ext_eq_res(&mut bank, &clause, &mut store, 2).unwrap(),
+            1
+        );
+
+        let generated = store.iter().next().expect("ExtEqRes should generate");
+        assert_eq!(generated.literal_number(), 1);
+        assert_eq!(generated.negative_literal_count(), 1);
+        assert_eq!(generated.proof_depth(), 3);
+        assert_eq!(generated.proof_size(), 6);
+        assert_eq!(generated.query_tptp_type(), CP_TYPE_AXIOM);
+        assert!(generated.query_prop(CP_IS_SOS));
+        assert!(!generated.query_prop(CP_NO_GENERATION));
+        assert!(derivation_contains_operation(generated, DC_EXT_EQ_RES));
+        assert!(derivation_contains_parent(generated, 4_183));
+
+        let condition = &generated.literals().as_slice()[0];
+        assert!(condition.is_negative());
+        assert_eq!(condition.left().f_code(), q_code);
+        assert_eq!(condition.right().f_code(), p_code);
+
+        assert_eq!(
+            compute_ext_eq_res(&mut bank, &clause, &mut ClauseSet::new(), 1).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn compute_ext_eq_fact_generates_partner_condition_and_keeps_partner_literal() {
+        let mut bank = test_bank();
+        let (p_code, q_code, u_code, v_code, clause) = {
+            let head = predicate_argument_binary_const(&mut bank, "pc_ext_eqfact_h");
+            let p = unary_predicate_const(&mut bank, "pc_ext_eqfact_p");
+            let q = unary_predicate_const(&mut bank, "pc_ext_eqfact_q");
+            let arg = typed_const(&mut bank, "pc_ext_eqfact_a");
+            let u = typed_const(&mut bank, "pc_ext_eqfact_u");
+            let v = typed_const(&mut bank, "pc_ext_eqfact_v");
+            let left = apply_terms(&mut bank, &head, &[p.clone(), arg.clone()]).unwrap();
+            let right = apply_terms(&mut bank, &head, &[q.clone(), arg]).unwrap();
+            let first = literal(&mut bank, &left, &u, true);
+            let second = literal(&mut bank, &right, &v, true);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+            clause.set_ident(4_184);
+            clause.set_proof_depth(4);
+            clause.set_proof_size(9);
+            clause.set_tptp_type(CP_TYPE_CONJECTURE);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (p.f_code(), q.f_code(), u.f_code(), v.f_code(), clause)
+        };
+        let mut store = ClauseSet::new();
+
+        assert_eq!(
+            compute_ext_eq_fact(&mut bank, &clause, &mut store, 4).unwrap(),
+            1
+        );
+
+        let generated = store.iter().next().expect("ExtEqFact should generate");
+        assert_eq!(generated.literal_number(), 3);
+        assert_eq!(generated.positive_literal_count(), 1);
+        assert_eq!(generated.negative_literal_count(), 2);
+        assert_eq!(generated.proof_depth(), 5);
+        assert_eq!(generated.proof_size(), 10);
+        assert_ne!(generated.query_tptp_type(), CP_TYPE_CONJECTURE);
+        assert!(generated.query_prop(CP_IS_SOS));
+        assert!(!generated.query_prop(CP_NO_GENERATION));
+        assert!(derivation_contains_operation(generated, DC_EXT_EQ_FACT));
+        assert!(derivation_contains_parent(generated, 4_184));
+
+        let negative_literals = generated
+            .literals()
+            .as_slice()
+            .iter()
+            .filter(|literal| literal.is_negative())
+            .collect::<Vec<_>>();
+        assert!(
+            negative_literals
+                .iter()
+                .any(|literal| literal.left().f_code() == q_code
+                    && literal.right().f_code() == p_code)
+        );
+        assert!(
+            negative_literals
+                .iter()
+                .any(|literal| literal.left().f_code() == u_code
+                    && literal.right().f_code() == v_code)
+        );
+        let positive = generated
+            .literals()
+            .as_slice()
+            .iter()
+            .find(|literal| literal.is_positive())
+            .expect("partner literal should remain");
+        assert_eq!(positive.right().f_code(), v_code);
+
+        assert_eq!(
+            compute_ext_eq_fact(&mut bank, &clause, &mut ClauseSet::new(), 3).unwrap(),
+            0
+        );
     }
 
     #[test]
