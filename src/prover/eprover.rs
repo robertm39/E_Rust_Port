@@ -4606,6 +4606,7 @@ fn run_prune_only<W: Write + ?Sized>(
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     write_preprocessing_config_debug_line(output, config)?;
+    load_configured_watchlist_source(config, &mut state)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
     let _preproc_removed = apply_clause_set_preprocessing(
@@ -4648,6 +4649,7 @@ fn run_proof_search<W: Write + ?Sized>(
     let auto_context =
         apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
+    load_configured_watchlist_source(config, &mut state)?;
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let relevancy_pruned = sine_pruned + apply_clause_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
@@ -4674,7 +4676,8 @@ fn run_proof_search<W: Write + ?Sized>(
         state.set_state_is_complete(false);
     }
     let next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
-    let next_doc_ident = load_configured_watchlist(output, config, &mut state, next_doc_ident)?;
+    let next_doc_ident =
+        write_watchlist_initial_clause_docs(output, config, &mut state, next_doc_ident)?;
 
     apply_auto_mode_search_selection(
         output,
@@ -5624,22 +5627,20 @@ fn apply_goal_definition_transformation(
     )?)
 }
 
-fn load_configured_watchlist<W: Write + ?Sized>(
-    output: &mut ConfiguredOutput<'_, W>,
+fn load_configured_watchlist_source(
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
-    next_doc_ident: i64,
-) -> Result<i64, EProverError> {
+) -> Result<(), EProverError> {
     let Some(source) = &config.search.watchlist.source else {
         state.load_watchlist(ProofStateWatchlistSource::Disabled, config.parse_format)?;
-        return Ok(next_doc_ident);
+        return Ok(());
     };
     let proof_state_source = match source {
         WatchlistSource::Inline => ProofStateWatchlistSource::Inline,
         WatchlistSource::File(path) => ProofStateWatchlistSource::File(Path::new(path)),
     };
     state.load_watchlist(proof_state_source, config.parse_format)?;
-    write_watchlist_initial_clause_docs(output, config, state, next_doc_ident)
+    Ok(())
 }
 
 fn write_initial_clause_docs<W: Write + ?Sized>(
@@ -17306,6 +17307,59 @@ mod tests {
         assert!(printed.contains("% SZS status ResourceOut\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_unfolds_file_watchlist_before_docs() {
+        let _guard = global_state_lock();
+        let input_path = temp_path("proof-file-watch-eqdef-input");
+        let watch_path = temp_path("proof-file-watch-eqdef-list");
+        std::fs::write(
+            &input_path,
+            "cnf(def, axiom, (f(X)=X)).\n\
+             cnf(input, axiom, (p(a))).\n",
+        )
+        .unwrap();
+        std::fs::write(&watch_path, "cnf(watch, axiom, (p(f(a)))).\n").unwrap();
+        let input_arg = input_path.to_string_lossy().into_owned();
+        let watch_path_arg = watch_path.to_string_lossy().into_owned();
+        let watch_arg = format!("--watchlist={watch_path_arg}");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--no-generation",
+                watch_arg.as_str(),
+                input_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        let input_doc = format!("cnf(c_0_1, axiom, (p(a)), file('{input_arg}', input)).\n");
+        let watch_doc =
+            format!("cnf(c_0_2, watchlist, (p(a)), file('{watch_path_arg}', watch),['wl']).\n");
+        let final_doc =
+            "cnf(c_0_3, plain, (p(a)), c_0_1,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+        let input_doc_pos = printed.find(&input_doc).unwrap();
+        let watch_doc_pos = printed.find(&watch_doc).unwrap();
+        let final_doc_pos = printed.find(final_doc).unwrap();
+        assert!(input_doc_pos < watch_doc_pos);
+        assert!(watch_doc_pos < final_doc_pos);
+        assert!(!printed.contains("p(f(a))"));
+        assert!(!printed.contains(&format!("file('{input_arg}', def)")));
+        assert!(printed.contains("% SZS status ResourceOut\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&input_path).unwrap();
+        std::fs::remove_file(&watch_path).unwrap();
     }
 
     #[test]
