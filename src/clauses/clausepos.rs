@@ -66,6 +66,10 @@ impl<T> ClausePos<T> {
         self.clause.as_ref()
     }
 
+    pub fn clause_mut(&mut self) -> Option<&mut Clause> {
+        self.clause.as_mut()
+    }
+
     pub fn set_clause(&mut self, clause: Option<Clause>) {
         self.literal_index = clause
             .as_ref()

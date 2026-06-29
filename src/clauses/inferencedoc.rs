@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
     clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
@@ -11,8 +12,10 @@ use crate::clauses::clause_props::{
     CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_WATCH_ONLY,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
+use crate::clauses::clausepos::{term_compute_rw_sequence, ClausePos, RewriteSequenceEntry};
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::Term;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PclStepPrintOptions {
@@ -847,6 +850,169 @@ impl ProofDocSession {
         }
     }
 
+    /// Ports C `DocClauseRewrite`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the clause position is not clause-backed, lacks a literal, or
+    /// if the term rewrite chain does not connect `old_term` to the selected
+    /// side, matching C assertions in `DocClauseRewrite` and
+    /// `TermComputeRWSequence`.
+    pub fn doc_clause_rewrite<T>(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        rewritten: &mut ClausePos<T>,
+        old_term: &Term,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        rewritten
+            .clause_mut()
+            .expect("clause rewrite documentation needs clause")
+            .del_prop(CP_INPUT_FORMULA);
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        assert!(
+            rewritten.literal().is_some(),
+            "clause rewrite documentation needs literal"
+        );
+        let normal_form = rewritten
+            .get_side()
+            .expect("clause rewrite documentation needs selected side");
+        let old_id = rewritten
+            .clause()
+            .expect("clause rewrite documentation needs clause")
+            .ident();
+        rewritten
+            .clause_mut()
+            .expect("clause rewrite documentation needs clause")
+            .set_ident(self.id_source.next_ident());
+        let demodulator_ids = compute_rewrite_demodulator_ids(old_term, &normal_form);
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                let clause = rewritten
+                    .clause()
+                    .expect("clause rewrite documentation needs clause");
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_clause_rewrite_inference(output, old_id, &demodulator_ids)
+                    .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, comment, self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                let clause = rewritten
+                    .clause()
+                    .expect("clause rewrite documentation needs clause");
+                clause_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    clause,
+                    self.step_options.full_terms,
+                    false,
+                    self.problem_type,
+                    self.step_options.print_types,
+                )?;
+                output.write_char(',').map_err(doc_write_error)?;
+                write_tstp_clause_rewrite_inference(output, old_id, &demodulator_ids)
+                    .map_err(doc_write_error)?;
+                tstp_print_end(output, clause, comment).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports C `DocClauseEqUnfold`.
+    ///
+    /// `demod_pos_count` is the visible part of C's `demod_pos` stack for this
+    /// renderer; C ignores the positions themselves and repeats the same
+    /// demodulator id once per stack entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    pub fn doc_clause_eq_unfold(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        rewritten: &mut Clause,
+        demodulator: &Clause,
+        demod_pos_count: usize,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        rewritten.del_prop(CP_INPUT_FORMULA);
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        let old_id = rewritten.ident();
+        rewritten.set_ident(self.id_source.next_ident());
+        let demodulator_ids = vec![demodulator.ident(); demod_pos_count];
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                pcl_print_start(
+                    output,
+                    bank,
+                    rewritten,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_clause_rewrite_inference(output, old_id, &demodulator_ids)
+                    .map_err(doc_write_error)?;
+                pcl_print_end(output, rewritten, Some("unfolding"), self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                clause_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    rewritten,
+                    self.step_options.full_terms,
+                    false,
+                    self.problem_type,
+                    self.step_options.print_types,
+                )?;
+                output.write_char(',').map_err(doc_write_error)?;
+                write_tstp_clause_rewrite_inference(output, old_id, &demodulator_ids)
+                    .map_err(doc_write_error)?;
+                tstp_print_end(output, rewritten, Some("Unfolding")).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
     /// Ports C `DocIntroSplitDef`.
     pub fn doc_intro_split_def(
         &mut self,
@@ -1527,6 +1693,28 @@ fn write_unsupported_doc_format(output: &mut impl fmt::Write) -> fmt::Result {
     )
 }
 
+fn compute_rewrite_demodulator_ids(old_term: &Term, normal_form: &Term) -> Vec<i64> {
+    let mut steps = PStack::new();
+    assert!(
+        term_compute_rw_sequence(&mut steps, old_term, normal_form, 0),
+        "clause rewrite documentation requires a non-empty rewrite sequence"
+    );
+    steps
+        .as_slice()
+        .iter()
+        .map(|entry| match entry {
+            RewriteSequenceEntry::Demodulator(demodulator) => {
+                demodulator.id().try_into().unwrap_or(i64::MAX)
+            }
+            RewriteSequenceEntry::Operation(_)
+            | RewriteSequenceEntry::ClauseParent(_)
+            | RewriteSequenceEntry::NumericArg(_) => {
+                panic!("rewrite documentation sequence has non-demodulator entry")
+            }
+        })
+        .collect()
+}
+
 fn formula_tstp_identifier(formula: &FormulaDocView<'_>) -> String {
     if formula.ident() >= 0 {
         format!("c_0_{}", formula.ident())
@@ -2057,12 +2245,31 @@ mod tests {
         CP_WATCH_ONLY,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
+    use crate::clauses::clausepos::ClausePos;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn_props::EqnSide;
+    use crate::clauses::eqnlist::EqnList;
+    use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::{RewriteDemodulator, Term};
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).unwrap()
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .unwrap();
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn eqn(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
+        Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
 
     #[test]
@@ -2940,6 +3147,118 @@ mod tests {
         assert_eq!(formula.ident(), 1);
         assert_eq!(session.id_source.current_ident(), 1);
         assert_eq!(rendered, "% Output format not implemented.\n");
+    }
+
+    #[test]
+    fn doc_clause_rewrite_computes_demodulator_sequence_from_rewrite_links() {
+        let mut bank = test_bank();
+        let old = typed_const(&mut bank, "old");
+        let nf = typed_const(&mut bank, "nf");
+        let literal = eqn(&mut bank, &nf, &nf, true);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(7);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rewritten = ClausePos::<()>::for_clause(clause);
+        rewritten.set_side(EqnSide::LeftSide);
+        let demodulator = RewriteDemodulator::new(17);
+        term_add_rw_link(
+            &old,
+            &nf,
+            Some(demodulator),
+            false,
+            RwResultType::LimitedRewritable,
+        );
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        session.pcl_shell_level = 1;
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_rewrite(&mut rendered, &bank, &mut rewritten, &old, Some("rw"))
+            .unwrap();
+
+        let clause = rewritten.clause().unwrap();
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "     1 : : : rw(7,17) : 'rw'\n");
+
+        let literal = eqn(&mut bank, &nf, &nf, true);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(8);
+        let mut rewritten = ClausePos::<()>::for_clause(clause);
+        rewritten.set_side(EqnSide::LeftSide);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        rendered.clear();
+
+        session
+            .doc_clause_rewrite(&mut rendered, &bank, &mut rewritten, &old, None)
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, (nf=nf),inference(rw, [status(thm)],[c_0_8,c_0_17])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_rewrite_suppresses_below_level_but_clears_input() {
+        let mut bank = test_bank();
+        let old = typed_const(&mut bank, "old");
+        let nf = typed_const(&mut bank, "nf");
+        let literal = eqn(&mut bank, &nf, &nf, true);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(7);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rewritten = ClausePos::<()>::for_clause(clause);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_rewrite(&mut rendered, &bank, &mut rewritten, &old, Some("rw"))
+            .unwrap();
+
+        let clause = rewritten.clause().unwrap();
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(clause.ident(), 7);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+    }
+
+    #[test]
+    fn doc_clause_eq_unfold_repeats_demodulator_for_each_position() {
+        let bank = test_bank();
+        let mut rewritten = Clause::empty();
+        rewritten.set_ident(7);
+        rewritten.set_prop(CP_INPUT_FORMULA);
+        let mut demodulator = Clause::empty();
+        demodulator.set_ident(30);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_eq_unfold(&mut rendered, &bank, &mut rewritten, &demodulator, 2)
+            .unwrap();
+
+        assert_eq!(rewritten.ident(), 1);
+        assert!(!rewritten.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "     1 : :[] : rw(rw(7,30),30) : 'unfolding'\n");
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        rewritten.set_ident(8);
+        rendered.clear();
+        session
+            .doc_clause_eq_unfold(&mut rendered, &bank, &mut rewritten, &demodulator, 2)
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false),inference(rw, [status(thm)],[inference(rw, [status(thm)],[c_0_8,c_0_30]),c_0_30]),['Unfolding']).\n"
+        );
     }
 
     #[test]
