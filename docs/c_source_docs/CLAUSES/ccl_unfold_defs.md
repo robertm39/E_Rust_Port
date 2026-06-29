@@ -99,6 +99,18 @@ Source files reviewed: `CLAUSES/ccl_unfold_defs.h`, `CLAUSES/ccl_unfold_defs.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/clauses/unfold_defs.rs` currently ports the `ClauseSetPreprocess` subset: `ClauseSetRemoveSuperfluousLiterals`, `ClauseSetFilterTautologies`, optional `ClauseSetReplaceInjectivityDefs`, and `ClauseSetCanonize`, returning the number of clauses removed by tautology filtering just as the C helper does.
+- Supported executable prune/proof-search paths apply this clause-set preprocessing before BCE and goal-definition preprocessing when `--no-preprocessing` is absent. Proof-search statistics now use the returned count for `% Removed in clause preprocessing`.
+- The equality-definition unfolding functions in this C unit are not yet ported. The parsed `--eq-unfold-limit`, `--eq-unfold-maxclauses`, and `--no-eq-unfolding` state is still recorded for compatibility but does not yet drive `ClauseSetUnfoldEqDefNormalize`.
+
+### Change-Later Observations
+
+- `ClauseSetPreprocess` keeps `eqdef_incrlimit` and `eqdef_maxclauses` parameters even though this current C body does not use them; Rust preserves the public helper shape with ignored parameters so the eventual unfolding bridge can reuse the same call boundary.
+- C `ProofStateClausalPreproc` archives copies of all input axioms before clause preprocessing, then later moves eliminated/unfolded definitions to the regular archive. Rust has not added that initial `ax_archive` copy at this executable boundary yet because represented proof-output parent resolution is still compact-id based; revisit this when stable clause handles make archive-copy identity less fragile.
+- The C source comments say `ClauseSetPreprocess` performs definition unfolding, but the current function body only does literal cleanup, tautology filtering, optional injectivity replacement, and canonization. The actual equality-definition unfolding lives in `ClauseSetUnfoldEqDefNormalize`, which C calls separately after `ClauseSetPreprocess`.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

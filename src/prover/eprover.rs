@@ -54,6 +54,7 @@ use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::clauses::sine::{
     select_axioms_clause_sets, select_threshold_clause_sets, ClauseSineParams,
 };
+use crate::clauses::unfold_defs::clause_set_preprocess;
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
@@ -4607,6 +4608,13 @@ fn run_prune_only<W: Write + ?Sized>(
     write_preprocessing_config_debug_line(output, config)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
+    let _preproc_removed = apply_clause_set_preprocessing(
+        &mut state,
+        config.preprocessing.no_preprocessing,
+        config.search.inference.higher_order.replace_inj_defs,
+        config.preprocessing.eqdef_incrlimit,
+        config.preprocessing.eqdef_maxclauses,
+    )?;
     let bce_max_occs = i32_from_i64_config("bce_max_occs", config.preprocessing.bce.max_occs)?;
     apply_blocked_clause_elimination(
         output,
@@ -4643,6 +4651,13 @@ fn run_proof_search<W: Write + ?Sized>(
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let relevancy_pruned = sine_pruned + apply_clause_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
+    let preproc_removed = apply_clause_set_preprocessing(
+        &mut state,
+        heuristic_params.no_preproc,
+        heuristic_params.replace_inj_defs,
+        heuristic_params.eqdef_incrlimit,
+        heuristic_params.eqdef_maxclauses,
+    )?;
     apply_blocked_clause_elimination(
         output,
         heuristic_params.bce,
@@ -4699,6 +4714,7 @@ fn run_proof_search<W: Write + ?Sized>(
             parsed_ax_no,
             relevancy_pruned,
             raw_clause_no,
+            preproc_removed,
         )?;
         return Ok(ErrorCode::NO_ERROR.exit_status());
     }
@@ -4753,6 +4769,7 @@ fn run_proof_search<W: Write + ?Sized>(
         parsed_ax_no,
         relevancy_pruned,
         raw_clause_no,
+        preproc_removed,
     )?;
     Ok(saturate_outcome_exit_status(
         &outcome,
@@ -5529,6 +5546,30 @@ fn apply_clause_relevance_pruning(
         clause_set_relevance_prune(state.terms().signature(), state.axioms(), level);
     *state.axioms_mut() = pruned;
     removed
+}
+
+fn apply_clause_set_preprocessing(
+    state: &mut crate::clauses::proofstate::ProofState,
+    no_preprocessing: bool,
+    replace_injectivity_defs: bool,
+    eqdef_incrlimit: i64,
+    eqdef_maxclauses: i64,
+) -> Result<i64, EProverError> {
+    if no_preprocessing {
+        return Ok(0);
+    }
+
+    let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
+    let (bank, axioms, archive) = state.terms_axioms_archive_mut();
+    Ok(clause_set_preprocess(
+        axioms,
+        archive,
+        &mut tmp_bank,
+        bank,
+        replace_injectivity_defs,
+        eqdef_incrlimit,
+        eqdef_maxclauses,
+    )?)
 }
 
 fn apply_blocked_clause_elimination<W: Write + ?Sized>(
@@ -6883,6 +6924,7 @@ fn write_proof_statistics(
     parsed_ax_no: i64,
     relevancy_pruned: i64,
     raw_clause_no: i64,
+    preproc_removed: i64,
 ) -> Result<(), EProverError> {
     if config.output_level <= 1 && !config.flags.contains(EProverFlag::PrintStatistics) {
         return Ok(());
@@ -6901,7 +6943,7 @@ fn write_proof_statistics(
     )?;
     writeln!(
         output,
-        "{DEFAULT_COMCHAR_RAW} Removed in clause preprocessing      : 0"
+        "{DEFAULT_COMCHAR_RAW} Removed in clause preprocessing      : {preproc_removed}"
     )?;
     output.write_all(
         state
@@ -12377,6 +12419,80 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_clause_preprocessing_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-clause-preprocess");
+        std::fs::write(
+            &path,
+            "cnf(drop, axiom, (a=a)).\n\
+             cnf(keep, axiom, (p(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(!printed.contains(&format!("file('{path_arg}', drop)")));
+        assert!(printed.contains(&format!("file('{path_arg}', keep)")));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_no_preprocessing_preserves_tautologies() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-no-clause-preprocess");
+        std::fs::write(
+            &path,
+            "cnf(drop, axiom, (a=a)).\n\
+             cnf(keep, axiom, (p(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--no-preprocessing",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains(&format!("file('{path_arg}', drop)")));
+        assert!(printed.contains(&format!("file('{path_arg}', keep)")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_accepts_supported_formula_bridge_input() {
         let _guard = global_state_lock();
         let path = temp_path("prune-formula-bridge");
@@ -12401,11 +12517,12 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains(&format!("axiom, (p(a)), file('{path_arg}', fact)).\n")));
         assert!(printed.contains(&format!(
-            "cnf(c_0_1, axiom, (q(a)|~p(a)), file('{path_arg}', rule)).\n"
+            "axiom, (q(a)|~p(a)), file('{path_arg}', rule)).\n"
         )));
         assert!(printed.contains(&format!(
-            "cnf(c_0_3, negated_conjecture, (~q(a)), file('{path_arg}', goal)).\n"
+            "negated_conjecture, (~q(a)), file('{path_arg}', goal)).\n"
         )));
         assert!(printed.ends_with("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
@@ -12521,10 +12638,10 @@ mod tests {
         let path = temp_path("prune-gsine");
         std::fs::write(
             &path,
-            "cnf(goal, negated_conjecture, (g=g)).\n\
+            "cnf(goal, negated_conjecture, (p(g))).\n\
              cnf(link, axiom, (g=h)).\n\
              cnf(far, axiom, (h=k)).\n\
-             cnf(irr, axiom, (u=u)).\n",
+             cnf(irr, axiom, (r(u))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -12553,7 +12670,7 @@ mod tests {
         assert!(printed.contains(&format!("file('{path_arg}', link)")));
         assert!(printed.contains(&format!("file('{path_arg}', far)")));
         assert!(!printed.contains(&format!("file('{path_arg}', irr)")));
-        assert!(!printed.contains("u=u"));
+        assert!(!printed.contains("r(u)"));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -12784,7 +12901,7 @@ mod tests {
         assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
         assert!(output.contains("% Configuration: G-E--_302_C18_F1_URBAN_RG_S04BN\n"));
         assert!(output.contains("% No SInE strategy applied\n"));
-        assert!(output.contains("% Search class: FUUNF-FFSF00-SFFFFFNN\n"));
+        assert!(output.contains("% Search class: FUHPF-FFSF00-SFFFFFNN\n"));
         assert!(output.contains("% Configuration: SAT001_MinMin_p005000_rr_RG\n"));
         assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
@@ -12875,7 +12992,7 @@ mod tests {
         assert!(output.contains("% Preprocessing class: FSSSSMSSSSSNFFN.\n"));
         assert!(output.contains("% Scheduled 1 strats onto 1 cores with "));
         assert!(output.contains("% No SInE strategy applied\n"));
-        assert!(output.contains("% Search class: FUUNF-FFSF00-SFFFFFNN\n"));
+        assert!(output.contains("% Search class: FUHPF-FFSF00-SFFFFFNN\n"));
         assert!(output.contains("% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(!output.contains("strategy scheduling process execution is not ported yet"));
         assert!(stderr.is_empty());
@@ -15651,7 +15768,7 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert!(printed.contains("% Processed positive unit clauses:\n"));
-        assert!(printed.contains("equal(b, a) <- .\n"));
+        assert!(printed.contains("equal(a, b) <- .\n"));
         assert!(!printed.contains("b=a <- .\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -15869,6 +15986,37 @@ mod tests {
         assert!(printed.contains("% Initial clauses                      : 1\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 2\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_statistics_count_clause_preprocessing() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-clause-preprocess-statistics");
+        std::fs::write(
+            &path,
+            "cnf(drop, axiom, (a=a)).\n\
+             cnf(keep, axiom, (p(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-statistics", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 2\n"));
+        assert!(printed.contains("% Removed in clause preprocessing      : 1\n"));
+        assert!(printed.contains("% Initial clauses in saturation        : 1\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -16175,8 +16323,7 @@ mod tests {
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("     1 : :[--equal(a, a)] : initial("));
-        assert!(printed.contains("     2 : :[] : cn(1) : 'proof'\n"));
+        assert!(printed.contains("     1 : :[] : cn() : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -16266,10 +16413,8 @@ mod tests {
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("cnf(c_0_1, axiom, ($false), file("));
-        assert!(printed.contains(
-            "cnf(c_0_2, axiom, ($false), inference(cn,[status(thm)],[c_0_1]), ['proof']).\n"
-        ));
+        assert!(printed
+            .contains("cnf(c_0_1, axiom, ($false), inference(cn,[status(thm)],[]), ['proof']).\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -16296,12 +16441,9 @@ mod tests {
         assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\ndigraph proof{\n"));
         assert!(printed.contains("  rankdir=TB\n"));
         assert!(printed.contains(
-            "  1 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"c1\"]\n"
+            "  1 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c1\"]\n"
         ));
-        assert!(printed.contains(
-            "  2 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c2\"]\n"
-        ));
-        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
+        assert!(!printed.contains(" -> "));
         assert!(!printed.contains("SZS output start CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -16326,11 +16468,9 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(printed.contains("label=\"cnf("));
-        assert!(printed.contains(",\\ninference("));
-        assert!(printed.contains("[status(thm)],[c_0_"));
-        assert!(printed.contains("])).\"]\n"));
+        assert!(printed.contains(",\\ninference(cn,[status(thm)],[])).\"]\n"));
         assert!(!printed.contains("label=\"c2\""));
-        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
+        assert!(!printed.contains(" -> "));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -16416,8 +16556,8 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Proof object total steps             : 2\n"));
-        assert!(printed.contains("% Proof object clause steps            : 2\n"));
+        assert!(printed.contains("% Proof object total steps             : 1\n"));
+        assert!(printed.contains("% Proof object clause steps            : 1\n"));
         assert!(printed.contains("% Proof object formula steps           : 0\n"));
         assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
         assert!(printed.contains("% Proof object generating inferences   : 0\n"));
