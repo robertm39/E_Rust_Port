@@ -2905,8 +2905,10 @@ pub fn proof_state_select_unprocessed_clause(
 ///
 /// This covers plain backward rewriting, backward subsumption, unit
 /// back-simplification, backward contextual simplify-reflect, and the final
-/// `CPIsIRVictim` marking over `tmp_store`. Long-lived global-index
-/// insertion/deletion and proof-output quotes remain later integration work.
+/// `CPIsIRVictim` marking over `tmp_store`. Use
+/// [`proof_state_backward_simplify_with_docs`] for represented
+/// backward-subsumption quotes; rewrite/unit/context proof-output quotes remain
+/// later integration work.
 ///
 /// # Errors
 ///
@@ -2917,7 +2919,32 @@ pub fn proof_state_backward_simplify(
     clause: &Clause,
     clause_date: &mut SysDate,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
-    proof_state_backward_simplify_impl(state, control, clause, clause_date, None)
+    proof_state_backward_simplify_impl::<String>(state, control, clause, clause_date, None, None)
+}
+
+/// Runs the currently ported backward-simplification tail while emitting
+/// represented proof-documentation quotes for backward-subsumed clauses.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_backward_simplify`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_backward_simplify_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    clause_date: &mut SysDate,
+) -> Result<BackwardSimplificationOutcome, Diagnostic> {
+    proof_state_backward_simplify_impl(
+        state,
+        control,
+        clause,
+        clause_date,
+        None,
+        Some((output, session)),
+    )
 }
 
 /// Runs backward simplification while maintaining caller-owned global indices.
@@ -2937,15 +2964,50 @@ pub fn proof_state_backward_simplify_with_global_indices(
     clause_date: &mut SysDate,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
-    proof_state_backward_simplify_impl(state, control, clause, clause_date, Some(indices))
+    proof_state_backward_simplify_impl::<String>(
+        state,
+        control,
+        clause,
+        clause_date,
+        Some(indices),
+        None,
+    )
 }
 
-fn proof_state_backward_simplify_impl(
+/// Runs backward simplification with caller-owned global indices while emitting
+/// represented proof-documentation quotes for backward-subsumed clauses.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_backward_simplify_with_global_indices`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_backward_simplify_with_global_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    clause_date: &mut SysDate,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<BackwardSimplificationOutcome, Diagnostic> {
+    proof_state_backward_simplify_impl(
+        state,
+        control,
+        clause,
+        clause_date,
+        Some(indices),
+        Some((output, session)),
+    )
+}
+
+fn proof_state_backward_simplify_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
     mut indices: Option<&mut GlobalIndices<'_>>,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<BackwardSimplificationOutcome, Diagnostic> {
     let mut outcome = BackwardSimplificationOutcome::default();
 
@@ -2974,7 +3036,8 @@ fn proof_state_backward_simplify_impl(
         clause,
         indices.as_deref_mut(),
         lambda_demod,
-    );
+        &mut doc_context,
+    )?;
     state.statistics_mut().backward_subsumed_count += outcome.subsumed;
     outcome.unit_simplified = proof_state_eliminate_unit_simplified_clauses(
         state,
@@ -3443,12 +3506,33 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
 
     let mut clause_date = proof_state_demodulator_date(state, RewriteLevel::FullRewrite);
     let backward = if let Some(indices) = indices.as_deref_mut() {
-        proof_state_backward_simplify_with_global_indices(
+        if let Some((output, session, _output_level)) = doc_context.as_mut() {
+            proof_state_backward_simplify_with_global_indices_and_docs(
+                &mut **output,
+                session,
+                state,
+                control,
+                &clause,
+                &mut clause_date,
+                indices,
+            )?
+        } else {
+            proof_state_backward_simplify_with_global_indices(
+                state,
+                control,
+                &clause,
+                &mut clause_date,
+                indices,
+            )?
+        }
+    } else if let Some((output, session, _output_level)) = doc_context.as_mut() {
+        proof_state_backward_simplify_with_docs(
+            &mut **output,
+            session,
             state,
             control,
             &clause,
             &mut clause_date,
-            indices,
         )?
     } else {
         proof_state_backward_simplify(state, control, &clause, &mut clause_date)?
@@ -4068,12 +4152,13 @@ fn rewritable_ids_in_set(
     Ok((found, ids))
 }
 
-fn proof_state_eliminate_backward_subsumed_clauses(
+fn proof_state_eliminate_backward_subsumed_clauses<W: fmt::Write>(
     state: &mut ProofState,
     subsumer: &Clause,
     mut indices: Option<&mut GlobalIndices<'_>>,
     lambda_demod: bool,
-) -> u64 {
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<u64, Diagnostic> {
     let mut removed = 0;
     if subsumer.is_unit() {
         if subsumer.positive_literal_count() != 0 {
@@ -4084,14 +4169,16 @@ fn proof_state_eliminate_backward_subsumed_clauses(
                     subsumer,
                     indices.as_deref_mut(),
                     lambda_demod,
-                );
+                    doc_context,
+                )?;
                 removed += remove_subsumed_ids_from_slot(
                     state,
                     ProcessedSetSlot::PosEqns,
                     subsumer,
                     indices.as_deref_mut(),
                     lambda_demod,
-                );
+                    doc_context,
+                )?;
             }
             removed += remove_subsumed_ids_from_slot(
                 state,
@@ -4099,7 +4186,8 @@ fn proof_state_eliminate_backward_subsumed_clauses(
                 subsumer,
                 indices.as_deref_mut(),
                 lambda_demod,
-            );
+                doc_context,
+            )?;
         } else {
             removed += remove_subsumed_ids_from_slot(
                 state,
@@ -4107,14 +4195,16 @@ fn proof_state_eliminate_backward_subsumed_clauses(
                 subsumer,
                 indices.as_deref_mut(),
                 lambda_demod,
-            );
+                doc_context,
+            )?;
             removed += remove_subsumed_ids_from_slot(
                 state,
                 ProcessedSetSlot::NonUnits,
                 subsumer,
                 indices.as_deref_mut(),
                 lambda_demod,
-            );
+                doc_context,
+            )?;
         }
     } else {
         removed += remove_subsumed_ids_from_slot(
@@ -4123,18 +4213,20 @@ fn proof_state_eliminate_backward_subsumed_clauses(
             subsumer,
             indices,
             lambda_demod,
-        );
+            doc_context,
+        )?;
     }
-    removed
+    Ok(removed)
 }
 
-fn remove_subsumed_ids_from_slot(
+fn remove_subsumed_ids_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     subsumer: &Clause,
     mut indices: Option<&mut GlobalIndices<'_>>,
     lambda_demod: bool,
-) -> u64 {
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<u64, Diagnostic> {
     let ids = {
         let set = processed_set_by_slot(state, slot);
         subsumed_ids_in_set(set, subsumer, state.terms())
@@ -4153,10 +4245,26 @@ fn remove_subsumed_ids_from_slot(
         let Some(clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
             continue;
         };
+        let mut clause = clause;
+        if let Some((output, session)) = doc_context.as_mut() {
+            let comment = if clause.query_prop(CP_WATCH_ONLY) {
+                "extract_wl_subsumed"
+            } else {
+                "subsumed"
+            };
+            session.doc_clause_quote(
+                &mut **output,
+                state.terms(),
+                6,
+                &mut clause,
+                Some(comment),
+                Some(subsumer),
+            )?;
+        }
         proof_state_archive_dead_clause(state, clause);
         removed += 1;
     }
-    removed
+    Ok(removed)
 }
 
 fn subsumed_ids_in_set(set: &ClauseSet, subsumer: &Clause, terms: &TermBank) -> Vec<i64> {
@@ -8506,6 +8614,55 @@ mod tests {
         );
         let archived = state.archive().find_by_id(4_132).unwrap();
         assert!(archived.query_prop(CP_IS_DEAD));
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_quotes_backward_subsumed_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, subsumed) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_process_back_doc_sub_target");
+            let witness = typed_const(terms, "pc_process_back_doc_sub_witness");
+            let guard_left = typed_const(terms, "pc_process_back_doc_sub_guard_left");
+            let guard_right = typed_const(terms, "pc_process_back_doc_sub_guard_right");
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &witness, &target, true,
+            )]));
+            selected.set_ident(4_154);
+            let mut subsumed = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &witness, &target, true),
+                literal(terms, &guard_left, &guard_right, true),
+            ]));
+            subsumed.set_ident(4_155);
+            subsumed.set_weight(subsumed.standard_weight());
+            (selected, subsumed)
+        };
+        state.processed_non_units_mut().insert(subsumed);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            6,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { backward, .. } = outcome else {
+            panic!("selected non-unit should survive processing");
+        };
+        assert_eq!(backward.subsumed, 1);
+        assert!(output.contains(" : 4154 : 'new_given'\n"));
+        assert!(output.contains(" : 4155 : 'subsumed(1)'\n"));
+        assert!(state.archive().find_by_id(2).is_some());
+        assert!(state.archive().find_by_id(4_155).is_none());
     }
 
     #[test]
