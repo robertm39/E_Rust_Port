@@ -2907,8 +2907,8 @@ pub fn proof_state_select_unprocessed_clause(
 /// back-simplification, backward contextual simplify-reflect, and the final
 /// `CPIsIRVictim` marking over `tmp_store`. Use
 /// [`proof_state_backward_simplify_with_docs`] for represented
-/// backward-subsumption quotes; rewrite/unit/context proof-output quotes remain
-/// later integration work.
+/// backward-subsumption and simplified-clause movement quotes; child-kill proof
+/// traversal remains later integration work.
 ///
 /// # Errors
 ///
@@ -2923,7 +2923,8 @@ pub fn proof_state_backward_simplify(
 }
 
 /// Runs the currently ported backward-simplification tail while emitting
-/// represented proof-documentation quotes for backward-subsumed clauses.
+/// represented proof-documentation quotes for backward-subsumed clauses and
+/// simplified clauses moved through `tmp_store`.
 ///
 /// # Errors
 ///
@@ -2975,7 +2976,8 @@ pub fn proof_state_backward_simplify_with_global_indices(
 }
 
 /// Runs backward simplification with caller-owned global indices while emitting
-/// represented proof-documentation quotes for backward-subsumed clauses.
+/// represented proof-documentation quotes for backward-subsumed clauses and
+/// simplified clauses moved through `tmp_store`.
 ///
 /// # Errors
 ///
@@ -3020,6 +3022,7 @@ fn proof_state_backward_simplify_impl<W: fmt::Write>(
         clause,
         clause_date,
         indices.as_deref_mut(),
+        &mut doc_context,
     )?;
     let rewritten_lits = state.tmp_store().literals() - old_lit_count;
     let rewritten = state.tmp_store().members() - old_clause_count;
@@ -3044,9 +3047,16 @@ fn proof_state_backward_simplify_impl<W: fmt::Write>(
         clause,
         indices.as_deref_mut(),
         lambda_demod,
+        &mut doc_context,
     )?;
-    outcome.context_sr =
-        proof_state_eliminate_context_sr_clauses(state, control, clause, indices, lambda_demod)?;
+    outcome.context_sr = proof_state_eliminate_context_sr_clauses(
+        state,
+        control,
+        clause,
+        indices,
+        lambda_demod,
+        &mut doc_context,
+    )?;
 
     outcome.tmp_store_marked = state.tmp_store().members();
     state.tmp_store_mut().set_prop(CP_IS_IR_VICTIM);
@@ -4084,12 +4094,13 @@ fn rewrite_level_set_count(level: RewriteLevel) -> usize {
     }
 }
 
-fn proof_state_eliminate_backward_rewritten_clauses(
+fn proof_state_eliminate_backward_rewritten_clauses<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
     clause_date: &mut SysDate,
     mut indices: Option<&mut GlobalIndices<'_>>,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
     if !clause.is_demodulator() {
         return Ok(false);
@@ -4130,7 +4141,14 @@ fn proof_state_eliminate_backward_rewritten_clauses(
             rewritable_ids_in_set(terms, ocb, set, clause, *clause_date)?
         };
         min_rw = min_rw || found;
-        move_simplified_ids_from_slot(state, slot, ids, indices.as_deref_mut(), lambda_demod)?;
+        move_simplified_ids_from_slot(
+            state,
+            slot,
+            ids,
+            indices.as_deref_mut(),
+            lambda_demod,
+            doc_context,
+        )?;
     }
 
     if control.heuristic_parms().detsort_bw_rw {
@@ -4283,11 +4301,12 @@ fn subsumed_ids_in_set(set: &ClauseSet, subsumer: &Clause, terms: &TermBank) -> 
         .collect()
 }
 
-fn proof_state_eliminate_unit_simplified_clauses(
+fn proof_state_eliminate_unit_simplified_clauses<W: fmt::Write>(
     state: &mut ProofState,
     simplifier: &Clause,
     mut indices: Option<&mut GlobalIndices<'_>>,
     lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     if simplifier.is_rw_rule() || !simplifier.is_unit() {
         return Ok(0);
@@ -4299,6 +4318,7 @@ fn proof_state_eliminate_unit_simplified_clauses(
         simplifier,
         indices.as_deref_mut(),
         lambda_demod,
+        doc_context,
     )?;
     if simplifier.is_positive() {
         moved += move_unit_simplified_from_slot(
@@ -4307,6 +4327,7 @@ fn proof_state_eliminate_unit_simplified_clauses(
             simplifier,
             indices.as_deref_mut(),
             lambda_demod,
+            doc_context,
         )?;
     } else {
         moved += move_unit_simplified_from_slot(
@@ -4315,6 +4336,7 @@ fn proof_state_eliminate_unit_simplified_clauses(
             simplifier,
             indices.as_deref_mut(),
             lambda_demod,
+            doc_context,
         )?;
         moved += move_unit_simplified_from_slot(
             state,
@@ -4322,17 +4344,19 @@ fn proof_state_eliminate_unit_simplified_clauses(
             simplifier,
             indices,
             lambda_demod,
+            doc_context,
         )?;
     }
     Ok(moved)
 }
 
-fn move_unit_simplified_from_slot(
+fn move_unit_simplified_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     simplifier: &Clause,
     indices: Option<&mut GlobalIndices<'_>>,
     lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     let ids = {
         let set = processed_set_by_slot(state, slot);
@@ -4341,7 +4365,7 @@ fn move_unit_simplified_from_slot(
             .map(Clause::ident)
             .collect::<Vec<_>>()
     };
-    move_simplified_ids_from_slot(state, slot, ids, indices, lambda_demod)
+    move_simplified_ids_from_slot(state, slot, ids, indices, lambda_demod, doc_context)
 }
 
 fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
@@ -4364,12 +4388,13 @@ fn clause_unit_simplify_test(clause: &Clause, simplifier: &Clause) -> bool {
     })
 }
 
-fn proof_state_eliminate_context_sr_clauses(
+fn proof_state_eliminate_context_sr_clauses<W: fmt::Write>(
     state: &mut ProofState,
     control: &ProofControl,
     simplifier: &Clause,
     indices: Option<&mut GlobalIndices<'_>>,
     lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     if !control.heuristic_parms().backward_context_sr {
         return Ok(0);
@@ -4400,15 +4425,17 @@ fn proof_state_eliminate_context_sr_clauses(
         ids,
         indices,
         lambda_demod,
+        doc_context,
     )
 }
 
-fn move_simplified_ids_from_slot(
+fn move_simplified_ids_from_slot<W: fmt::Write>(
     state: &mut ProofState,
     slot: ProcessedSetSlot,
     ids: Vec<i64>,
     mut indices: Option<&mut GlobalIndices<'_>>,
     lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<u64, Diagnostic> {
     let mut moved = 0;
     for id in ids.into_iter().rev() {
@@ -4421,9 +4448,19 @@ fn move_simplified_ids_from_slot(
                 lambda_demod,
             );
         }
-        let Some(clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
+        let Some(mut clause) = processed_set_mut_by_slot(state, slot).extract_by_id(id) else {
             continue;
         };
+        if let Some((output, session)) = doc_context.as_mut() {
+            session.doc_clause_quote(
+                &mut **output,
+                state.terms(),
+                6,
+                &mut clause,
+                Some("simplifiable"),
+                None,
+            )?;
+        }
         proof_state_move_simplified_clause_to_tmp(state, clause)?;
         moved += 1;
     }
@@ -8663,6 +8700,59 @@ mod tests {
         assert!(output.contains(" : 4155 : 'subsumed(1)'\n"));
         assert!(state.archive().find_by_id(2).is_some());
         assert!(state.archive().find_by_id(4_155).is_none());
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_quotes_unit_simplified_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, simplified) = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_process_unit_doc_left");
+            let right = typed_const(terms, "pc_process_unit_doc_right");
+            let guard_left = typed_const(terms, "pc_process_unit_doc_guard_left");
+            let guard_right = typed_const(terms, "pc_process_unit_doc_guard_right");
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &left, &right, false,
+            )]));
+            selected.set_ident(4_156);
+            let mut simplified = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left, &right, true),
+                literal(terms, &guard_left, &guard_right, true),
+            ]));
+            simplified.set_ident(4_157);
+            simplified.set_weight(simplified.standard_weight());
+            simplified.set_prop(CP_IS_PROCESSED | CP_LIMITED_RW);
+            (selected, simplified)
+        };
+        state.processed_non_units_mut().insert(simplified);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            6,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { backward, .. } = outcome else {
+            panic!("selected negative unit should survive processing");
+        };
+        assert_eq!(backward.subsumed, 0);
+        assert_eq!(backward.unit_simplified, 1);
+        assert_eq!(backward.tmp_store_marked, 1);
+        assert!(output.contains(" : 4156 : 'new_given'\n"));
+        assert!(output.contains(" : 4157 : 'simplifiable'\n"));
+        assert!(state.processed_non_units().find_by_id(4_157).is_none());
+        assert!(state.archive().find_by_id(2).is_some());
+        assert!(state.tmp_store().is_empty());
     }
 
     #[test]
