@@ -12106,6 +12106,86 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_generate_new_clauses_higher_order_first_order_subset_paramodulates() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, partner, replacement, rhs) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_ho_pm_source");
+            let replacement = typed_const(terms, "pc_generate_ho_pm_replacement");
+            let rhs = typed_const(terms, "pc_generate_ho_pm_rhs");
+            let f_of_source = typed_unary(terms, "pc_generate_ho_pm_f", &source);
+            let mut partner_lit = literal(terms, &source, &replacement, true);
+            let mut selected_lit = literal(terms, &f_of_source, &rhs, true);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit]));
+            selected.set_ident(4_153);
+            (selected, partner, replacement, rhs)
+        };
+        state.processed_pos_eqns_mut().insert(partner);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo6_ocb(state.terms()));
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &selected)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 1);
+        assert_eq!(generated.literals().as_slice()[0].right(), &rhs);
+        assert!(generated.literals().as_slice()[0]
+            .left()
+            .argument(0)
+            .is_some_and(|arg| arg == replacement));
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_applied_var_paramodulation_stays_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, partner) = {
+            let terms = state.terms_mut();
+            let source = typed_const(terms, "pc_generate_ho_pm_diag_source");
+            let replacement = typed_const(terms, "pc_generate_ho_pm_diag_replacement");
+            let rhs = typed_const(terms, "pc_generate_ho_pm_diag_rhs");
+            let f_of_source = typed_unary(terms, "pc_generate_ho_pm_diag_f", &source);
+            let predicate = unary_predicate_var(terms, -4_230);
+            let arg = typed_const(terms, "pc_generate_ho_pm_diag_arg");
+            let applied = apply_terms(terms, &predicate, std::slice::from_ref(&arg))
+                .unwrap_or_else(|err| panic!("{err}"));
+            let truth = terms.true_term().clone();
+
+            let mut partner_lit = literal(terms, &source, &replacement, true);
+            let mut selected_lit = literal(terms, &f_of_source, &rhs, true);
+            let applied_lit = literal(terms, &applied, &truth, true);
+            partner_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            selected_lit.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
+            let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit, applied_lit]));
+            selected.set_ident(4_154);
+            (selected, partner)
+        };
+        state.processed_pos_eqns_mut().insert(partner);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo6_ocb(state.terms()));
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let error =
+            proof_state_generate_new_clauses(&mut state, &mut control, &selected).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("higher-order paramodulation"));
+    }
+
+    #[test]
     fn proof_state_generate_new_clauses_with_docs_quotes_paramodulation() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (selected, partner) = {

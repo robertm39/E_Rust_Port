@@ -18,9 +18,10 @@ use crate::clauses::overlap_index::{
     clause_collect_from_terms_pos, clause_collect_into_terms_pos, OverlapIndex,
 };
 use crate::clauses::subterm_tree::SubtermOcc;
+use crate::heuristics::to_params::TermOrdering;
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
 use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -228,6 +229,9 @@ fn compute_clause_clause_paramodulants_impl<W: fmt::Write>(
     if clause.query_prop(CP_NO_GENERATION) || with.query_prop(CP_NO_GENERATION) {
         return Ok(0);
     }
+    ensure_higher_order_paramodulation_clauses_subset(ocb, &[clause, parent_alias, with], || {
+        higher_order_paramod_diagnostic_for_type(pm_type)
+    })?;
 
     let mut paramod_count = compute_directed_clause_paramodulants(
         bank,
@@ -454,6 +458,10 @@ fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
     pm_type: ParamodulationType,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
+    ensure_higher_order_paramodulation_clauses_subset(ocb, &[clause, parent_alias], || {
+        higher_order_paramod_diagnostic_for_type(pm_type)
+    })?;
+
     let mut paramod_count = compute_into_paramodulants_indexed(
         bank,
         ocb,
@@ -619,14 +627,22 @@ fn compute_from_position_into_occurrence(
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
+    ensure_higher_order_paramodulation_terms_subset(ocb, &[occurrence.term()], || {
+        higher_order_paramod_diagnostic_for_type(pm_type)
+    })?;
     let Some(effective_pm_type) =
-        indexed_effective_paramodulation_type(bank, ocb, from_pos, occurrence.term(), pm_type)
+        indexed_effective_paramodulation_type(bank, ocb, from_pos, occurrence.term(), pm_type)?
     else {
         return Ok(0);
     };
     let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
 
     for into_clause_pos in occurrence.position_clauses().entries() {
+        ensure_higher_order_paramodulation_clauses_subset(
+            ocb,
+            &[into_clause_pos.clause()],
+            || higher_order_paramod_diagnostic_for_type(effective_pm_type),
+        )?;
         let mut marked_term = None;
         for into_cpos in into_clause_pos.positions() {
             let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
@@ -708,15 +724,24 @@ fn compute_indexed_sources_into_position(
             }
             for from_cpos in from_clause_pos.positions() {
                 let from_pos = unpack_clause_pos(*from_cpos, from_clause_pos.clause().clone());
+                ensure_higher_order_paramodulation_terms_subset(ocb, &[occurrence.term()], || {
+                    higher_order_paramod_diagnostic_for_type(pm_type)
+                })?;
                 let Some(effective_pm_type) = indexed_effective_paramodulation_type(
                     bank,
                     ocb,
                     &from_pos,
                     overlap_term,
                     pm_type,
-                ) else {
+                )?
+                else {
                     continue;
                 };
+                ensure_higher_order_paramodulation_clauses_subset(
+                    ocb,
+                    &[from_clause_pos.clause()],
+                    || higher_order_paramod_diagnostic_for_type(effective_pm_type),
+                )?;
                 let into_term = into_pos
                     .get_subterm()
                     .expect("indexed target position must select a subterm");
@@ -767,7 +792,7 @@ fn indexed_effective_paramodulation_type(
     from_pos: &ClausePos,
     overlap_term: &Term,
     pm_type: ParamodulationType,
-) -> Option<ParamodulationType> {
+) -> Result<Option<ParamodulationType>, Diagnostic> {
     let from_literal = from_pos
         .literal()
         .expect("indexed source position must select a literal");
@@ -777,6 +802,11 @@ fn indexed_effective_paramodulation_type(
     let from_other = from_pos
         .get_other_side()
         .expect("indexed source position must select an opposite side");
+    ensure_higher_order_paramodulation_terms_subset(
+        ocb,
+        &[&from_term, &from_other, overlap_term],
+        || higher_order_paramod_diagnostic_for_type(pm_type),
+    )?;
     let mut subst = Substitution::new();
     if !subst_mgu_complete(&from_term, overlap_term, &mut subst)
         || (!from_literal.is_oriented()
@@ -790,11 +820,17 @@ fn indexed_effective_paramodulation_type(
             ))
     {
         subst.backtrack();
-        return None;
+        return Ok(None);
+    }
+    if problem_type() == ProblemType::HigherOrder
+        && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
+    {
+        subst.backtrack();
+        return Err(higher_order_paramod_diagnostic_for_type(pm_type));
     }
     let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
     subst.backtrack();
-    Some(effective)
+    Ok(Some(effective))
 }
 
 fn clause_ordered_paramod_by_type(
@@ -828,6 +864,18 @@ const fn paramodulation_is_simultaneous(pm_type: ParamodulationType) -> bool {
     )
 }
 
+const fn paramodulation_type_requests_simultaneous(pm_type: ParamodulationType) -> bool {
+    matches!(
+        pm_type,
+        ParamodulationType::Simultaneous
+            | ParamodulationType::OrientedSimultaneous
+            | ParamodulationType::SuperSimultaneous
+            | ParamodulationType::OrientedSuperSimultaneous
+            | ParamodulationType::DecreasingSimultaneous
+            | ParamodulationType::SizeDecreasingSimultaneous
+    )
+}
+
 fn unifiable_occurrences<'index>(
     index: &'index OverlapIndex<'_>,
     term: &Term,
@@ -835,6 +883,70 @@ fn unifiable_occurrences<'index>(
     let mut occurrences = Vec::new();
     let _ = index.find_unifiable_occurrences(term, &mut occurrences);
     occurrences
+}
+
+fn ensure_higher_order_paramodulation_clauses_subset(
+    ocb: &OrderControlBlock,
+    clauses: &[&Clause],
+    diagnostic: impl Fn() -> Diagnostic,
+) -> Result<(), Diagnostic> {
+    if problem_type() != ProblemType::HigherOrder {
+        return Ok(());
+    }
+    if ocb.ordering_type != TermOrdering::Kbo6
+        || clauses
+            .iter()
+            .any(|clause| clause_has_higher_order_paramodulation_surface(clause))
+    {
+        return Err(diagnostic());
+    }
+    Ok(())
+}
+
+fn ensure_higher_order_paramodulation_terms_subset(
+    ocb: &OrderControlBlock,
+    terms: &[&Term],
+    diagnostic: impl Fn() -> Diagnostic,
+) -> Result<(), Diagnostic> {
+    if problem_type() != ProblemType::HigherOrder {
+        return Ok(());
+    }
+    if ocb.ordering_type != TermOrdering::Kbo6
+        || terms
+            .iter()
+            .any(|term| term_has_higher_order_unification_surface(term))
+    {
+        return Err(diagnostic());
+    }
+    Ok(())
+}
+
+fn clause_has_higher_order_paramodulation_surface(clause: &Clause) -> bool {
+    clause
+        .literals()
+        .exists_term(term_has_higher_order_unification_surface)
+}
+
+fn higher_order_paramod_diagnostic_for_type(pm_type: ParamodulationType) -> Diagnostic {
+    if paramodulation_type_requests_simultaneous(pm_type) {
+        higher_order_sim_paramod_diagnostic()
+    } else {
+        higher_order_paramod_diagnostic()
+    }
+}
+
+fn higher_order_paramod_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "higher-order paramodulation constraints are not ported yet",
+    )
+}
+
+fn higher_order_sim_paramod_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "higher-order simultaneous paramodulation constraints are not ported yet",
+    )
 }
 
 /// Computes the first-order C `ComputeOverlap` replacement term.
@@ -863,13 +975,6 @@ pub fn compute_overlap(
     subst: &mut Substitution,
     freshvars: &VarBank,
 ) -> Result<Option<Term>, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order paramodulation constraints are not ported yet",
-        ));
-    }
-
     let from_literal = from
         .literal()
         .expect("paramodulation source position must select a literal");
@@ -898,11 +1003,22 @@ pub fn compute_overlap(
     let rep_side = from
         .get_other_side()
         .expect("paramodulation source position must select an opposite side");
+    ensure_higher_order_paramodulation_terms_subset(
+        ocb,
+        &[&max_side, &rep_side, into, &sub_into],
+        higher_order_paramod_diagnostic,
+    )?;
     let oldstate = subst.len();
 
     if !subst_mgu_complete(&max_side, &sub_into, subst) {
         subst.backtrack_to_pos(oldstate);
         return Ok(None);
+    }
+    if problem_type() == ProblemType::HigherOrder
+        && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
+    {
+        subst.backtrack_to_pos(oldstate);
+        return Err(higher_order_paramod_diagnostic());
     }
 
     if !from_literal.is_oriented()
@@ -981,6 +1097,11 @@ pub fn eqn_ordered_paramod(
     let rside = into
         .get_other_side()
         .expect("paramodulation target position must select an opposite side");
+    ensure_higher_order_paramodulation_terms_subset(
+        ocb,
+        &[&rside],
+        higher_order_paramod_diagnostic,
+    )?;
     let oldstate = subst.len();
 
     let Some(replaced_lhs) =
@@ -1081,6 +1202,11 @@ pub fn clause_ordered_paramod(
         !from_literal.is_oriented() || from.side() == EqnSide::LeftSide,
         "oriented paramodulation source can only use its left side"
     );
+    ensure_higher_order_paramodulation_clauses_subset(
+        ocb,
+        &[from_clause, into_clause],
+        higher_order_paramod_diagnostic,
+    )?;
     let freshvars = fresh_var_bank_for_clauses(bank, from_clause, into_clause);
     let mut subst = Substitution::new();
     let result = clause_ordered_paramod_with_subst(
@@ -1190,12 +1316,6 @@ fn clause_ordered_sim_paramod_variant(
         !from_literal.is_oriented() || from.side() == EqnSide::LeftSide,
         "oriented simultaneous paramodulation source can only use its left side"
     );
-    if problem_type() == ProblemType::HigherOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order simultaneous paramodulation constraints are not ported yet",
-        ));
-    }
 
     let into_term = into
         .get_subterm()
@@ -1216,6 +1336,11 @@ fn clause_ordered_sim_paramod_variant(
     let into_other = into
         .get_other_side()
         .expect("simultaneous paramodulation target position must select an opposite side");
+    ensure_higher_order_paramodulation_clauses_subset(
+        ocb,
+        &[from_clause, into_clause],
+        higher_order_sim_paramod_diagnostic,
+    )?;
 
     let freshvars = fresh_var_bank_for_clauses(bank, from_clause, into_clause);
     let mut subst = Substitution::new();
@@ -1323,6 +1448,13 @@ fn clause_ordered_sim_paramod_with_subst(
     replacement: SimParamodReplacement,
 ) -> Result<Option<Clause>, Diagnostic> {
     let unified = subst_mgu_complete(from_term, into_term, subst);
+    if unified
+        && problem_type() == ProblemType::HigherOrder
+        && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
+    {
+        into_term.del_prop(TP_POTENTIAL_PARAMOD);
+        return Err(higher_order_sim_paramod_diagnostic());
+    }
     if !unified
         || (!from_literal.is_oriented()
             && to_greater(
