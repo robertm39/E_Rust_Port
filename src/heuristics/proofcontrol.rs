@@ -10,8 +10,9 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
-    clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_remove_ac_resolved,
-    clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
+    clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
+    clause_remove_ac_resolved, clause_remove_superfluous_literals, clause_resolve_flex_clause,
+    clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -78,6 +79,7 @@ use crate::heuristics::litselection::{
     apply_ported_literal_selector_with_bank, UnsupportedLiteralSelection, NO_GENERATION,
 };
 use crate::heuristics::to_autoselect::to_select_ordering;
+use crate::heuristics::to_params::TermOrdering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::inout::signals::time_is_up;
@@ -1476,8 +1478,9 @@ fn proof_state_move_processed_set_to_tmp_by(
 /// # Errors
 ///
 /// Returns a diagnostic if proof-control ordering is missing, if a lower-level
-/// term operation fails, or if the current problem is higher-order and reaches
-/// higher-order-only normalization/pruning hooks that are not wired yet.
+/// term operation fails, or if the current higher-order problem requests the
+/// not-yet-ported argument-pruning hook or a non-empty higher-order term
+/// ordering.
 pub fn proof_state_forward_modify_clause(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -1537,16 +1540,11 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     level: RewriteLevel,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ForwardModifyClause higher-order normalization/pruning is not ported yet",
-        ));
-    }
-
     let prefer_general = control.heuristic_parms().prefer_general;
     let lambda_demod = control.heuristic_parms().lambda_demod;
     let local_rw = control.heuristic_parms().local_rw;
+    let prune_args = control.heuristic_parms().prune_args;
+    let higher_order = problem_type() == ProblemType::HigherOrder;
     let ac_handling_active = control.ac_handling_active();
     let strong_unit_forward_subsumption = control.strong_unit_forward_subsumption();
     let ocb = control.ocb.as_mut().ok_or_else(|| {
@@ -1555,12 +1553,14 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             "ForwardModifyClause requires initialized proof-control ordering",
         )
     })?;
+    forward_modify_check_higher_order_ordering(higher_order, ocb)?;
 
     let mut rw_steps = 0_i64;
     let trivial = {
         let (terms, processed_sets) = state.terms_and_processed_sets_mut();
         let demodulators: [&ClauseSet; 2] = [&*processed_sets.pos_rules, &*processed_sets.pos_eqns];
         loop {
+            forward_modify_normalize_if_higher_order(higher_order, clause, terms);
             let steps = match doc_context.as_mut() {
                 Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
                     output,
@@ -1584,6 +1584,7 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 )?,
             };
             rw_steps += steps;
+            forward_modify_normalize_if_higher_order(higher_order, clause, terms);
 
             let limited_rw = clause.query_prop(CP_LIMITED_RW);
             let removed_lits = clause_remove_superfluous_literals(clause, terms);
@@ -1605,7 +1606,7 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             }
 
             if local_rw && clause_local_rw(ocb, terms, clause)? {
-                debug_assert_ne!(problem_type(), ProblemType::HigherOrder);
+                forward_modify_normalize_if_higher_order(higher_order, clause, terms);
             }
 
             clause.orient_literals(ocb, terms);
@@ -1617,6 +1618,9 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             if clause.is_trivial(terms) {
                 break true;
             }
+
+            forward_modify_check_higher_order_prune_args(higher_order, prune_args)?;
+            forward_modify_normalize_if_higher_order(higher_order, clause, terms);
 
             forward_modify_positive_simplify_reflect(
                 terms,
@@ -1641,6 +1645,42 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
         state.statistics_mut().rw_count += u64::try_from(rw_steps).unwrap_or(u64::MAX);
     }
     Ok(trivial)
+}
+
+fn forward_modify_check_higher_order_ordering(
+    higher_order: bool,
+    ocb: &OrderControlBlock,
+) -> Result<(), Diagnostic> {
+    if higher_order && ocb.ordering_type != TermOrdering::Empty {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ForwardModifyClause higher-order term ordering is not ported yet",
+        ));
+    }
+    Ok(())
+}
+
+fn forward_modify_check_higher_order_prune_args(
+    higher_order: bool,
+    prune_args: bool,
+) -> Result<(), Diagnostic> {
+    if higher_order && prune_args {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ForwardModifyClause higher-order ClausePruneArgs is not ported yet",
+        ));
+    }
+    Ok(())
+}
+
+fn forward_modify_normalize_if_higher_order(
+    higher_order: bool,
+    clause: &mut Clause,
+    terms: &TermBank,
+) {
+    if higher_order {
+        let _ = clause_normalize_equations(clause, terms);
+    }
 }
 
 fn forward_modify_condense<W: fmt::Write>(
@@ -5388,7 +5428,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
@@ -5520,6 +5560,20 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.term_top_insert(term).unwrap()
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap();
+        ProblemTypeReset
     }
 
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -5680,6 +5734,15 @@ mod tests {
         OrderControlBlock::alloc(
             TermOrdering::Kbo,
             true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn empty_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Empty,
+            false,
             bank.signature(),
             HoOrderKind::LfhoOrder,
         )
@@ -6447,6 +6510,109 @@ mod tests {
         assert_ne!(literal.left(), &target);
         assert_ne!(literal.right(), &target);
         assert!(literal.left() == &replacement || literal.right() == &replacement);
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_higher_order_normalizes_encoded_equality() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut clause, left, right) = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_ho_norm_a");
+            let right = typed_const(terms, "pc_ho_norm_b");
+            let truth = terms.true_term().clone();
+            let eqn_code = terms.signature().eqn_code();
+            let encoded = bool_binary_with_code(terms, eqn_code, &left, &right);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &encoded, &truth, true,
+            )]));
+            clause.set_ident(4_082);
+            (clause, left, right)
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(empty_ocb(state.terms()));
+
+        let trivial = proof_state_forward_modify_clause(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        let literal = &clause.literals().as_slice()[0];
+        assert!(literal.is_equ_lit(state.terms()));
+        assert!(
+            (literal.left() == &left && literal.right() == &right)
+                || (literal.left() == &right && literal.right() == &left)
+        );
+        assert!(clause
+            .derivation()
+            .unwrap()
+            .as_slice()
+            .iter()
+            .any(|entry| matches!(entry, DerivationEntry::Operation(DC_NORMALIZE))));
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_higher_order_ordering_stays_explicit_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_ho_order_a");
+            let right = typed_const(terms, "pc_ho_order_b");
+            Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]))
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+
+        let error = proof_state_forward_modify_clause(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("term ordering"));
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_higher_order_prune_args_stays_explicit_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_ho_prune_a");
+            let right = typed_const(terms, "pc_ho_prune_b");
+            Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]))
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(empty_ocb(state.terms()));
+        control.heuristic_parms_mut().prune_args = true;
+
+        let error = proof_state_forward_modify_clause(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("ClausePruneArgs"));
     }
 
     #[test]

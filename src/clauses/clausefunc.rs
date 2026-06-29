@@ -12,7 +12,9 @@ use crate::clauses::derivation::{
     DC_FLEX_RESOLVE, DC_NORMALIZE,
 };
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::EP_IS_POSITIVE;
+use crate::clauses::eqn_props::{
+    EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
+};
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::signature::{FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE};
@@ -354,6 +356,98 @@ pub fn clause_eliminate_naked_boolean_variables(
     let result = clause.literals().find_true(bank).is_some();
     substitution.delete();
     Ok(result)
+}
+
+/// Applies C `NormalizeEquations`.
+///
+/// This lifts encoded `$eq`/`$neq` Boolean terms and strips encoded `$not`
+/// prefixes from predicate-literal left sides.
+///
+/// # Panics
+///
+/// Panics if an encoded `$not`, `$eq`, or `$neq` term has uninitialized
+/// arguments, matching the C direct argument access.
+pub fn clause_normalize_equations(clause: &mut Clause, bank: &TermBank) -> bool {
+    let mut normalized = false;
+
+    for literal in clause.literals_mut().as_mut_slice() {
+        if normalize_encoded_equation_literal(literal, bank) {
+            normalized = true;
+        }
+    }
+
+    if normalized {
+        clause.recompute_lit_counts();
+        let _ = clause_remove_superfluous_literals(clause, bank);
+        clause.set_weight(clause.standard_weight());
+        clause_push_derivation(clause, DC_NORMALIZE, None, None);
+    }
+
+    normalized
+}
+
+fn normalize_encoded_equation_literal(literal: &mut Eqn, bank: &TermBank) -> bool {
+    let true_term = bank.true_term().clone();
+    let false_term = bank.false_term().clone();
+    let eqn_code = bank.signature().eqn_code();
+    let neqn_code = bank.signature().neqn_code();
+    let not_code = bank.signature().not_code();
+    let mut normalized = false;
+
+    if literal.left() == &true_term && literal.right() != &true_term {
+        literal.swap_sides_simple();
+        literal.del_prop(EP_IS_EQU_LITERAL | EP_MAX_IS_UP_TO_DATE | EP_IS_ORIENTED);
+        normalized = true;
+    }
+
+    if literal.right() == &true_term
+        && matches!(literal.left().f_code(), code if code == eqn_code || code == neqn_code || code == not_code)
+    {
+        let mut negate = false;
+        let mut left = literal.left().clone();
+        while left.f_code() == not_code {
+            assert_eq!(left.arity(), 1, "encoded $not term must be unary");
+            negate = !negate;
+            left = formula_argument(&left, 0);
+        }
+
+        let mut right = true_term.clone();
+        if left.f_code() == eqn_code || left.f_code() == neqn_code {
+            let encoded = left;
+            left = formula_argument(&encoded, 0);
+            right = formula_argument(&encoded, 1);
+            if encoded.f_code() == neqn_code {
+                negate = !negate;
+            }
+        }
+
+        if left == false_term {
+            left = true_term.clone();
+            negate = !negate;
+        }
+        if right == false_term {
+            right = true_term.clone();
+            negate = !negate;
+        }
+        if left == true_term {
+            std::mem::swap(&mut left, &mut right);
+        }
+
+        literal.set_left_raw(left);
+        literal.set_right_raw(right);
+        if literal.right() == &true_term {
+            literal.del_prop(EP_IS_EQU_LITERAL);
+        } else {
+            literal.set_prop(EP_IS_EQU_LITERAL);
+        }
+        if negate {
+            literal.flip_prop(EP_IS_POSITIVE);
+        }
+        literal.del_prop(EP_MAX_IS_UP_TO_DATE | EP_IS_ORIENTED);
+        normalized = true;
+    }
+
+    normalized
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1313,13 +1407,13 @@ mod tests {
     use super::{
         clause_archive, clause_archive_copy, clause_boolean_simplification,
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
-        clause_flip_literal_sign_index, clause_is_orphaned_with, clause_recognize_injectivity,
-        clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
-        clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_archive_copy,
-        clause_set_canonize, clause_set_delete_orphans_with,
-        clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
-        clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_simplify_decoded,
+        clause_flip_literal_sign_index, clause_is_orphaned_with, clause_normalize_equations,
+        clause_recognize_injectivity, clause_remove_ac_resolved, clause_remove_literal,
+        clause_remove_literal_index, clause_remove_superfluous_literals,
+        clause_resolve_flex_clause, clause_set_archive_copy, clause_set_canonize,
+        clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
+        clause_set_replace_injectivity_defs, clause_unit_simplify_test, close_with_db_var,
+        pstack_clause_print_lop_string, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1335,7 +1429,7 @@ mod tests {
         DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
-    use crate::clauses::eqn_props::EP_IS_ORIENTED;
+    use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
@@ -1868,6 +1962,79 @@ mod tests {
         assert_eq!(literal.left(), &variable);
         assert_eq!(literal.right(), &truth);
         assert!(!literal.is_equ_lit(&bank));
+    }
+
+    #[test]
+    fn normalize_equations_lifts_encoded_equality_to_literal_level() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "norm_eq_a");
+        let right = typed_const(&mut bank, "norm_eq_b");
+        let truth = bank.true_term().clone();
+        let eqn_code = bank.signature().eqn_code();
+        let encoded = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let mut literal = literal(&mut bank, &encoded, &truth, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = clause_from(vec![literal]);
+
+        assert!(clause_normalize_equations(&mut clause, &bank));
+
+        let normalized = &clause.literals().as_slice()[0];
+        assert_eq!(normalized.left(), &left);
+        assert_eq!(normalized.right(), &right);
+        assert!(normalized.is_positive());
+        assert!(normalized.is_equ_lit(&bank));
+        assert!(!normalized.query_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE));
+        assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
+    }
+
+    #[test]
+    fn normalize_equations_strips_not_and_flips_literal_sign() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "norm_not_a");
+        let right = typed_const(&mut bank, "norm_not_b");
+        let truth = bank.true_term().clone();
+        let eqn_code = bank.signature().eqn_code();
+        let not_code = bank.signature().not_code();
+        let encoded_eq = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let encoded_not = bool_result_unary_with_code(&mut bank, not_code, &encoded_eq);
+        let mut clause = clause_from(vec![literal(&mut bank, &encoded_not, &truth, true)]);
+
+        assert!(clause_normalize_equations(&mut clause, &bank));
+
+        let normalized = &clause.literals().as_slice()[0];
+        assert_eq!(normalized.left(), &left);
+        assert_eq!(normalized.right(), &right);
+        assert!(normalized.is_negative());
+        assert!(normalized.is_equ_lit(&bank));
+    }
+
+    #[test]
+    fn normalize_equations_swaps_true_left_before_lifting_encoded_equality() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "norm_swap_a");
+        let right = typed_const(&mut bank, "norm_swap_b");
+        let truth = bank.true_term().clone();
+        let eqn_code = bank.signature().eqn_code();
+        let encoded = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let placeholder = bool_var(&bank, -60);
+        let mut raw = literal(&mut bank, &placeholder, &truth, true);
+        raw.set_left_raw(truth);
+        raw.set_right_raw(encoded);
+        raw.set_prop(EP_IS_EQU_LITERAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = clause_from(vec![raw]);
+
+        assert!(clause_normalize_equations(&mut clause, &bank));
+
+        let normalized = &clause.literals().as_slice()[0];
+        assert_eq!(normalized.left(), &left);
+        assert_eq!(normalized.right(), &right);
+        assert!(normalized.is_positive());
+        assert!(normalized.is_equ_lit(&bank));
+        assert!(!normalized.query_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE));
     }
 
     #[test]
