@@ -1652,10 +1652,12 @@ impl TermBank {
                 child,
                 None,
             )?
-        } else if scanner.test_tok(TokenType::LET_TOKEN | TokenType::ITE_TOKEN) {
+        } else if scanner.test_tok(TokenType::ITE_TOKEN) {
+            self.parse_ite_tformula_tstp_subset(scanner)?
+        } else if scanner.test_tok(TokenType::LET_TOKEN) {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
-                "Boolean $let/$ite term arguments are not ported yet",
+                "Boolean $let term arguments are not ported yet",
             ));
         } else {
             self.parse_tformula_atom(scanner)?
@@ -1689,6 +1691,63 @@ impl TermBank {
         })();
         self.vars.pop_env();
         parsed
+    }
+
+    fn parse_ite_tformula_tstp_subset(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        scanner.accept_tok(TokenType::ITE_TOKEN)?;
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let condition = self.parse_tformula_tstp_subset(scanner)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        let if_true = self.parse_tformula_tstp_subset(scanner)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        let if_false = self.parse_tformula_tstp_subset(scanner)?;
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+        self.require_same_sort(&condition, &self.true_term, "$ite condition")?;
+        self.require_same_sort(&if_true, &if_false, "$ite branches")?;
+        let result_type = if_true.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$ite true branch must have an inferred type",
+            )
+        })?;
+
+        let ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        ite.set_type(Some(result_type));
+        ite.set_argument(0, condition);
+        ite.set_argument(1, if_true);
+        ite.set_argument(2, if_false);
+        self.term_top_insert(ite)
+    }
+
+    fn require_same_sort(
+        &self,
+        left: &Term,
+        right: &Term,
+        context: &str,
+    ) -> Result<(), Diagnostic> {
+        let left_type = left.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{context} left term has no type"),
+            )
+        })?;
+        let right_type = right.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{context} right term has no type"),
+            )
+        })?;
+        if left_type != right_type {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{context} terms should have the same sort"),
+            ));
+        }
+        Ok(())
     }
 
     fn parse_tformula_atom(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
@@ -3087,6 +3146,62 @@ mod tests {
             Some(y),
             "right predicate keeps the second quantified variable"
         );
+    }
+
+    #[test]
+    fn checked_parser_reads_ite_boolean_formula_arguments() {
+        let (bank, arg) =
+            parse_bool_arg("takes_bool_arg($ite(pred_ite_cond, pred_ite_then, ~pred_ite_else))");
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        assert_eq!(arg.argument(1), Some(bank.true_term().clone()));
+        let ite = arg.argument(0).unwrap();
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(bank.signature().type_bank().bool_type()));
+
+        let condition = ite.argument(0).unwrap();
+        assert_eq!(condition.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(condition.argument(0).unwrap().f_code()),
+            Some("pred_ite_cond")
+        );
+
+        let true_branch = ite.argument(1).unwrap();
+        assert_eq!(true_branch.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(true_branch.argument(0).unwrap().f_code()),
+            Some("pred_ite_then")
+        );
+
+        let false_branch = ite.argument(2).unwrap();
+        assert_eq!(false_branch.f_code(), bank.signature().not_code());
+        assert_eq!(
+            bank.signature().find_name(
+                false_branch
+                    .argument(0)
+                    .unwrap()
+                    .argument(0)
+                    .unwrap()
+                    .f_code()
+            ),
+            Some("pred_ite_else")
+        );
+    }
+
+    #[test]
+    fn checked_parser_rejects_let_boolean_formula_arguments_until_scoped_let_port() {
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner = Scanner::from_user_string("takes_bool_arg($let)", false).unwrap();
+        let error = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Boolean $let term arguments are not ported yet"));
     }
 
     #[test]
