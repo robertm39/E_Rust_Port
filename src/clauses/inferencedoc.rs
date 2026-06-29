@@ -98,6 +98,7 @@ pub enum ClauseModificationInference {
     Minimize,
     EvalAnswerLiteral,
     DestructiveEqualityResolution,
+    AcResolution,
 }
 
 impl ClauseModificationInference {
@@ -109,7 +110,8 @@ impl ClauseModificationInference {
             Self::Condense
             | Self::Minimize
             | Self::EvalAnswerLiteral
-            | Self::DestructiveEqualityResolution => None,
+            | Self::DestructiveEqualityResolution
+            | Self::AcResolution => None,
         }
     }
 
@@ -120,8 +122,46 @@ impl ClauseModificationInference {
             Self::Minimize => Some(ClauseUnaryInference::Normalize),
             Self::EvalAnswerLiteral => Some(ClauseUnaryInference::EvalAnswerLiteral),
             Self::DestructiveEqualityResolution => Some(ClauseUnaryInference::EqualityResolution),
-            Self::SimplifyReflect | Self::ContextSimplifyReflect => None,
+            Self::SimplifyReflect | Self::ContextSimplifyReflect | Self::AcResolution => None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClauseModificationEvidence<'a> {
+    pub partner: Option<&'a Clause>,
+    pub ac_axiom_ids: &'a [i64],
+}
+
+impl<'a> ClauseModificationEvidence<'a> {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            partner: None,
+            ac_axiom_ids: &[],
+        }
+    }
+
+    #[must_use]
+    pub const fn partner(partner: &'a Clause) -> Self {
+        Self {
+            partner: Some(partner),
+            ac_axiom_ids: &[],
+        }
+    }
+
+    #[must_use]
+    pub const fn ac_resolution(ac_axiom_ids: &'a [i64]) -> Self {
+        Self {
+            partner: None,
+            ac_axiom_ids,
+        }
+    }
+}
+
+impl Default for ClauseModificationEvidence<'_> {
+    fn default() -> Self {
+        Self::none()
     }
 }
 
@@ -245,7 +285,7 @@ struct ClauseModificationRender<'a> {
     clause: &'a Clause,
     old_id: i64,
     inference: ClauseModificationInference,
-    partner: Option<&'a Clause>,
+    evidence: ClauseModificationEvidence<'a>,
     comment: Option<&'a str>,
 }
 
@@ -320,10 +360,8 @@ impl ProofDocSession {
         }
     }
 
-    /// Ports the non-AC clause cases of C `DocClauseModification`.
-    ///
-    /// The AC-resolution branch is deliberately left to the caller for now
-    /// because C expands the signature-owned AC-axiom stack while rendering.
+    /// Ports C `DocClauseModification` for represented clause modification
+    /// inferences.
     ///
     /// # Errors
     ///
@@ -343,6 +381,38 @@ impl ProofDocSession {
         partner: Option<&Clause>,
         comment: Option<&str>,
     ) -> Result<ProofDocWriteResult, Diagnostic> {
+        let evidence = partner.map_or_else(
+            ClauseModificationEvidence::none,
+            ClauseModificationEvidence::partner,
+        );
+        self.doc_clause_modification_with_evidence(
+            output, bank, clause, inference, evidence, comment,
+        )
+    }
+
+    /// Ports C `DocClauseModification` with branch-specific evidence.
+    ///
+    /// Use this form for AC-resolution so the signature-owned AC axiom stack
+    /// can be passed as stable clause ids.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied evidence shape does not match the requested
+    /// inference, matching C assertions in `DocClauseModification`.
+    pub fn doc_clause_modification_with_evidence(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &mut Clause,
+        inference: ClauseModificationInference,
+        evidence: ClauseModificationEvidence<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
         clause.del_prop(CP_INPUT_FORMULA);
         if self.output_level < 2 {
             return Ok(ProofDocWriteResult::suppressed());
@@ -359,7 +429,7 @@ impl ProofDocSession {
                     clause,
                     old_id,
                     inference,
-                    partner,
+                    evidence,
                     comment,
                 },
             ),
@@ -370,7 +440,7 @@ impl ProofDocSession {
                     clause,
                     old_id,
                     inference,
-                    partner,
+                    evidence,
                     comment,
                 },
             ),
@@ -495,7 +565,7 @@ impl ProofDocSession {
         match render.inference {
             ClauseModificationInference::SimplifyReflect
             | ClauseModificationInference::ContextSimplifyReflect => {
-                let Some(partner) = render.partner else {
+                let Some(partner) = render.evidence.partner else {
                     panic!("binary clause modification documentation needs partner");
                 };
                 let Some(binary) = render.inference.binary() else {
@@ -508,7 +578,7 @@ impl ProofDocSession {
             | ClauseModificationInference::Minimize
             | ClauseModificationInference::EvalAnswerLiteral => {
                 assert!(
-                    render.partner.is_none(),
+                    render.evidence.partner.is_none(),
                     "unary clause modification documentation must not have partner"
                 );
                 let Some(unary) = render.inference.unary() else {
@@ -519,7 +589,7 @@ impl ProofDocSession {
             }
             ClauseModificationInference::DestructiveEqualityResolution => {
                 assert!(
-                    render.partner.is_some(),
+                    render.evidence.partner.is_some(),
                     "destructive equality-resolution documentation needs partner"
                 );
                 let Some(unary) = render.inference.unary() else {
@@ -527,6 +597,18 @@ impl ProofDocSession {
                 };
                 write_pcl_clause_unary_inference(output, unary, render.old_id)
                     .map_err(doc_write_error)?;
+            }
+            ClauseModificationInference::AcResolution => {
+                assert!(
+                    render.evidence.partner.is_none(),
+                    "AC-resolution documentation must not have partner"
+                );
+                write_pcl_clause_ac_resolution_inference(
+                    output,
+                    render.old_id,
+                    render.evidence.ac_axiom_ids,
+                )
+                .map_err(doc_write_error)?;
             }
         }
         pcl_print_end(output, render.clause, render.comment, self.step_options)
@@ -553,7 +635,7 @@ impl ProofDocSession {
         match render.inference {
             ClauseModificationInference::SimplifyReflect
             | ClauseModificationInference::ContextSimplifyReflect => {
-                let Some(partner) = render.partner else {
+                let Some(partner) = render.evidence.partner else {
                     panic!("binary clause modification documentation needs partner");
                 };
                 let Some(binary) = render.inference.binary() else {
@@ -566,7 +648,7 @@ impl ProofDocSession {
             | ClauseModificationInference::Minimize
             | ClauseModificationInference::EvalAnswerLiteral => {
                 assert!(
-                    render.partner.is_none(),
+                    render.evidence.partner.is_none(),
                     "unary clause modification documentation must not have partner"
                 );
                 let Some(unary) = render.inference.unary() else {
@@ -577,7 +659,7 @@ impl ProofDocSession {
             }
             ClauseModificationInference::DestructiveEqualityResolution => {
                 assert!(
-                    render.partner.is_some(),
+                    render.evidence.partner.is_some(),
                     "destructive equality-resolution documentation needs partner"
                 );
                 let Some(unary) = render.inference.unary() else {
@@ -585,6 +667,18 @@ impl ProofDocSession {
                 };
                 write_tstp_clause_unary_inference(output, unary, render.old_id)
                     .map_err(doc_write_error)?;
+            }
+            ClauseModificationInference::AcResolution => {
+                assert!(
+                    render.evidence.partner.is_none(),
+                    "AC-resolution documentation must not have partner"
+                );
+                write_tstp_clause_ac_resolution_inference(
+                    output,
+                    render.old_id,
+                    render.evidence.ac_axiom_ids,
+                )
+                .map_err(doc_write_error)?;
             }
         }
         tstp_print_end(output, render.clause, render.comment).map_err(doc_write_error)?;
@@ -1144,8 +1238,9 @@ mod tests {
         write_tstp_clause_unary_inference, write_tstp_formula_apply_defs_inference,
         write_tstp_formula_intro_def_inference, write_tstp_formula_parent_inference,
         ClauseBinaryInference, ClauseCreationInference, ClauseCreationParents,
-        ClauseModificationInference, ClauseUnaryInference, FormulaParentInference,
-        PclStepPrintOptions, ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
+        ClauseModificationEvidence, ClauseModificationInference, ClauseUnaryInference,
+        FormulaParentInference, PclStepPrintOptions, ProofDocOutputFormat, ProofDocSession,
+        ProofDocWriteResult,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1458,6 +1553,50 @@ mod tests {
         assert_eq!(
             rendered,
             "cnf(c_0_2, plain, ($false),inference(er,[status(thm)],[c_0_8])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_modification_prints_ac_resolution_axiom_list() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(7);
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_modification_with_evidence(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::AcResolution,
+                ClauseModificationEvidence::ac_resolution(&[70, 71]),
+                Some("ac"),
+            )
+            .unwrap();
+
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(rendered, "     1 : :[] : ar(7,70,71) : 'ac'\n");
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        clause.set_ident(8);
+        rendered.clear();
+        session
+            .doc_clause_modification_with_evidence(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::AcResolution,
+                ClauseModificationEvidence::ac_resolution(&[70, 71]),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false),inference(ar,[status(thm)],[c_0_8,c_0_70,c_0_71])).\n"
         );
     }
 
