@@ -2959,6 +2959,7 @@ mod tests {
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::inout::scanner::Scanner;
+    use crate::terms::functypes::FunCode;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
         Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_CONS_CODE,
@@ -3026,6 +3027,28 @@ mod tests {
             .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
         sig.declare_type(outer, outer_type).unwrap();
         TermBank::new(sig).unwrap()
+    }
+
+    fn declare_i_const(bank: &mut TermBank, name: &str) -> FunCode {
+        let i_type = bank.signature().type_bank().i_type();
+        let code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(code, i_type)
+            .unwrap();
+        code
+    }
+
+    fn declare_unary_i_fun(bank: &mut TermBank, name: &str) -> FunCode {
+        let i_type = bank.signature().type_bank().i_type();
+        let function_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type]));
+        let code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(code, function_type)
+            .unwrap();
+        code
     }
 
     fn parse_bool_arg(input: &str) -> (TermBank, Term) {
@@ -3805,6 +3828,57 @@ mod tests {
     }
 
     #[test]
+    fn checked_parser_reads_non_boolean_ite_compound_branches() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        declare_i_const(&mut bank, "ite_compound_arg_a");
+        declare_i_const(&mut bank, "ite_compound_arg_b");
+        declare_unary_i_fun(&mut bank, "ite_compound_then");
+        declare_unary_i_fun(&mut bank, "ite_compound_else");
+        let mut scanner = Scanner::from_user_string(
+            concat!(
+                "takes_i_arg($ite(",
+                "pred_i_compound_cond,",
+                "ite_compound_then(ite_compound_arg_a),",
+                "ite_compound_else(ite_compound_arg_b)",
+                "))"
+            ),
+            false,
+        )
+        .unwrap();
+
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let ite = parsed.argument(0).unwrap();
+
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(i_type));
+        assert_eq!(
+            ite.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        let true_branch = ite.argument(1).unwrap();
+        assert_eq!(
+            bank.signature().find_name(true_branch.f_code()),
+            Some("ite_compound_then")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(true_branch.argument(0).unwrap().f_code()),
+            Some("ite_compound_arg_a")
+        );
+        let false_branch = ite.argument(2).unwrap();
+        assert_eq!(
+            bank.signature().find_name(false_branch.f_code()),
+            Some("ite_compound_else")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(false_branch.argument(0).unwrap().f_code()),
+            Some("ite_compound_arg_b")
+        );
+    }
+
+    #[test]
     fn checked_parser_reads_top_level_boolean_let_terms_like_tbterm_parse_real() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
@@ -3877,6 +3951,77 @@ mod tests {
             bank.signature()
                 .find_name(body_head.argument(0).unwrap().f_code()),
             Some("let_arg_a")
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_top_level_non_boolean_let_terms_like_c() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let value_code = declare_i_const(&mut bank, "let_i_value");
+        let mut scanner =
+            Scanner::from_user_string("$let(f:$i, f := let_i_value, f)", false).unwrap();
+
+        let let_term = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+
+        assert_eq!(let_term.f_code(), SIG_LET_CODE);
+        assert_eq!(
+            let_term.type_(),
+            Some(bank.signature().type_bank().i_type())
+        );
+        assert_eq!(let_term.arity(), 2);
+
+        let definition = let_term.argument(0).unwrap();
+        assert_eq!(definition.f_code(), bank.signature().eqn_code());
+        let defined_head = definition.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(defined_head.f_code()), Some("f"));
+        assert_eq!(
+            defined_head.type_(),
+            Some(bank.signature().type_bank().i_type())
+        );
+        assert_eq!(definition.argument(1).unwrap().f_code(), value_code);
+
+        let body = let_term.argument(1).unwrap();
+        assert_eq!(body.f_code(), defined_head.f_code());
+        assert_eq!(body.type_(), Some(bank.signature().type_bank().i_type()));
+    }
+
+    #[test]
+    fn checked_parser_reads_parameterized_non_boolean_let_terms() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        declare_i_const(&mut bank, "let_i_arg");
+        declare_unary_i_fun(&mut bank, "let_i_h");
+        let mut scanner =
+            Scanner::from_user_string("$let(f:$i>$i, f(X) := let_i_h(X), f(let_i_arg))", false)
+                .unwrap();
+
+        let let_term = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+
+        assert_eq!(let_term.f_code(), SIG_LET_CODE);
+        assert_eq!(
+            let_term.type_(),
+            Some(bank.signature().type_bank().i_type())
+        );
+        let definition = let_term.argument(0).unwrap();
+        let defined_head = definition.argument(0).unwrap();
+        let local_f_code = defined_head.f_code();
+        assert_eq!(defined_head.arity(), 1);
+        let variable = defined_head.argument(0).unwrap();
+        assert!(variable.is_free_var());
+
+        let rhs = definition.argument(1).unwrap();
+        assert_eq!(bank.signature().find_name(rhs.f_code()), Some("let_i_h"));
+        assert_eq!(rhs.argument(0), Some(variable));
+
+        let body = let_term.argument(1).unwrap();
+        assert_eq!(body.f_code(), local_f_code);
+        assert_eq!(
+            bank.signature()
+                .find_name(body.argument(0).unwrap().f_code()),
+            Some("let_i_arg")
         );
     }
 
