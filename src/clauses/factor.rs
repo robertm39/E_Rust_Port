@@ -6,6 +6,9 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_EQ_FACTOR, DC_ORDERED_FACTOR};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
+use crate::clauses::inferencedoc::{
+    ClauseCreationInference, ClauseCreationParents, ProofDocSession,
+};
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_mgu_complete;
@@ -16,7 +19,7 @@ use crate::{
     basics::error::{Diagnostic, ErrorCode},
     terms::termtypes::{DerefType, Term},
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 /// One C `ClausePosFirst/NextOrderedFactorLiterals` candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -352,7 +355,8 @@ pub fn compute_equality_factor(
 ///
 /// This mirrors C `ComputeAllOrderedFactors` for the first-order ordered
 /// factoring path, including the C derivation opcode and parent reference.
-/// Proof-documentation output remains pending.
+/// Use [`compute_all_ordered_factors_with_docs`] for represented
+/// proof-documentation output.
 ///
 /// # Errors
 ///
@@ -362,6 +366,34 @@ pub fn compute_all_ordered_factors(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    compute_all_ordered_factors_impl::<String>(bank, ocb, clause, store, None)
+}
+
+/// Computes all first-order ordered factors while emitting represented C
+/// `DocClauseCreationDefault(..., inf_factor, ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_all_ordered_factors`], plus any
+/// proof-documentation write diagnostic.
+pub fn compute_all_ordered_factors_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    compute_all_ordered_factors_impl(bank, ocb, clause, store, Some((output, session)))
+}
+
+fn compute_all_ordered_factors_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut factor_count = 0;
     if clause.is_horn() || clause.query_prop(CP_NO_GENERATION) {
@@ -375,6 +407,16 @@ pub fn compute_all_ordered_factors(
             factor.set_proof_size(clause.proof_size().saturating_add(1));
             factor.set_tptp_type(clause.query_tptp_type());
             factor.set_prop(clause.give_props(CP_IS_SOS));
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_creation(
+                    &mut **output,
+                    bank,
+                    &mut factor,
+                    ClauseCreationInference::Factoring,
+                    ClauseCreationParents::unary(clause),
+                    None,
+                )?;
+            }
             clause_push_derivation(&mut factor, DC_ORDERED_FACTOR, Some(clause), None);
             store.insert(factor);
         }
@@ -386,8 +428,9 @@ pub fn compute_all_ordered_factors(
 /// Computes all first-order equality factors and inserts them into `store`.
 ///
 /// This mirrors C `ComputeAllEqualityFactors` for the first-order MGU path.
-/// Higher-order CSU enumeration, lambda normalization, and proof documentation
-/// remain pending.
+/// Higher-order CSU enumeration and lambda normalization remain pending. Use
+/// [`compute_all_equality_factors_with_docs`] for represented
+/// proof-documentation output.
 ///
 /// # Errors
 ///
@@ -397,6 +440,34 @@ pub fn compute_all_equality_factors(
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    compute_all_equality_factors_impl::<String>(bank, ocb, clause, store, None)
+}
+
+/// Computes all first-order equality factors while emitting represented C
+/// `DocClauseCreationDefault(..., inf_efactor, ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_all_equality_factors`], plus any
+/// proof-documentation write diagnostic.
+pub fn compute_all_equality_factors_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    compute_all_equality_factors_impl(bank, ocb, clause, store, Some((output, session)))
+}
+
+fn compute_all_equality_factors_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut factor_count = 0;
     if clause.is_horn() || clause.query_prop(CP_NO_GENERATION) {
@@ -410,6 +481,16 @@ pub fn compute_all_equality_factors(
             factor.set_proof_size(clause.proof_size().saturating_add(1));
             factor.set_tptp_type(clause.query_tptp_type());
             factor.set_prop(clause.give_props(CP_IS_SOS));
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_creation(
+                    &mut **output,
+                    bank,
+                    &mut factor,
+                    ClauseCreationInference::EqualityFactoring,
+                    ClauseCreationParents::unary(clause),
+                    None,
+                )?;
+            }
             clause_push_derivation(&mut factor, DC_EQ_FACTOR, Some(clause), None);
             store.insert(factor);
         }
@@ -521,11 +602,13 @@ fn fresh_var_bank_for_clause(bank: &TermBank, clause: &Clause) -> VarBank {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_all_equality_factors, compute_all_ordered_factors, compute_equality_factor,
-        compute_ordered_factor, equality_factor_positions, ordered_factor_positions,
-        EqualityFactorPosition, OrderedFactorPosition,
+        compute_all_equality_factors, compute_all_equality_factors_with_docs,
+        compute_all_ordered_factors, compute_equality_factor, compute_ordered_factor,
+        equality_factor_positions, ordered_factor_positions, EqualityFactorPosition,
+        OrderedFactorPosition,
     };
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
@@ -535,6 +618,7 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
@@ -858,6 +942,50 @@ mod tests {
             0
         );
         assert!(blocked_store.is_empty());
+    }
+
+    #[test]
+    fn compute_all_equality_factors_with_docs_prints_creation_step() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "ef_doc_a");
+        let b = typed_const(&mut bank, "ef_doc_b");
+        let c = typed_const(&mut bank, "ef_doc_c");
+        let f_code = typed_unary_code(&mut bank, "ef_doc_f");
+        let f_of_x = typed_unary(&mut bank, f_code, &x);
+        let f_of_b = typed_unary(&mut bank, f_code, &b);
+        let mut first = lit(&mut bank, &f_of_x, &a, true);
+        let second = lit(&mut bank, &f_of_b, &c, true);
+        first.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        clause.set_ident(44);
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let count = compute_all_equality_factors_with_docs(
+            &mut output,
+            &mut session,
+            &mut bank,
+            &mut ocb,
+            &clause,
+            &mut store,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert!(output.contains(" : ef(44)\n"));
+        let stored = store.iter().next().expect("one equality factor inserted");
+        assert_eq!(stored.ident(), 1);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_EQ_FACTOR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+            ]
+        );
     }
 
     #[test]

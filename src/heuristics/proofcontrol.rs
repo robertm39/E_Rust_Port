@@ -27,7 +27,9 @@ use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::{
     clause_er_normalize_var, compute_all_eqn_resolvents, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
 };
-use crate::clauses::factor::compute_all_equality_factors;
+use crate::clauses::factor::{
+    compute_all_equality_factors, compute_all_equality_factors_with_docs,
+};
 use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvPackedClause;
@@ -2907,8 +2909,9 @@ pub fn proof_state_select_unprocessed_clause(
 /// back-simplification, backward contextual simplify-reflect, and the final
 /// `CPIsIRVictim` marking over `tmp_store`. Use
 /// [`proof_state_backward_simplify_with_docs`] for represented
-/// backward-subsumption and simplified-clause movement quotes; child-kill proof
-/// traversal remains later integration work.
+/// backward-subsumption and simplified-clause movement quotes. C comments in
+/// the removal helpers mention child killing, but the current bodies archive
+/// or requeue the affected clauses without traversing child links.
 ///
 /// # Errors
 ///
@@ -3079,7 +3082,24 @@ pub fn proof_state_generate_new_clauses(
     control: &mut ProofControl,
     clause: &Clause,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    proof_state_generate_new_clauses_impl(state, control, clause, None)
+    proof_state_generate_new_clauses_impl::<String>(state, control, clause, None, None)
+}
+
+/// Runs the ported first-order selected-clause generators while emitting
+/// represented proof-documentation output for generated equality factors.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_generate_new_clauses`], plus
+/// any proof-documentation write diagnostic.
+pub fn proof_state_generate_new_clauses_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    proof_state_generate_new_clauses_impl(state, control, clause, None, Some((output, session)))
 }
 
 /// Runs the ported first-order selected-clause generators with caller-owned
@@ -3100,14 +3120,41 @@ pub fn proof_state_generate_new_clauses_with_global_indices(
     clause: &Clause,
     indices: &GlobalIndices<'_>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
-    proof_state_generate_new_clauses_impl(state, control, clause, Some(indices))
+    proof_state_generate_new_clauses_impl::<String>(state, control, clause, Some(indices), None)
 }
 
-fn proof_state_generate_new_clauses_impl(
+/// Runs the ported first-order selected-clause generators with caller-owned
+/// global indices while emitting represented proof-documentation output for
+/// generated equality factors.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_generate_new_clauses_with_global_indices`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_generate_new_clauses_with_global_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    indices: &GlobalIndices<'_>,
+) -> Result<GenerateNewClausesOutcome, Diagnostic> {
+    proof_state_generate_new_clauses_impl(
+        state,
+        control,
+        clause,
+        Some(indices),
+        Some((output, session)),
+    )
+}
+
+fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
     indices: Option<&GlobalIndices<'_>>,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<GenerateNewClausesOutcome, Diagnostic> {
     if problem_type() == ProblemType::HigherOrder {
         return Err(Diagnostic::new(
@@ -3155,7 +3202,18 @@ fn proof_state_generate_new_clauses_impl(
                     "selected-clause generation requires initialized proof-control ordering",
                 ));
             };
-            let count = compute_all_equality_factors(terms, ocb, clause, generation.tmp_store)?;
+            let count = if let Some((output, session)) = doc_context.as_mut() {
+                compute_all_equality_factors_with_docs(
+                    &mut **output,
+                    session,
+                    terms,
+                    ocb,
+                    clause,
+                    generation.tmp_store,
+                )?
+            } else {
+                compute_all_equality_factors(terms, ocb, clause, generation.tmp_store)?
+            };
             outcome.equality_factors = i64_to_u64_saturating(count);
         }
 
@@ -3611,7 +3669,26 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
                     "processed clause disappeared before selected-clause generation",
                 )
             })?;
-        if let Some(indices) = indices.as_deref() {
+        if let Some((output, session, _output_level)) = doc_context.as_mut() {
+            if let Some(indices) = indices.as_deref() {
+                proof_state_generate_new_clauses_with_global_indices_and_docs(
+                    &mut **output,
+                    session,
+                    state,
+                    control,
+                    &processed_clause,
+                    indices,
+                )?
+            } else {
+                proof_state_generate_new_clauses_with_docs(
+                    &mut **output,
+                    session,
+                    state,
+                    control,
+                    &processed_clause,
+                )?
+            }
+        } else if let Some(indices) = indices.as_deref() {
             proof_state_generate_new_clauses_with_global_indices(
                 state,
                 control,
@@ -5094,8 +5171,9 @@ mod tests {
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
         proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
         proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
-        proof_state_init, proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_docs,
+        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
         proof_state_init_global_indices, proof_state_init_indexing, proof_state_init_with_docs,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_insert_new_clauses_with_docs, proof_state_insert_processed_clause,
@@ -8034,6 +8112,47 @@ mod tests {
         assert_eq!(state.statistics().resolv_count, 1);
         assert_eq!(state.tmp_store().members(), 1);
         assert!(state.tmp_store().iter().next().unwrap().is_empty());
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_with_docs_quotes_equality_factor() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -72);
+            let left_remainder = typed_const(terms, "pc_generate_doc_ef_a");
+            let right_remainder = typed_const(terms, "pc_generate_doc_ef_c");
+            let instance = typed_const(terms, "pc_generate_doc_ef_b");
+            let f_of_var = typed_unary(terms, "pc_generate_doc_ef_f", &variable);
+            let f_of_instance = typed_unary(terms, "pc_generate_doc_ef_f", &instance);
+            let mut first = literal(terms, &f_of_var, &left_remainder, true);
+            let second = literal(terms, &f_of_instance, &right_remainder, true);
+            first.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+            clause.set_ident(4_145);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().enable_eq_factoring = true;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_generate_new_clauses_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+            &clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.equality_factors, 1);
+        assert_eq!(state.statistics().factor_count, 1);
+        assert!(output.contains(" : ef(4145)\n"));
+        assert_eq!(state.tmp_store().members(), 1);
+        assert_eq!(state.tmp_store().iter().next().unwrap().ident(), 1);
     }
 
     #[test]
