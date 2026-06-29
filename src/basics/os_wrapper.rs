@@ -116,6 +116,13 @@ pub fn current_resource_usage() -> ResourceUsage {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(usage) = linux_resource_usage() {
+            return usage;
+        }
+    }
+
     ResourceUsage {
         user_time_seconds: fallback_user_time_seconds(),
         system_time_seconds: 0.0,
@@ -241,6 +248,61 @@ pub fn secure_fclose_io(file: File) -> io::Result<()> {
 #[allow(clippy::cast_precision_loss)]
 fn fallback_user_time_seconds() -> f64 {
     get_usec_clock() as f64 / 1_000_000.0
+}
+
+#[cfg(target_os = "linux")]
+fn linux_resource_usage() -> Option<ResourceUsage> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let (user_ticks, system_ticks) = parse_linux_stat_cpu_ticks(&stat)?;
+    let status = std::fs::read_to_string("/proc/self/status").ok();
+    Some(ResourceUsage {
+        user_time_seconds: linux_ticks_to_seconds(user_ticks),
+        system_time_seconds: linux_ticks_to_seconds(system_ticks),
+        // Linux getrusage returns ru_maxrss in KiB, despite E's historical
+        // "pages" label. Preserve the raw Linux-style value for compatibility.
+        max_resident_pages: status
+            .as_deref()
+            .and_then(parse_linux_status_vm_hwm_kib)
+            .unwrap_or(0),
+    })
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn parse_linux_stat_cpu_ticks(stat: &str) -> Option<(u64, u64)> {
+    let (_, rest) = stat.rsplit_once(") ")?;
+    let mut fields = rest.split_whitespace().skip(11);
+    let user_ticks = parse_non_negative_u64(fields.next()?)?;
+    let system_ticks = parse_non_negative_u64(fields.next()?)?;
+    let child_user_ticks = parse_non_negative_u64(fields.next()?)?;
+    let child_system_ticks = parse_non_negative_u64(fields.next()?)?;
+    Some((
+        user_ticks.saturating_add(child_user_ticks),
+        system_ticks.saturating_add(child_system_ticks),
+    ))
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn parse_non_negative_u64(value: &str) -> Option<u64> {
+    let parsed = value.parse::<i128>().ok()?;
+    u64::try_from(parsed).ok()
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn parse_linux_status_vm_hwm_kib(status: &str) -> Option<u64> {
+    status.lines().find_map(|line| {
+        let rest = line.strip_prefix("VmHWM:")?;
+        rest.split_whitespace().next()?.parse::<u64>().ok()
+    })
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::cast_precision_loss)]
+fn linux_ticks_to_seconds(ticks: u64) -> f64 {
+    // Linux exposes /proc CPU fields in USER_HZ units. sysconf(_SC_CLK_TCK)
+    // would require libc FFI; the port keeps this safe and documents that
+    // exact nonstandard tick rates should be revisited if reference tests need
+    // them.
+    ticks as f64 / 100.0
 }
 
 #[cfg(windows)]
@@ -452,8 +514,9 @@ mod tests {
     use super::{
         current_resource_usage, format_resource_usage, get_core_number, get_msec_time,
         get_sec_time, get_sec_time_mod, get_soft_rlimit, get_system_page_size,
-        get_system_phys_memory, get_usec_clock, get_usec_time, secure_fclose, secure_fopen,
-        set_memory_limit, set_soft_rlimit, stride_memory, RLimResult, ResourceUsage,
+        get_system_phys_memory, get_usec_clock, get_usec_time, parse_linux_stat_cpu_ticks,
+        parse_linux_status_vm_hwm_kib, secure_fclose, secure_fopen, set_memory_limit,
+        set_soft_rlimit, stride_memory, RLimResult, ResourceUsage,
     };
     use crate::basics::error::ErrorCode;
     use std::io::Write;
@@ -526,6 +589,20 @@ mod tests {
         let current = current_resource_usage();
         assert!(current.user_time_seconds >= 0.0);
         assert!(current.system_time_seconds >= 0.0);
+    }
+
+    #[test]
+    fn linux_stat_parser_sums_self_and_child_cpu_ticks() {
+        let stat = "1234 (eprover worker) R 1 2 3 4 5 6 7 8 9 10 13 17 19 23 24";
+
+        assert_eq!(parse_linux_stat_cpu_ticks(stat), Some((32, 40)));
+    }
+
+    #[test]
+    fn linux_status_parser_reads_peak_resident_kib() {
+        let status = "Name:\teprover\nVmRSS:\t   2048 kB\nVmHWM:\t   4096 kB\n";
+
+        assert_eq!(parse_linux_status_vm_hwm_kib(status), Some(4096));
     }
 
     #[test]

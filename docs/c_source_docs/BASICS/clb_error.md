@@ -131,7 +131,7 @@ Source files reviewed: `BASICS/clb_error.h`, `BASICS/clb_error.c`.
 
 ### Change-Later Observations
 
-- `PrintRusage` sums `getrusage(RUSAGE_SELF)` and `getrusage(RUSAGE_CHILDREN)` user/system times, then prints raw maximum resident set size under a "pages" label. Rust now has the C-shaped footer through the safe process-clock abstraction, but native process counters, child-process aggregation, and exact per-target resident-set units should be revisited when the final resource-limit/signal abstraction is completed.
+- `PrintRusage` sums `getrusage(RUSAGE_SELF)` and `getrusage(RUSAGE_CHILDREN)` user/system times, then prints raw maximum resident set size under a "pages" label. Rust now has the C-shaped footer, native Windows process counters, and a safe Linux `/proc` path that sums self/child CPU ticks and reports the raw `VmHWM` KiB value through the same historic label. Exact POSIX `getrusage`, nonstandard clock-tick rates, child resident-set aggregation, and per-target resident-set units should be revisited when the final resource-limit/signal abstraction is completed.
 
 ### Porting Focus
 
