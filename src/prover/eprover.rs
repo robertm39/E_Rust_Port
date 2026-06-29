@@ -8575,8 +8575,24 @@ fn parse_simple_old_tptp_fof_formula(
             right,
         }]);
     }
+    if scanner.test_tok(TokenType::EQUAL_SIGN) {
+        scanner.accept_tok(TokenType::EQUAL_SIGN)?;
+        let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Equivalence {
+            left: formulas,
+            right,
+        }]);
+    }
     if scanner.test_tok(TokenType::FOF_XOR) {
         scanner.accept_tok(TokenType::FOF_XOR)?;
+        let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Xor {
+            left: formulas,
+            right,
+        }]);
+    }
+    if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+        scanner.accept_tok(TokenType::NEG_EQUAL_SIGN)?;
         let right = parse_simple_old_tptp_fof_formula(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Xor {
             left: formulas,
@@ -8734,8 +8750,24 @@ fn parse_simple_fof_connective_formulas(
             right,
         }]);
     }
+    if scanner.test_tok(TokenType::EQUAL_SIGN) {
+        scanner.accept_tok(TokenType::EQUAL_SIGN)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Equivalence {
+            left: formulas,
+            right,
+        }]);
+    }
     if scanner.test_tok(TokenType::FOF_XOR) {
         scanner.accept_tok(TokenType::FOF_XOR)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        return Ok(vec![SimpleFofFormula::Xor {
+            left: formulas,
+            right,
+        }]);
+    }
+    if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+        scanner.accept_tok(TokenType::NEG_EQUAL_SIGN)?;
         let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Xor {
             left: formulas,
@@ -9135,7 +9167,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, XORs, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, formula-level equality, XORs, formula-level disequality, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -11855,6 +11887,36 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_parses_supported_fof_formula_equality_fragments() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-fof-formula-equality");
+        std::fs::write(
+            &path,
+            "fof(eq, axiom, (((p(a) | q(a)) = r(a)))).\n\
+             fof(ne, axiom, (((s(a) & t(a)) != u(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_supported_fof_axiom_conjunction_fragment() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-only-fof-conjunction");
@@ -12428,6 +12490,31 @@ mod tests {
                 default_preprocessing_debug_line()
             )
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_old_tptp_formula_equality_with_compound_left() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-equality-compound-left");
+        std::fs::write(
+            &path,
+            "input_formula(rule, axiom, ((p(a) | q(a)) = r(a))).\n\
+             input_formula(fact, axiom, p(a)).\n\
+             input_formula(goal, conjecture, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -13333,6 +13420,56 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_formula_equality_with_compound_left() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-formula-equality-compound-left");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, (((p(a) | q(a)) = r(a)))).\n\
+             fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_formula_disequality_with_compound_left() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-formula-disequality-compound-left");
+        std::fs::write(
+            &path,
+            "fof(diff, axiom, (((p(a) | q(a)) != r(a)))).\n\
+             fof(p, axiom, p(a)).\n\
+             fof(r, axiom, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
