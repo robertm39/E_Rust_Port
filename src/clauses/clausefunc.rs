@@ -1,4 +1,4 @@
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
@@ -20,7 +20,8 @@ use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
 use crate::terms::termtypes::{
-    term_del_prop, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TP_CHECK_FLAG, TP_OP_FLAG,
+    term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
+    TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS,
 };
 use std::cmp::Ordering;
 
@@ -353,6 +354,494 @@ pub fn clause_eliminate_naked_boolean_variables(
     Ok(result)
 }
 
+/// Applies C `BooleanSimplification` to a clause.
+///
+/// The mapped term-level simplifier follows C `TFormulaSimplifyDecoded` for
+/// decoded two-argument Boolean formulas used by forward contraction.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the formula rebuild needs an unavailable signature
+/// arity, if term-bank insertion fails, or if a higher-order-only decoded
+/// formula shape reaches a branch that is not ported yet.
+pub fn clause_boolean_simplification(
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    let mut changed = false;
+    let mut is_tautology = false;
+
+    for literal in clause.literals_mut().as_mut_slice() {
+        let old_left = literal.left().clone();
+        let old_right = literal.right().clone();
+        let new_left = tformula_simplify_decoded(bank, &old_left, true)?;
+        let new_right = tformula_simplify_decoded(bank, &old_right, true)?;
+        if new_left != old_left || new_right != old_right {
+            changed = true;
+        }
+
+        literal.map_terms(bank, |term| {
+            if *term == old_left {
+                new_left.clone()
+            } else if *term == old_right {
+                new_right.clone()
+            } else {
+                term.clone()
+            }
+        });
+        if literal.is_true(bank) {
+            is_tautology = true;
+            break;
+        }
+    }
+
+    if changed {
+        clause.recompute_lit_counts();
+        let removed_resolved = clause.literals_mut().remove_resolved(bank);
+        let removed_duplicates = clause.literals_mut().remove_duplicates(bank);
+        if removed_resolved + removed_duplicates != 0 {
+            clause.del_prop(CP_INITIAL | CP_LIMITED_RW);
+            clause.recompute_lit_counts();
+        }
+        clause.set_weight(clause.standard_weight());
+        clause_push_derivation(clause, DC_NORMALIZE, None, None);
+    }
+
+    Ok(is_tautology)
+}
+
+fn tformula_simplify_decoded(
+    bank: &mut TermBank,
+    formula: &Term,
+    unroll_implications: bool,
+) -> Result<Term, Diagnostic> {
+    if formula.is_db_var() {
+        return Ok(formula.clone());
+    }
+
+    let sig = bank.signature();
+    if matches!(formula.f_code(), code if code == sig.or_code() || code == sig.and_code()) {
+        return simplify_decoded_and_or(bank, formula, unroll_implications);
+    }
+    if formula.f_code() == sig.not_code() {
+        return match formula.arity() {
+            1 => {
+                let arg = formula_argument(formula, 0);
+                negate_decoded_formula(bank, &arg)
+            }
+            _ => Ok(formula.clone()),
+        };
+    }
+    if formula.f_code() == sig.impl_code() {
+        return simplify_decoded_implication(bank, formula, unroll_implications);
+    }
+    if matches!(formula.f_code(), code if code == sig.equiv_code()
+        || code == sig.xor_code()
+        || code == sig.eqn_code()
+        || code == sig.neqn_code())
+    {
+        return simplify_decoded_equivalence_like(bank, formula);
+    }
+    if matches!(formula.f_code(), code if code == sig.qex_code() || code == sig.qall_code()) {
+        return simplify_decoded_quantifier(bank, formula);
+    }
+
+    simplify_decoded_args(bank, formula, true)
+}
+
+fn simplify_decoded_args(
+    bank: &mut TermBank,
+    formula: &Term,
+    unroll_implications: bool,
+) -> Result<Term, Diagnostic> {
+    if formula.is_any_var() || formula.arity() == 0 {
+        return Ok(formula.clone());
+    }
+
+    let copy = Term::top_copy_without_args(formula);
+    let mut changed = false;
+    for (index, arg) in formula.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+        let simplified = tformula_simplify_decoded(bank, &arg, unroll_implications)?;
+        if simplified != arg {
+            changed = true;
+        }
+        copy.set_argument(index, simplified);
+    }
+
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(formula.clone())
+    }
+}
+
+fn simplify_decoded_and_or(
+    bank: &mut TermBank,
+    formula: &Term,
+    unroll_implications: bool,
+) -> Result<Term, Diagnostic> {
+    let is_or = formula.f_code() == bank.signature().or_code();
+    let neutral_element = if is_or {
+        bank.false_term().clone()
+    } else {
+        bank.true_term().clone()
+    };
+    let absorbing_element = if is_or {
+        bank.true_term().clone()
+    } else {
+        bank.false_term().clone()
+    };
+
+    match formula.arity() {
+        1 => Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "TFormulaSimplifyDecoded unary Boolean lambda branch is not ported yet",
+        )),
+        2 => {
+            let mut changed = false;
+            let mut args = Vec::new();
+            unroll_binary_formula(formula, formula.f_code(), &mut args);
+
+            let mut simplified_args = Vec::new();
+            for arg in args {
+                let simplified = tformula_simplify_decoded(bank, &arg, unroll_implications)?;
+                if simplified != arg {
+                    changed = true;
+                }
+                if simplified == neutral_element {
+                    changed = true;
+                } else if simplified == absorbing_element {
+                    return Ok(absorbing_element);
+                } else {
+                    simplified_args.push(simplified);
+                }
+            }
+
+            simplified_args.sort_by_key(term_identity_id);
+            let deduped = dedup_sorted_terms(simplified_args);
+            if deduped.removed_duplicate {
+                changed = true;
+            }
+
+            if contains_decoded_complement(bank, &deduped.terms)? {
+                return Ok(absorbing_element);
+            }
+
+            if !changed {
+                Ok(formula.clone())
+            } else if deduped.terms.is_empty() {
+                Ok(neutral_element)
+            } else {
+                fold_and_or(bank, deduped.terms, formula.f_code())
+            }
+        }
+        _ => Ok(formula.clone()),
+    }
+}
+
+fn simplify_decoded_implication(
+    bank: &mut TermBank,
+    formula: &Term,
+    unroll_implications: bool,
+) -> Result<Term, Diagnostic> {
+    let nested_implication = formula.arity() == 2
+        && formula_argument(formula, 1).f_code() == bank.signature().impl_code();
+    let formula = simplify_decoded_args(bank, formula, unroll_implications && !nested_implication)?;
+    if formula.arity() != 2 {
+        return Ok(formula);
+    }
+
+    if unroll_implications {
+        let mut precedent = Vec::new();
+        let mut consequent = Vec::new();
+        let mut current = formula.clone();
+        while current.f_code() == bank.signature().impl_code() && current.arity() == 2 {
+            unroll_binary_formula(
+                &formula_argument(&current, 0),
+                bank.signature().and_code(),
+                &mut precedent,
+            );
+            current = formula_argument(&current, 1);
+        }
+        unroll_binary_formula(&current, bank.signature().or_code(), &mut consequent);
+        precedent.sort_by_key(term_identity_id);
+        for term in consequent {
+            if precedent
+                .binary_search_by_key(&term_identity_id(&term), term_identity_id)
+                .is_ok()
+            {
+                return Ok(bank.true_term().clone());
+            }
+        }
+    }
+
+    let antecedent = formula_argument(&formula, 0);
+    let consequent = formula_argument(&formula, 1);
+    if antecedent == consequent
+        || antecedent == *bank.false_term()
+        || consequent == *bank.true_term()
+    {
+        return Ok(bank.true_term().clone());
+    }
+
+    let neg_antecedent = negate_decoded_formula(bank, &antecedent)?;
+    let neg_consequent = negate_decoded_formula(bank, &consequent)?;
+    if consequent == neg_antecedent
+        || antecedent == neg_consequent
+        || antecedent == *bank.true_term()
+    {
+        return Ok(consequent);
+    }
+    if consequent == *bank.false_term() {
+        return negate_decoded_formula(bank, &antecedent);
+    }
+
+    Ok(formula)
+}
+
+fn simplify_decoded_equivalence_like(
+    bank: &mut TermBank,
+    formula: &Term,
+) -> Result<Term, Diagnostic> {
+    let formula = simplify_decoded_args(bank, formula, true)?;
+    if formula.arity() != 2 {
+        return Ok(formula);
+    }
+
+    let sig = bank.signature();
+    let negative =
+        matches!(formula.f_code(), code if code == sig.xor_code() || code == sig.neqn_code());
+    let left = formula_argument(&formula, 0);
+    let right = formula_argument(&formula, 1);
+
+    if left == right {
+        return Ok(if negative {
+            bank.false_term().clone()
+        } else {
+            bank.true_term().clone()
+        });
+    }
+    if left == *bank.true_term() {
+        return if negative {
+            negate_decoded_formula(bank, &right)
+        } else {
+            Ok(right)
+        };
+    }
+    if right == *bank.true_term() {
+        return if negative {
+            negate_decoded_formula(bank, &left)
+        } else {
+            Ok(left)
+        };
+    }
+    if left == *bank.false_term() {
+        return if negative {
+            Ok(right)
+        } else {
+            negate_decoded_formula(bank, &right)
+        };
+    }
+    if right == *bank.false_term() {
+        return if negative {
+            Ok(left)
+        } else {
+            negate_decoded_formula(bank, &left)
+        };
+    }
+
+    Ok(formula)
+}
+
+fn simplify_decoded_quantifier(bank: &mut TermBank, formula: &Term) -> Result<Term, Diagnostic> {
+    let formula = simplify_decoded_args(bank, formula, true)?;
+    if formula.arity() == 1 && formula_argument(&formula, 0).is_lambda() {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "TFormulaSimplifyDecoded closed-lambda quantifier branch is not ported yet",
+        ));
+    }
+    Ok(formula)
+}
+
+fn negate_decoded_formula(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    if !term.type_().is_some_and(|type_| type_.is_bool()) {
+        return Ok(term.clone());
+    }
+    if term.is_db_var() {
+        return tformula_fcode_alloc(bank, bank.signature().not_code(), term.clone(), None);
+    }
+
+    let sig = bank.signature();
+    if term == bank.true_term() {
+        return Ok(bank.false_term().clone());
+    }
+    if term == bank.false_term() {
+        return Ok(bank.true_term().clone());
+    }
+    if term.f_code() == sig.not_code() {
+        return Ok(formula_argument(term, 0));
+    }
+    if term.f_code() == sig.eqn_code() {
+        return tformula_fcode_alloc(
+            bank,
+            bank.signature().neqn_code(),
+            formula_argument(term, 0),
+            Some(formula_argument(term, 1)),
+        );
+    }
+    if term.f_code() == sig.neqn_code() {
+        return tformula_fcode_alloc(
+            bank,
+            bank.signature().eqn_code(),
+            formula_argument(term, 0),
+            Some(formula_argument(term, 1)),
+        );
+    }
+    if term.f_code() == sig.equiv_code() {
+        return tformula_fcode_alloc(
+            bank,
+            bank.signature().xor_code(),
+            formula_argument(term, 0),
+            Some(formula_argument(term, 1)),
+        );
+    }
+    if term.f_code() == sig.xor_code() {
+        return tformula_fcode_alloc(
+            bank,
+            bank.signature().equiv_code(),
+            formula_argument(term, 0),
+            Some(formula_argument(term, 1)),
+        );
+    }
+
+    tformula_fcode_alloc(bank, bank.signature().not_code(), term.clone(), None)
+}
+
+fn tformula_fcode_alloc(
+    bank: &mut TermBank,
+    op: i64,
+    arg1: Term,
+    arg2: Option<Term>,
+) -> Result<Term, Diagnostic> {
+    let arity = bank.signature().find_arity(op).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "TFormulaFCodeAlloc requires a known signature arity",
+        )
+    })?;
+    let arity = usize::try_from(arity).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "TFormulaFCodeAlloc requires unary or binary formula arity",
+        )
+    })?;
+    if arity != 1 && arity != 2 {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "TFormulaFCodeAlloc requires unary or binary formula arity",
+        ));
+    }
+    if arity == 2 && arg2.is_none() {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "TFormulaFCodeAlloc binary formula is missing its second argument",
+        ));
+    }
+
+    let term = Term::top_alloc(op, arity);
+    term.set_type(Some(bank.signature().type_bank().bool_type()));
+    if bank.signature().is_predicate(op) {
+        term.set_prop(TP_PRED_POS);
+    }
+    term.set_argument(0, arg1);
+    if let Some(arg2) = arg2 {
+        term.set_argument(1, arg2);
+    }
+    bank.term_top_insert(term)
+}
+
+fn unroll_binary_formula(formula: &Term, f_code: i64, args: &mut Vec<Term>) {
+    let mut tasks = vec![formula.clone()];
+    while let Some(task) = tasks.pop() {
+        if !task.is_db_var() && task.arity() == 2 && task.f_code() == f_code {
+            tasks.push(formula_argument(&task, 1));
+            tasks.push(formula_argument(&task, 0));
+        } else {
+            args.push(task);
+        }
+    }
+}
+
+fn fold_and_or(bank: &mut TermBank, mut args: Vec<Term>, f_code: i64) -> Result<Term, Diagnostic> {
+    if args.len() == 1 {
+        let Some(term) = args.pop() else {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "fold_and_or expected a single formula argument",
+            ));
+        };
+        return Ok(term);
+    }
+
+    let Some(mut left) = args.pop() else {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "fold_and_or expected a left formula argument",
+        ));
+    };
+    let Some(right) = args.pop() else {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "fold_and_or expected a right formula argument",
+        ));
+    };
+    left = tformula_fcode_alloc(bank, f_code, left, Some(right))?;
+    while let Some(right) = args.pop() {
+        left = tformula_fcode_alloc(bank, f_code, left, Some(right))?;
+    }
+    Ok(left)
+}
+
+struct DedupedTerms {
+    terms: Vec<Term>,
+    removed_duplicate: bool,
+}
+
+fn dedup_sorted_terms(terms: Vec<Term>) -> DedupedTerms {
+    let mut deduped = Vec::with_capacity(terms.len());
+    let mut removed_duplicate = false;
+    for term in terms {
+        if deduped.last().is_some_and(|last| last == &term) {
+            removed_duplicate = true;
+        } else {
+            deduped.push(term);
+        }
+    }
+    DedupedTerms {
+        terms: deduped,
+        removed_duplicate,
+    }
+}
+
+fn contains_decoded_complement(bank: &mut TermBank, terms: &[Term]) -> Result<bool, Diagnostic> {
+    for term in terms {
+        let negated = negate_decoded_formula(bank, term)?;
+        let key = term_identity_id(&negated);
+        if terms.binary_search_by_key(&key, term_identity_id).is_ok() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn formula_argument(formula: &Term, index: usize) -> Term {
+    formula
+        .argument(index)
+        .unwrap_or_else(|| panic!("formula argument {index} is uninitialized"))
+}
+
 /// Recognizes an injectivity definition and creates the inverse-function clause.
 ///
 /// This is the plain clause-building part of C `ClauseRecognizeInjectivity`;
@@ -668,13 +1157,14 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_archive, clause_archive_copy, clause_canon_compare_ref,
-        clause_eliminate_naked_boolean_variables, clause_flip_literal_sign_index,
-        clause_is_orphaned_with, clause_recognize_injectivity, clause_remove_ac_resolved,
-        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
-        clause_set_archive_copy, clause_set_canonize, clause_set_delete_orphans_with,
-        clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
-        clause_unit_simplify_test, pstack_clause_print_lop_string,
+        clause_archive, clause_archive_copy, clause_boolean_simplification,
+        clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
+        clause_flip_literal_sign_index, clause_is_orphaned_with, clause_recognize_injectivity,
+        clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
+        clause_remove_superfluous_literals, clause_set_archive_copy, clause_set_canonize,
+        clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
+        clause_set_replace_injectivity_defs, clause_unit_simplify_test,
+        pstack_clause_print_lop_string,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -734,6 +1224,15 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -1142,6 +1641,41 @@ mod tests {
         assert_eq!(clause.weight(), 0);
         assert!(!clause.query_prop(CP_INITIAL));
         assert!(!clause.query_prop(CP_LIMITED_RW));
+    }
+
+    #[test]
+    fn boolean_simplification_collapses_absorbing_or_to_tautology() {
+        let mut bank = test_bank();
+        let variable = bool_var(&bank, -2);
+        let truth = bank.true_term().clone();
+        let or_code = bank.signature().or_code();
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &variable, &truth);
+        let mut clause = clause_from(vec![literal(&mut bank, &disjunction, &truth, true)]);
+
+        assert!(clause_boolean_simplification(&mut clause, &mut bank).unwrap());
+
+        assert!(clause.literals().find_true(&bank).is_some());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
+    }
+
+    #[test]
+    fn boolean_simplification_removes_duplicate_and_argument() {
+        let mut bank = test_bank();
+        let variable = bool_var(&bank, -4);
+        let truth = bank.true_term().clone();
+        let and_code = bank.signature().and_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &variable, &variable);
+        let mut clause = clause_from(vec![literal(&mut bank, &conjunction, &truth, true)]);
+
+        assert!(!clause_boolean_simplification(&mut clause, &mut bank).unwrap());
+        let literal = &clause.literals().as_slice()[0];
+
+        assert_eq!(literal.left(), &variable);
+        assert_eq!(literal.right(), &truth);
+        assert!(!literal.is_equ_lit(&bank));
     }
 
     #[test]

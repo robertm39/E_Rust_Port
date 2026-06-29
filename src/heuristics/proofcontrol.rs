@@ -9,8 +9,8 @@ use crate::clauses::clause_props::{
     CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
 };
 use crate::clauses::clausefunc::{
-    clause_archive, clause_archive_copy, clause_is_orphaned_with, clause_remove_ac_resolved,
-    clause_remove_superfluous_literals, clause_set_delete_orphans_with,
+    clause_archive, clause_archive_copy, clause_boolean_simplification, clause_is_orphaned_with,
+    clause_remove_ac_resolved, clause_remove_superfluous_literals, clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -1904,6 +1904,11 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
             &mut doc_context,
         )?;
         if forward_trivial {
+            counts.trivial += 1;
+            return Ok(None);
+        }
+
+        if clause_boolean_simplification(clause, state.terms_mut())? {
             counts.trivial += 1;
             return Ok(None);
         }
@@ -5502,6 +5507,15 @@ mod tests {
         bank.insert(&term, DerefType::Never).unwrap()
     }
 
+    fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(bool_type));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
@@ -6931,6 +6945,43 @@ mod tests {
         assert!(survivor.query_prop(CP_IS_ORIENTED));
         assert_eq!(survivor.prop_lit_number(EP_IS_SELECTED), 1);
         assert!(survivor.literals().as_slice().iter().any(Eqn::is_maximal));
+    }
+
+    #[test]
+    fn proof_state_forward_contract_clause_counts_boolean_simplified_tautology() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let variable = terms
+                .vars()
+                .var_assert_alloc(-2, &terms.signature().type_bank().bool_type());
+            let truth = terms.true_term().clone();
+            let or_code = terms.signature().or_code();
+            let disjunction = bool_binary_with_code(terms, or_code, &variable, &truth);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &disjunction,
+                &truth,
+                true,
+            )]));
+            clause.set_ident(40_861);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let options = ForwardContractOptions {
+            non_unit_subsumption: true,
+            context_sr: false,
+            condense_clause: false,
+            level: RewriteLevel::RuleRewrite,
+        };
+
+        let packed = proof_state_forward_contract_clause(&mut state, &mut control, clause, options)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(packed.is_none());
+        assert_eq!(state.statistics().proc_trivial_count, 1);
+        assert_eq!(state.statistics().proc_forward_subsumed_count, 0);
     }
 
     #[test]

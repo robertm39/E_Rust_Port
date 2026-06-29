@@ -151,4 +151,12 @@ Source files reviewed: `CONTROL/cco_ho_inferences.h`, `CONTROL/cco_ho_inferences
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `BooleanSimplification` is partially staged in Rust through `src/clauses/clausefunc.rs` and called from `forward_contract_keep` at the C call site. The port covers decoded two-argument Boolean formula simplification, true-literal redundancy detection, superfluous-literal cleanup, and `DCNormalize` derivation metadata. Higher-order-only decoded unary Boolean/lambda branches remain deferred with diagnostics.
+
+### Change-Later Observations
+
+- `BooleanSimplification` lives in this higher-order control unit, but `cco_forward_contraction.c` calls it unconditionally for every clause after `ForwardModifyClause`. Keep that cross-module dependency while matching C behavior; after compatibility is secured, consider moving shared decoded-Boolean simplification into a formula/clause normalization module with the higher-order callers depending on that lower-level API.
 <!-- END MANUAL REVIEW: c_source_docs -->

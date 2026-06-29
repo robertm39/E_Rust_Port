@@ -154,4 +154,12 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- A focused Rust port of `TFormulaSimplifyDecoded` is staged for `BooleanSimplification` in forward contraction. It covers decoded two-argument `and`/`or`, `not`, implication, equivalence/xor, `$eq`/`$neq`, recursive argument simplification, neutral/absorbing constants, duplicate removal, complement detection, and literal remapping through the term bank. The unary decoded Boolean lambda branch and closed-lambda quantifier branch are still deferred for the higher-order/lambda-normalization slice.
+
+### Change-Later Observations
+
+- `do_simplify_decoded` sorts flattened decoded `and`/`or` arguments by raw term pointer (`PCmp`) before deduplicating and folding the formula back into binary shape. This makes the resulting shared formula shape allocation-order dependent. Rust mirrors handle-identity ordering for compatibility; a later cleaned formula canonicalizer should switch to structural ordering only behind proof-search and proof-output reference tests.
 <!-- END MANUAL REVIEW: c_source_docs -->
