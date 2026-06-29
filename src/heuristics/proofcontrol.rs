@@ -4183,6 +4183,7 @@ fn proof_state_saturate_impl(
         if let Some(clause) =
             proof_state_saturate_sat_check_gate(state, control, &mut sat_check_thresholds)?
         {
+            state.push_extract_root(clause.clone());
             return Ok(SaturateOutcome::Returned {
                 clause: Box::new(clause),
                 reason: SaturateReturnReason::SatCheck,
@@ -9137,6 +9138,7 @@ mod tests {
             panic!("SATCheck should return an empty proof clause");
         };
         assert!(clause.is_empty());
+        assert_eq!(state.extract_roots(), std::slice::from_ref(clause.as_ref()));
         assert_eq!(reason, SaturateReturnReason::SatCheck);
         assert_eq!(processed_steps, 1);
         assert_eq!(state.statistics().satcheck_count, 1);

@@ -208,6 +208,7 @@ pub struct ProofState {
     tmp_store: ClauseSet,
     eval_store: ClauseSet,
     archive: ClauseSet,
+    extract_roots: Vec<Clause>,
     watchlist: Option<ClauseSet>,
     watchlist_activation: WatchlistActivation,
     definition_store: ClauseSet,
@@ -261,6 +262,7 @@ impl ProofState {
             tmp_store: ClauseSet::new(),
             eval_store: ClauseSet::new(),
             archive: ClauseSet::new(),
+            extract_roots: Vec::new(),
             watchlist: Some(ClauseSet::new()),
             watchlist_activation: WatchlistActivation::Inactive,
             definition_store: ClauseSet::new(),
@@ -451,6 +453,15 @@ impl ProofState {
 
     pub fn archive_mut(&mut self) -> &mut ClauseSet {
         &mut self.archive
+    }
+
+    #[must_use]
+    pub fn extract_roots(&self) -> &[Clause] {
+        &self.extract_roots
+    }
+
+    pub fn push_extract_root(&mut self, clause: Clause) {
+        self.extract_roots.push(clause);
     }
 
     pub fn terms_watchlist_archive_mut(
