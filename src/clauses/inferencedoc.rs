@@ -1,9 +1,13 @@
 use std::fmt;
 
-use crate::clauses::clause::{clause_write_pcl_with_options, Clause};
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{clause_write_pcl_with_options, clause_write_tstp, Clause};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_WATCH_ONLY,
 };
+use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string};
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::terms::termbanks::TermBank;
 
@@ -24,6 +28,406 @@ impl Default for PclStepPrintOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i32)]
+pub enum ProofDocOutputFormat {
+    NoFormat = 0,
+    Lop = 1,
+    Pcl = 2,
+    Tstp = 3,
+    Tptp = 4,
+    Xml = 5,
+}
+
+impl ProofDocOutputFormat {
+    #[must_use]
+    pub const fn c_value(self) -> i32 {
+        self as i32
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClauseCreationInference {
+    Initial,
+    Paramodulation,
+    SimultaneousParamodulation,
+    EqualityResolution,
+    EqualityFactoring,
+    Factoring,
+    Split,
+}
+
+impl ClauseCreationInference {
+    #[must_use]
+    pub const fn binary(self) -> Option<ClauseBinaryInference> {
+        match self {
+            Self::Paramodulation => Some(ClauseBinaryInference::Paramodulation),
+            Self::SimultaneousParamodulation => {
+                Some(ClauseBinaryInference::SimultaneousParamodulation)
+            }
+            Self::Initial
+            | Self::EqualityResolution
+            | Self::EqualityFactoring
+            | Self::Factoring
+            | Self::Split => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn unary(self) -> Option<ClauseUnaryInference> {
+        match self {
+            Self::EqualityResolution => Some(ClauseUnaryInference::EqualityResolution),
+            Self::EqualityFactoring => Some(ClauseUnaryInference::EqualityFactoring),
+            Self::Factoring => Some(ClauseUnaryInference::Factoring),
+            Self::Split => Some(ClauseUnaryInference::Split),
+            Self::Initial | Self::Paramodulation | Self::SimultaneousParamodulation => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClauseCreationParents<'a> {
+    pub parent1: Option<&'a Clause>,
+    pub parent2: Option<&'a Clause>,
+}
+
+impl<'a> ClauseCreationParents<'a> {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            parent1: None,
+            parent2: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn unary(parent: &'a Clause) -> Self {
+        Self {
+            parent1: Some(parent),
+            parent2: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn binary(parent1: &'a Clause, parent2: &'a Clause) -> Self {
+        Self {
+            parent1: Some(parent1),
+            parent2: Some(parent2),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofDocWriteResult {
+    pub printed: bool,
+    pub stdout_before: &'static str,
+    pub stdout_after: &'static str,
+}
+
+impl ProofDocWriteResult {
+    #[must_use]
+    pub const fn suppressed() -> Self {
+        Self {
+            printed: false,
+            stdout_before: "",
+            stdout_after: "",
+        }
+    }
+
+    #[must_use]
+    pub const fn printed() -> Self {
+        Self {
+            printed: true,
+            stdout_before: "",
+            stdout_after: "",
+        }
+    }
+
+    #[must_use]
+    pub const fn pcl_initial() -> Self {
+        Self {
+            printed: true,
+            stdout_before: "XX\n",
+            stdout_after: "XX\n",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofDocIdSource {
+    current_ident: i64,
+}
+
+impl Default for ProofDocIdSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProofDocIdSource {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { current_ident: 0 }
+    }
+
+    #[must_use]
+    pub const fn from_current(current_ident: i64) -> Self {
+        Self { current_ident }
+    }
+
+    #[must_use]
+    pub const fn current_ident(&self) -> i64 {
+        self.current_ident
+    }
+
+    pub fn next_ident(&mut self) -> i64 {
+        self.current_ident = self.current_ident.saturating_add(1);
+        self.current_ident
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProofDocSession {
+    pub output_format: ProofDocOutputFormat,
+    pub output_level: i64,
+    pub problem_type: ProblemType,
+    pub pcl_shell_level: i32,
+    pub step_options: PclStepPrintOptions,
+    pub id_source: ProofDocIdSource,
+}
+
+impl ProofDocSession {
+    #[must_use]
+    pub fn new(
+        output_format: ProofDocOutputFormat,
+        output_level: i64,
+        problem_type: ProblemType,
+    ) -> Self {
+        Self {
+            output_format,
+            output_level,
+            problem_type,
+            pcl_shell_level: 0,
+            step_options: PclStepPrintOptions::default(),
+            id_source: ProofDocIdSource::new(),
+        }
+    }
+
+    /// Ports the C `DocClauseCreation` dispatch for represented clause
+    /// creation inferences.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied parent shape does not match the requested
+    /// inference, matching C assertions in `DocClauseCreation`.
+    pub fn doc_clause_creation(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &mut Clause,
+        inference: ClauseCreationInference,
+        parent_refs: ClauseCreationParents<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        clause.set_ident(self.id_source.next_ident());
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => self.write_pcl_clause_creation(
+                output,
+                bank,
+                clause,
+                inference,
+                parent_refs,
+                comment,
+            ),
+            ProofDocOutputFormat::Tstp => self.write_tstp_clause_creation(
+                output,
+                bank,
+                clause,
+                inference,
+                parent_refs,
+                comment,
+            ),
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    fn write_pcl_clause_creation(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &Clause,
+        inference: ClauseCreationInference,
+        parent_refs: ClauseCreationParents<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        match inference {
+            ClauseCreationInference::Initial => {
+                assert!(
+                    parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
+                    "initial clause documentation must not have parents"
+                );
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 2,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                output
+                    .write_str(&source_info_pcl_string(clause.info()))
+                    .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, comment, self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::pcl_initial())
+            }
+            ClauseCreationInference::Paramodulation
+            | ClauseCreationInference::SimultaneousParamodulation => {
+                let Some(left_parent) = parent_refs.parent1 else {
+                    panic!("binary clause documentation needs first parent");
+                };
+                let Some(right_parent) = parent_refs.parent2 else {
+                    panic!("binary clause documentation needs second parent");
+                };
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                let Some(binary) = inference.binary() else {
+                    unreachable!("binary creation inference must map to a PCL name");
+                };
+                write_pcl_clause_binary_inference(
+                    output,
+                    binary,
+                    left_parent.ident(),
+                    right_parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, comment, self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ClauseCreationInference::EqualityResolution
+            | ClauseCreationInference::EqualityFactoring
+            | ClauseCreationInference::Factoring
+            | ClauseCreationInference::Split => {
+                let Some(source_parent) = parent_refs.parent1 else {
+                    panic!("unary clause documentation needs first parent");
+                };
+                assert!(
+                    parent_refs.parent2.is_none(),
+                    "unary clause documentation must not have second parent"
+                );
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                let Some(unary) = inference.unary() else {
+                    unreachable!("unary creation inference must map to a PCL name");
+                };
+                write_pcl_clause_unary_inference(output, unary, source_parent.ident())
+                    .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, comment, self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    fn write_tstp_clause_creation(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &Clause,
+        inference: ClauseCreationInference,
+        parent_refs: ClauseCreationParents<'_>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        clause_write_tstp(
+            output,
+            bank,
+            clause,
+            self.step_options.full_terms,
+            false,
+            self.problem_type,
+        )?;
+        match inference {
+            ClauseCreationInference::Initial => {
+                assert!(
+                    parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
+                    "initial clause documentation must not have parents"
+                );
+                write!(output, ", {}", source_info_tstp_string(clause.info()))
+                    .map_err(doc_write_error)?;
+            }
+            ClauseCreationInference::Paramodulation
+            | ClauseCreationInference::SimultaneousParamodulation => {
+                let Some(left_parent) = parent_refs.parent1 else {
+                    panic!("binary clause documentation needs first parent");
+                };
+                let Some(right_parent) = parent_refs.parent2 else {
+                    panic!("binary clause documentation needs second parent");
+                };
+                output.write_char(',').map_err(doc_write_error)?;
+                let Some(binary) = inference.binary() else {
+                    unreachable!("binary creation inference must map to a TSTP name");
+                };
+                write_tstp_clause_binary_inference(
+                    output,
+                    binary,
+                    left_parent.ident(),
+                    right_parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+            }
+            ClauseCreationInference::EqualityResolution
+            | ClauseCreationInference::EqualityFactoring
+            | ClauseCreationInference::Factoring
+            | ClauseCreationInference::Split => {
+                let Some(source_parent) = parent_refs.parent1 else {
+                    panic!("unary clause documentation needs first parent");
+                };
+                assert!(
+                    parent_refs.parent2.is_none(),
+                    "unary clause documentation must not have second parent"
+                );
+                output.write_char(',').map_err(doc_write_error)?;
+                let Some(unary) = inference.unary() else {
+                    unreachable!("unary creation inference must map to a TSTP name");
+                };
+                write_tstp_clause_unary_inference(output, unary, source_parent.ident())
+                    .map_err(doc_write_error)?;
+            }
+        }
+        tstp_print_end(output, clause, comment).map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
+    }
+}
+
 #[must_use]
 pub const fn pcl_type_str(type_: FormulaProperties) -> &'static str {
     match type_ {
@@ -32,6 +436,20 @@ pub const fn pcl_type_str(type_: FormulaProperties) -> &'static str {
         CP_TYPE_NEG_CONJECTURE => "neg",
         _ => "",
     }
+}
+
+fn write_unsupported_doc_format(output: &mut impl fmt::Write) -> fmt::Result {
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} Output format not implemented."
+    )
+}
+
+fn doc_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "failed to write proof documentation",
+    )
 }
 
 pub fn pcl_print_start(
@@ -491,20 +909,202 @@ mod tests {
         write_tstp_clause_binary_inference, write_tstp_clause_rewrite_inference,
         write_tstp_clause_unary_inference, write_tstp_formula_apply_defs_inference,
         write_tstp_formula_intro_def_inference, write_tstp_formula_parent_inference,
-        ClauseBinaryInference, ClauseUnaryInference, FormulaParentInference, PclStepPrintOptions,
+        ClauseBinaryInference, ClauseCreationInference, ClauseCreationParents,
+        ClauseUnaryInference, FormulaParentInference, PclStepPrintOptions, ProofDocOutputFormat,
+        ProofDocSession, ProofDocWriteResult,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
         CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_UNKNOWN, CP_TYPE_WATCH_CLAUSE,
         CP_WATCH_ONLY,
     };
+    use crate::clauses::clauseinfo::ClauseInfo;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).unwrap()
+    }
+
+    #[test]
+    fn proof_doc_output_format_discriminants_match_c_enum() {
+        assert_eq!(ProofDocOutputFormat::NoFormat.c_value(), 0);
+        assert_eq!(ProofDocOutputFormat::Lop.c_value(), 1);
+        assert_eq!(ProofDocOutputFormat::Pcl.c_value(), 2);
+        assert_eq!(ProofDocOutputFormat::Tstp.c_value(), 3);
+        assert_eq!(ProofDocOutputFormat::Tptp.c_value(), 4);
+        assert_eq!(ProofDocOutputFormat::Xml.c_value(), 5);
+    }
+
+    #[test]
+    fn doc_clause_creation_suppresses_below_level_two_without_assigning_id() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseCreationInference::Initial,
+                ClauseCreationParents::none(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(clause.ident(), 42);
+        assert_eq!(session.id_source.current_ident(), 0);
+    }
+
+    #[test]
+    fn doc_clause_creation_prints_initial_pcl_and_exposes_c_stdout_markers() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_info(Some(ClauseInfo::new(Some("ax1"), Some("problem.p"), 1, 2)));
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseCreationInference::Initial,
+                ClauseCreationParents::none(),
+                Some("input"),
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::pcl_initial());
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(
+            rendered,
+            "     1 : :[] : initial(\"problem.p\", ax1) : 'input'\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_creation_prints_binary_and_unary_pcl_steps_with_new_ids() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut left = Clause::empty();
+        left.set_ident(10);
+        let mut right = Clause::empty();
+        right.set_ident(11);
+        let mut paramod = Clause::empty();
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut paramod,
+                ClauseCreationInference::Paramodulation,
+                ClauseCreationParents::binary(&left, &right),
+                Some("generated"),
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::printed());
+        assert_eq!(paramod.ident(), 1);
+        assert_eq!(rendered, "     1 : :[] : pm(10,11) : 'generated'\n");
+
+        rendered.clear();
+        let mut factor = Clause::empty();
+        session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut factor,
+                ClauseCreationInference::EqualityFactoring,
+                ClauseCreationParents::unary(&left),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(factor.ident(), 2);
+        assert_eq!(rendered, "     2 : :[] : ef(10)\n");
+    }
+
+    #[test]
+    fn doc_clause_creation_prints_tstp_creation_steps() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut initial = Clause::empty();
+        initial.set_info(Some(ClauseInfo::new(Some("ax1"), Some("problem.p"), 1, 2)));
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut initial,
+                ClauseCreationInference::Initial,
+                ClauseCreationParents::none(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false), file('problem.p', ax1)).\n"
+        );
+
+        let mut parent = Clause::empty();
+        parent.set_ident(10);
+        let mut split = Clause::empty();
+        rendered.clear();
+        session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut split,
+                ClauseCreationInference::Split,
+                ClauseCreationParents::unary(&parent),
+                Some("split"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_2, plain, ($false),inference(split,[split(esplit,[])],[c_0_10]),['split']).\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_creation_preserves_c_unsupported_format_fallback() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::NoFormat, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_creation(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseCreationInference::Initial,
+                ClauseCreationParents::none(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::printed());
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(rendered, "% Output format not implemented.\n");
     }
 
     #[test]
