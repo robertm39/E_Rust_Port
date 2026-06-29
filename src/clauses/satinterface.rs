@@ -39,6 +39,7 @@ struct SatClauseSet {
     max_lit: i32,
     clauses: Vec<SatClause>,
     exported: Vec<usize>,
+    core: Vec<usize>,
     core_size: u64,
 }
 
@@ -97,23 +98,54 @@ impl SatClauseSet {
             .enumerate()
             .filter_map(|(index, clause)| (!clause.has_pure_lit).then_some(index))
             .collect();
+        self.core.clear();
+        self.core_size = 0;
 
-        let solver_clauses: Vec<Vec<i32>> = self
-            .exported
-            .iter()
-            .map(|index| self.clauses[*index].literals.clone())
-            .collect();
+        let solver_clauses = self.solver_clauses_for_indices(&self.exported);
         match solve_sat(&solver_clauses, self.max_lit, decision_limit) {
             SolverStatus::Sat => (ProverResult::Satisfiable, None),
             SolverStatus::GaveUp => (ProverResult::GaveUp, None),
             SolverStatus::Unsat => {
-                self.core_size = usize_to_u64(self.exported.len());
+                self.core = self.minimize_exported_core(decision_limit);
+                self.core_size = usize_to_u64(self.core.len());
                 (
                     ProverResult::Unsatisfiable,
-                    Some(self.empty_clause_from_exported_core()),
+                    Some(self.empty_clause_from_core()),
                 )
             }
         }
+    }
+
+    fn solver_clauses_for_indices(&self, indices: &[usize]) -> Vec<Vec<i32>> {
+        indices
+            .iter()
+            .map(|index| self.clauses[*index].literals.clone())
+            .collect()
+    }
+
+    fn minimize_exported_core(&self, decision_limit: i32) -> Vec<usize> {
+        if self.exported.len() <= 1 {
+            return self.exported.clone();
+        }
+
+        let mut core = self.exported.clone();
+        let mut index = 0;
+        while index < core.len() {
+            let mut trial = core.clone();
+            trial.remove(index);
+            if trial.is_empty() {
+                index += 1;
+                continue;
+            }
+
+            let solver_clauses = self.solver_clauses_for_indices(&trial);
+            if solve_sat(&solver_clauses, self.max_lit, decision_limit) == SolverStatus::Unsat {
+                core = trial;
+            } else {
+                index += 1;
+            }
+        }
+        core
     }
 
     fn mark_pure(&mut self) -> u64 {
@@ -145,10 +177,10 @@ impl SatClauseSet {
         pure_clauses
     }
 
-    fn empty_clause_from_exported_core(&self) -> Clause {
+    fn empty_clause_from_core(&self) -> Clause {
         let mut empty = Clause::empty();
         let mut sources = self
-            .exported
+            .core
             .iter()
             .rev()
             .map(|index| &self.clauses[*index].source);
@@ -666,6 +698,65 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&second)),
                 DerivationEntry::Operation(DC_CNF_ADD_ARG),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&first)),
+            ]
+        );
+    }
+
+    #[test]
+    fn unsat_core_minimization_keeps_exported_size_separate() {
+        let mut redundant_pos = Clause::empty();
+        redundant_pos.set_ident(201);
+        redundant_pos.set_csscpa_source(1);
+        let mut redundant_neg = Clause::empty();
+        redundant_neg.set_ident(202);
+        redundant_neg.set_csscpa_source(1);
+        let mut positive = Clause::empty();
+        positive.set_ident(203);
+        positive.set_csscpa_source(1);
+        let mut negative = Clause::empty();
+        negative.set_ident(204);
+        negative.set_csscpa_source(1);
+        let mut set = SatClauseSet {
+            max_lit: 2,
+            clauses: vec![
+                SatClause {
+                    literals: vec![1, 2],
+                    source: redundant_pos,
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![1, -2],
+                    source: redundant_neg,
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![1],
+                    source: positive.clone(),
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![-1],
+                    source: negative.clone(),
+                    has_pure_lit: false,
+                },
+            ],
+            ..SatClauseSet::default()
+        };
+
+        let (result, empty) = set.check_unsat(-1);
+        let empty = empty.unwrap();
+
+        assert_eq!(result, ProverResult::Unsatisfiable);
+        assert_eq!(set.exported, vec![0, 1, 2, 3]);
+        assert_eq!(set.core, vec![2, 3]);
+        assert_eq!(set.core_size, 2);
+        assert_eq!(
+            derivation_entries(&empty),
+            &[
+                DerivationEntry::Operation(DC_SAT_GEN),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&negative)),
+                DerivationEntry::Operation(DC_CNF_ADD_ARG),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&positive)),
             ]
         );
     }
