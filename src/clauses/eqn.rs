@@ -4,7 +4,7 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::basics::{pdarrays::PDIntArray, pstacks::PStack};
 use crate::clauses::eqn_props::{
     EqnProperties, EqnSide, PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE,
-    EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT, EQUAL_PREDICATE,
+    EP_IS_SPLIT_LIT, EP_MAX_IS_UP_TO_DATE, EP_NO_PROPS, EP_PSEUDO_LIT, EQUAL_PREDICATE,
 };
 use crate::heuristics::to_params::LiteralCmp;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
@@ -970,6 +970,15 @@ impl Eqn {
     #[must_use]
     pub fn standard_weight(&self) -> i64 {
         term_standard_weight(&self.lterm) + term_standard_weight(&self.rterm)
+    }
+
+    #[must_use]
+    pub fn split_mod_standard_weight(&self, special_weight: impl FnOnce(FunCode) -> i64) -> i64 {
+        if self.query_prop(EP_IS_SPLIT_LIT | EP_IS_POSITIVE) {
+            special_weight(self.lterm.f_code())
+        } else {
+            self.standard_weight()
+        }
     }
 
     #[must_use]
@@ -2630,9 +2639,9 @@ mod tests {
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn_props::{
-        EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_IS_EQU_LITERAL, EP_IS_MAXIMAL,
-        EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED, EP_MAX_IS_UP_TO_DATE,
-        EP_PSEUDO_LIT,
+        EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_HAS_EQUIV, EP_IS_EQU_LITERAL,
+        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED,
+        EP_IS_SPLIT_LIT, EP_IS_STRICTLY_MAXIMAL, EP_MAX_IS_UP_TO_DATE, EP_PSEUDO_LIT,
     };
     use crate::heuristics::to_params::{LiteralCmp, TermOrdering};
     use crate::inout::scanner::{IoFormat, Scanner};
@@ -3666,6 +3675,49 @@ mod tests {
         let lex_a = Eqn::alloc(left.clone(), right.clone(), &mut bank, true).unwrap();
         let lex_b = Eqn::alloc(right, left, &mut bank, true).unwrap();
         assert!(lex_a.struct_weight_lex_compare(&lex_b, &bank) < 0);
+    }
+
+    #[test]
+    fn split_mod_standard_weight_matches_c_macro_gate() {
+        let mut bank = test_bank();
+        let atom = typed_pred_const(&mut bank, "split_weight_pred");
+        let true_term = bank.true_term().clone();
+        bank.signature_mut()
+            .set_func_prop(atom.f_code(), FP_CL_SPLIT_DEF);
+
+        let mut split = Eqn::alloc(atom.clone(), true_term.clone(), &mut bank, true).unwrap();
+        split.set_prop(EP_IS_SPLIT_LIT);
+        assert_eq!(
+            split.split_mod_standard_weight(|f_code| {
+                assert_eq!(f_code, atom.f_code());
+                13
+            }),
+            13
+        );
+
+        let mut negative = Eqn::alloc(atom.clone(), true_term.clone(), &mut bank, false).unwrap();
+        negative.set_prop(EP_IS_SPLIT_LIT);
+        assert_eq!(
+            negative.split_mod_standard_weight(|_| panic!("negative literal used special weight")),
+            negative.standard_weight()
+        );
+
+        let predicate_only = Eqn::alloc(atom.clone(), true_term.clone(), &mut bank, true).unwrap();
+        assert!(predicate_only.is_split_lit(&bank));
+        assert_eq!(
+            predicate_only
+                .split_mod_standard_weight(|_| panic!("predicate-only split used special weight")),
+            predicate_only.standard_weight()
+        );
+
+        let mut overlap_only = Eqn::alloc(atom, true_term, &mut bank, true).unwrap();
+        overlap_only.set_prop(EP_IS_STRICTLY_MAXIMAL | EP_MAX_IS_UP_TO_DATE | EP_HAS_EQUIV);
+        assert!(!overlap_only.query_prop(EP_IS_SPLIT_LIT));
+        assert_eq!(
+            overlap_only
+                .split_mod_standard_weight(|_| panic!("overlap-only flags used special weight")),
+            overlap_only.standard_weight()
+        );
     }
 
     #[test]
