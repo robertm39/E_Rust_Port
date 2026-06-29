@@ -102,14 +102,17 @@ Source files reviewed: `CLAUSES/ccl_unfold_defs.h`, `CLAUSES/ccl_unfold_defs.c`.
 ### Rust Port Status Notes
 
 - `src/clauses/unfold_defs.rs` currently ports the `ClauseSetPreprocess` subset: `ClauseSetRemoveSuperfluousLiterals`, `ClauseSetFilterTautologies`, optional `ClauseSetReplaceInjectivityDefs`, and `ClauseSetCanonize`, returning the number of clauses removed by tautology filtering just as the C helper does.
-- Supported executable prune/proof-search paths apply this clause-set preprocessing before BCE and goal-definition preprocessing when `--no-preprocessing` is absent. Proof-search statistics now use the returned count for `% Removed in clause preprocessing`.
-- The equality-definition unfolding functions in this C unit are not yet ported. The parsed `--eq-unfold-limit`, `--eq-unfold-maxclauses`, and `--no-eq-unfolding` state is still recorded for compatibility but does not yet drive `ClauseSetUnfoldEqDefNormalize`.
+- The same Rust unit now ports the first-order equality-definition unfolding path: `ClauseUnfoldEqDef`, `ClauseSetUnfoldEqDef`, `ClauseSetUnfoldAllEqDefs`, and `ClauseSetUnfoldEqDefNormalize`, including definition removal into the archive, `DCUnfold` derivation entries, tautology refiltering, and canonization after successful unfolding.
+- Supported executable prune/proof-search paths apply the clause-set preprocessing subset before BCE and goal-definition preprocessing when `--no-preprocessing` is absent, then apply first-order `ClauseSetUnfoldEqDefNormalize` regardless of `--no-preprocessing` unless the unfolding gates disable it. `--eq-unfold-limit`, `--eq-unfold-maxclauses`, and `--no-eq-unfolding` now drive the supported first-order normalization path, and proof-search statistics use the combined removed count for `% Removed in clause preprocessing`.
+- Higher-order lambda-definition unfolding and executable passive/watchlist unfolding at this preprocessing boundary remain pending.
 
 ### Change-Later Observations
 
-- `ClauseSetPreprocess` keeps `eqdef_incrlimit` and `eqdef_maxclauses` parameters even though this current C body does not use them; Rust preserves the public helper shape with ignored parameters so the eventual unfolding bridge can reuse the same call boundary.
+- `ClauseSetPreprocess` keeps `eqdef_incrlimit` and `eqdef_maxclauses` parameters even though this current C body does not use them; Rust preserves the public helper shape with ignored parameters, while the separate Rust `ClauseSetUnfoldEqDefNormalize` bridge consumes those gates just as the C caller does after preprocessing.
 - C `ProofStateClausalPreproc` archives copies of all input axioms before clause preprocessing, then later moves eliminated/unfolded definitions to the regular archive. Rust has not added that initial `ax_archive` copy at this executable boundary yet because represented proof-output parent resolution is still compact-id based; revisit this when stable clause handles make archive-copy identity less fragile.
 - The C source comments say `ClauseSetPreprocess` performs definition unfolding, but the current function body only does literal cleanup, tautology filtering, optional injectivity replacement, and canonization. The actual equality-definition unfolding lives in `ClauseSetUnfoldEqDefNormalize`, which C calls separately after `ClauseSetPreprocess`.
+- `ClauseUnfoldEqDef` emits live `DocClauseEqUnfold` preprocessing documentation when proof output is active. Rust records `DCUnfold` derivation metadata for unfolded clauses, but the executable path does not yet emit the live unfolding documentation stream because proof-document session ownership is still outside this preprocessing boundary.
+- Higher-order unfolding uses `ClauseExtractHODefinition`, lambda-shaped definitions, and top-level lambda normalization instead of the first-order matching path. Rust currently no-ops this helper outside first-order mode so it does not accidentally apply first-order matching to higher-order lambda definitions.
 
 ### Porting Focus
 

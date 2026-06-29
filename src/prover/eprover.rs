@@ -54,7 +54,7 @@ use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::clauses::sine::{
     select_axioms_clause_sets, select_threshold_clause_sets, ClauseSineParams,
 };
-use crate::clauses::unfold_defs::clause_set_preprocess;
+use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
@@ -5555,21 +5555,30 @@ fn apply_clause_set_preprocessing(
     eqdef_incrlimit: i64,
     eqdef_maxclauses: i64,
 ) -> Result<i64, EProverError> {
-    if no_preprocessing {
-        return Ok(0);
-    }
-
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
     let (bank, axioms, archive) = state.terms_axioms_archive_mut();
-    Ok(clause_set_preprocess(
+    let mut removed = 0;
+    if !no_preprocessing {
+        removed += clause_set_preprocess(
+            axioms,
+            archive,
+            &mut tmp_bank,
+            bank,
+            replace_injectivity_defs,
+            eqdef_incrlimit,
+            eqdef_maxclauses,
+        )?;
+    }
+    removed += clause_set_unfold_eq_def_normalize(
         axioms,
+        None,
         archive,
         &mut tmp_bank,
         bank,
-        replace_injectivity_defs,
         eqdef_incrlimit,
         eqdef_maxclauses,
-    )?)
+    )?;
+    Ok(removed)
 }
 
 fn apply_blocked_clause_elimination<W: Write + ?Sized>(
@@ -12488,6 +12497,118 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains(&format!("file('{path_arg}', drop)")));
         assert!(printed.contains(&format!("file('{path_arg}', keep)")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_applies_eq_definition_unfolding_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-eqdef-unfold");
+        std::fs::write(
+            &path,
+            "cnf(def, axiom, (f(X)=X)).\n\
+             cnf(use, axiom, (p(f(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("p(a)"));
+        assert!(!printed.contains("p(f(a))"));
+        assert!(!printed.contains(&format!("file('{path_arg}', def)")));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_no_eq_unfolding_preserves_eq_definitions() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-no-eqdef-unfold");
+        std::fs::write(
+            &path,
+            "cnf(def, axiom, (f(X)=X)).\n\
+             cnf(use, axiom, (p(f(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--no-eq-unfolding",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("p(f(a))"));
+        assert!(printed.contains(&format!("file('{path_arg}', def)")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_no_preprocessing_still_applies_eq_definition_unfolding() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-no-preproc-eqdef-unfold");
+        std::fs::write(
+            &path,
+            "cnf(def, axiom, (f(X)=X)).\n\
+             cnf(use, axiom, (p(f(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--no-preprocessing",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("p(a)"));
+        assert!(!printed.contains("p(f(a))"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
