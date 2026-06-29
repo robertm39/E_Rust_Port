@@ -22,8 +22,8 @@ use crate::clauses::clause::{
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
-    CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
-    CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
+    CP_IS_LAMBDA_DEF, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+    CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -5348,7 +5348,7 @@ fn apply_proof_state_sine<W: Write + ?Sized>(
             resolution.filter().threshold,
         )),
         AxFilterType::GSinE => Ok(apply_gsine_clause_filter(state, resolution.filter())),
-        AxFilterType::LambdaDefines => Ok(0),
+        AxFilterType::LambdaDefines => Ok(apply_lambda_defines_filter(state)),
         AxFilterType::NoFilter => Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "resolved SInE filter has no concrete type",
@@ -5412,6 +5412,32 @@ fn apply_gsine_clause_filter(
             .collect::<Vec<_>>()
     };
 
+    replace_axioms_with_selected_idents(state, original_axioms, selected_idents)
+}
+
+fn apply_lambda_defines_filter(state: &mut crate::clauses::proofstate::ProofState) -> i64 {
+    let original_axioms = state.axioms().members();
+    if state.raw_formula_features().sentence_no == 0 {
+        state.axioms_mut().clear();
+        return original_axioms;
+    }
+
+    let selected_idents = state
+        .axioms()
+        .iter()
+        .filter(|clause| {
+            clause.query_prop(CP_IS_LAMBDA_DEF) || clause.is_conjecture() || clause.is_hypothesis()
+        })
+        .map(Clause::ident)
+        .collect::<Vec<_>>();
+    replace_axioms_with_selected_idents(state, original_axioms, selected_idents)
+}
+
+fn replace_axioms_with_selected_idents(
+    state: &mut crate::clauses::proofstate::ProofState,
+    original_axioms: i64,
+    selected_idents: Vec<i64>,
+) -> i64 {
     let mut selected_axioms = ClauseSet::new();
     let mut moved = BTreeSet::new();
     for ident in selected_idents {
@@ -12450,6 +12476,90 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_lambda_def_clears_represented_clause_axioms() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-lambda-def-clauses");
+        std::fs::write(
+            &path,
+            "cnf(goal, negated_conjecture, (g=g)).\n\
+             cnf(ax, axiom, (a=a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--sine=LambdaDef",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = LambdaDef)\n\
+% SinE strategy is LambdaDef\n\n\
+% Pruning successful!\n\
+% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_lambda_def_keeps_lowered_formula_goals_and_hypotheses() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-lambda-def-formulas");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, p(a)).\n\
+             fof(hyp, hypothesis, h(a)).\n\
+             fof(goal, conjecture, g(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--sine=LambdaDef",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("% SinE strategy is LambdaDef\n"));
+        assert!(!printed.contains(&format!("file('{path_arg}', fact)")));
+        assert!(printed.contains(&format!("file('{path_arg}', hyp)")));
+        assert!(printed.contains(&format!("file('{path_arg}', goal)")));
+        assert!(printed.contains("hypothesis"));
+        assert!(printed.contains("negated_conjecture"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
         let _guard = global_state_lock();
         let path = temp_path("proof-found");
@@ -15540,6 +15650,38 @@ mod tests {
         assert!(printed.contains("% Parsed axioms                        : 4\n"));
         assert!(printed.contains("% Removed by relevancy pruning/SinE    : 1\n"));
         assert!(printed.contains("% Initial clauses                      : 3\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_statistics_count_lambda_def_pruning() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-lambda-def-statistics");
+        std::fs::write(&path, "p(a).\nq(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--print-statistics",
+                "--sine=LambdaDef",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("% SinE strategy is LambdaDef\n"));
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Removed by relevancy pruning/SinE    : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 0\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
