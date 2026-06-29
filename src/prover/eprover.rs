@@ -16363,7 +16363,7 @@ mod tests {
         let input_doc =
             format!("     1 : :[++p(a)] : XX\ninitial(\"{input_arg}\", at_line_1_column_1)\n");
         let watch_doc = format!(
-            "     2 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1): 'wl'\n",
+            "     2 : :[++p(a)] : XX\ninitial(\"{}\", at_line_1_column_1) : 'wl'\n",
             watch_path.to_string_lossy()
         );
         let final_doc = "     3 : :[++p(a)] : 1 : 'final_subsumes_wl'\n\n% Watchlist is empty!\n";
