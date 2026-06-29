@@ -6549,7 +6549,9 @@ fn collect_direct_clause_parent_arg(
                 DerivationEntry::Demodulator(demodulator) => {
                     parents.extend(demodulator_clause_refs(*demodulator));
                 }
-                DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {}
+                DerivationEntry::FormulaParent(_)
+                | DerivationEntry::Operation(_)
+                | DerivationEntry::NumericArg(_) => {}
             }
         }
         *index += 1;

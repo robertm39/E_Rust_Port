@@ -211,10 +211,28 @@ impl From<&Clause> for ClauseDerivationRef {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct FormulaDerivationRef {
+    ident: i64,
+}
+
+impl FormulaDerivationRef {
+    #[must_use]
+    pub const fn new(ident: i64) -> Self {
+        Self { ident }
+    }
+
+    #[must_use]
+    pub const fn ident(self) -> i64 {
+        self.ident
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DerivationEntry {
     Operation(i64),
     ClauseParent(ClauseDerivationRef),
+    FormulaParent(FormulaDerivationRef),
     NumericArg(i64),
     Demodulator(RewriteDemodulator),
 }
@@ -222,7 +240,14 @@ pub enum DerivationEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DerivationParentRef {
     Clause(ClauseDerivationRef),
+    Formula(FormulaDerivationRef),
     Demodulator(RewriteDemodulator),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DerivationArg {
+    Clause(ClauseDerivationRef),
+    Formula(FormulaDerivationRef),
 }
 
 #[must_use]
@@ -290,15 +315,50 @@ pub const fn get_is_ho(op: i64) -> bool {
 ///
 /// # Panics
 ///
-/// Panics if `op` is `DCNop`, if a provided parent is not permitted by the
-/// opcode argument bits, if a second CNF parent is requested without a first
-/// CNF parent, or if the opcode requires formula parents. Formula derivation
-/// entries are intentionally left to the later formula-owner slice.
+/// Panics if `op` is `DCNop`, if a provided clause parent is not permitted by
+/// the opcode argument bits, or if a second CNF parent is requested without a
+/// first CNF parent.
 pub fn clause_push_derivation(
     clause: &mut Clause,
     op: i64,
     arg1: Option<&Clause>,
     arg2: Option<&Clause>,
+) {
+    push_derivation_args(
+        clause,
+        op,
+        arg1.map(|parent| DerivationArg::Clause(parent.into())),
+        arg2.map(|parent| DerivationArg::Clause(parent.into())),
+    );
+}
+
+/// Pushes a clause derivation operation with optional represented formula
+/// parents.
+///
+/// # Panics
+///
+/// Panics if `op` is `DCNop`, if a provided formula parent is not permitted by
+/// the opcode argument bits, or if a second CNF parent is requested without a
+/// first CNF parent.
+pub fn clause_push_formula_derivation(
+    clause: &mut Clause,
+    op: i64,
+    arg1: Option<FormulaDerivationRef>,
+    arg2: Option<FormulaDerivationRef>,
+) {
+    push_derivation_args(
+        clause,
+        op,
+        arg1.map(DerivationArg::Formula),
+        arg2.map(DerivationArg::Formula),
+    );
+}
+
+fn push_derivation_args(
+    clause: &mut Clause,
+    op: i64,
+    arg1: Option<DerivationArg>,
+    arg2: Option<DerivationArg>,
 ) {
     assert!(op != 0, "derivation opcode must not be DCNop");
     assert!(
@@ -306,29 +366,44 @@ pub fn clause_push_derivation(
         "C derivation stack permits CNF arg2 only after CNF arg1"
     );
     assert!(
-        op_has_cnf_arg1(op) || op_has_fof_arg1(op) || arg1.is_none(),
+        derivation_arg1_matches(op, arg1),
         "derivation arg1 is not permitted by opcode"
     );
     assert!(
-        op_has_cnf_arg2(op) || op_has_fof_arg2(op) || arg2.is_none(),
+        derivation_arg2_matches(op, arg2),
         "derivation arg2 is not permitted by opcode"
-    );
-    assert!(
-        op_has_cnf_arg1(op) || !op_has_fof_arg1(op),
-        "FOF derivation parents are not represented for clauses yet"
-    );
-    assert!(
-        op_has_cnf_arg2(op) || !op_has_fof_arg2(op),
-        "FOF derivation parents are not represented for clauses yet"
     );
 
     let stack = clause.ensure_derivation();
     stack.push(DerivationEntry::Operation(op));
     if let Some(parent) = arg1 {
-        stack.push(DerivationEntry::ClauseParent(parent.into()));
+        stack.push(derivation_arg_entry(parent));
         if let Some(parent) = arg2 {
-            stack.push(DerivationEntry::ClauseParent(parent.into()));
+            stack.push(derivation_arg_entry(parent));
         }
+    }
+}
+
+const fn derivation_arg1_matches(op: i64, arg: Option<DerivationArg>) -> bool {
+    match arg {
+        None => true,
+        Some(DerivationArg::Clause(_)) => op_has_cnf_arg1(op),
+        Some(DerivationArg::Formula(_)) => op_has_fof_arg1(op),
+    }
+}
+
+const fn derivation_arg2_matches(op: i64, arg: Option<DerivationArg>) -> bool {
+    match arg {
+        None => true,
+        Some(DerivationArg::Clause(_)) => op_has_cnf_arg2(op),
+        Some(DerivationArg::Formula(_)) => op_has_fof_arg2(op),
+    }
+}
+
+const fn derivation_arg_entry(arg: DerivationArg) -> DerivationEntry {
+    match arg {
+        DerivationArg::Clause(parent) => DerivationEntry::ClauseParent(parent),
+        DerivationArg::Formula(parent) => DerivationEntry::FormulaParent(parent),
     }
 }
 
@@ -398,20 +473,20 @@ pub fn deriv_stack_extract_parents(
         index += 1;
 
         if op_has_cnf_arg1(op) {
-            parents.push(read_parent_arg(entries, &mut index));
+            parents.push(read_clause_parent_arg(entries, &mut index));
             direct_parent_count += 1;
         } else if op_has_fof_arg1(op) {
-            skip_arg(entries, &mut index);
+            parents.push(read_formula_parent_arg(entries, &mut index));
             direct_parent_count += 1;
         } else if op_has_num_arg1(op) {
             numarg1 = read_numeric_arg(entries, &mut index);
         }
 
         if op_has_cnf_arg2(op) {
-            parents.push(read_parent_arg(entries, &mut index));
+            parents.push(read_clause_parent_arg(entries, &mut index));
             direct_parent_count += 1;
         } else if op_has_fof_arg2(op) {
-            skip_arg(entries, &mut index);
+            parents.push(read_formula_parent_arg(entries, &mut index));
             direct_parent_count += 1;
         } else if op_has_num_arg2(op) {
             skip_arg(entries, &mut index);
@@ -556,16 +631,16 @@ pub fn deriv_stack_pcl_string(derivation: Option<&PStack<DerivationEntry>>) -> O
         if *op == DC_CNF_ADD_ARG {
             continue;
         }
-        if op_has_cnf_arg1(*op) {
+        if op_has_parent_arg1(*op) {
             if start != 0 {
                 rendered.push_str(", ");
             }
-            write_derivation_clause_ident(&mut rendered, derivation_clause_arg(entries, start + 1));
-            if op_has_cnf_arg2(*op) {
+            write_derivation_parent_ident(&mut rendered, derivation_parent_arg(entries, start + 1));
+            if op_has_parent_arg2(*op) {
                 rendered.push_str(", ");
-                write_derivation_clause_ident(
+                write_derivation_parent_ident(
                     &mut rendered,
-                    derivation_clause_arg(entries, start + 2),
+                    derivation_parent_arg(entries, start + 2),
                 );
             }
         }
@@ -633,16 +708,16 @@ pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> 
         if *op == DC_CNF_ADD_ARG {
             continue;
         }
-        if op_has_cnf_arg1(*op) {
+        if op_has_parent_arg1(*op) {
             if start != 0 {
                 rendered.push_str(", ");
             }
-            write_derivation_clause_ref(&mut rendered, derivation_clause_arg(entries, start + 1));
-            if op_has_cnf_arg2(*op) {
+            write_derivation_parent_ref(&mut rendered, derivation_parent_arg(entries, start + 1));
+            if op_has_parent_arg2(*op) {
                 rendered.push_str(", ");
-                write_derivation_clause_ref(
+                write_derivation_parent_ref(
                     &mut rendered,
-                    derivation_clause_arg(entries, start + 2),
+                    derivation_parent_arg(entries, start + 2),
                 );
             }
         }
@@ -710,8 +785,39 @@ fn derivation_clause_arg(entries: &[DerivationEntry], index: usize) -> ClauseDer
         DerivationEntry::Demodulator(demodulator) => {
             ClauseDerivationRef::new(demodulator.id().try_into().unwrap_or(i64::MAX), 0)
         }
-        DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {
+        DerivationEntry::FormulaParent(_)
+        | DerivationEntry::Operation(_)
+        | DerivationEntry::NumericArg(_) => {
             panic!("derivation clause argument has the wrong entry shape")
+        }
+    }
+}
+
+fn derivation_formula_arg(entries: &[DerivationEntry], index: usize) -> FormulaDerivationRef {
+    match entries
+        .get(index)
+        .unwrap_or_else(|| panic!("derivation formula argument is missing"))
+    {
+        DerivationEntry::FormulaParent(parent) => *parent,
+        DerivationEntry::Operation(_)
+        | DerivationEntry::ClauseParent(_)
+        | DerivationEntry::NumericArg(_)
+        | DerivationEntry::Demodulator(_) => {
+            panic!("derivation formula argument has the wrong entry shape")
+        }
+    }
+}
+
+fn derivation_parent_arg(entries: &[DerivationEntry], index: usize) -> DerivationParentRef {
+    match entries
+        .get(index)
+        .unwrap_or_else(|| panic!("derivation parent argument is missing"))
+    {
+        DerivationEntry::ClauseParent(parent) => DerivationParentRef::Clause(*parent),
+        DerivationEntry::FormulaParent(parent) => DerivationParentRef::Formula(*parent),
+        DerivationEntry::Demodulator(demodulator) => DerivationParentRef::Demodulator(*demodulator),
+        DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {
+            panic!("derivation parent argument has the wrong entry shape")
         }
     }
 }
@@ -722,6 +828,57 @@ fn write_derivation_clause_ref(output: &mut String, parent: ClauseDerivationRef)
 
 fn write_derivation_clause_ident(output: &mut String, parent: ClauseDerivationRef) {
     write!(output, "{}", parent.ident()).expect("writing to String cannot fail");
+}
+
+fn write_derivation_formula_ref(output: &mut String, parent: FormulaDerivationRef) {
+    if parent.ident() >= 0 {
+        write!(output, "c_0_{}", parent.ident()).expect("writing to String cannot fail");
+    } else {
+        let offset = i128::from(parent.ident()) - i128::from(i64::MIN);
+        write!(output, "i_0_{offset}").expect("writing to String cannot fail");
+    }
+}
+
+fn write_derivation_formula_ident(output: &mut String, parent: FormulaDerivationRef) {
+    write!(output, "{}", parent.ident()).expect("writing to String cannot fail");
+}
+
+fn write_derivation_parent_ref(output: &mut String, parent: DerivationParentRef) {
+    match parent {
+        DerivationParentRef::Clause(parent) => write_derivation_clause_ref(output, parent),
+        DerivationParentRef::Formula(parent) => write_derivation_formula_ref(output, parent),
+        DerivationParentRef::Demodulator(demodulator) => {
+            write_derivation_clause_ref(
+                output,
+                ClauseDerivationRef::new(demodulator.id().try_into().unwrap_or(i64::MAX), 0),
+            );
+        }
+    }
+}
+
+fn write_derivation_parent_ident(output: &mut String, parent: DerivationParentRef) {
+    match parent {
+        DerivationParentRef::Clause(parent) => write_derivation_clause_ident(output, parent),
+        DerivationParentRef::Formula(parent) => write_derivation_formula_ident(output, parent),
+        DerivationParentRef::Demodulator(demodulator) => {
+            write!(
+                output,
+                "{}",
+                i64::try_from(demodulator.id()).unwrap_or(i64::MAX)
+            )
+            .expect("writing to String cannot fail");
+        }
+    }
+}
+
+#[must_use]
+pub const fn op_has_parent_arg1(op: i64) -> bool {
+    (op & (ARG1_CNF | ARG1_FOF)) != 0
+}
+
+#[must_use]
+pub const fn op_has_parent_arg2(op: i64) -> bool {
+    (op & (ARG2_CNF | ARG2_FOF)) != 0
 }
 
 const fn derivation_op_id(op: i64) -> &'static str {
@@ -806,18 +963,26 @@ const fn derivation_op_theory(op: i64) -> Option<&'static str> {
     }
 }
 
-fn read_parent_arg(entries: &[DerivationEntry], index: &mut usize) -> DerivationParentRef {
+fn read_clause_parent_arg(entries: &[DerivationEntry], index: &mut usize) -> DerivationParentRef {
     let entry = entries
         .get(*index)
-        .unwrap_or_else(|| panic!("derivation parent argument is missing"));
+        .unwrap_or_else(|| panic!("derivation clause parent argument is missing"));
     *index += 1;
     match entry {
         DerivationEntry::ClauseParent(parent) => DerivationParentRef::Clause(*parent),
         DerivationEntry::Demodulator(demodulator) => DerivationParentRef::Demodulator(*demodulator),
-        DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {
-            panic!("derivation parent argument has the wrong entry shape")
+        DerivationEntry::Operation(_)
+        | DerivationEntry::FormulaParent(_)
+        | DerivationEntry::NumericArg(_) => {
+            panic!("derivation clause parent argument has the wrong entry shape")
         }
     }
+}
+
+fn read_formula_parent_arg(entries: &[DerivationEntry], index: &mut usize) -> DerivationParentRef {
+    let parent = derivation_formula_arg(entries, *index);
+    *index += 1;
+    DerivationParentRef::Formula(parent)
 }
 
 fn read_numeric_arg(entries: &[DerivationEntry], index: &mut usize) -> i64 {
@@ -829,6 +994,7 @@ fn read_numeric_arg(entries: &[DerivationEntry], index: &mut usize) -> i64 {
         DerivationEntry::NumericArg(value) => *value,
         DerivationEntry::Operation(_)
         | DerivationEntry::ClauseParent(_)
+        | DerivationEntry::FormulaParent(_)
         | DerivationEntry::Demodulator(_) => {
             panic!("derivation numeric argument has the wrong entry shape")
         }
@@ -879,16 +1045,16 @@ pub fn derivation_entries(clause: &Clause) -> &[DerivationEntry] {
 mod tests {
     use super::{
         clause_is_dummy_quote, clause_is_eval_gc, clause_push_ac_res_derivation,
-        clause_push_derivation, clause_push_numeric_derivation,
+        clause_push_derivation, clause_push_formula_derivation, clause_push_numeric_derivation,
         deriv_stack_count_search_inferences, deriv_stack_extract_parents,
         deriv_stack_indicates_initial_clause, deriv_stack_pcl_string, deriv_stack_tstp_string,
         derivation_entries, get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef,
-        DerivationEntry, DerivationParentRef, ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF,
-        ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION,
-        DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC,
-        DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS,
-        DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF, DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES,
-        DC_EQ_TO_EQ, DC_EVAL_ANSWERS, DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
+        DerivationEntry, DerivationParentRef, FormulaDerivationRef, ProofObjectType, ProofOutput,
+        ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES,
+        DC_ANNO_QUESTION, DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES,
+        DC_DIST_DISJUNCTIONS, DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF, DC_ELIMINATE_BVAR, DC_EQ_FACTOR,
+        DC_EQ_RES, DC_EQ_TO_EQ, DC_EVAL_ANSWERS, DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
         DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
         DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE,
         DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
@@ -1104,6 +1270,26 @@ mod tests {
     }
 
     #[test]
+    fn clause_push_formula_derivation_records_opcode_and_formula_parent() {
+        let mut child = Clause::alloc(EqnList::new());
+
+        clause_push_formula_derivation(
+            &mut child,
+            DC_SPLIT_CONJUNCT,
+            Some(FormulaDerivationRef::new(42)),
+            None,
+        );
+
+        assert_eq!(
+            derivation_entries(&child),
+            &[
+                DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                DerivationEntry::FormulaParent(FormulaDerivationRef::new(42)),
+            ]
+        );
+    }
+
+    #[test]
     fn clause_push_numeric_derivation_records_numeric_arg() {
         let mut clause = Clause::alloc(EqnList::new());
 
@@ -1175,19 +1361,24 @@ mod tests {
         derivation.push(DerivationEntry::ClauseParent(second));
         derivation.push(DerivationEntry::Operation(DC_REWRITE));
         derivation.push(DerivationEntry::Demodulator(demodulator));
+        derivation.push(DerivationEntry::Operation(DC_SPLIT_CONJUNCT));
+        derivation.push(DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+            12,
+        )));
         derivation.push(DerivationEntry::Operation(DC_AC_RES));
         derivation.push(DerivationEntry::NumericArg(2));
 
         let (parents, direct_count) =
             deriv_stack_extract_parents(Some(&derivation), &[ac_first, ac_second]);
 
-        assert_eq!(direct_count, 3);
+        assert_eq!(direct_count, 4);
         assert_eq!(
             parents,
             vec![
                 DerivationParentRef::Clause(first),
                 DerivationParentRef::Clause(second),
                 DerivationParentRef::Demodulator(demodulator),
+                DerivationParentRef::Formula(FormulaDerivationRef::new(12)),
                 DerivationParentRef::Clause(ac_first),
                 DerivationParentRef::Clause(ac_second),
             ]
@@ -1264,6 +1455,26 @@ mod tests {
     }
 
     #[test]
+    fn deriv_stack_tstp_string_prints_formula_parent_ids_like_c() {
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_SPLIT_CONJUNCT));
+        derivation.push(DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+            17,
+        )));
+        derivation.push(DerivationEntry::Operation(DC_EXPAND_DISTINCT));
+        derivation.push(DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+            i64::MIN + 3,
+        )));
+
+        assert_eq!(
+            deriv_stack_tstp_string(Some(&derivation)).as_deref(),
+            Some(
+                "inference(epxand_distinct,[status(thm)],[inference(split_conjunct,[status(thm)],[c_0_17]), i_0_3, theory(distinct)])"
+            )
+        );
+    }
+
+    #[test]
     fn deriv_stack_pcl_string_matches_c_nested_shape() {
         let mut derivation = PStack::new();
         derivation.push(DerivationEntry::Operation(DC_CNF_QUOTE));
@@ -1279,6 +1490,24 @@ mod tests {
         assert_eq!(
             deriv_stack_pcl_string(Some(&derivation)).as_deref(),
             Some("er(evalgc(101), 102)")
+        );
+    }
+
+    #[test]
+    fn deriv_stack_pcl_string_prints_formula_parent_idents_like_c() {
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_SPLIT_CONJUNCT));
+        derivation.push(DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+            17,
+        )));
+        derivation.push(DerivationEntry::Operation(DC_EXPAND_DISTINCT));
+        derivation.push(DerivationEntry::FormulaParent(FormulaDerivationRef::new(
+            i64::MIN + 3,
+        )));
+
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&derivation)).as_deref(),
+            Some("epxand_distinct(split_conjunct(17), -9223372036854775805)")
         );
     }
 

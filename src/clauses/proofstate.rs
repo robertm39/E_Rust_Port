@@ -640,7 +640,7 @@ impl ProofState {
                 }
                 !saw_live_parent
             }
-            DerivationParentRef::Demodulator(_) => false,
+            DerivationParentRef::Demodulator(_) | DerivationParentRef::Formula(_) => false,
         }
     }
 
@@ -983,6 +983,7 @@ impl ProofState {
                 .into_iter()
                 .filter_map(|parent| self.proof_clause_by_derivation_ref(parent))
                 .collect(),
+            DerivationParentRef::Formula(_) => Vec::new(),
         }
     }
 
@@ -1680,7 +1681,9 @@ fn push_proof_object_parent_edge(
                 parent: DerivationParentRef::Demodulator(*demodulator),
                 resolution: ProofObjectParentResolution::ProofStep,
             }),
-            DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {}
+            DerivationEntry::FormulaParent(_)
+            | DerivationEntry::Operation(_)
+            | DerivationEntry::NumericArg(_) => {}
         }
     }
     *index += 1;

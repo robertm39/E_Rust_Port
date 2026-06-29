@@ -1708,6 +1708,7 @@ fn compute_rewrite_demodulator_ids(old_term: &Term, normal_form: &Term) -> Vec<i
             }
             RewriteSequenceEntry::Operation(_)
             | RewriteSequenceEntry::ClauseParent(_)
+            | RewriteSequenceEntry::FormulaParent(_)
             | RewriteSequenceEntry::NumericArg(_) => {
                 panic!("rewrite documentation sequence has non-demodulator entry")
             }

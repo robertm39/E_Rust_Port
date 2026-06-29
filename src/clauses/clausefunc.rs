@@ -158,6 +158,7 @@ fn derivation_parent_is_dead(
         .unwrap_or_else(|| panic!("orphan-check derivation parent is missing"));
     let parent = match entry {
         DerivationEntry::ClauseParent(parent) => DerivationParentRef::Clause(*parent),
+        DerivationEntry::FormulaParent(parent) => DerivationParentRef::Formula(*parent),
         DerivationEntry::Demodulator(demodulator) => DerivationParentRef::Demodulator(*demodulator),
         DerivationEntry::Operation(_) | DerivationEntry::NumericArg(_) => {
             panic!("orphan-check derivation parent has the wrong entry shape")

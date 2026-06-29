@@ -2355,7 +2355,7 @@ impl ParentLivenessSnapshot {
     fn parent_is_dead(&self, parent: DerivationParentRef) -> bool {
         match parent {
             DerivationParentRef::Clause(parent) => !self.live.contains(&parent),
-            DerivationParentRef::Demodulator(_) => false,
+            DerivationParentRef::Demodulator(_) | DerivationParentRef::Formula(_) => false,
         }
     }
 }
