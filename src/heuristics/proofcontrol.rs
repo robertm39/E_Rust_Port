@@ -22,8 +22,9 @@ use crate::clauses::context_sr::{
     clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CNF_EVAL_GC,
-    DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM,
+    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CHOICE_AX,
+    DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_LEIBNIZ_ELIM, DC_NEG_EXT,
+    DC_POS_EXT, DC_PRIM_ENUM,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -93,7 +94,7 @@ use crate::terms::lambda::{
 };
 use crate::terms::match_mgu::occur_check;
 use crate::terms::simpletypes::{
-    alloc_arrow_type, arrow_type_flattened, type_get_max_arity, type_identity_cmp,
+    alloc_arrow_type, arrow_type_flattened, is_choice_type, type_get_max_arity, type_identity_cmp,
     type_is_predicate, Type,
 };
 use crate::terms::termbanks::TermBank;
@@ -3357,6 +3358,16 @@ fn compute_ho_inferences(
                 parms.prim_enum_max_depth,
             )?;
         }
+        if parms.inst_choice_max_depth >= 0 {
+            generated += instantiate_choice_clauses(
+                terms,
+                clause,
+                generation.tmp_store,
+                generation.archive,
+                generation.choice_opcodes,
+                parms.inst_choice_max_depth,
+            )?;
+        }
     }
     state.statistics_mut().neg_ext_count += u64::try_from(neg_ext_count).unwrap_or(u64::MAX);
     Ok(generated)
@@ -3367,12 +3378,6 @@ fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Dia
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "higher-order extensional superposition generation is not ported yet",
-        ));
-    }
-    if parms.inst_choice_max_depth >= 0 {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order choice instantiation is not ported yet",
         ));
     }
     Ok(())
@@ -4207,6 +4212,343 @@ fn make_prim_enum_instance(
     })();
     var.set_binding(None);
     result
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ChoiceTrigger {
+    Defined {
+        choice_code: i64,
+        predicate: Term,
+    },
+    AppliedVariable {
+        choice_variable: Term,
+        predicate: Term,
+    },
+}
+
+fn instantiate_choice_clauses(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    choice_symbols: &mut BTreeMap<i64, Clause>,
+    limit: i32,
+) -> Result<i64, Diagnostic> {
+    if clause.proof_depth() > i64::from(limit) {
+        return Ok(0);
+    }
+
+    let mut generated = 0;
+    let mut triggers = Vec::new();
+    for literal in clause.literals().as_slice() {
+        debug_assert!(triggers.is_empty());
+        find_choice_triggers(choice_symbols, &mut triggers, literal.left());
+        find_choice_triggers(choice_symbols, &mut triggers, literal.right());
+        while let Some(trigger) = triggers.pop() {
+            match trigger {
+                ChoiceTrigger::Defined {
+                    choice_code,
+                    predicate,
+                } => {
+                    generated += instantiate_choice(
+                        bank,
+                        store,
+                        choice_symbols,
+                        clause,
+                        choice_code,
+                        &predicate,
+                    )?;
+                }
+                ChoiceTrigger::AppliedVariable {
+                    choice_variable,
+                    predicate,
+                } => {
+                    let choice_type = choice_variable
+                        .type_()
+                        .expect("choice variable trigger must have a type");
+                    let mut choice_codes =
+                        choice_codes_for_type(bank, choice_symbols, &choice_type);
+                    if choice_codes.is_empty() {
+                        choice_codes.push(make_new_choice(
+                            bank,
+                            archive,
+                            choice_symbols,
+                            &choice_type,
+                        )?);
+                    }
+                    while let Some(choice_code) = choice_codes.pop() {
+                        generated += instantiate_choice(
+                            bank,
+                            store,
+                            choice_symbols,
+                            clause,
+                            choice_code,
+                            &predicate,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(generated)
+}
+
+fn find_choice_triggers(
+    choice_symbols: &BTreeMap<i64, Clause>,
+    triggers: &mut Vec<ChoiceTrigger>,
+    term: &Term,
+) {
+    if term.is_db_var() || term.is_lambda() {
+        return;
+    }
+
+    if term.arity() == 1
+        && choice_symbols.contains_key(&term.f_code())
+        && term
+            .argument(0)
+            .is_some_and(|argument| !argument.is_free_var())
+    {
+        triggers.push(ChoiceTrigger::Defined {
+            choice_code: term.f_code(),
+            predicate: term
+                .argument(0)
+                .expect("defined choice trigger must have an argument"),
+        });
+    } else if term.is_applied_free_var() && term.arity() == 2 {
+        let choice_variable = term
+            .argument(0)
+            .expect("applied choice-variable trigger must have a head");
+        if choice_variable
+            .type_()
+            .is_some_and(|type_| is_choice_type(&type_))
+        {
+            triggers.push(ChoiceTrigger::AppliedVariable {
+                choice_variable,
+                predicate: term
+                    .argument(1)
+                    .expect("applied choice-variable trigger must have a predicate"),
+            });
+        }
+    } else if !term.is_free_var() && term.arity() != 0 {
+        for argument in term.argument_clones() {
+            let argument = argument.expect("choice trigger scan term argument is uninitialized");
+            find_choice_triggers(choice_symbols, triggers, &argument);
+        }
+    }
+}
+
+fn choice_codes_for_type(
+    bank: &TermBank,
+    choice_symbols: &BTreeMap<i64, Clause>,
+    choice_type: &Type,
+) -> Vec<i64> {
+    choice_symbols
+        .keys()
+        .copied()
+        .filter(|choice_code| {
+            bank.signature()
+                .get_type(*choice_code)
+                .is_some_and(|candidate| candidate == choice_type)
+        })
+        .collect()
+}
+
+fn make_new_choice(
+    bank: &mut TermBank,
+    archive: &mut ClauseSet,
+    choice_symbols: &mut BTreeMap<i64, Clause>,
+    choice_type: &Type,
+) -> Result<i64, Diagnostic> {
+    assert!(
+        is_choice_type(choice_type),
+        "fresh choice symbols require a choice type"
+    );
+
+    let choice_const = bank.alloc_new_skolem(&[], Some(choice_type))?;
+    let predicate_type = choice_type
+        .args()
+        .first()
+        .expect("choice type must have a predicate argument")
+        .clone();
+    assert!(
+        predicate_type.is_arrow() && predicate_type.arity() == 2,
+        "choice predicate argument must be unary"
+    );
+    let witness_type = predicate_type.args()[0].clone();
+
+    let predicate_var = bank.vars().get_fresh_var(&predicate_type);
+    let predicate_var = bank.insert(&predicate_var, DerefType::Never)?;
+    let choice_applied = apply_terms(bank, &choice_const, std::slice::from_ref(&predicate_var))?;
+    let positive_atom = apply_terms(bank, &predicate_var, std::slice::from_ref(&choice_applied))?;
+
+    let witness_var = bank.vars().get_fresh_var(&witness_type);
+    let witness_var = bank.insert(&witness_var, DerefType::Never)?;
+    let negative_atom = apply_terms(bank, &predicate_var, std::slice::from_ref(&witness_var))?;
+
+    let true_term = bank.true_term().clone();
+    let negative_literal = Eqn::alloc(negative_atom, true_term.clone(), bank, false)?;
+    let positive_literal = Eqn::alloc(positive_atom, true_term, bank, true)?;
+    let mut choice_axiom =
+        Clause::alloc(EqnList::from_vec(vec![negative_literal, positive_literal]));
+    clause_push_derivation(&mut choice_axiom, DC_CHOICE_AX, None, None);
+
+    let choice_code = choice_const.f_code();
+    assert!(
+        !choice_symbols.contains_key(&choice_code),
+        "fresh choice symbol must not already be registered"
+    );
+    archive.insert(choice_axiom.clone());
+    choice_symbols.insert(choice_code, choice_axiom);
+    Ok(choice_code)
+}
+
+fn instantiate_choice(
+    bank: &mut TermBank,
+    store: &mut ClauseSet,
+    choice_symbols: &BTreeMap<i64, Clause>,
+    clause: &Clause,
+    choice_code: i64,
+    predicate: &Term,
+) -> Result<i64, Diagnostic> {
+    let Some(choice_definition) = choice_symbols.get(&choice_code).cloned() else {
+        return Ok(0);
+    };
+    make_choice_instance(
+        bank,
+        store,
+        clause,
+        &choice_definition,
+        choice_code,
+        predicate,
+    )?;
+
+    let negated_predicate = negated_eta_expanded_predicate(bank, predicate)?;
+    make_choice_instance(
+        bank,
+        store,
+        clause,
+        &choice_definition,
+        choice_code,
+        &negated_predicate,
+    )?;
+    Ok(2)
+}
+
+fn make_choice_instance(
+    bank: &mut TermBank,
+    store: &mut ClauseSet,
+    clause: &Clause,
+    choice_definition: &Clause,
+    choice_code: i64,
+    predicate: &Term,
+) -> Result<(), Diagnostic> {
+    let predicate_type = predicate.type_().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "choice-instantiation trigger predicate must be typed",
+        )
+    })?;
+    assert!(
+        type_is_predicate(&predicate_type),
+        "choice-instantiation trigger must be a predicate"
+    );
+    assert!(
+        choice_symbols_match_type(bank, choice_code, &predicate_type),
+        "choice symbol argument type must match trigger predicate"
+    );
+
+    let choice_var = choice_definition_predicate_var(choice_definition);
+    assert!(
+        choice_var.binding().is_none(),
+        "choice definition predicate variable must be unbound"
+    );
+    assert_eq!(
+        choice_var.type_(),
+        Some(predicate_type),
+        "choice definition predicate type must match trigger predicate"
+    );
+
+    choice_var.set_binding(Some(predicate.clone()));
+    let result = (|| {
+        let mut new_literals = Vec::with_capacity(choice_definition.literal_number());
+        for literal in choice_definition.literals().as_slice() {
+            new_literals.push(literal.copy_instantiated_ho(bank)?);
+        }
+        let mut new_literals = EqnList::from_vec(new_literals);
+        beta_normalize_eqn_list(bank, &mut new_literals)?;
+        let _ = new_literals.remove_resolved(bank);
+        let _ = new_literals.remove_duplicates(bank);
+
+        let mut new_clause = Clause::alloc(new_literals);
+        let _ = clause_normalize_equations(&mut new_clause, bank);
+        set_ho_generation_proof_object(
+            &mut new_clause,
+            clause,
+            Some(choice_definition),
+            DC_CHOICE_INST,
+            1,
+        );
+        let _ = clause_boolean_simplification(&mut new_clause, bank)?;
+        store.insert(new_clause);
+        Ok(())
+    })();
+    choice_var.set_binding(None);
+    result
+}
+
+fn choice_symbols_match_type(bank: &TermBank, choice_code: i64, predicate_type: &Type) -> bool {
+    let Some(choice_type) = bank.signature().get_type(choice_code) else {
+        return false;
+    };
+    choice_type
+        .args()
+        .first()
+        .is_some_and(|choice_predicate_type| choice_predicate_type == predicate_type)
+}
+
+fn choice_definition_predicate_var(choice_definition: &Clause) -> Term {
+    let negative_literal = choice_definition
+        .literals()
+        .as_slice()
+        .iter()
+        .find(|literal| literal.is_negative())
+        .expect("choice definition must have a negative literal");
+    let left = negative_literal.left();
+    assert!(
+        left.is_applied_free_var(),
+        "choice definition negative literal must be an applied variable"
+    );
+    left.argument(0)
+        .expect("choice definition predicate variable must be initialized")
+}
+
+fn negated_eta_expanded_predicate(
+    bank: &mut TermBank,
+    predicate: &Term,
+) -> Result<Term, Diagnostic> {
+    let predicate_type = predicate.type_().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "choice-instantiation negated trigger must be typed",
+        )
+    })?;
+    assert!(
+        predicate_type.is_arrow() && type_is_predicate(&predicate_type),
+        "choice-instantiation negated trigger must be an arrow predicate"
+    );
+
+    let argument_types = predicate_type.args()[..predicate_type.arity() - 1].to_vec();
+    let mut db_args = Vec::with_capacity(argument_types.len());
+    for (index, argument_type) in argument_types.iter().enumerate() {
+        let db_index = i64::try_from(argument_types.len() - index - 1)
+            .expect("choice eta-expansion DB index fits in FunCode");
+        db_args.push(bank.request_db_var(argument_type, db_index));
+    }
+    let applied = apply_terms(bank, predicate, &db_args)?;
+    let not_code = bank.signature().not_code();
+    let negated = tformula_fcode_alloc(bank, not_code, applied, None)?;
+    close_with_type_prefix(bank, &argument_types, &negated)
 }
 
 fn fresh_var_bank_for_arg_cong_clause(bank: &TermBank, clause: &Clause) -> VarBank {
@@ -6427,9 +6769,9 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_INV_REC,
-        DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM,
-        DC_SR,
+        DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
+        DC_CONTEXT_SR, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR,
+        DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -6510,6 +6852,22 @@ mod tests {
             .type_bank_mut()
             .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn unary_predicate_const(bank: &mut TermBank, name: &str) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let type_ = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
     }
 
     fn choice_const(bank: &mut TermBank, name: &str) -> Term {
@@ -10408,6 +10766,147 @@ mod tests {
 
         assert_eq!(outcome, GenerateNewClausesOutcome::default());
         assert_eq!(state.tmp_store().members(), 0);
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_choice_instantiates_defined_trigger() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (choice_definition, choice_code, clause) = {
+            let terms = state.terms_mut();
+            let (choice_definition, choice_code) =
+                choice_axiom(terms, "pc_generate_choice_defined", -40, -42);
+            let choice = terms.create_const_term(choice_code).unwrap();
+            let predicate = unary_predicate_const(terms, "pc_generate_choice_pred");
+            let choice_application =
+                apply_terms(terms, &choice, std::slice::from_ref(&predicate)).unwrap();
+            let witness = typed_const(terms, "pc_generate_choice_witness");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &choice_application,
+                &witness,
+                true,
+            )]));
+            clause.set_ident(4_181);
+            clause.set_proof_depth(1);
+            clause.set_proof_size(4);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (choice_definition, choice_code, clause)
+        };
+        state.axioms_mut().insert(choice_definition);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().inst_choice_max_depth = 1;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        assert_eq!(
+            proof_state_recognize_choice_axioms(&mut state, &control).unwrap(),
+            1
+        );
+        let choice_parent = state
+            .choice_opcodes()
+            .get(&choice_code)
+            .map(Clause::ident)
+            .expect("choice definition should be recorded");
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 2);
+        for generated_clause in state.tmp_store().iter() {
+            assert_eq!(generated_clause.proof_depth(), 2);
+            assert!(generated_clause.query_prop(CP_IS_SOS));
+            assert!(!generated_clause.query_prop(CP_NO_GENERATION));
+            assert!(derivation_contains_operation(
+                generated_clause,
+                DC_CHOICE_INST
+            ));
+            assert!(derivation_contains_parent(generated_clause, 4_181));
+            assert!(derivation_contains_parent(generated_clause, choice_parent));
+        }
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_choice_variable_creates_choice_axiom() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let arg_type = terms.signature().type_bank().default_type();
+            let bool_type = terms.signature().type_bank().bool_type();
+            let predicate_type = terms
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![arg_type.clone(), bool_type]));
+            let choice_type = terms
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![predicate_type, arg_type]));
+            let choice_variable = terms.vars().var_assert_alloc(-44, &choice_type);
+            let predicate = unary_predicate_const(terms, "pc_generate_choice_var_pred");
+            let choice_application =
+                apply_terms(terms, &choice_variable, std::slice::from_ref(&predicate)).unwrap();
+            let witness = typed_const(terms, "pc_generate_choice_var_witness");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms,
+                &choice_application,
+                &witness,
+                true,
+            )]));
+            clause.set_ident(4_182);
+            clause.set_proof_depth(0);
+            clause.set_proof_size(3);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().inst_choice_max_depth = 0;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.archive().members(), 1);
+        assert_eq!(state.choice_opcodes().len(), 1);
+        let choice_parent = state
+            .choice_opcodes()
+            .values()
+            .next()
+            .map(Clause::ident)
+            .expect("fresh choice axiom should be recorded");
+        assert!(state.archive().find_by_id(choice_parent).is_some());
+        let choice_axiom = state.choice_opcodes().values().next().unwrap();
+        assert!(derivation_contains_operation(choice_axiom, DC_CHOICE_AX));
+        assert_eq!(state.tmp_store().members(), 2);
+        for generated_clause in state.tmp_store().iter() {
+            assert_eq!(generated_clause.proof_depth(), 1);
+            assert!(generated_clause.query_prop(CP_IS_SOS));
+            assert!(!generated_clause.query_prop(CP_NO_GENERATION));
+            assert!(derivation_contains_operation(
+                generated_clause,
+                DC_CHOICE_INST
+            ));
+            assert!(derivation_contains_parent(generated_clause, 4_182));
+            assert!(derivation_contains_parent(generated_clause, choice_parent));
+        }
     }
 
     #[test]

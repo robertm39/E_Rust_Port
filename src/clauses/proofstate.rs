@@ -129,6 +129,8 @@ pub struct ProofStateGenerationContext<'a> {
     pub processed_neg_units: &'a ClauseSet,
     pub processed_non_units: &'a ClauseSet,
     pub tmp_store: &'a mut ClauseSet,
+    pub archive: &'a mut ClauseSet,
+    pub choice_opcodes: &'a mut BTreeMap<FunCode, Clause>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -364,6 +366,8 @@ impl ProofState {
             processed_neg_units,
             processed_non_units,
             tmp_store,
+            archive,
+            choice_opcodes,
             ..
         } = self;
         (
@@ -374,6 +378,8 @@ impl ProofState {
                 processed_neg_units,
                 processed_non_units,
                 tmp_store,
+                archive,
+                choice_opcodes,
             },
         )
     }
