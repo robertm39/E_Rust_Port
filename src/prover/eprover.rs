@@ -33,6 +33,7 @@ use crate::clauses::derivation::{
 };
 use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
+use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
@@ -45,8 +46,10 @@ use crate::clauses::proofstate::{
     WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
-use crate::clauses::sine::select_threshold_clause_sets;
-use crate::heuristics::axfilter::{sine_get_filter, AxFilterType};
+use crate::clauses::sine::{
+    select_axioms_clause_sets, select_threshold_clause_sets, ClauseSineParams,
+};
+use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
     spec_features_compute_clause_set_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
@@ -5344,7 +5347,8 @@ fn apply_proof_state_sine<W: Write + ?Sized>(
             state,
             resolution.filter().threshold,
         )),
-        AxFilterType::GSinE | AxFilterType::LambdaDefines => Ok(0),
+        AxFilterType::GSinE => Ok(apply_gsine_clause_filter(state, resolution.filter())),
+        AxFilterType::LambdaDefines => Ok(0),
         AxFilterType::NoFilter => Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "resolved SInE filter has no concrete type",
@@ -5371,6 +5375,56 @@ fn apply_threshold_sine_filter(
 
     state.axioms_mut().clear();
     original_axioms - selected_axioms
+}
+
+fn apply_gsine_clause_filter(
+    state: &mut crate::clauses::proofstate::ProofState,
+    filter: &AxFilter,
+) -> i64 {
+    let original_axioms = state.axioms().members();
+    let selected_idents = {
+        let mut clause_sets = PStack::new();
+        clause_sets.push(state.axioms());
+        let mut generality = GenDistrib::new(state.terms().signature());
+        generality.add_clause_sets(&clause_sets);
+        let mut selected_clauses = PStack::new();
+        let params = ClauseSineParams {
+            gen_measure: filter.gen_measure,
+            use_hypotheses: filter.use_hypotheses,
+            benevolence: filter.benevolence,
+            generosity: filter.generosity,
+            max_recursion_depth: filter.max_recursion_depth,
+            max_set_size: filter.max_set_size,
+            max_set_fraction: filter.max_set_fraction,
+            add_no_symbol_axioms: filter.add_no_symbol_axioms,
+        };
+        select_axioms_clause_sets(
+            &mut generality,
+            &clause_sets,
+            0,
+            params,
+            &mut selected_clauses,
+        );
+        selected_clauses
+            .as_slice()
+            .iter()
+            .map(|clause| clause.ident())
+            .collect::<Vec<_>>()
+    };
+
+    let mut selected_axioms = ClauseSet::new();
+    let mut moved = BTreeSet::new();
+    for ident in selected_idents {
+        if !moved.insert(ident) {
+            continue;
+        }
+        if let Some(clause) = state.axioms_mut().extract_by_id(ident) {
+            selected_axioms.insert(clause);
+        }
+    }
+    let selected_count = selected_axioms.members();
+    *state.axioms_mut() = selected_axioms;
+    original_axioms - selected_count
 }
 
 fn auto_sine_filter_name(state: &crate::clauses::proofstate::ProofState) -> Option<&'static str> {
@@ -12352,6 +12406,50 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_clause_gsine_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-gsine");
+        std::fs::write(
+            &path,
+            "cnf(goal, negated_conjecture, (g=g)).\n\
+             cnf(link, axiom, (g=h)).\n\
+             cnf(far, axiom, (h=k)).\n\
+             cnf(irr, axiom, (u=u)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--sine=GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("% SinE strategy is GSinE(CountTerms,,false,10.0,,2,10,1.0)\n"));
+        assert!(printed.contains(&format!("file('{path_arg}', goal)")));
+        assert!(printed.contains(&format!("file('{path_arg}', link)")));
+        assert!(printed.contains(&format!("file('{path_arg}', far)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', irr)")));
+        assert!(!printed.contains("u=u"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
         let _guard = global_state_lock();
         let path = temp_path("proof-found");
@@ -15401,6 +15499,47 @@ mod tests {
         assert!(printed.contains("% Removed by relevancy pruning/SinE    : 2\n"));
         assert!(printed.contains("% Initial clauses                      : 0\n"));
         assert!(printed.contains("\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_statistics_count_clause_gsine_pruning() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-gsine-statistics");
+        std::fs::write(
+            &path,
+            "cnf(goal, negated_conjecture, (g=g)).\n\
+             cnf(link, axiom, (g=h)).\n\
+             cnf(far, axiom, (h=k)).\n\
+             cnf(irr, axiom, (u=u)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--tstp-in",
+                "--tstp-out",
+                "--no-generation",
+                "--print-statistics",
+                "--sine=GSinE(CountTerms,,false,10.0,,2,10,1.0)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("% SinE strategy is GSinE(CountTerms,,false,10.0,,2,10,1.0)\n"));
+        assert!(printed.contains("% Parsed axioms                        : 4\n"));
+        assert!(printed.contains("% Removed by relevancy pruning/SinE    : 1\n"));
+        assert!(printed.contains("% Initial clauses                      : 3\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
