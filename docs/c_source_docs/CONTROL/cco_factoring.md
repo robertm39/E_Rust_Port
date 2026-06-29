@@ -87,7 +87,7 @@ Source files reviewed: `CONTROL/cco_factoring.h`, `CONTROL/cco_factoring.c`.
 - `src/clauses/factor.rs` ports first-order `ComputeAllOrderedFactors`: it skips Horn clauses and `CPNoGeneration`, iterates ordered-factor candidates, inserts generated clauses into the caller-owned `ClauseSet`, and copies proof depth, proof size, TPTP type, and SOS status from the parent.
 - `src/clauses/factor.rs` ports the first-order MGU subset of `ComputeAllEqualityFactors`: it uses the C equality-factor side cursor, skips Horn clauses and `CPNoGeneration`, inserts generated factors into the caller-owned `ClauseSet`, and copies parent proof depth, proof size, TPTP type, and SOS status.
 - Derivation pushes (`ClausePushDerivation`) are ported for the first-order all-factor wrappers through compact clause-parent references.
-- Proof documentation (`DocClauseCreationDefault`) remains pending until proof-output ownership is ported.
+- Opt-in proof-documentation wrappers emit represented `DocClauseCreationDefault(..., inf_factor, ...)` and `DocClauseCreationDefault(..., inf_efactor, ...)` output for first-order all-factor generation while keeping the plain helpers output-free.
 - Higher-order `ComputeAllEqualityFactors` behavior remains pending with the underlying CSU/lambda-normalization path.
 
 ### Change-Later Observations

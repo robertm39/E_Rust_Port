@@ -100,8 +100,8 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 - The port preserves C's pair ordering, second-literal side retry, post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - `src/clauses/factor.rs` also ports first-order equality factor candidate enumeration (`ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) and the first-order MGU subset of `ComputeEqualityFactor`.
 - The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, and resolved/duplicate cleanup.
-- The first-order all-factor wrappers now attach `DCOrderedFactor` / `DCEqFactor` derivation entries with the source clause reference.
-- Higher-order CSU enumeration, lambda normalization, and proof-documentation output remain pending.
+- The first-order all-factor wrappers now attach `DCOrderedFactor` / `DCEqFactor` derivation entries with the source clause reference and expose opt-in represented `DocClauseCreationDefault(..., inf_factor/inf_efactor, ...)` output.
+- Higher-order CSU enumeration and lambda normalization remain pending.
 
 ### Change-Later Observations
 
