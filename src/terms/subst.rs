@@ -1,5 +1,7 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_create_prefix;
 use crate::terms::termtypes::{
     term_deref, DerefType, Term, TP_OP_FLAG, TP_PRED_POS, TP_SPECIAL_FLAG,
@@ -207,8 +209,9 @@ impl Substitution {
         var: &Term,
         to_bind: &Term,
         up_to: usize,
+        bank: &mut TermBank,
         problem_type: ProblemType,
-    ) -> usize {
+    ) -> Result<usize, Diagnostic> {
         let previous = self.len();
         assert!(
             var.is_free_var(),
@@ -224,9 +227,14 @@ impl Substitution {
 
         let prefix = term_create_prefix(to_bind, up_to);
         prefix.set_type(Some(var_type));
-        var.set_binding(Some(prefix));
+        let binding = if prefix.is_shared() {
+            prefix
+        } else {
+            bank.term_top_insert(prefix)?
+        };
+        var.set_binding(Some(binding));
         self.bindings.push(var.clone());
-        previous
+        Ok(previous)
     }
 
     #[must_use]
@@ -249,7 +257,9 @@ mod tests {
     use super::Substitution;
     use crate::basics::simple_stuff::ProblemType;
     use crate::terms::signature::Signature;
-    use crate::terms::termtypes::{Term, TP_OP_FLAG, TP_SPECIAL_FLAG};
+    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::{DerefType, Term, TP_OP_FLAG, TP_SPECIAL_FLAG};
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
 
@@ -383,26 +393,73 @@ mod tests {
 
     #[test]
     fn bind_app_var_binds_to_prefix_and_records_position() {
-        let type_bank = TypeBank::new();
-        let var = typed_var(-2, &type_bank);
-        let term = Term::top_alloc(40, 2);
-        term.set_type(Some(type_bank.i_type()));
-        let a = Term::const_cell_alloc(10);
-        a.set_type(Some(type_bank.i_type()));
-        let b = Term::const_cell_alloc(11);
-        b.set_type(Some(type_bank.i_type()));
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let f_code = sig.insert_id("subst_prefix_f", 2, false);
+        sig.declare_type(
+            f_code,
+            alloc_arrow_type(vec![i_type.clone(), i_type.clone(), i_type.clone()]),
+        )
+        .unwrap();
+        let a_code = sig.insert_id("subst_prefix_a", 0, false);
+        let b_code = sig.insert_id("subst_prefix_b", 0, false);
+        sig.declare_type(a_code, i_type.clone()).unwrap();
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type.clone()));
+        let a = bank.create_const_term(a_code).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(i_type.clone()));
         term.set_argument(0, a.clone());
         term.set_argument(1, b);
+        let shared_term = bank.insert_ignore_var(&term, DerefType::Never).unwrap();
         let mut subst = Substitution::new();
 
-        let pos = subst.bind_app_var(&var, &term, 1, ProblemType::HigherOrder);
+        let pos = subst
+            .bind_app_var(&var, &shared_term, 1, &mut bank, ProblemType::HigherOrder)
+            .unwrap();
 
         assert_eq!(pos, 0);
         let binding = var.binding().unwrap();
-        assert_eq!(binding.f_code(), 40);
+        assert_eq!(binding.f_code(), f_code);
         assert_eq!(binding.arity(), 1);
         assert_eq!(binding.argument(0), Some(a));
-        assert_eq!(binding.type_(), Some(type_bank.i_type()));
+        assert_eq!(binding.type_(), Some(i_type));
+        assert!(binding.is_shared());
+        assert_eq!(bank.find(&binding), Some(binding));
+    }
+
+    #[test]
+    fn bind_app_var_reuses_shared_full_prefix() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let f_code = sig.insert_id("subst_full_f", 1, false);
+        sig.declare_type(
+            f_code,
+            alloc_arrow_type(vec![i_type.clone(), i_type.clone()]),
+        )
+        .unwrap();
+        let a_code = sig.insert_id("subst_full_a", 0, false);
+        sig.declare_type(a_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let a = bank.create_const_term(a_code).unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(i_type.clone()));
+        term.set_argument(0, a);
+        let shared_term = bank.insert_ignore_var(&term, DerefType::Never).unwrap();
+        let var = Term::const_cell_alloc(-2);
+        var.set_type(Some(i_type));
+        let before = bank.term_nodes();
+        let mut subst = Substitution::new();
+
+        subst
+            .bind_app_var(&var, &shared_term, 1, &mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(var.binding(), Some(shared_term));
+        assert_eq!(bank.term_nodes(), before);
     }
 
     #[test]

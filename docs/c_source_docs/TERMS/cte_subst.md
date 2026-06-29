@@ -114,6 +114,14 @@ Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `SubstBindAppVar` calls `TermCreatePrefix`, overwrites the returned prefix type with the bound variable's type, and inserts any newly created non-shared prefix with `TBTermTopInsert` before storing it as the variable binding. Rust mirrors this with an explicit term-bank parameter and preserves the existing substitution-stack backtracking shape.
+
+### Change Later Candidates
+
+- Because `TermCreatePrefix` can return the original already-shared term or the hidden head of an applied variable, `SubstBindAppVar` can mutate type metadata on a term it did not allocate. Keep this for compatibility, but a future cleaned API should consider returning a typed prefix view or fresh prefix only when type adjustment is required.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
