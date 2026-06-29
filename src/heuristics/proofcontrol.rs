@@ -2413,6 +2413,30 @@ pub fn proof_state_insert_new_clauses(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_insert_new_clauses_impl::<String>(state, control, None)
+}
+
+/// Drains `tmp_store` through C `insert_new_clauses` while emitting represented
+/// proof-documentation steps for the already-ported generated-clause branches.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_insert_new_clauses`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_insert_new_clauses_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<Clause>, Diagnostic> {
+    proof_state_insert_new_clauses_impl(state, control, Some((output, session)))
+}
+
+fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<Option<Clause>, Diagnostic> {
     let generated_count = i64_to_u64_saturating(state.tmp_store().members());
     let generated_lit_count = i64_to_u64_saturating(state.tmp_store().literals());
     {
@@ -2429,25 +2453,26 @@ pub fn proof_state_insert_new_clauses(
 
         if clause.query_prop(CP_IS_IR_VICTIM) {
             debug_assert!(clause.query_prop(CP_LIMITED_RW));
-            let _ = proof_state_forward_modify_clause(
+            let _ = proof_state_forward_modify_clause_maybe_docs(
                 state,
                 control,
                 &mut clause,
-                context_sr,
-                condense,
-                RewriteLevel::FullRewrite,
+                insert_new_forward_modify_options(context_sr, condense, RewriteLevel::FullRewrite),
+                &mut doc_context,
             )?;
             clause.del_prop(CP_IS_IR_VICTIM);
         }
 
-        let level = control.heuristic_parms().forward_demod;
-        let trivial = proof_state_forward_modify_clause(
+        let trivial = proof_state_forward_modify_clause_maybe_docs(
             state,
             control,
             &mut clause,
-            context_sr,
-            condense,
-            level,
+            insert_new_forward_modify_options(
+                context_sr,
+                condense,
+                control.heuristic_parms().forward_demod,
+            ),
+            &mut doc_context,
         )?;
         if trivial || clause.is_trivial(state.terms()) {
             continue;
@@ -2510,8 +2535,25 @@ pub fn proof_state_insert_new_clauses(
     }
 
     proof_state_eval_clause_set(state, control)?;
-    let _ = proof_state_move_eval_store_to_unprocessed(state);
+    if let Some((output, session)) = doc_context.as_mut() {
+        proof_state_move_eval_store_to_unprocessed_with_docs(output, session, state)?;
+    } else {
+        let _ = proof_state_move_eval_store_to_unprocessed(state);
+    }
     Ok(None)
+}
+
+fn insert_new_forward_modify_options(
+    context_sr: bool,
+    condense_clause: bool,
+    level: RewriteLevel,
+) -> ForwardContractOptions {
+    ForwardContractOptions {
+        non_unit_subsumption: false,
+        context_sr,
+        condense_clause,
+        level,
+    }
 }
 
 /// Applies C `replacing_inferences` to one already packed selected clause.
@@ -4213,8 +4255,9 @@ pub fn proof_state_eval_clause_set(
 /// Moves evaluated clauses from `eval_store` to `unprocessed`.
 ///
 /// This is the final queueing tail of C `insert_new_clauses` after
-/// [`proof_state_eval_clause_set`] has attached evaluations. Proof-output
-/// quoting is left for the later proof-documentation integration.
+/// [`proof_state_eval_clause_set`] has attached evaluations. Use
+/// [`proof_state_move_eval_store_to_unprocessed_with_docs`] for the represented
+/// proof-documentation `eval` quote side effect.
 pub fn proof_state_move_eval_store_to_unprocessed(state: &mut ProofState) -> i64 {
     let mut moved = 0;
     while let Some(mut clause) = state.eval_store_mut().extract_first() {
@@ -4223,6 +4266,27 @@ pub fn proof_state_move_eval_store_to_unprocessed(state: &mut ProofState) -> i64
         moved += 1;
     }
     moved
+}
+
+/// Moves evaluated clauses from `eval_store` to `unprocessed` while emitting
+/// the represented C `DocClauseQuoteDefault(6, handle, "eval")` step.
+///
+/// # Errors
+///
+/// Returns any proof-documentation write diagnostic.
+pub fn proof_state_move_eval_store_to_unprocessed_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+) -> Result<i64, Diagnostic> {
+    let mut moved = 0;
+    while let Some(mut clause) = state.eval_store_mut().extract_first() {
+        clause.del_prop(CP_IS_ORIENTED);
+        session.doc_clause_quote(output, state.terms(), 6, &mut clause, Some("eval"), None)?;
+        state.unprocessed_mut().insert(clause);
+        moved += 1;
+    }
+    Ok(moved)
 }
 
 /// Runs C `check_ac_status` for one newly processed clause.
@@ -4500,9 +4564,11 @@ mod tests {
         proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
         proof_state_init_indexing, proof_state_init_with_docs,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_move_to_tmp_store_with_global_indices,
-        proof_state_process_clause, proof_state_process_clause_with_global_indices,
+        proof_state_insert_new_clauses_with_docs, proof_state_insert_processed_clause,
+        proof_state_move_eval_store_to_unprocessed,
+        proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
+        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
+        proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_docs,
         proof_state_reset_processed_with_global_indices, proof_state_saturate,
@@ -6523,6 +6589,33 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_move_eval_store_to_unprocessed_with_docs_emits_eval_quote() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = unit_clause_with_id(state.terms_mut(), "pc_eval_store_doc", 4_065);
+        clause.set_prop(CP_INPUT_FORMULA);
+        clause.set_prop(CP_IS_ORIENTED);
+        state.eval_store_mut().insert(clause);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let moved = proof_state_move_eval_store_to_unprocessed_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(moved, 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("1 : :"));
+        assert!(rendered.contains("4065 : 'eval'"));
+        assert!(state.eval_store().is_empty());
+        let moved_clause = state.unprocessed().find_by_id(1).unwrap();
+        assert!(!moved_clause.query_prop(CP_INPUT_FORMULA | CP_IS_ORIENTED));
+    }
+
+    #[test]
     fn proof_state_queue_generated_clause_for_eval_selects_and_stamps_clause() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         state.statistics_mut().proc_non_trivial_count = 77;
@@ -6618,6 +6711,43 @@ mod tests {
                 .prop_lit_number(EP_IS_SELECTED),
             1
         );
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_with_docs_emits_eval_quote() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.statistics_mut().proc_non_trivial_count = 92;
+        let mut clause = unit_clause_with_id(state.terms_mut(), "pc_insert_new_doc_eval", 4_076);
+        clause.set_prop(CP_INPUT_FORMULA);
+        clause.set_prop(CP_IS_ORIENTED);
+        state.tmp_store_mut().insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewDocEval");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let empty = proof_state_insert_new_clauses_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("1 : :"));
+        assert!(rendered.contains("4076 : 'eval'"));
+        assert!(state.tmp_store().is_empty());
+        assert!(state.eval_store().is_empty());
+        let queued = state.unprocessed().find_by_id(1).unwrap();
+        assert_eq!(queued.create_date(), 92);
+        assert!(!queued.query_prop(CP_INPUT_FORMULA | CP_IS_ORIENTED));
+        assert!(queued.evaluations().is_some());
+        assert_eq!(state.statistics().generated_count, 1);
+        assert_eq!(state.statistics().non_trivial_generated_count, 1);
     }
 
     #[test]
