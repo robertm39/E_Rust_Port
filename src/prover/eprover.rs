@@ -28,8 +28,9 @@ use crate::clauses::clause_props::{
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    demodulator_clause_refs, deriv_stack_pcl_string, deriv_stack_tstp_string, op_has_arg1,
-    op_has_arg2, op_has_cnf_arg1, op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
+    demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
+    deriv_stack_tstp_string_with_ac_axioms, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
 };
 use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
@@ -6089,7 +6090,10 @@ fn write_saturation_proof_object_clause(
         DocOutputFormat::Pcl => {
             write_pcl_doc_step_start(&mut rendered, config, bank, clause, true)
                 .map_err(proof_doc_write_error)?;
-            if let Some(derivation) = deriv_stack_pcl_string(clause.derivation()) {
+            if let Some(derivation) = deriv_stack_pcl_string_with_ac_axioms(
+                clause.derivation(),
+                bank.signature().ac_axioms(),
+            ) {
                 rendered.push_str(&derivation);
             } else {
                 rendered.push_str(&source_info_pcl_string(clause.info()));
@@ -6114,7 +6118,10 @@ fn write_saturation_proof_object_clause(
                 ProblemType::FirstOrder,
                 config.encoding.print_types,
             )?;
-            if let Some(derivation) = deriv_stack_tstp_string(clause.derivation()) {
+            if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
+                clause.derivation(),
+                bank.signature().ac_axioms(),
+            ) {
                 rendered.push_str(", ");
                 rendered.push_str(&derivation);
             } else {
@@ -6204,7 +6211,10 @@ fn write_proof_object_dot_clause(
             ProblemType::FirstOrder,
             config.encoding.print_types,
         )?;
-        if let Some(derivation) = deriv_stack_tstp_string(clause.derivation()) {
+        if let Some(derivation) = deriv_stack_tstp_string_with_ac_axioms(
+            clause.derivation(),
+            bank.signature().ac_axioms(),
+        ) {
             rendered.push_str(",\n");
             rendered.push_str(&derivation);
         } else {

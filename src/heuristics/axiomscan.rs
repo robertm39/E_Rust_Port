@@ -1,5 +1,6 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::ClauseDerivationRef;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
 use crate::terms::termfunc::term_standard_weight;
@@ -128,6 +129,7 @@ pub fn clause_scan_ac(sig: &mut Signature, clause: &Clause) -> bool {
     if f != 0 {
         if !sig.query_prop(f, FP_COMMUTATIVE) {
             sig.set_func_prop(f, FP_COMMUTATIVE);
+            sig.push_ac_axiom(ClauseDerivationRef::from(clause));
         }
         return true;
     }
@@ -135,6 +137,7 @@ pub fn clause_scan_ac(sig: &mut Signature, clause: &Clause) -> bool {
     let f = detect_associativity(clause);
     if f != 0 && !sig.query_prop(f, FP_ASSOCIATIVE) {
         sig.set_func_prop(f, FP_ASSOCIATIVE);
+        sig.push_ac_axiom(ClauseDerivationRef::from(clause));
     }
     false
 }
@@ -165,6 +168,7 @@ mod tests {
     use super::{clause_scan_ac, clause_set_scan_ac, detect_associativity, detect_commutativity};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::ClauseDerivationRef;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
@@ -307,11 +311,17 @@ mod tests {
         let yz = binary(&mut bank, f_code, &y, &z);
         let left_assoc = binary(&mut bank, f_code, &xy, &z);
         let right_assoc = binary(&mut bank, f_code, &x, &yz);
-        let assoc = unit_clause(literal(&mut bank, &left_assoc, &right_assoc, true));
+        let mut assoc = unit_clause(literal(&mut bank, &left_assoc, &right_assoc, true));
+        assoc.set_ident(31);
+        assoc.set_csscpa_source(2);
 
         assert!(!clause_scan_ac(bank.signature_mut(), &assoc));
         assert!(bank.signature().query_prop(f_code, FP_ASSOCIATIVE));
         assert!(!bank.signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert_eq!(
+            bank.signature().ac_axioms(),
+            &[ClauseDerivationRef::new(31, 2)]
+        );
     }
 
     #[test]
@@ -321,12 +331,22 @@ mod tests {
         let y = variable(&bank, -4);
         let left = binary(&mut bank, f_code, &x, &y);
         let right = binary(&mut bank, f_code, &y, &x);
-        let clause = unit_clause(literal(&mut bank, &left, &right, true));
+        let mut clause = unit_clause(literal(&mut bank, &left, &right, true));
+        clause.set_ident(41);
+        clause.set_csscpa_source(3);
         let set = ClauseSet::from_clauses([clause.clone()]);
 
         assert!(clause_scan_ac(bank.signature_mut(), &clause));
         assert!(bank.signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert_eq!(
+            bank.signature().ac_axioms(),
+            &[ClauseDerivationRef::new(41, 3)]
+        );
         assert!(clause_set_scan_ac(bank.signature_mut(), &set));
         assert!(bank.signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert_eq!(
+            bank.signature().ac_axioms(),
+            &[ClauseDerivationRef::new(41, 3)]
+        );
     }
 }

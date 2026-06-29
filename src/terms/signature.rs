@@ -2,6 +2,7 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pdarrays::PDIntArray;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::clauses::derivation::ClauseDerivationRef;
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_parse, func_symb_token, FunCode, FuncSymbType};
 use crate::terms::simpletypes::{
@@ -194,6 +195,7 @@ pub struct Signature {
     internal_symbols: FunCode,
     f_info: Vec<FuncCell>,
     f_index: BTreeMap<String, FunCode>,
+    ac_axioms: Vec<ClauseDerivationRef>,
     type_bank: TypeBank,
     support_lists: bool,
     typed_symbols: bool,
@@ -236,6 +238,7 @@ impl Signature {
             internal_symbols: 0,
             f_info: vec![FuncCell::dummy()],
             f_index: BTreeMap::new(),
+            ac_axioms: Vec::new(),
             type_bank,
             support_lists,
             typed_symbols: false,
@@ -696,6 +699,15 @@ impl Signature {
     #[must_use]
     pub fn query_prop(&self, f_code: FunCode, prop: FunctionProperties) -> bool {
         self.func(f_code).properties.contains_all(prop)
+    }
+
+    pub fn push_ac_axiom(&mut self, axiom: ClauseDerivationRef) {
+        self.ac_axioms.push(axiom);
+    }
+
+    #[must_use]
+    pub fn ac_axioms(&self) -> &[ClauseDerivationRef] {
+        &self.ac_axioms
     }
 
     #[must_use]

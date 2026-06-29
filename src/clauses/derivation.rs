@@ -592,8 +592,9 @@ pub fn deriv_stack_count_search_inferences(
 /// Returns the C `DerivationStackPCLPrint` expression for represented
 /// clause-side derivation stacks.
 ///
-/// Formula parents and signature-owned AC axiom expansion remain with the
-/// later formula/signature proof-object owner.
+/// This compatibility wrapper does not expand `DCACRes` signature-owned AC
+/// axiom parents. Use [`deriv_stack_pcl_string_with_ac_axioms`] when the caller
+/// can supply the signature-owned AC axiom list.
 ///
 /// # Panics
 ///
@@ -601,6 +602,29 @@ pub fn deriv_stack_count_search_inferences(
 /// Rust stack entry shape.
 #[must_use]
 pub fn deriv_stack_pcl_string(derivation: Option<&PStack<DerivationEntry>>) -> Option<String> {
+    deriv_stack_pcl_string_internal(derivation, None)
+}
+
+/// Returns the C `DerivationStackPCLPrint` expression with signature-owned AC
+/// axiom parent expansion.
+///
+/// # Panics
+///
+/// Panics if an opcode-declared argument is missing or has the wrong Rust stack
+/// entry shape, if a `DCACRes` numeric argument is negative, or if it requests
+/// more AC axiom references than the supplied slice contains.
+#[must_use]
+pub fn deriv_stack_pcl_string_with_ac_axioms(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
+) -> Option<String> {
+    deriv_stack_pcl_string_internal(derivation, Some(ac_axioms))
+}
+
+fn deriv_stack_pcl_string_internal(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: Option<&[ClauseDerivationRef]>,
+) -> Option<String> {
     let derivation = derivation?;
     let entries = derivation.as_slice();
     let subexpressions = derivation_subexpression_starts(entries);
@@ -648,6 +672,9 @@ pub fn deriv_stack_pcl_string(derivation: Option<&PStack<DerivationEntry>>) -> O
             rendered.push_str(", ");
             write_derivation_clause_ident(&mut rendered, parent);
         }
+        if *op == DC_AC_RES {
+            write_ac_axiom_idents(&mut rendered, entries, start, ac_axioms);
+        }
         match *op {
             DC_CNF_QUOTE => {}
             op if op_code(op) == DO_INTRO_DEF => {}
@@ -661,8 +688,9 @@ pub fn deriv_stack_pcl_string(derivation: Option<&PStack<DerivationEntry>>) -> O
 /// Returns the C `DerivationStackTSTPPrint` expression for represented
 /// clause-side derivation stacks.
 ///
-/// Formula parents and signature-owned AC axiom expansion remain with the
-/// later formula/signature proof-object owner.
+/// This compatibility wrapper does not expand `DCACRes` signature-owned AC
+/// axiom parents. Use [`deriv_stack_tstp_string_with_ac_axioms`] when the
+/// caller can supply the signature-owned AC axiom list.
 ///
 /// # Panics
 ///
@@ -670,6 +698,29 @@ pub fn deriv_stack_pcl_string(derivation: Option<&PStack<DerivationEntry>>) -> O
 /// Rust stack entry shape.
 #[must_use]
 pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> Option<String> {
+    deriv_stack_tstp_string_internal(derivation, None)
+}
+
+/// Returns the C `DerivationStackTSTPPrint` expression with signature-owned AC
+/// axiom parent expansion.
+///
+/// # Panics
+///
+/// Panics if an opcode-declared argument is missing or has the wrong Rust stack
+/// entry shape, if a `DCACRes` numeric argument is negative, or if it requests
+/// more AC axiom references than the supplied slice contains.
+#[must_use]
+pub fn deriv_stack_tstp_string_with_ac_axioms(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: &[ClauseDerivationRef],
+) -> Option<String> {
+    deriv_stack_tstp_string_internal(derivation, Some(ac_axioms))
+}
+
+fn deriv_stack_tstp_string_internal(
+    derivation: Option<&PStack<DerivationEntry>>,
+    ac_axioms: Option<&[ClauseDerivationRef]>,
+) -> Option<String> {
     let derivation = derivation?;
     let entries = derivation.as_slice();
     let subexpressions = derivation_subexpression_starts(entries);
@@ -725,6 +776,9 @@ pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> 
             rendered.push_str(", ");
             write_derivation_clause_ref(&mut rendered, parent);
         }
+        if *op == DC_AC_RES {
+            write_ac_axiom_refs(&mut rendered, entries, start, ac_axioms);
+        }
         match *op {
             DC_CNF_QUOTE => {}
             op if op_code(op) == DO_INTRO_DEF => {}
@@ -739,6 +793,56 @@ pub fn deriv_stack_tstp_string(derivation: Option<&PStack<DerivationEntry>>) -> 
     }
 
     Some(rendered)
+}
+
+fn write_ac_axiom_idents(
+    output: &mut String,
+    entries: &[DerivationEntry],
+    start: usize,
+    ac_axioms: Option<&[ClauseDerivationRef]>,
+) {
+    let Some(ac_axioms) = ac_axioms else {
+        return;
+    };
+    let ac_count = ac_axiom_count(entries, start);
+    assert!(
+        ac_count <= ac_axioms.len(),
+        "DCACRes parent count exceeds supplied AC axioms"
+    );
+    for axiom in &ac_axioms[..ac_count] {
+        output.push_str(", ");
+        write_derivation_clause_ident(output, *axiom);
+    }
+}
+
+fn write_ac_axiom_refs(
+    output: &mut String,
+    entries: &[DerivationEntry],
+    start: usize,
+    ac_axioms: Option<&[ClauseDerivationRef]>,
+) {
+    let Some(ac_axioms) = ac_axioms else {
+        return;
+    };
+    let ac_count = ac_axiom_count(entries, start);
+    assert!(
+        ac_count <= ac_axioms.len(),
+        "DCACRes parent count exceeds supplied AC axioms"
+    );
+    for axiom in &ac_axioms[..ac_count] {
+        output.push_str(", ");
+        write_derivation_clause_ref(output, *axiom);
+    }
+}
+
+fn ac_axiom_count(entries: &[DerivationEntry], start: usize) -> usize {
+    let entry = entries
+        .get(start + 1)
+        .unwrap_or_else(|| panic!("DCACRes numeric argument is missing"));
+    let DerivationEntry::NumericArg(value) = entry else {
+        panic!("DCACRes numeric argument has the wrong entry shape");
+    };
+    usize::try_from(*value).unwrap_or_else(|_| panic!("DCACRes parent count must be non-negative"))
 }
 
 fn derivation_subexpression_starts(entries: &[DerivationEntry]) -> Vec<usize> {
@@ -1047,29 +1151,31 @@ mod tests {
         clause_is_dummy_quote, clause_is_eval_gc, clause_push_ac_res_derivation,
         clause_push_derivation, clause_push_formula_derivation, clause_push_numeric_derivation,
         deriv_stack_count_search_inferences, deriv_stack_extract_parents,
-        deriv_stack_indicates_initial_clause, deriv_stack_pcl_string, deriv_stack_tstp_string,
-        derivation_entries, get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef,
-        DerivationEntry, DerivationParentRef, FormulaDerivationRef, ProofObjectType, ProofOutput,
-        ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES,
-        DC_ANNO_QUESTION, DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES,
-        DC_DIST_DISJUNCTIONS, DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF, DC_ELIMINATE_BVAR, DC_EQ_FACTOR,
-        DC_EQ_RES, DC_EQ_TO_EQ, DC_EVAL_ANSWERS, DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
-        DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
-        DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE,
-        DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
-        DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM, DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN,
-        DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR,
-        DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES, DO_ADD_CNF_ARG, DO_ANNO_QUESTION,
-        DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST, DO_CONDENSE, DO_CONTEXT_SR,
-        DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE, DO_DYNAMIC_CNF,
-        DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS, DO_EVAL_GC,
-        DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE, DO_FNNF,
-        DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM, DO_LIFT_ITE,
-        DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP, DO_NORMALIZE,
-        DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM, DO_PRUNE_ARG,
-        DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD, DO_SKOLEMIZE,
-        DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD, DO_VAR_RENAME,
+        deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
+        deriv_stack_pcl_string_with_ac_axioms, deriv_stack_tstp_string,
+        deriv_stack_tstp_string_with_ac_axioms, derivation_entries, get_is_ho, op_code,
+        op_is_generating, set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
+        FormulaDerivationRef, ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF, ARG1_NUM, ARG2_CNF,
+        ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_ARG_CONG,
+        DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
+        DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS, DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF,
+        DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES, DC_EQ_TO_EQ, DC_EVAL_ANSWERS,
+        DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF,
+        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM,
+        DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE, DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP,
+        DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM,
+        DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN, DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE,
+        DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR, DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES,
+        DO_ADD_CNF_ARG, DO_ANNO_QUESTION, DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST,
+        DO_CONDENSE, DO_CONTEXT_SR, DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE,
+        DO_DYNAMIC_CNF, DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS,
+        DO_EVAL_GC, DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE,
+        DO_FNNF, DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM,
+        DO_LIFT_ITE, DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP,
+        DO_NORMALIZE, DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM,
+        DO_PRUNE_ARG, DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD,
+        DO_SKOLEMIZE, DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD,
+        DO_VAR_RENAME,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1475,6 +1581,29 @@ mod tests {
     }
 
     #[test]
+    fn deriv_stack_tstp_string_expands_ac_axioms_when_supplied() {
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_AC_RES));
+        derivation.push(DerivationEntry::NumericArg(2));
+
+        assert_eq!(
+            deriv_stack_tstp_string_with_ac_axioms(
+                Some(&derivation),
+                &[
+                    ClauseDerivationRef::new(70, 0),
+                    ClauseDerivationRef::new(71, 0),
+                ],
+            )
+            .as_deref(),
+            Some("inference(ar,[status(thm)],[, c_0_70, c_0_71])")
+        );
+        assert_eq!(
+            deriv_stack_tstp_string(Some(&derivation)).as_deref(),
+            Some("inference(ar,[status(thm)],[])")
+        );
+    }
+
+    #[test]
     fn deriv_stack_pcl_string_matches_c_nested_shape() {
         let mut derivation = PStack::new();
         derivation.push(DerivationEntry::Operation(DC_CNF_QUOTE));
@@ -1508,6 +1637,29 @@ mod tests {
         assert_eq!(
             deriv_stack_pcl_string(Some(&derivation)).as_deref(),
             Some("epxand_distinct(split_conjunct(17), -9223372036854775805)")
+        );
+    }
+
+    #[test]
+    fn deriv_stack_pcl_string_expands_ac_axioms_when_supplied() {
+        let mut derivation = PStack::new();
+        derivation.push(DerivationEntry::Operation(DC_AC_RES));
+        derivation.push(DerivationEntry::NumericArg(2));
+
+        assert_eq!(
+            deriv_stack_pcl_string_with_ac_axioms(
+                Some(&derivation),
+                &[
+                    ClauseDerivationRef::new(70, 0),
+                    ClauseDerivationRef::new(71, 0),
+                ],
+            )
+            .as_deref(),
+            Some("ar(, 70, 71)")
+        );
+        assert_eq!(
+            deriv_stack_pcl_string(Some(&derivation)).as_deref(),
+            Some("ar()")
         );
     }
 
