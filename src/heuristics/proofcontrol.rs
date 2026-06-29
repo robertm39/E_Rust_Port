@@ -30,6 +30,7 @@ use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
+use crate::clauses::inferencedoc::ProofDocSession;
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::paramodulation::{
     compute_all_paramodulants, compute_all_paramodulants_indexed,
@@ -37,7 +38,10 @@ use crate::clauses::paramodulation::{
 };
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
 use crate::clauses::rewrite::find_rewritable_clauses;
-use crate::clauses::rewrite::{clause_compute_li_normalform_plain, clause_local_rw};
+use crate::clauses::rewrite::{
+    clause_compute_li_normalform_plain, clause_compute_li_normalform_plain_with_docs,
+    clause_local_rw,
+};
 use crate::clauses::satinterface::{sat_check_proof_state, SatCheckReport};
 use crate::clauses::splitting::{
     clause_split, clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
@@ -72,7 +76,7 @@ use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{RewriteLevel, TP_IS_REWRITABLE};
-use std::{collections::BTreeSet, time::Instant};
+use std::{collections::BTreeSet, fmt, time::Instant};
 
 pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "\n",
@@ -1209,6 +1213,59 @@ pub fn proof_state_forward_modify_clause(
     condense_clause: bool,
     level: RewriteLevel,
 ) -> Result<bool, Diagnostic> {
+    proof_state_forward_modify_clause_impl::<String>(
+        state,
+        control,
+        clause,
+        condense_clause,
+        level,
+        None,
+    )
+}
+
+/// Applies C `ForwardModifyClause` while emitting represented proof docs.
+///
+/// Currently this wires the C `OutputLevel >= 4` rewrite-documentation side
+/// effect from `eqn_li_normalform`; other modification proof-documentation
+/// branches remain at their existing renderer boundaries until their mutation
+/// call sites are threaded through the proof-control session.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_forward_modify_clause`], plus
+/// any proof-documentation write diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Proof-control proof-documentation wrapper keeps output/session state explicit"
+)]
+pub fn proof_state_forward_modify_clause_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    _context_sr: bool,
+    condense_clause: bool,
+    level: RewriteLevel,
+) -> Result<bool, Diagnostic> {
+    proof_state_forward_modify_clause_impl(
+        state,
+        control,
+        clause,
+        condense_clause,
+        level,
+        Some((output, session)),
+    )
+}
+
+fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    condense_clause: bool,
+    level: RewriteLevel,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<bool, Diagnostic> {
     if problem_type() == ProblemType::HigherOrder {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -1233,15 +1290,28 @@ pub fn proof_state_forward_modify_clause(
         let (terms, processed_sets) = state.terms_and_processed_sets_mut();
         let demodulators: [&ClauseSet; 2] = [&*processed_sets.pos_rules, &*processed_sets.pos_eqns];
         loop {
-            let steps = clause_compute_li_normalform_plain(
-                terms,
-                ocb,
-                clause,
-                &demodulators,
-                level,
-                prefer_general,
-                lambda_demod,
-            )?;
+            let steps = match doc_context.as_mut() {
+                Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
+                    output,
+                    session,
+                    terms,
+                    ocb,
+                    clause,
+                    &demodulators,
+                    level,
+                    prefer_general,
+                    lambda_demod,
+                )?,
+                None => clause_compute_li_normalform_plain(
+                    terms,
+                    ocb,
+                    clause,
+                    &demodulators,
+                    level,
+                    prefer_general,
+                    lambda_demod,
+                )?,
+            };
             rw_steps += steps;
 
             let limited_rw = clause.query_prop(CP_LIMITED_RW);
@@ -4106,14 +4176,14 @@ mod tests {
         proof_state_eval_clause_set, proof_state_filter_unprocessed,
         proof_state_forward_contract_clause, proof_state_forward_contract_set,
         proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
-        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
-        proof_state_init_indexing, proof_state_init_with_global_indices,
-        proof_state_insert_new_clauses, proof_state_insert_processed_clause,
-        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
-        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
-        proof_state_process_clause_with_global_indices,
+        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
+        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
+        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
+        proof_state_move_to_tmp_store, proof_state_move_to_tmp_store_with_global_indices,
+        proof_state_process_clause, proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_global_indices,
         proof_state_saturate, proof_state_saturate_with_global_indices,
@@ -4130,8 +4200,9 @@ mod tests {
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED, CP_IS_PROCESSED, CP_IS_SOS,
-        CP_IS_S_INDEXED, CP_LIMITED_RW, CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE,
+        CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED,
+        CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW, CP_SUBSUMES_WATCH,
+        CP_TYPE_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -4147,6 +4218,7 @@ mod tests {
     use crate::clauses::fcvindexing::{fv_index_pack_clause, FvIndexParams};
     use crate::clauses::freqvectors::{FvIndexType, FVINDEX_MAX_FEATURES_DEFAULT};
     use crate::clauses::global_indices::{global_indices_null, GlobalIndices};
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::heuristics::hcb::{
@@ -5005,6 +5077,118 @@ mod tests {
         assert_ne!(literal.left(), &target);
         assert_ne!(literal.right(), &target);
         assert!(literal.left() == &replacement || literal.right() == &replacement);
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_with_docs_emits_rewrite_steps_at_level_four() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, mut clause) = {
+            let terms = state.terms_mut();
+            let f_code = typed_binary_code(terms, "pc_forward_doc_f");
+            let x = typed_var(terms, -2);
+            let y = typed_var(terms, -4);
+            let replacement = typed_const(terms, "pc_forward_doc_a");
+            let first = typed_const(terms, "pc_forward_doc_b");
+            let second = typed_const(terms, "pc_forward_doc_c");
+            let rhs = typed_const(terms, "pc_forward_doc_d");
+            let pattern = typed_binary_with_code(terms, f_code, &x, &y);
+            let target = typed_binary_with_code(terms, f_code, &first, &second);
+            let mut demod_lit = literal(terms, &pattern, &replacement, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_084);
+            demodulator.set_date(SysDate::from_raw(5));
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &target, &rhs, true)]));
+            clause.set_ident(4_085);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            (demodulator, clause)
+        };
+        state
+            .processed_pos_rules_mut()
+            .set_date(SysDate::from_raw(5));
+        state.processed_pos_rules_mut().insert(demodulator);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 4, ProblemType::FirstOrder);
+        session.pcl_shell_level = 1;
+        let mut rendered = String::new();
+
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(state.statistics().rw_count, 1);
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert_eq!(rendered, "     1 : : : rw(4085,4084)\n");
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_with_docs_preserves_output_level_four_gate() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, mut clause) = {
+            let terms = state.terms_mut();
+            let f_code = typed_binary_code(terms, "pc_forward_doc_gate_f");
+            let x = typed_var(terms, -2);
+            let y = typed_var(terms, -4);
+            let replacement = typed_const(terms, "pc_forward_doc_gate_a");
+            let first = typed_const(terms, "pc_forward_doc_gate_b");
+            let second = typed_const(terms, "pc_forward_doc_gate_c");
+            let rhs = typed_const(terms, "pc_forward_doc_gate_d");
+            let pattern = typed_binary_with_code(terms, f_code, &x, &y);
+            let target = typed_binary_with_code(terms, f_code, &first, &second);
+            let mut demod_lit = literal(terms, &pattern, &replacement, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_086);
+            demodulator.set_date(SysDate::from_raw(5));
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &target, &rhs, true)]));
+            clause.set_ident(4_087);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            (demodulator, clause)
+        };
+        state
+            .processed_pos_rules_mut()
+            .set_date(SysDate::from_raw(5));
+        state.processed_pos_rules_mut().insert(demodulator);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 3, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(state.statistics().rw_count, 1);
+        assert_eq!(clause.ident(), 4_087);
+        assert!(rendered.is_empty());
+        assert!(!clause.query_prop(CP_INITIAL));
+        assert!(clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
     }
 
     #[test]
