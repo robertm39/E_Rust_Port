@@ -1,10 +1,12 @@
 //! Term-ordering weight generation from `che_to_weightgen`.
 
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::partial_orderings::{ordering_to_part, CompareResult};
+use crate::basics::partial_orderings::{ordering_to_part, CompareResult, HoOrderKind};
 use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::fcode_featurearrays::{FCodeFeatureArray, FCodeFeatureSortCell};
-use crate::heuristics::to_params::{OrderParmsCell, TOWeightGenMethod, W_CONST_NO_SPECIAL_WEIGHT};
+use crate::heuristics::to_params::{
+    OrderParmsCell, TOWeightGenMethod, TermOrdering, W_CONST_NO_SPECIAL_WEIGHT,
+};
 use crate::inout::scanner::Scanner;
 use crate::orderings::cto_orderings::weights_parse;
 use crate::orderings::ocb::OrderControlBlock;
@@ -48,15 +50,15 @@ impl GeneratedWeights {
 /// The result is indexed by f-code; index zero is unused. Methods that depend
 /// on `OCBFunCompare` use `context.precedence_order` as a low-to-high total
 /// precedence, or `context.precedence_ocb` for matrix-backed partial
-/// precedence. User `pre_weights` parsing is available through
-/// [`generate_weights_into_ocb`] because it mutates OCB-owned weights.
+/// precedence. User `pre_weights` parsing is applied after generated weights,
+/// matching C `TOGenerateWeights`.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic when a selected method needs a precedence order but
 /// none was supplied, when the supplied total precedence is invalid for the
-/// current signature, when user weight parsing would be required in this pure
-/// helper, or when the method is the invalid C sentinel.
+/// current signature, when user weight parsing fails, or when the method is the
+/// invalid C sentinel.
 ///
 /// # Panics
 ///
@@ -68,16 +70,6 @@ pub fn generate_weights(
     oparms: &OrderParmsCell,
     context: WeightGenerationContext<'_>,
 ) -> Result<GeneratedWeights, Diagnostic> {
-    if context
-        .pre_weights
-        .is_some_and(|weights| !weights.is_empty())
-    {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "User weight parsing requires ordering-control block port",
-        ));
-    }
-
     let mut generated = GeneratedWeights {
         weights: vec![0; weights_size(signature.f_count())],
         var_weight: W_DEFAULT_WEIGHT,
@@ -92,6 +84,7 @@ pub fn generate_weights(
     if signature.f_count() >= SIG_PHONY_APP_CODE {
         set_symbol_weight(&mut generated.weights, SIG_PHONY_APP_CODE, 0);
     }
+    apply_pre_weights(signature, context.pre_weights, &mut generated)?;
 
     Ok(generated)
 }
@@ -307,6 +300,36 @@ fn apply_constant_overrides(
             }
         }
     }
+}
+
+fn apply_pre_weights(
+    signature: &Signature,
+    pre_weights: Option<&str>,
+    generated: &mut GeneratedWeights,
+) -> Result<(), Diagnostic> {
+    let Some(pre_weights) = pre_weights else {
+        return Ok(());
+    };
+    if pre_weights.is_empty() {
+        return Ok(());
+    }
+
+    let mut ocb =
+        OrderControlBlock::alloc(TermOrdering::Kbo, true, signature, HoOrderKind::LfhoOrder);
+    ocb.install_weights(&generated.weights);
+    ocb.var_weight = generated.var_weight;
+    ocb.lam_weight = generated.lam_weight;
+    ocb.db_weight = generated.db_weight;
+
+    let mut scanner = Scanner::from_user_string(pre_weights, true)?;
+    weights_parse(&mut scanner, signature, &mut ocb)?;
+    if let Some(weights) = ocb.weights {
+        generated.weights = weights;
+    }
+    generated.var_weight = ocb.var_weight;
+    generated.lam_weight = ocb.lam_weight;
+    generated.db_weight = ocb.db_weight;
+    Ok(())
 }
 
 fn generate_constant_weights(signature: &Signature, weights: &mut [i64]) {
@@ -1656,25 +1679,44 @@ mod tests {
     }
 
     #[test]
-    fn pre_weights_are_reported_as_deferred() {
+    fn pure_weight_generation_applies_late_user_weight_overrides() {
         let mut signature = signature();
+        let a = typed_symbol(&mut signature, "a", 0);
+        let f = typed_symbol(&mut signature, "f", 1);
         let params = params(TOWeightGenMethod::ConstantWeight);
 
-        let error = generate_weights(
+        let result = generate_weights(
             &mut signature,
             &ClauseSet::new(),
             &params,
             WeightGenerationContext {
-                pre_weights: Some("f=2"),
+                pre_weights: Some("a:9"),
                 ..WeightGenerationContext::default()
             },
         )
-        .unwrap_err();
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert_eq!(weight(&result, a), 9);
+        assert_eq!(weight(&result, f), W_DEFAULT_WEIGHT);
+
         assert_eq!(
-            error.message(),
-            "User weight parsing requires ordering-control block port"
+            generate_weights(
+                &mut signature,
+                &ClauseSet::new(),
+                &params,
+                WeightGenerationContext {
+                    pre_weights: Some(""),
+                    ..WeightGenerationContext::default()
+                },
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            generate_weights(
+                &mut signature,
+                &ClauseSet::new(),
+                &params,
+                WeightGenerationContext::default(),
+            )
+            .unwrap_or_else(|err| panic!("{err}"))
         );
     }
 
