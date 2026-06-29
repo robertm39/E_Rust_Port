@@ -94,7 +94,11 @@ Source files reviewed: `TERMS/cte_replace.h`, `TERMS/cte_replace.c`.
 ### Compatibility Notes
 
 - `TBTermPosReplace` rebuilds the enclosing term inside-out from the `TermPos` stack, using shallow `TermTopCopy` cells and inserting the final temporary term through `TBInsertNoProps`. Rust preserves this ordinary replacement path with safe temporary cells and term-bank sharing.
-- The LFHO positive-`remains` branch calls `MakeRewrittenTerm`, appends the remaining original arguments, sets owner-bank state, and runs lambda normalization. Rust reports this branch as deferred until `MakeRewrittenTerm`/lambda normalization are ported; once available, this branch may be a candidate for a clearer API than the C integer sentinel and `old_into` side parameter.
+- The LFHO positive-`remains` branch calls `MakeRewrittenTerm`, appends the remaining original arguments, sets owner-bank state, and runs lambda normalization. Rust now ports the retained-argument construction for top-level and nested replacements and runs the available DB-lambda beta-normalization subset after sharing the constructed top cell.
+
+### Change-Later Observations
+
+- Rust's `MakeRewrittenTerm` subset uses the existing safe term-bank handles and beta-normalizer, not C owner-bank fields or full LFHO eta/WHNF normalization. Revisit this helper when the complete `LambdaNormalizeDB`/WHNF cache path is ported; the C integer `remains` sentinel plus `old_into` side parameter may also be worth replacing with an explicit prefix-rewrite descriptor after compatibility is locked down.
 
 ### Porting Focus
 

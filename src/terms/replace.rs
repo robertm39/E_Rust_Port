@@ -1,8 +1,11 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::terms::lambda::beta_normalize_db;
+use crate::terms::signature::SIG_PHONY_APP_CODE;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
-    DerefType, RewriteDemodulator, Term, TP_IS_REWRITTEN, TP_IS_RREWRITTEN, TP_IS_SOS_REWRITTEN,
+    term_deref, DerefType, RewriteDemodulator, Term, TP_IS_REWRITTEN, TP_IS_RREWRITTEN,
+    TP_IS_SOS_REWRITTEN, TP_PRED_POS,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,9 +103,9 @@ pub fn term_follow_top_rw_chain(term: &Term, restricted_rw: bool) -> (Term, bool
 ///
 /// # Errors
 ///
-/// Returns a diagnostic for the LFHO prefix-rewrite branch where C calls
-/// `MakeRewrittenTerm`; that helper still depends on lambda normalization that
-/// has not been ported.
+/// Returns a diagnostic if the C prefix-rewrite shape is missing the original
+/// term required to append retained arguments, or if term-bank sharing or
+/// beta-normalization fails.
 ///
 /// # Panics
 ///
@@ -113,15 +116,9 @@ pub fn tb_term_pos_replace(
     repl: &Term,
     pos: &TermPos,
     deref: DerefType,
-    remains: i32,
-    _old_into: Option<&Term>,
+    mut remains: i32,
+    old_into: Option<&Term>,
 ) -> Result<Term, Diagnostic> {
-    if remains > 0 {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "LFHO MakeRewrittenTerm path for TBTermPosReplace is not yet implemented",
-        ));
-    }
     assert!(
         remains >= -1,
         "TBTermPosReplace remains sentinel must be -1, 0, or positive"
@@ -138,11 +135,96 @@ pub fn tb_term_pos_replace(
             subscript < handle.arity(),
             "term-position index must select an existing argument"
         );
-        handle.set_argument(subscript, replacement);
+        if remains == -1 {
+            handle.set_argument(subscript, replacement);
+        } else {
+            let old_arg = handle
+                .argument(subscript)
+                .unwrap_or_else(|| panic!("position argument is initialized"));
+            let old_arg = deref_always(&old_arg);
+            let derefed_replacement = deref_always(&replacement);
+            let rewritten = make_rewritten_term(
+                bank,
+                &old_arg,
+                &derefed_replacement,
+                usize::try_from(remains).expect("nonnegative remains fits usize"),
+            )?;
+            handle.set_argument(subscript, rewritten);
+            remains = -1;
+        }
         replacement = handle;
     }
 
+    if remains > 0 {
+        let old_into = old_into.ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "TBTermPosReplace prefix rewrite requires original term",
+            )
+        })?;
+        let old_into = deref_always(old_into);
+        let derefed_replacement = deref_always(&replacement);
+        replacement = make_rewritten_term(
+            bank,
+            &old_into,
+            &derefed_replacement,
+            usize::try_from(remains).expect("positive remains fits usize"),
+        )?;
+    }
+
     bank.insert_no_props(&replacement, deref)
+}
+
+fn make_rewritten_term(
+    bank: &mut TermBank,
+    orig: &Term,
+    new: &Term,
+    remaining_orig: usize,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        remaining_orig <= orig.arity(),
+        "remaining original arguments must be a suffix of the original term"
+    );
+
+    if remaining_orig == 0 {
+        return beta_normalize_db(bank, new);
+    }
+
+    let retained_start = orig.arity() - remaining_orig;
+    let retained = (retained_start..orig.arity())
+        .map(|index| {
+            orig.argument(index)
+                .unwrap_or_else(|| panic!("original suffix argument is initialized"))
+        })
+        .collect::<Vec<_>>();
+
+    let rewritten = if new.is_any_var() || new.is_lambda() {
+        let rewritten = Term::top_alloc(SIG_PHONY_APP_CODE, remaining_orig + 1);
+        rewritten.set_argument(0, new.clone());
+        for (index, arg) in retained.into_iter().enumerate() {
+            rewritten.set_argument(index + 1, arg);
+        }
+        rewritten
+    } else {
+        let rewritten = Term::top_alloc(new.f_code(), new.arity() + remaining_orig);
+        for (index, arg) in new.argument_clones().into_iter().enumerate() {
+            rewritten.set_argument_opt(index, arg);
+        }
+        for (index, arg) in retained.into_iter().enumerate() {
+            rewritten.set_argument(new.arity() + index, arg);
+        }
+        rewritten
+    };
+
+    rewritten.set_type(orig.type_());
+    rewritten.set_properties(orig.give_props(TP_PRED_POS));
+    let shared = bank.term_top_insert(rewritten)?;
+    beta_normalize_db(bank, &shared)
+}
+
+fn deref_always(term: &Term) -> Term {
+    let mut deref = DerefType::Always;
+    term_deref(term, &mut deref)
 }
 
 #[cfg(test)]
@@ -153,7 +235,9 @@ mod tests {
         TP_IS_RREWRITTEN, TP_IS_SOS_REWRITTEN,
     };
     use crate::inout::scanner::Scanner;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termpos::TermPos;
     use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG};
@@ -323,18 +407,83 @@ mod tests {
     }
 
     #[test]
-    fn term_pos_replace_reports_deferred_lfho_remaining_arguments() {
+    fn term_pos_replace_top_prefix_appends_remaining_original_arguments() {
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
-        let root = parse_simple(&mut bank, "f(a)");
+        let root = parse_simple(&mut bank, "f(a,b,c)");
         let repl = parse_simple(&mut bank, "g(a)");
         let pos = TermPos::new();
 
-        let error = tb_term_pos_replace(&mut bank, &repl, &pos, DerefType::Never, 1, Some(&root))
-            .unwrap_err();
+        let replaced =
+            tb_term_pos_replace(&mut bank, &repl, &pos, DerefType::Never, 2, Some(&root)).unwrap();
 
-        assert_eq!(
-            error.message(),
-            "LFHO MakeRewrittenTerm path for TBTermPosReplace is not yet implemented"
-        );
+        assert_eq!(bank.term_string(&replaced, true), "g(a,b,c)");
+        assert!(replaced.is_shared());
+        assert_eq!(bank.find(&replaced), Some(replaced));
+    }
+
+    #[test]
+    fn term_pos_replace_nested_prefix_appends_remaining_original_arguments() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let root = parse_simple(&mut bank, "f(g(a,b),c)");
+        let repl = parse_simple(&mut bank, "h(a)");
+        let nested = root.argument(0).unwrap();
+        let mut pos = TermPos::new();
+        pos.push_component(root, 0);
+
+        let replaced =
+            tb_term_pos_replace(&mut bank, &repl, &pos, DerefType::Never, 1, Some(&nested))
+                .unwrap();
+
+        assert_eq!(bank.term_string(&replaced, true), "f(h(a,b),c)");
+    }
+
+    #[test]
+    fn term_pos_replace_prefix_beta_normalizes_lambda_replacement() {
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        let mut bank = TermBank::new(signature).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let k_code = bank.signature_mut().insert_id("rewrite_lambda_k", 1, false);
+        bank.signature_mut()
+            .declare_final_type(k_code, unary)
+            .unwrap();
+        let holder_code = bank
+            .signature_mut()
+            .insert_id("rewrite_lambda_holder", 1, false);
+        bank.signature_mut()
+            .declare_final_type(
+                holder_code,
+                alloc_arrow_type(vec![individual.clone(), individual.clone()]),
+            )
+            .unwrap();
+        let b_code = bank.signature_mut().insert_id("rewrite_lambda_b", 0, false);
+        bank.signature_mut()
+            .declare_final_type(b_code, individual.clone())
+            .unwrap();
+        let k = bank.create_const_term(k_code).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let db0 = bank.request_db_var(&individual, 0);
+        let matrix = apply_terms(&mut bank, &k, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&individual), &matrix).unwrap();
+        let holder = Term::top_alloc(holder_code, 1);
+        holder.set_type(Some(individual));
+        holder.set_argument(0, b.clone());
+        let holder = bank.insert(&holder, DerefType::Never).unwrap();
+        let pos = TermPos::new();
+
+        let replaced =
+            tb_term_pos_replace(&mut bank, &lambda, &pos, DerefType::Never, 1, Some(&holder))
+                .unwrap();
+
+        assert_eq!(replaced.f_code(), k_code);
+        assert_eq!(replaced.argument(0), Some(b));
     }
 }
