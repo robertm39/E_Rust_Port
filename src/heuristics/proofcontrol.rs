@@ -4516,6 +4516,44 @@ pub fn proof_state_init_ac_handling(state: &mut ProofState, control: &mut ProofC
     active
 }
 
+/// Runs the AC-axiom scan portion of C `ProofStateInit` and renders its
+/// represented `OutputLevel` output.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the output sink fails while printing the scan
+/// banner, signature AC status, or activation line.
+pub fn proof_state_init_ac_handling_with_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<bool, Diagnostic> {
+    let ac_handling_enabled = control.heuristic_parms().ac_handling != AcHandling::None;
+    if ac_handling_enabled && output_level != 0 {
+        std::io::Write::write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        std::io::Write::write_all(output, b" Scanning for AC axioms\n")
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    }
+
+    let active = proof_state_init_ac_handling(state, control);
+    if ac_handling_enabled && output_level != 0 {
+        state
+            .terms()
+            .signature()
+            .print_ac_status(output)
+            .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        if active {
+            std::io::Write::write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())
+                .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+            std::io::Write::write_all(output, b" AC handling enabled\n")
+                .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        }
+    }
+    Ok(active)
+}
+
 /// Runs the global-index free/init tail of C `ProofStateInit`.
 ///
 /// This mirrors `GlobalIndicesFreeIndices(&state->gindices)` followed by
@@ -4750,8 +4788,8 @@ mod tests {
         proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
         proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
         proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
-        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
-        proof_state_init_indexing, proof_state_init_with_docs,
+        proof_state_init, proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
+        proof_state_init_global_indices, proof_state_init_indexing, proof_state_init_with_docs,
         proof_state_init_with_global_indices, proof_state_insert_new_clauses,
         proof_state_insert_new_clauses_with_docs, proof_state_insert_processed_clause,
         proof_state_move_eval_store_to_unprocessed,
@@ -8673,6 +8711,65 @@ mod tests {
 
         assert!(control.ac_handling_active());
         assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+    }
+
+    #[test]
+    fn proof_state_init_ac_handling_with_output_reports_scan_and_activation() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, f_code) = commutativity_axiom(state.terms_mut(), "pc_init_ac_print_f", 4_015);
+        state.unprocessed_mut().insert(axiom);
+        let mut control = proof_control_alloc();
+        let mut output = Vec::new();
+
+        let active =
+            proof_state_init_ac_handling_with_output(&mut output, 1, &mut state, &mut control)
+                .unwrap();
+
+        assert!(active);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Scanning for AC axioms\n% pc_init_ac_print_f is commutative\n% AC handling enabled\n"
+        );
+    }
+
+    #[test]
+    fn proof_state_init_ac_handling_with_output_obeys_zero_output_level() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, f_code) = commutativity_axiom(state.terms_mut(), "pc_init_ac_quiet_f", 4_016);
+        state.unprocessed_mut().insert(axiom);
+        let mut control = proof_control_alloc();
+        let mut output = Vec::new();
+
+        let active =
+            proof_state_init_ac_handling_with_output(&mut output, 0, &mut state, &mut control)
+                .unwrap();
+
+        assert!(active);
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn proof_state_init_ac_handling_with_output_skips_output_when_disabled() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, f_code) =
+            commutativity_axiom(state.terms_mut(), "pc_init_ac_disabled_print_f", 4_017);
+        state.unprocessed_mut().insert(axiom);
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().ac_handling = AcHandling::None;
+        let mut output = Vec::new();
+
+        let active =
+            proof_state_init_ac_handling_with_output(&mut output, 1, &mut state, &mut control)
+                .unwrap();
+
+        assert!(!active);
+        assert!(!control.ac_handling_active());
+        assert!(!state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert!(output.is_empty());
     }
 
     #[test]
