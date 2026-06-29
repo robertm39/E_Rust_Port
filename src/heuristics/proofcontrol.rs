@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
@@ -937,6 +938,14 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
     if removed != 0 {
         clause.set_prop(CP_SUBSUMES_WATCH);
         if let Some((output, session)) = doc_context.as_mut() {
+            if session.output_level == 1 {
+                writeln!(
+                    output,
+                    "{DEFAULT_COMCHAR_RAW} Watchlist reduced by {removed} clause{}",
+                    if removed == 1 { "" } else { "s" }
+                )
+                .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+            }
             session.doc_clause_quote(
                 output,
                 terms,
@@ -5394,6 +5403,45 @@ mod tests {
         assert_eq!(subsumer.ident(), 2);
         assert!(subsumer.query_prop(CP_SUBSUMES_WATCH));
         assert!(!subsumer.query_prop(CP_INPUT_FORMULA));
+    }
+
+    #[test]
+    fn proof_state_check_watchlist_with_docs_reports_output_level_one_reduction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut subsumer, watched) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_doc_watch_level_one", 4_034, 4_035);
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let outcome = proof_state_check_watchlist_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut subsumer,
+            false,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            ProofStateWatchlistOutcome {
+                subsumes_watch: true,
+                removed: 1,
+            }
+        );
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert_eq!(rendered, "% Watchlist reduced by 1 clause\n");
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        let archived = state.archive().find_by_id(4_035).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD));
+        assert_eq!(subsumer.ident(), 4_034);
+        assert!(subsumer.query_prop(CP_SUBSUMES_WATCH));
     }
 
     #[test]
