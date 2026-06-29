@@ -13,7 +13,7 @@ use crate::clauses::clausefunc::{
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
     clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
     clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
-    tformula_fcode_alloc,
+    clause_set_recognize_choice, tformula_fcode_alloc,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -692,6 +692,7 @@ fn proof_state_init_impl<W: fmt::Write>(
     debug_assert!(state.processed_neg_units().is_empty());
     debug_assert!(state.processed_non_units().is_empty());
 
+    let _ = proof_state_recognize_choice_axioms(state, control)?;
     let watchlist_indexed = proof_state_init_indexing(state, control)?;
     let axiom_outcome = proof_state_init_axioms_impl(state, control, &mut doc_context)?;
     let ac_handling_active = proof_state_init_ac_handling(state, control);
@@ -757,6 +758,20 @@ pub fn proof_state_init_axioms(
 ) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
     let mut doc_context = None;
     proof_state_init_axioms_impl::<String>(state, control, &mut doc_context)
+}
+
+pub fn proof_state_recognize_choice_axioms(
+    state: &mut ProofState,
+    control: &ProofControl,
+) -> Result<i64, Diagnostic> {
+    if problem_type() != ProblemType::HigherOrder
+        || control.heuristic_parms().inst_choice_max_depth < 0
+    {
+        return Ok(0);
+    }
+
+    let (terms, axioms, choice_opcodes) = state.terms_axioms_choice_opcodes_mut();
+    clause_set_recognize_choice(terms, axioms, choice_opcodes)
 }
 
 /// Runs the axiom-queue portion of C `ProofStateInit` while emitting
@@ -6386,17 +6401,18 @@ mod tests {
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_docs, proof_state_process_clause_with_global_indices,
-        proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
-        proof_state_replacing_inferences_with_docs, proof_state_reset_processed,
-        proof_state_reset_processed_with_docs, proof_state_reset_processed_with_global_indices,
-        proof_state_saturate, proof_state_saturate_with_global_indices,
-        proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
-        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
-        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
-        LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
-        ProcessClauseReturnReason, ProcessedClauseClass, ProofStateWatchlistOutcome,
-        ReplacingInferenceOutcome, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_queue_generated_clause_for_eval, proof_state_recognize_choice_axioms,
+        proof_state_replacing_inferences, proof_state_replacing_inferences_with_docs,
+        proof_state_reset_processed, proof_state_reset_processed_with_docs,
+        proof_state_reset_processed_with_global_indices, proof_state_saturate,
+        proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
+        proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
+        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
+        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
+        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -6494,6 +6510,42 @@ mod tests {
             .type_bank_mut()
             .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn choice_const(bank: &mut TermBank, name: &str) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type.clone(), bool_type]));
+        let choice_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![predicate_type, arg_type]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, choice_type)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn choice_axiom(bank: &mut TermBank, name: &str, p_code: i64, x_code: i64) -> (Clause, i64) {
+        let predicate = unary_predicate_var(bank, p_code);
+        let witness = typed_var(bank, x_code);
+        let choice = choice_const(bank, name);
+        let choice_applied = apply_terms(bank, &choice, std::slice::from_ref(&predicate)).unwrap();
+        let negative_atom = apply_terms(bank, &predicate, std::slice::from_ref(&witness)).unwrap();
+        let positive_atom =
+            apply_terms(bank, &predicate, std::slice::from_ref(&choice_applied)).unwrap();
+        let true_term = bank.true_term().clone();
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            Eqn::alloc(negative_atom, true_term.clone(), bank, false).unwrap(),
+            Eqn::alloc(positive_atom, true_term, bank, true).unwrap(),
+        ]));
+        (clause, choice.f_code())
     }
 
     fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -6922,6 +6974,44 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(!state.fvi_initialized());
+    }
+
+    #[test]
+    fn proof_state_recognize_choice_axioms_uses_ho_and_depth_gates() {
+        let _guard = global_state_lock();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let choice_code = {
+            let terms = state.terms_mut();
+            let (choice_clause, choice_code) =
+                choice_axiom(terms, "pc_init_choice_axiom", -30, -32);
+            state.axioms_mut().insert(choice_clause);
+            choice_code
+        };
+        let mut control = proof_control_alloc();
+
+        let fo_reset = set_problem_type_for_test(ProblemType::FirstOrder);
+        control.heuristic_parms_mut().inst_choice_max_depth = 0;
+        assert_eq!(
+            proof_state_recognize_choice_axioms(&mut state, &control).unwrap(),
+            0
+        );
+        assert!(state.choice_opcodes().is_empty());
+        drop(fo_reset);
+
+        let _ho = set_problem_type_for_test(ProblemType::HigherOrder);
+        control.heuristic_parms_mut().inst_choice_max_depth = -1;
+        assert_eq!(
+            proof_state_recognize_choice_axioms(&mut state, &control).unwrap(),
+            0
+        );
+        assert!(state.choice_opcodes().is_empty());
+
+        control.heuristic_parms_mut().inst_choice_max_depth = 0;
+        assert_eq!(
+            proof_state_recognize_choice_axioms(&mut state, &control).unwrap(),
+            1
+        );
+        assert!(state.choice_opcodes().contains_key(&choice_code));
     }
 
     #[test]

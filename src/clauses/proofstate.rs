@@ -208,6 +208,7 @@ pub struct ProofState {
     tmp_store: ClauseSet,
     eval_store: ClauseSet,
     archive: ClauseSet,
+    choice_opcodes: BTreeMap<FunCode, Clause>,
     extract_roots: Vec<Clause>,
     watchlist: Option<ClauseSet>,
     watchlist_activation: WatchlistActivation,
@@ -262,6 +263,7 @@ impl ProofState {
             tmp_store: ClauseSet::new(),
             eval_store: ClauseSet::new(),
             archive: ClauseSet::new(),
+            choice_opcodes: BTreeMap::new(),
             extract_roots: Vec::new(),
             watchlist: Some(ClauseSet::new()),
             watchlist_activation: WatchlistActivation::Inactive,
@@ -314,6 +316,22 @@ impl ProofState {
     pub fn terms_and_archive_mut(&mut self) -> (&mut TermBank, &mut ClauseSet) {
         let Self { terms, archive, .. } = self;
         (terms, archive)
+    }
+
+    pub fn terms_axioms_choice_opcodes_mut(
+        &mut self,
+    ) -> (
+        &mut TermBank,
+        &mut ClauseSet,
+        &mut BTreeMap<FunCode, Clause>,
+    ) {
+        let Self {
+            terms,
+            axioms,
+            choice_opcodes,
+            ..
+        } = self;
+        (terms, axioms, choice_opcodes)
     }
 
     pub fn terms_and_processed_sets_mut(&mut self) -> (&mut TermBank, ProofStateProcessedSets<'_>) {
@@ -453,6 +471,15 @@ impl ProofState {
 
     pub fn archive_mut(&mut self) -> &mut ClauseSet {
         &mut self.archive
+    }
+
+    #[must_use]
+    pub const fn choice_opcodes(&self) -> &BTreeMap<FunCode, Clause> {
+        &self.choice_opcodes
+    }
+
+    pub fn choice_opcodes_mut(&mut self) -> &mut BTreeMap<FunCode, Clause> {
+        &mut self.choice_opcodes
     }
 
     #[must_use]

@@ -1464,6 +1464,137 @@ pub fn clause_set_replace_injectivity_defs(
     Ok(count)
 }
 
+/// Recognizes a C defined-choice axiom and records its choice symbol.
+///
+/// This mirrors the represented `ClauseRecognizeChoice` path for already
+/// beta/eta-normal clauses of shape `~P X | P (choice P)`. Full eta reduction
+/// remains tied to the broader lambda-normalization port.
+///
+/// # Errors
+///
+/// Returns diagnostics from beta normalization.
+pub fn clause_recognize_choice(
+    bank: &mut TermBank,
+    clause: &mut Clause,
+    choice_symbols: &BTreeMap<i64, Clause>,
+) -> Result<Option<i64>, Diagnostic> {
+    let Some(candidate) = clause_choice_candidate(bank, clause, choice_symbols)? else {
+        return Ok(None);
+    };
+
+    let literals = clause.literals_mut().as_mut_slice();
+    literals[candidate.negative_index].set_left_raw(candidate.negative_term);
+    literals[candidate.positive_index].set_left_raw(candidate.positive_term);
+    Ok(Some(candidate.choice_code))
+}
+
+/// Recognizes all represented choice axioms in `set`.
+///
+/// The C helper stores pointers to clauses that remain in the source set,
+/// despite a stale comment saying they are moved to the archive. Rust stores
+/// owned clause copies until proof-state clause handles are stable enough to
+/// represent the pointer map directly.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`clause_recognize_choice`].
+pub fn clause_set_recognize_choice(
+    bank: &mut TermBank,
+    set: &mut ClauseSet,
+    choice_symbols: &mut BTreeMap<i64, Clause>,
+) -> Result<i64, Diagnostic> {
+    let mut recognized = 0;
+    for clause in set.iter_mut() {
+        let Some(choice_code) = clause_recognize_choice(bank, clause, choice_symbols)? else {
+            continue;
+        };
+        choice_symbols.insert(choice_code, clause.clone());
+        recognized += 1;
+    }
+    Ok(recognized)
+}
+
+struct ChoiceCandidate {
+    choice_code: i64,
+    positive_index: usize,
+    positive_term: Term,
+    negative_index: usize,
+    negative_term: Term,
+}
+
+fn clause_choice_candidate(
+    bank: &mut TermBank,
+    clause: &Clause,
+    choice_symbols: &BTreeMap<i64, Clause>,
+) -> Result<Option<ChoiceCandidate>, Diagnostic> {
+    if clause.positive_literal_count() != 1 || clause.negative_literal_count() != 1 {
+        return Ok(None);
+    }
+
+    let Some((positive_index, negative_index)) = choice_literal_indices(clause) else {
+        return Ok(None);
+    };
+    let positive_literal = &clause.literals().as_slice()[positive_index];
+    let negative_literal = &clause.literals().as_slice()[negative_index];
+    if positive_literal.is_equ_lit(bank) || negative_literal.is_equ_lit(bank) {
+        return Ok(None);
+    }
+
+    let negative_term = beta_normalize_db(bank, negative_literal.left())?;
+    let positive_term = beta_normalize_db(bank, positive_literal.left())?;
+    if !negative_term.is_applied_free_var()
+        || !positive_term.is_applied_free_var()
+        || negative_term.arity() != 2
+        || positive_term.arity() != 2
+    {
+        return Ok(None);
+    }
+
+    let Some(negative_arg) = negative_term.argument(1) else {
+        return Ok(None);
+    };
+    if !negative_arg.is_free_var() {
+        return Ok(None);
+    }
+    let Some(predicate_var) = negative_term.argument(0) else {
+        return Ok(None);
+    };
+    if positive_term.argument(0) != Some(predicate_var.clone()) {
+        return Ok(None);
+    }
+    let Some(choice_application) = positive_term.argument(1) else {
+        return Ok(None);
+    };
+    if choice_application.arity() != 1
+        || choice_application.f_code() <= bank.signature().internal_symbols()
+        || choice_application.argument(0) != Some(predicate_var)
+        || choice_symbols.contains_key(&choice_application.f_code())
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(ChoiceCandidate {
+        choice_code: choice_application.f_code(),
+        positive_index,
+        positive_term,
+        negative_index,
+        negative_term,
+    }))
+}
+
+fn choice_literal_indices(clause: &Clause) -> Option<(usize, usize)> {
+    let mut positive = None;
+    let mut negative = None;
+    for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_positive() {
+            positive = Some(index);
+        } else {
+            negative = Some(index);
+        }
+    }
+    Some((positive?, negative?))
+}
+
 #[must_use]
 pub fn clause_canon_compare_ref(left: &Clause, right: &Clause, bank: &TermBank) -> i32 {
     left.cmp_by_struct_weight(right, bank)
@@ -1622,9 +1753,10 @@ mod tests {
         clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
         clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
         clause_resolve_flex_clause, clause_set_archive_copy, clause_set_canonize,
-        clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
-        clause_set_replace_injectivity_defs, clause_unit_simplify_test, close_with_db_var,
-        pstack_clause_print_lop_string, tformula_simplify_decoded,
+        clause_set_delete_orphans_with, clause_set_recognize_choice,
+        clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
+        clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
+        tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1650,6 +1782,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use std::collections::BTreeMap;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -1711,6 +1844,41 @@ mod tests {
 
     fn apply_many(bank: &mut TermBank, head: &Term, args: &[Term]) -> Term {
         lambda_apply_terms(bank, head, args).unwrap()
+    }
+
+    fn choice_const(bank: &mut TermBank, name: &str) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type.clone(), bool_type]));
+        let choice_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![predicate_type, arg_type]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, choice_type)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn choice_axiom(bank: &mut TermBank, name: &str, p_code: i64, x_code: i64) -> (Clause, i64) {
+        let predicate = predicate_var(bank, p_code);
+        let witness = typed_var(bank, x_code);
+        let choice = choice_const(bank, name);
+        let choice_applied = apply_many(bank, &choice, std::slice::from_ref(&predicate));
+        let negative_atom = apply_many(bank, &predicate, std::slice::from_ref(&witness));
+        let positive_atom = apply_many(bank, &predicate, std::slice::from_ref(&choice_applied));
+        let true_term = bank.true_term().clone();
+        let clause = clause_from(vec![
+            literal(bank, &negative_atom, &true_term, false),
+            literal(bank, &positive_atom, &true_term, true),
+        ]);
+        (clause, choice.f_code())
     }
 
     fn typed_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
@@ -2691,6 +2859,53 @@ mod tests {
             .expect("replacement clause inserted");
         assert!(generated.query_prop(CP_IS_SOS));
         assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn recognize_choice_axiom_records_choice_symbol_copy() {
+        let mut bank = test_bank();
+        let (choice_clause, choice_code) = choice_axiom(&mut bank, "choice_recognized", -70, -72);
+        let mut set = ClauseSet::from_clauses([choice_clause]);
+        let mut choice_symbols = BTreeMap::new();
+
+        assert_eq!(
+            clause_set_recognize_choice(&mut bank, &mut set, &mut choice_symbols).unwrap(),
+            1
+        );
+
+        assert_eq!(choice_symbols.len(), 1);
+        let stored = choice_symbols
+            .get(&choice_code)
+            .expect("choice operator should be recorded");
+        assert_eq!(stored.literal_number(), 2);
+        let live = set.iter().next().expect("source clause remains in set");
+        assert_eq!(stored.ident(), live.ident());
+        assert!(live.literals().as_slice()[0].left().is_applied_free_var());
+        assert!(live.literals().as_slice()[1].left().is_applied_free_var());
+    }
+
+    #[test]
+    fn recognize_choice_axiom_rejects_duplicate_choice_symbol() {
+        let mut bank = test_bank();
+        let (first, choice_code) = choice_axiom(&mut bank, "choice_duplicate", -80, -82);
+        let (second, _) = choice_axiom(&mut bank, "choice_duplicate", -84, -86);
+        let first_id = first.ident();
+        let second_id = second.ident();
+        let mut set = ClauseSet::from_clauses([first, second]);
+        let mut choice_symbols = BTreeMap::new();
+
+        assert_eq!(
+            clause_set_recognize_choice(&mut bank, &mut set, &mut choice_symbols).unwrap(),
+            1
+        );
+
+        assert_eq!(choice_symbols.len(), 1);
+        assert_eq!(
+            choice_symbols.get(&choice_code).map(Clause::ident),
+            Some(first_id)
+        );
+        assert!(set.find_by_id(first_id).is_some());
+        assert!(set.find_by_id(second_id).is_some());
     }
 
     #[test]

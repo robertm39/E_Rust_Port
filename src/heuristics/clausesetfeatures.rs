@@ -1173,9 +1173,10 @@ pub fn clause_set_collect_arity_information(
 ///
 /// C also recognizes defined-choice clauses through `ClauseRecognizeChoice`,
 /// which beta/eta-normalizes lambda/DB terms and optionally records the
-/// recognized choice symbol in a side map. That map and normalization pipeline
-/// are not available at this layer yet, so callers supply the boolean
-/// recognizer. Passing `|_| false` preserves the non-choice parts exactly.
+/// recognized choice symbol in a side map. The proof-state initialization path
+/// owns that side map; this feature layer stays side-effect-free, so callers
+/// supply the boolean recognizer. Passing `|_| false` preserves the non-choice
+/// parts exactly.
 ///
 /// # Panics
 ///
