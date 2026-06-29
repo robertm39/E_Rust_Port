@@ -2139,9 +2139,23 @@ impl TermBank {
             };
             self.encode_equality_term(left, right, positive)
         } else {
+            if self.tformula_atom_can_stay_plain_term(&left) {
+                return Ok(left);
+            }
             self.prepare_predicate_formula_atom(&left)?;
             Ok(left)
         }
+    }
+
+    fn tformula_atom_can_stay_plain_term(&self, term: &Term) -> bool {
+        if term.is_any_var() || term.type_().as_ref().is_some_and(type_is_predicate) {
+            return false;
+        }
+        term.is_phony_app()
+            || term.is_lambda()
+            || term.f_code() == SIG_ITE_CODE
+            || term.f_code() == SIG_LET_CODE
+            || self.sig.is_function(term.f_code())
     }
 
     fn prepare_predicate_formula_atom(&mut self, term: &Term) -> Result<(), Diagnostic> {
@@ -3002,6 +3016,18 @@ mod tests {
         TermBank::new(sig).unwrap()
     }
 
+    fn unary_i_arg_bank(outer_name: &str) -> TermBank {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let i_type = sig.type_bank().i_type();
+        let outer = sig.insert_id(outer_name, 1, false);
+        let outer_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        sig.declare_type(outer, outer_type).unwrap();
+        TermBank::new(sig).unwrap()
+    }
+
     fn parse_bool_arg(input: &str) -> (TermBank, Term) {
         let mut bank = bool_arg_bank("takes_bool_arg");
         let mut scanner = Scanner::from_user_string(input, false).unwrap();
@@ -3704,6 +3730,77 @@ mod tests {
         assert_eq!(
             ite.argument(2).unwrap().f_code(),
             bank.signature().eqn_code()
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_top_level_non_boolean_ite_terms_like_c() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        for name in ["ite_i_then", "ite_i_else"] {
+            let code = bank.signature_mut().insert_id(name, 0, false);
+            bank.signature_mut()
+                .declare_final_type(code, i_type.clone())
+                .unwrap();
+        }
+        let mut scanner =
+            Scanner::from_user_string("$ite(pred_i_ite_cond, ite_i_then, ite_i_else)", false)
+                .unwrap();
+
+        let ite = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(i_type));
+        assert_eq!(
+            ite.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(ite.argument(1).unwrap().f_code()),
+            Some("ite_i_then")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(ite.argument(2).unwrap().f_code()),
+            Some("ite_i_else")
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_non_boolean_ite_arguments() {
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let i_type = bank.signature().type_bank().i_type();
+        for name in ["ite_arg_then", "ite_arg_else"] {
+            let code = bank.signature_mut().insert_id(name, 0, false);
+            bank.signature_mut()
+                .declare_final_type(code, i_type.clone())
+                .unwrap();
+        }
+        let mut scanner = Scanner::from_user_string(
+            "takes_i_arg($ite(pred_i_arg_cond, ite_arg_then, ite_arg_else))",
+            false,
+        )
+        .unwrap();
+
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let arg = parsed.argument(0).unwrap();
+
+        assert_eq!(arg.f_code(), SIG_ITE_CODE);
+        assert_eq!(arg.type_(), Some(i_type));
+        assert_eq!(
+            arg.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(arg.argument(1).unwrap().f_code()),
+            Some("ite_arg_then")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(arg.argument(2).unwrap().f_code()),
+            Some("ite_arg_else")
         );
     }
 
