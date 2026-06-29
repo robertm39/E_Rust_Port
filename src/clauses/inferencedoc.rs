@@ -7,7 +7,8 @@ use crate::clauses::clause::{
     clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
 };
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_WATCH_ONLY,
+    FormulaProperties, CP_INPUT_FORMULA, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE,
+    CP_TYPE_QUESTION, CP_WATCH_ONLY,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string};
 use crate::clauses::eqn::EqnPrintOptions;
@@ -85,6 +86,41 @@ impl ClauseCreationInference {
             Self::Factoring => Some(ClauseUnaryInference::Factoring),
             Self::Split => Some(ClauseUnaryInference::Split),
             Self::Initial | Self::Paramodulation | Self::SimultaneousParamodulation => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClauseModificationInference {
+    SimplifyReflect,
+    ContextSimplifyReflect,
+    Condense,
+    Minimize,
+    EvalAnswerLiteral,
+    DestructiveEqualityResolution,
+}
+
+impl ClauseModificationInference {
+    #[must_use]
+    pub const fn binary(self) -> Option<ClauseBinaryInference> {
+        match self {
+            Self::SimplifyReflect => Some(ClauseBinaryInference::SimplifyReflect),
+            Self::ContextSimplifyReflect => Some(ClauseBinaryInference::ContextSimplifyReflect),
+            Self::Condense
+            | Self::Minimize
+            | Self::EvalAnswerLiteral
+            | Self::DestructiveEqualityResolution => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn unary(self) -> Option<ClauseUnaryInference> {
+        match self {
+            Self::Condense => Some(ClauseUnaryInference::Condense),
+            Self::Minimize => Some(ClauseUnaryInference::Normalize),
+            Self::EvalAnswerLiteral => Some(ClauseUnaryInference::EvalAnswerLiteral),
+            Self::DestructiveEqualityResolution => Some(ClauseUnaryInference::EqualityResolution),
+            Self::SimplifyReflect | Self::ContextSimplifyReflect => None,
         }
     }
 }
@@ -204,6 +240,15 @@ pub struct ProofDocSession {
     pub id_source: ProofDocIdSource,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ClauseModificationRender<'a> {
+    clause: &'a Clause,
+    old_id: i64,
+    inference: ClauseModificationInference,
+    partner: Option<&'a Clause>,
+    comment: Option<&'a str>,
+}
+
 impl ProofDocSession {
     #[must_use]
     pub fn new(
@@ -264,6 +309,70 @@ impl ProofDocSession {
                 inference,
                 parent_refs,
                 comment,
+            ),
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports the non-AC clause cases of C `DocClauseModification`.
+    ///
+    /// The AC-resolution branch is deliberately left to the caller for now
+    /// because C expands the signature-owned AC-axiom stack while rendering.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied partner shape does not match the requested
+    /// inference, matching C assertions in `DocClauseModification`.
+    pub fn doc_clause_modification(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &mut Clause,
+        inference: ClauseModificationInference,
+        partner: Option<&Clause>,
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        clause.del_prop(CP_INPUT_FORMULA);
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        let old_id = clause.ident();
+        clause.set_ident(self.id_source.next_ident());
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => self.write_pcl_clause_modification(
+                output,
+                bank,
+                ClauseModificationRender {
+                    clause,
+                    old_id,
+                    inference,
+                    partner,
+                    comment,
+                },
+            ),
+            ProofDocOutputFormat::Tstp => self.write_tstp_clause_modification(
+                output,
+                bank,
+                ClauseModificationRender {
+                    clause,
+                    old_id,
+                    inference,
+                    partner,
+                    comment,
+                },
             ),
             ProofDocOutputFormat::NoFormat
             | ProofDocOutputFormat::Lop
@@ -367,6 +476,119 @@ impl ProofDocSession {
                 Ok(ProofDocWriteResult::printed())
             }
         }
+    }
+
+    fn write_pcl_clause_modification(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        render: ClauseModificationRender<'_>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        pcl_print_start(
+            output,
+            bank,
+            render.clause,
+            self.pcl_shell_level < 1,
+            self.step_options,
+        )
+        .map_err(doc_write_error)?;
+        match render.inference {
+            ClauseModificationInference::SimplifyReflect
+            | ClauseModificationInference::ContextSimplifyReflect => {
+                let Some(partner) = render.partner else {
+                    panic!("binary clause modification documentation needs partner");
+                };
+                let Some(binary) = render.inference.binary() else {
+                    unreachable!("binary modification inference must map to a PCL name");
+                };
+                write_pcl_clause_binary_inference(output, binary, render.old_id, partner.ident())
+                    .map_err(doc_write_error)?;
+            }
+            ClauseModificationInference::Condense
+            | ClauseModificationInference::Minimize
+            | ClauseModificationInference::EvalAnswerLiteral => {
+                assert!(
+                    render.partner.is_none(),
+                    "unary clause modification documentation must not have partner"
+                );
+                let Some(unary) = render.inference.unary() else {
+                    unreachable!("unary modification inference must map to a PCL name");
+                };
+                write_pcl_clause_unary_inference(output, unary, render.old_id)
+                    .map_err(doc_write_error)?;
+            }
+            ClauseModificationInference::DestructiveEqualityResolution => {
+                assert!(
+                    render.partner.is_some(),
+                    "destructive equality-resolution documentation needs partner"
+                );
+                let Some(unary) = render.inference.unary() else {
+                    unreachable!("destructive equality-resolution must map to a PCL name");
+                };
+                write_pcl_clause_unary_inference(output, unary, render.old_id)
+                    .map_err(doc_write_error)?;
+            }
+        }
+        pcl_print_end(output, render.clause, render.comment, self.step_options)
+            .map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
+    }
+
+    fn write_tstp_clause_modification(
+        &self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        render: ClauseModificationRender<'_>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        clause_write_tstp_with_type_suffixes(
+            output,
+            bank,
+            render.clause,
+            self.step_options.full_terms,
+            false,
+            self.problem_type,
+            self.step_options.print_types,
+        )?;
+        output.write_char(',').map_err(doc_write_error)?;
+        match render.inference {
+            ClauseModificationInference::SimplifyReflect
+            | ClauseModificationInference::ContextSimplifyReflect => {
+                let Some(partner) = render.partner else {
+                    panic!("binary clause modification documentation needs partner");
+                };
+                let Some(binary) = render.inference.binary() else {
+                    unreachable!("binary modification inference must map to a TSTP name");
+                };
+                write_tstp_clause_binary_inference(output, binary, render.old_id, partner.ident())
+                    .map_err(doc_write_error)?;
+            }
+            ClauseModificationInference::Condense
+            | ClauseModificationInference::Minimize
+            | ClauseModificationInference::EvalAnswerLiteral => {
+                assert!(
+                    render.partner.is_none(),
+                    "unary clause modification documentation must not have partner"
+                );
+                let Some(unary) = render.inference.unary() else {
+                    unreachable!("unary modification inference must map to a TSTP name");
+                };
+                write_tstp_clause_unary_inference(output, unary, render.old_id)
+                    .map_err(doc_write_error)?;
+            }
+            ClauseModificationInference::DestructiveEqualityResolution => {
+                assert!(
+                    render.partner.is_some(),
+                    "destructive equality-resolution documentation needs partner"
+                );
+                let Some(unary) = render.inference.unary() else {
+                    unreachable!("destructive equality-resolution must map to a TSTP name");
+                };
+                write_tstp_clause_unary_inference(output, unary, render.old_id)
+                    .map_err(doc_write_error)?;
+            }
+        }
+        tstp_print_end(output, render.clause, render.comment).map_err(doc_write_error)?;
+        Ok(ProofDocWriteResult::printed())
     }
 
     fn write_tstp_clause_creation(
@@ -922,13 +1144,13 @@ mod tests {
         write_tstp_clause_unary_inference, write_tstp_formula_apply_defs_inference,
         write_tstp_formula_intro_def_inference, write_tstp_formula_parent_inference,
         ClauseBinaryInference, ClauseCreationInference, ClauseCreationParents,
-        ClauseUnaryInference, FormulaParentInference, PclStepPrintOptions, ProofDocOutputFormat,
-        ProofDocSession, ProofDocWriteResult,
+        ClauseModificationInference, ClauseUnaryInference, FormulaParentInference,
+        PclStepPrintOptions, ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
+        CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA,
         CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_UNKNOWN, CP_TYPE_WATCH_CLAUSE,
         CP_WATCH_ONLY,
     };
@@ -1119,6 +1341,150 @@ mod tests {
 
         assert_eq!(result, ProofDocWriteResult::printed());
         assert_eq!(clause.ident(), 1);
+        assert_eq!(rendered, "% Output format not implemented.\n");
+    }
+
+    #[test]
+    fn doc_clause_modification_suppresses_below_level_two_but_clears_input_formula() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_modification(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::Minimize,
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(clause.ident(), 42);
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+    }
+
+    #[test]
+    fn doc_clause_modification_prints_binary_and_unary_pcl_steps_with_old_id() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(7);
+        let mut partner = Clause::empty();
+        partner.set_ident(3);
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_modification(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::SimplifyReflect,
+                Some(&partner),
+                Some("simp"),
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::printed());
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(rendered, "     1 : :[] : sr(7,3) : 'simp'\n");
+
+        rendered.clear();
+        clause.set_ident(9);
+        session
+            .doc_clause_modification(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::Minimize,
+                None,
+                Some("min"),
+            )
+            .unwrap();
+
+        assert_eq!(clause.ident(), 2);
+        assert_eq!(rendered, "     2 : :[] : cn(9) : 'min'\n");
+    }
+
+    #[test]
+    fn doc_clause_modification_prints_tstp_steps_with_old_id() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(7);
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_modification(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::Condense,
+                None,
+                Some("condensed"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false),inference(condense,[status(thm)],[c_0_7]),['condensed']).\n"
+        );
+
+        let mut partner = Clause::empty();
+        partner.set_ident(5);
+        clause.set_ident(8);
+        rendered.clear();
+        session
+            .doc_clause_modification(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::DestructiveEqualityResolution,
+                Some(&partner),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_2, plain, ($false),inference(er,[status(thm)],[c_0_8])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_modification_preserves_c_unsupported_format_fallback_after_id_assignment() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::NoFormat, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(7);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_modification(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                ClauseModificationInference::EvalAnswerLiteral,
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::printed());
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
         assert_eq!(rendered, "% Output format not implemented.\n");
     }
 
