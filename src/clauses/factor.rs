@@ -11,7 +11,7 @@ use crate::clauses::inferencedoc::{
 };
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
@@ -262,13 +262,14 @@ pub fn compute_ordered_factor(
 /// Builds the first-order C `ComputeEqualityFactor` result for one candidate.
 ///
 /// The C implementation enumerates CSU elements and lambda-normalizes every
-/// generated literal list. This staged Rust path handles the first-order MGU
-/// case only and reports higher-order problem mode explicitly.
+/// generated literal list. In higher-order problem mode, this staged Rust path
+/// handles the ordinary first-order MGU subset and reports an explicit
+/// diagnostic when the candidate needs full CSU enumeration.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic for higher-order problem mode or if term-bank insertion
-/// fails while copying the generated factor.
+/// Returns a diagnostic if a higher-order candidate needs full CSU enumeration,
+/// or if term-bank insertion fails while copying the generated factor.
 ///
 /// # Panics
 ///
@@ -282,13 +283,6 @@ pub fn compute_equality_factor(
     clause: &Clause,
     position: EqualityFactorPosition,
 ) -> Result<Option<Clause>, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order equality-factoring CSU enumeration is not ported yet",
-        ));
-    }
-
     let literals = clause.literals().as_slice();
     assert_ne!(
         position.first_literal_index, position.second_literal_index,
@@ -321,6 +315,13 @@ pub fn compute_equality_factor(
 
     let max_term = literal_side(first, position.first_side).clone();
     let with_term = literal_side(second, position.second_side).clone();
+    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
+    if higher_order_problem
+        && (term_has_higher_order_unification_surface(&max_term)
+            || term_has_higher_order_unification_surface(&with_term))
+    {
+        return Err(higher_order_eq_factor_diagnostic());
+    }
     if (max_term.is_free_var() && !second.is_equ_lit(bank))
         || (with_term.is_free_var() && !first.is_equ_lit(bank))
     {
@@ -330,6 +331,10 @@ pub fn compute_equality_factor(
     let mut subst = Substitution::new();
     if !subst_mgu_complete(&max_term, &with_term, &mut subst) {
         return Ok(None);
+    }
+    if higher_order_problem && subst.has_ho_binding_for_problem(ProblemType::HigherOrder) {
+        subst.backtrack();
+        return Err(higher_order_eq_factor_diagnostic());
     }
 
     let min_term = literal_other_side(first, position.first_side).clone();
@@ -349,6 +354,13 @@ pub fn compute_equality_factor(
     };
     subst.backtrack();
     result
+}
+
+fn higher_order_eq_factor_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "higher-order equality-factoring CSU enumeration is not ported yet",
+    )
 }
 
 /// Computes all first-order ordered factors and inserts them into `store`.
@@ -607,8 +619,9 @@ mod tests {
         equality_factor_positions, ordered_factor_positions, EqualityFactorPosition,
         OrderedFactorPosition,
     };
+    use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
@@ -626,6 +639,21 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -658,6 +686,31 @@ mod tests {
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_arrow_type(bank: &mut TermBank) -> crate::terms::simpletypes::Type {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_]))
+    }
+
+    fn typed_arrow_var(bank: &mut TermBank, f_code: i64) -> Term {
+        let type_ = typed_arrow_type(bank);
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_arrow_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = typed_arrow_type(bank);
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     fn typed_unary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -942,6 +995,64 @@ mod tests {
             0
         );
         assert!(blocked_store.is_empty());
+    }
+
+    #[test]
+    fn compute_all_equality_factors_higher_order_uses_first_order_subset() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "ef_ho_fo_a");
+        let b = typed_const(&mut bank, "ef_ho_fo_b");
+        let c = typed_const(&mut bank, "ef_ho_fo_c");
+        let f_code = typed_unary_code(&mut bank, "ef_ho_fo_f");
+        let f_of_x = typed_unary(&mut bank, f_code, &x);
+        let f_of_b = typed_unary(&mut bank, f_code, &b);
+        let mut first = lit(&mut bank, &f_of_x, &a, true);
+        let second = lit(&mut bank, &f_of_b, &c, true);
+        first.set_prop(EP_IS_MAXIMAL | EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_equality_factors(&mut bank, &mut ocb, &clause, &mut store)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(count, 1);
+        let factor = store.iter().next().expect("first-order subset factors");
+        assert_eq!(factor.literal_number(), 2);
+        assert_eq!(
+            factor.derivation().unwrap().as_slice()[0],
+            DerivationEntry::Operation(DC_EQ_FACTOR)
+        );
+    }
+
+    #[test]
+    fn compute_equality_factor_higher_order_arrow_binding_remains_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let x = typed_arrow_var(&mut bank, -2);
+        let f = typed_arrow_const(&mut bank, "ef_ho_arrow_f");
+        let a = typed_arrow_const(&mut bank, "ef_ho_arrow_a");
+        let b = typed_arrow_const(&mut bank, "ef_ho_arrow_b");
+        let mut first = lit(&mut bank, &x, &a, true);
+        let second = lit(&mut bank, &f, &b, true);
+        first.set_prop(EP_IS_MAXIMAL);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let error = compute_equality_factor(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("CSU enumeration"));
     }
 
     #[test]

@@ -21,12 +21,43 @@ Implemented:
 - First-order `ComputeOrderedFactor`, including second-literal side retry, directed unification, post-unifier maximality recheck, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - First-order `ComputeAllOrderedFactors`, including Horn and `CPNoGeneration` gates, clause-set insertion, parent proof-depth/proof-size/TPTP/SOS metadata propagation, `DCOrderedFactor` derivation entries, and opt-in represented `inf_factor` proof-documentation output.
 - First-order equality factor candidate enumeration matching `ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`.
-- First-order MGU subset of `ComputeEqualityFactor` and `ComputeAllEqualityFactors`, including the C free-variable/equational guard, `TOGreater` side check, post-unifier maximality recheck, generated negative condition, Horn and `CPNoGeneration` gates, clause-set insertion, parent metadata propagation, `DCEqFactor` derivation entries, and opt-in represented `inf_efactor` proof-documentation output.
+- First-order MGU subset of `ComputeEqualityFactor` and `ComputeAllEqualityFactors`, including higher-order problem mode when candidate terms have no lambda/DB-variable/phony-application surface and accepted substitutions have no higher-order binding, plus the C free-variable/equational guard, `TOGreater` side check, post-unifier maximality recheck, generated negative condition, Horn and `CPNoGeneration` gates, clause-set insertion, parent metadata propagation, `DCEqFactor` derivation entries, and opt-in represented `inf_efactor` proof-documentation output.
 
 Pending:
 
-- Higher-order CSU enumeration, lambda normalization, and multi-CSU equality-factor stack order.
+- Full higher-order CSU enumeration, lambda normalization, higher-order derivation-flag propagation, and multi-CSU equality-factor stack order.
 - Reusable fresh-variable-bank behavior may need a performance pass once stable clause/literal ownership is ported.
+
+Change-later notes:
+
+- C equality factoring pushes CSU results to a stack and the wrapper later pops them, reversing multi-CSU insertion order. Rust currently has only the one-result first-order subset; preserve or intentionally change the reversal only after HO trace tests exist.
+- C maps `SubstHasHOBinding` into higher-order `DCEqFactor` derivation metadata for each accepted substitution. Rust keeps first-order-subset results as ordinary `DCEqFactor` and reports a CSU diagnostic for arrow-typed bindings until full HO derivation handling is represented.
+
+## Equality Resolution
+
+Rust files:
+
+- `src/clauses/eqnresolution.rs`
+
+C source references:
+
+- `eprover/CLAUSES/ccl_eqnresolution.c`
+- `eprover/CLAUSES/ccl_eqnresolution.h`
+
+Implemented:
+
+- First-order `ComputeEqRes` and `ComputeAllEqnResolvents`, including the higher-order problem-mode first-order subset when the selected disequality has no lambda/DB-variable/phony-application surface and the accepted substitution has no higher-order binding.
+- C-shaped non-selected literal substitution normalization, optimized copy excluding the resolved literal, false-literal removal, duplicate removal, maximal negative-literal iteration, caller-owned clause-set insertion, `DCEqRes` derivation entries, destructive equality-resolution normalization with `DCDesEqRes`, and represented proof-documentation helpers for creation and destructive replacement.
+
+Pending:
+
+- Full higher-order CSU enumeration, lambda normalization of copied resolvents, higher-order derivation-flag propagation, and multi-CSU stack order.
+
+Change-later notes:
+
+- C `ComputeEqRes` switches between returning one clause and filling a result stack based on whether `res_cls` is NULL. Rust keeps separate helpers so the API does not depend on a null stack argument.
+- C pushes higher-order CSU resolvents to `res_cls` and `ComputeAllEqnResolvents` pops that stack before insertion, reversing enumeration order. The current first-order subset has at most one result per literal; revisit the order only with HO trace tests.
+- C maps `SubstHasHOBinding` into higher-order `DCEqRes` derivation metadata. Rust keeps higher-order-problem first-order subset results as ordinary `DCEqRes` and reports a CSU diagnostic for arrow-typed bindings until full HO derivation handling is represented.
 
 ## Paramodulation
 
@@ -622,7 +653,7 @@ Known gaps:
 - `ccl_clausefunc` exact orphan deletion over stable proof-state-owned parent handles, process-global/full-format stack printing, proof-documentation side effects, and full proof-control injectivity ownership integration are still deferred until formula wrappers, stable proof-state handles, full printing, and caller ownership are ported; explicit LOP stack rendering, archive move/copy helpers with `DCCnfQuote` derivation metadata, injected compact-parent orphan checks/deletion, proof-control source-aware compact-parent snapshots, and plain injectivity-definition recognition/replacement are available.
 - `ccl_condensation` `DCCondense` derivation metadata is ported, and an opt-in documenting helper now emits represented condensation proof-documentation before the derivation push for proof-control callers with a `ProofDocSession`.
 - `ccl_eqn` full `TBTermParse` syntax parity and formula-level TSTP integration are still deferred until the full parsing and printing layers are available; simple-term-backed parsing plus OCB-backed equation orientation/comparison, split-mod standard-weight gating with caller-supplied special-symbol weights, term-extension literal weights, and explicit app-encoded, debug, dereferenced, FOF, and TSTP literal rendering are available.
-- `ccl_eqnresolution` higher-order CSU enumeration, `subst_is_ho` propagation, and lambda normalization of copied resolvents remain pending; first-order single and all-resolvent paths, first-order derivation entries, opt-in all-resolvent creation proof-documentation output, and opt-in destructive equality-resolution modification proof-documentation output are available.
+- `ccl_eqnresolution` full higher-order CSU enumeration, `subst_is_ho` propagation to higher-order derivation flags, and lambda normalization of copied resolvents remain pending; first-order single and all-resolvent paths, their higher-order-problem first-order subset, derivation entries, opt-in all-resolvent creation proof-documentation output, and opt-in destructive equality-resolution modification proof-documentation output are available.
 - `ccl_eqnlist` full `TBTermParse` syntax parity, lambda normalization, and exact no-copy pointer-stack conversions are still deferred until full parsing, lambda-normalization, and stable literal-handle ownership are available; simple-term-backed parsing plus OCB-backed list orientation/maximal marking and explicit dereferenced/TSTP list rendering are available.
 - `ccl_f_generality` formula-distribution paths and formula-side `FormulaComputeDRel` remain deferred until `WFormula`, formula sets, and full formula printing exist; clause-side distribution, D-relation selection, and distribution debug rendering are available.
 - `ccl_sine` formula D-relation stacks, formula seed queues, formula-aware `SelectDefiningAxioms`/`SelectAxioms`, formula-aware `SelectThreshold` result handling, exact `SelectDefinitions`, formula stack printing/property deletion, and clause/formula stack moves remain deferred until `WFormula`, formula sets, and stable clause/formula handles exist; clause-side D-relation construction, queue seed discovery, GSinE selection traversal, threshold selection, destructive threshold and clause-side GSinE integration for represented proof-state clause axioms, represented executable `LambdaDef`, debug rendering, and TSTP clause-stack rendering are available.

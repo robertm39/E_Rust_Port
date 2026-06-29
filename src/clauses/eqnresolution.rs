@@ -8,7 +8,7 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::inferencedoc::{
     ClauseCreationInference, ClauseCreationParents, ClauseModificationInference, ProofDocSession,
 };
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
@@ -19,15 +19,14 @@ pub const EQ_RES_ON_MAXIMAL_LITERALS_ONLY: bool = true;
 
 /// Builds the first-order single-clause C `ComputeEqRes` result.
 ///
-/// Higher-order CSU enumeration and derivation/proof-output side effects for
-/// the single-clause helper are handled by later integration slices. This
-/// helper preserves the first-order destructive-normalization support path used
-/// by C `ClauseERNormalizeVar`.
+/// In higher-order problem mode, this uses the same first-order MGU path for
+/// ordinary first-order subterms and reports an explicit diagnostic when the
+/// candidate needs full CSU enumeration.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if called while the process problem type is
-/// higher-order, or if term-bank insertion fails while copying the resolvent.
+/// Returns a diagnostic if a higher-order candidate needs full CSU enumeration,
+/// or if term-bank insertion fails while copying the resolvent.
 ///
 /// # Panics
 ///
@@ -38,13 +37,6 @@ pub fn compute_eq_res(
     clause: &Clause,
     literal_index: usize,
 ) -> Result<Option<Clause>, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order equality-resolution CSU enumeration is not ported yet",
-        ));
-    }
-
     let literal = clause
         .literals()
         .as_slice()
@@ -54,16 +46,34 @@ pub fn compute_eq_res(
         literal.is_negative(),
         "equality resolution expects a negative literal"
     );
+    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
+    if higher_order_problem
+        && (term_has_higher_order_unification_surface(literal.left())
+            || term_has_higher_order_unification_surface(literal.right()))
+    {
+        return Err(higher_order_eq_res_diagnostic());
+    }
 
     let mut subst = Substitution::new();
     if !subst_mgu_complete(literal.left(), literal.right(), &mut subst) {
         return Ok(None);
+    }
+    if higher_order_problem && subst.has_ho_binding_for_problem(ProblemType::HigherOrder) {
+        subst.backtrack();
+        return Err(higher_order_eq_res_diagnostic());
     }
 
     let freshvars = fresh_var_bank_for_clause(bank, clause);
     let resolvent = build_resolvent(bank, clause, literal_index, &freshvars, &mut subst)?;
     subst.backtrack();
     Ok(Some(resolvent))
+}
+
+fn higher_order_eq_res_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "higher-order equality-resolution CSU enumeration is not ported yet",
+    )
 }
 
 fn build_resolvent(
@@ -302,7 +312,8 @@ mod tests {
         compute_all_eqn_resolvents_with_docs, compute_eq_res, first_eq_res_literal_index,
         next_eq_res_literal_index,
     };
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
@@ -318,6 +329,21 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -341,6 +367,31 @@ mod tests {
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_arrow_type(bank: &mut TermBank) -> crate::terms::simpletypes::Type {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_]))
+    }
+
+    fn typed_arrow_var(bank: &mut TermBank, f_code: i64) -> Term {
+        let type_ = typed_arrow_type(bank);
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_arrow_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = typed_arrow_type(bank);
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     fn typed_unary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -552,6 +603,48 @@ mod tests {
             0
         );
         assert!(blocked_store.is_empty());
+    }
+
+    #[test]
+    fn compute_all_eqn_resolvents_higher_order_uses_first_order_subset() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "er_ho_fo_a");
+        let b = typed_const(&mut bank, "er_ho_fo_b");
+        let mut diseq = lit(&mut bank, &x, &a, false);
+        diseq.set_prop(EP_IS_MAXIMAL);
+        let rest = lit(&mut bank, &x, &b, true);
+        let clause = Clause::alloc(EqnList::from_vec(vec![rest, diseq]));
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_eqn_resolvents(&mut bank, &clause, &mut store, true).unwrap();
+
+        assert_eq!(count, 1);
+        let resolvent = store.iter().next().expect("first-order subset resolves");
+        assert_eq!(resolvent.literal_number(), 1);
+        assert_eq!(
+            resolvent.derivation().unwrap().as_slice()[0],
+            DerivationEntry::Operation(DC_EQ_RES)
+        );
+    }
+
+    #[test]
+    fn compute_eq_res_higher_order_arrow_binding_remains_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let x = typed_arrow_var(&mut bank, -2);
+        let f = typed_arrow_const(&mut bank, "er_ho_arrow_f");
+        let mut diseq = lit(&mut bank, &x, &f, false);
+        diseq.set_prop(EP_IS_MAXIMAL);
+        let clause = Clause::alloc(EqnList::from_vec(vec![diseq]));
+
+        let error = compute_eq_res(&mut bank, &clause, 0).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("CSU enumeration"));
     }
 
     #[test]
