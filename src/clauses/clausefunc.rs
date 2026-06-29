@@ -943,7 +943,7 @@ fn negate_decoded_formula(bank: &mut TermBank, term: &Term) -> Result<Term, Diag
     tformula_fcode_alloc(bank, bank.signature().not_code(), term.clone(), None)
 }
 
-fn tformula_fcode_alloc(
+pub(crate) fn tformula_fcode_alloc(
     bank: &mut TermBank,
     op: i64,
     arg1: Term,

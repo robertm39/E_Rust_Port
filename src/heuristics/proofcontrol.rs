@@ -12,7 +12,7 @@ use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
     clause_prune_args, clause_remove_ac_resolved, clause_remove_superfluous_literals,
-    clause_resolve_flex_clause, clause_set_delete_orphans_with,
+    clause_resolve_flex_clause, clause_set_delete_orphans_with, tformula_fcode_alloc,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -22,7 +22,7 @@ use crate::clauses::context_sr::{
 };
 use crate::clauses::derivation::{
     clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CNF_EVAL_GC,
-    DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT,
+    DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -73,7 +73,7 @@ use crate::heuristics::hcb::{
     hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
     hcb_single_weight_clause_select_with, hcb_standard_clause_select_with, AcHandling,
     ExtInferenceType, GroundingStrategy, HcbSelectFunction, HeuristicParmsCell,
-    ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
+    ParamodulationType as HcbParamodulationType, PrimEnumMode, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -87,9 +87,14 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::inout::signals::time_is_up;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
-use crate::terms::lambda::{apply_terms, beta_normalize_db, close_with_type_prefix};
+use crate::terms::lambda::{
+    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
+};
 use crate::terms::match_mgu::occur_check;
-use crate::terms::simpletypes::{alloc_arrow_type, type_get_max_arity};
+use crate::terms::simpletypes::{
+    alloc_arrow_type, arrow_type_flattened, type_get_max_arity, type_identity_cmp,
+    type_is_predicate, Type,
+};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_has_f_code;
 use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
@@ -3324,6 +3329,15 @@ fn compute_ho_inferences(
                 parms.elim_leibniz_max_depth,
             )?;
         }
+        if parms.prim_enum_max_depth >= 0 {
+            generated += compute_primitive_enumeration(
+                terms,
+                clause,
+                generation.tmp_store,
+                parms.prim_enum_mode,
+                parms.prim_enum_max_depth,
+            )?;
+        }
     }
     state.statistics_mut().neg_ext_count += u64::try_from(neg_ext_count).unwrap_or(u64::MAX);
     Ok(generated)
@@ -3340,12 +3354,6 @@ fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Dia
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "higher-order extensional superposition generation is not ported yet",
-        ));
-    }
-    if parms.prim_enum_max_depth >= 0 {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order primitive enumeration is not ported yet",
         ));
     }
     if parms.inst_choice_max_depth >= 0 {
@@ -3723,6 +3731,452 @@ fn make_leibniz_instance(
         let mut new_clause = Clause::alloc(new_literals);
         let _ = clause_normalize_equations(&mut new_clause, bank);
         set_ho_generation_proof_object(&mut new_clause, clause, None, DC_LEIBNIZ_ELIM, 1);
+        store.insert(new_clause);
+        Ok(())
+    })();
+    var.set_binding(None);
+    result
+}
+
+fn compute_primitive_enumeration(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    mode: PrimEnumMode,
+    limit: i32,
+) -> Result<i64, Diagnostic> {
+    if clause.proof_depth() > i64::from(limit) {
+        return Ok(0);
+    }
+
+    bank.vars().set_v_counts_to_used();
+    bank.vars().set_fresh_count_to_used();
+    let mut generated = 0;
+    let mut processed_vars = BTreeSet::new();
+    for literal in clause.literals().as_slice() {
+        if !literal.left().type_().is_some_and(|type_| type_.is_bool()) {
+            continue;
+        }
+        for term in [literal.left(), literal.right()] {
+            if !term.is_applied_free_var() {
+                continue;
+            }
+            let var = term
+                .argument(0)
+                .expect("applied primitive-enumeration variable must have a head");
+            if processed_vars.insert(var.f_code()) {
+                generated += prim_enum_var(bank, clause, store, mode, term)?;
+            }
+        }
+    }
+
+    Ok(generated)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "mirrors C prim_enum_var mode dispatch for compatibility"
+)]
+fn prim_enum_var(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    mode: PrimEnumMode,
+    app_var: &Term,
+) -> Result<i64, Diagnostic> {
+    assert!(
+        app_var.is_applied_free_var(),
+        "primitive enumeration expects an applied free variable"
+    );
+    assert!(
+        app_var.type_().is_some_and(|type_| type_.is_bool()),
+        "primitive enumeration expects a Boolean application"
+    );
+
+    let head = app_var
+        .argument(0)
+        .expect("applied primitive-enumeration variable must have a head");
+    let sig = bank.signature();
+    let not_code = sig.not_code();
+    let and_code = sig.and_code();
+    let or_code = sig.or_code();
+    let eqn_code = sig.eqn_code();
+    let neqn_code = sig.neqn_code();
+    let equiv_code = sig.equiv_code();
+    let xor_code = sig.xor_code();
+    let qall_code = sig.qall_code();
+    let qex_code = sig.qex_code();
+
+    let mut generated = 0;
+    if matches!(mode, PrimEnumMode::Neg | PrimEnumMode::Full) {
+        let pattern = fresh_pattern(bank, app_var)?;
+        let matrix = tformula_fcode_alloc(bank, not_code, pattern, None)?;
+        let target = close_for_appvar(bank, app_var, &matrix)?;
+        make_prim_enum_instance(bank, clause, &head, target, store)?;
+        generated += 1;
+    }
+    if matches!(mode, PrimEnumMode::And | PrimEnumMode::Full) {
+        let left = fresh_pattern(bank, app_var)?;
+        let right = fresh_pattern(bank, app_var)?;
+        let matrix = tformula_fcode_alloc(bank, and_code, left, Some(right))?;
+        let target = close_for_appvar(bank, app_var, &matrix)?;
+        make_prim_enum_instance(bank, clause, &head, target, store)?;
+        generated += 1;
+    }
+    if matches!(mode, PrimEnumMode::Or | PrimEnumMode::Full) {
+        let left = fresh_pattern(bank, app_var)?;
+        let right = fresh_pattern(bank, app_var)?;
+        let matrix = tformula_fcode_alloc(bank, or_code, left, Some(right))?;
+        let target = close_for_appvar(bank, app_var, &matrix)?;
+        make_prim_enum_instance(bank, clause, &head, target, store)?;
+        generated += 1;
+    }
+    if matches!(mode, PrimEnumMode::Eq | PrimEnumMode::Full) {
+        for return_type in primitive_enum_return_types(app_var) {
+            let code = if return_type.is_bool() {
+                equiv_code
+            } else {
+                eqn_code
+            };
+            let left = fresh_pattern_w_ty(bank, app_var, &return_type)?;
+            let right = fresh_pattern_w_ty(bank, app_var, &return_type)?;
+            let matrix = tformula_fcode_alloc(bank, code, left, Some(right))?;
+            let target = close_for_appvar(bank, app_var, &matrix)?;
+            make_prim_enum_instance(bank, clause, &head, target, store)?;
+            generated += 1;
+        }
+    }
+
+    let target = close_for_appvar(bank, app_var, &bank.true_term().clone())?;
+    make_prim_enum_instance(bank, clause, &head, target, store)?;
+    let target = close_for_appvar(bank, app_var, &bank.false_term().clone())?;
+    make_prim_enum_instance(bank, clause, &head, target, store)?;
+    generated += 2;
+
+    if mode == PrimEnumMode::Pragmatic {
+        for first in 1..app_var.arity() {
+            for second in first + 1..app_var.arity() {
+                let first_arg = app_var
+                    .argument(first)
+                    .expect("primitive-enumeration first argument must be initialized");
+                let second_arg = app_var
+                    .argument(second)
+                    .expect("primitive-enumeration second argument must be initialized");
+                let first_type = first_arg
+                    .type_()
+                    .expect("primitive-enumeration first argument must have a type");
+                let second_type = second_arg
+                    .type_()
+                    .expect("primitive-enumeration second argument must have a type");
+                if first_type != second_type {
+                    continue;
+                }
+                let first_db = bank.request_db_var(
+                    &first_type,
+                    i64::try_from(app_var.arity() - first - 1)
+                        .expect("primitive-enumeration DB index fits in FunCode"),
+                );
+                let second_db = bank.request_db_var(
+                    &first_type,
+                    i64::try_from(app_var.arity() - second - 1)
+                        .expect("primitive-enumeration DB index fits in FunCode"),
+                );
+                let pos_code = if first_type.is_bool() {
+                    equiv_code
+                } else {
+                    eqn_code
+                };
+                let neg_code = if first_type.is_bool() {
+                    xor_code
+                } else {
+                    neqn_code
+                };
+                let matrix = tformula_fcode_alloc(
+                    bank,
+                    pos_code,
+                    first_db.clone(),
+                    Some(second_db.clone()),
+                )?;
+                let target = close_for_appvar(bank, app_var, &matrix)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                let matrix = tformula_fcode_alloc(
+                    bank,
+                    neg_code,
+                    first_db.clone(),
+                    Some(second_db.clone()),
+                )?;
+                let target = close_for_appvar(bank, app_var, &matrix)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                generated += 2;
+
+                if type_is_predicate(&first_type) {
+                    let first_projection = apply_pattern_vars(bank, &first_db, app_var)?;
+                    let second_projection = apply_pattern_vars(bank, &second_db, app_var)?;
+                    let matrix = tformula_fcode_alloc(
+                        bank,
+                        and_code,
+                        first_projection.clone(),
+                        Some(second_projection.clone()),
+                    )?;
+                    let target = close_for_appvar(bank, app_var, &matrix)?;
+                    make_prim_enum_instance(bank, clause, &head, target, store)?;
+                    let matrix = tformula_fcode_alloc(
+                        bank,
+                        or_code,
+                        first_projection,
+                        Some(second_projection),
+                    )?;
+                    let target = close_for_appvar(bank, app_var, &matrix)?;
+                    make_prim_enum_instance(bank, clause, &head, target, store)?;
+                    generated += 2;
+                }
+            }
+        }
+    }
+
+    if matches!(mode, PrimEnumMode::LogSymbol | PrimEnumMode::Pragmatic) {
+        let var_type = head
+            .type_()
+            .expect("primitive-enumeration head variable must have a type");
+        if var_type.is_arrow() {
+            if var_type.arity() == 2 && var_type.args()[0].is_bool() && var_type.args()[1].is_bool()
+            {
+                let target = logical_symbol_as_term(bank, not_code, &var_type)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                generated += 1;
+            } else if var_type.arity() == 3
+                && var_type.args()[0].is_bool()
+                && var_type.args()[1].is_bool()
+                && var_type.args()[2].is_bool()
+            {
+                let target = logical_symbol_as_term(bank, and_code, &var_type)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                let target = logical_symbol_as_term(bank, or_code, &var_type)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                generated += 2;
+            }
+
+            if var_type.arity() == 3
+                && var_type.args()[0] == var_type.args()[1]
+                && var_type.args()[2].is_bool()
+            {
+                let pos_code = if var_type.args()[0].is_bool() {
+                    equiv_code
+                } else {
+                    eqn_code
+                };
+                let neg_code = if var_type.args()[0].is_bool() {
+                    xor_code
+                } else {
+                    neqn_code
+                };
+                let target = logical_symbol_as_term(bank, pos_code, &var_type)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                let target = logical_symbol_as_term(bank, neg_code, &var_type)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                generated += 2;
+            }
+
+            if var_type.arity() == 2
+                && var_type.args()[1].is_bool()
+                && var_type.args()[0].is_arrow()
+                && var_type.args()[0].arity() == 2
+                && var_type.args()[0].args()[1].is_bool()
+            {
+                let predicate_type = var_type.args()[0].clone();
+                let db_var = bank.request_db_var(&predicate_type, 0);
+                let matrix = quantified_matrix(bank, qall_code, &db_var)?;
+                let target = close_with_db_var(bank, &predicate_type, &matrix)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                let matrix = quantified_matrix(bank, qex_code, &db_var)?;
+                let target = close_with_db_var(bank, &predicate_type, &matrix)?;
+                make_prim_enum_instance(bank, clause, &head, target, store)?;
+                generated += 2;
+            }
+        }
+    }
+
+    Ok(generated)
+}
+
+fn fresh_pattern(bank: &mut TermBank, app_var: &Term) -> Result<Term, Diagnostic> {
+    let return_type = app_var
+        .type_()
+        .expect("primitive-enumeration application must have a type");
+    fresh_pattern_w_ty(bank, app_var, &return_type)
+}
+
+fn fresh_pattern_w_ty(
+    bank: &mut TermBank,
+    app_var: &Term,
+    return_type: &Type,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        app_var.is_applied_free_var(),
+        "fresh primitive pattern expects an applied free variable"
+    );
+    let arg_types = appvar_arg_types(app_var);
+    let fresh_type = bank
+        .signature_mut()
+        .type_bank_mut()
+        .insert_type_shared(arrow_type_flattened(&arg_types, return_type));
+    let fresh_var = bank.vars().get_fresh_var(&fresh_type);
+    let fresh_var = bank.insert(&fresh_var, DerefType::Never)?;
+
+    let applied = Term::top_copy_without_args(app_var);
+    applied.set_type(Some(return_type.clone()));
+    applied.set_argument(0, fresh_var);
+    for index in 1..app_var.arity() {
+        let arg = app_var
+            .argument(index)
+            .expect("primitive-enumeration application argument must be initialized");
+        let arg_type = arg
+            .type_()
+            .expect("primitive-enumeration application argument must have a type");
+        let db_index = i64::try_from(app_var.arity() - index - 1)
+            .expect("primitive-enumeration DB index fits in FunCode");
+        applied.set_argument(index, bank.request_db_var(&arg_type, db_index));
+    }
+
+    bank.term_top_insert(applied)
+}
+
+fn close_for_appvar(
+    bank: &mut TermBank,
+    app_var: &Term,
+    matrix: &Term,
+) -> Result<Term, Diagnostic> {
+    let arg_types = appvar_arg_types(app_var);
+    close_with_type_prefix(bank, &arg_types, matrix)
+}
+
+fn apply_pattern_vars(
+    bank: &mut TermBank,
+    head: &Term,
+    app_var: &Term,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        app_var.is_applied_free_var(),
+        "primitive projection expects an applied free variable"
+    );
+    let head_type = head
+        .type_()
+        .expect("primitive projection head must have a type");
+    if !head_type.is_arrow() {
+        return Ok(head.clone());
+    }
+
+    let arg_types = appvar_arg_types(app_var);
+    let mut db_args = Vec::with_capacity(app_var.arity().saturating_sub(1));
+    for index in 1..app_var.arity() {
+        let arg = app_var
+            .argument(index)
+            .expect("primitive projection application argument must be initialized");
+        let arg_type = arg
+            .type_()
+            .expect("primitive projection application argument must have a type");
+        let db_index = i64::try_from(app_var.arity() - index - 1)
+            .expect("primitive projection DB index fits in FunCode");
+        db_args.push(bank.request_db_var(&arg_type, db_index));
+    }
+
+    let mut head_args = Vec::with_capacity(head_type.arity().saturating_sub(1));
+    for target_type in head_type.args().iter().take(head_type.arity() - 1) {
+        let fresh_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(arrow_type_flattened(&arg_types, target_type));
+        let fresh_var = bank.vars().get_fresh_var(&fresh_type);
+        let fresh_var = bank.insert(&fresh_var, DerefType::Never)?;
+        head_args.push(apply_terms(bank, &fresh_var, &db_args)?);
+    }
+
+    apply_terms(bank, head, &head_args)
+}
+
+fn appvar_arg_types(app_var: &Term) -> Vec<Type> {
+    (1..app_var.arity())
+        .map(|index| {
+            app_var
+                .argument(index)
+                .and_then(|arg| arg.type_())
+                .unwrap_or_else(|| {
+                    panic!("primitive-enumeration argument {index} must be initialized and typed")
+                })
+        })
+        .collect()
+}
+
+fn primitive_enum_return_types(app_var: &Term) -> Vec<Type> {
+    let mut return_types = Vec::new();
+    for index in 1..app_var.arity() {
+        let argument_type = app_var
+            .argument(index)
+            .and_then(|arg| arg.type_())
+            .unwrap_or_else(|| {
+                panic!("primitive-enumeration argument {index} must be initialized and typed")
+            });
+        if !return_types.iter().any(|seen| seen == &argument_type) {
+            return_types.push(argument_type);
+        }
+    }
+    return_types.sort_by(|left, right| type_identity_cmp(left, right).cmp(&0));
+    return_types
+}
+
+fn logical_symbol_as_term(
+    bank: &mut TermBank,
+    f_code: i64,
+    type_: &Type,
+) -> Result<Term, Diagnostic> {
+    let term = Term::top_alloc(f_code, 0);
+    term.set_type(Some(type_.clone()));
+    bank.term_top_insert(term)
+}
+
+fn quantified_matrix(
+    bank: &mut TermBank,
+    f_code: i64,
+    predicate: &Term,
+) -> Result<Term, Diagnostic> {
+    let term = Term::top_alloc(f_code, 1);
+    term.set_type(Some(bank.signature().type_bank().bool_type()));
+    term.set_argument(0, predicate.clone());
+    bank.term_top_insert(term)
+}
+
+fn make_prim_enum_instance(
+    bank: &mut TermBank,
+    clause: &Clause,
+    var: &Term,
+    target: Term,
+    store: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    assert!(
+        var.binding().is_none(),
+        "primitive-enumeration variable must be unbound"
+    );
+    assert_eq!(
+        var.type_(),
+        target.type_(),
+        "primitive-enumeration target type must match variable type"
+    );
+
+    var.set_binding(Some(target));
+    let result = (|| {
+        let mut new_literals = Vec::with_capacity(clause.literal_number());
+        for literal in clause.literals().as_slice() {
+            new_literals.push(literal.copy_instantiated_ho(bank)?);
+        }
+        let mut new_literals = EqnList::from_vec(new_literals);
+        beta_normalize_eqn_list(bank, &mut new_literals)?;
+        let _ = new_literals.remove_resolved(bank);
+        let _ = new_literals.remove_duplicates(bank);
+
+        let mut new_clause = Clause::alloc(new_literals);
+        let _ = clause_normalize_equations(&mut new_clause, bank);
+        set_ho_generation_proof_object(&mut new_clause, clause, None, DC_PRIM_ENUM, 1);
+        let _ = clause_boolean_simplification(&mut new_clause, bank)?;
         store.insert(new_clause);
         Ok(())
     })();
@@ -5948,7 +6402,7 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_LEIBNIZ_ELIM,
-        DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_SR,
+        DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -5965,7 +6419,7 @@ mod tests {
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::heuristics::hcb::{
         AcHandling, ExtInferenceType, GroundingStrategy, HeuristicParmsCell,
-        ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
+        ParamodulationType as HcbParamodulationType, PrimEnumMode, SplitClassType, SplitType,
         HCB_DEFAULT_HEURISTIC,
     };
     use crate::heuristics::litselection::{
@@ -6131,6 +6585,25 @@ mod tests {
 
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
         Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
+    }
+
+    fn derivation_contains_operation(clause: &Clause, operation: i64) -> bool {
+        clause.derivation().is_some_and(|derivation| {
+            derivation
+                .as_slice()
+                .contains(&DerivationEntry::Operation(operation))
+        })
+    }
+
+    fn derivation_contains_parent(clause: &Clause, parent_ident: i64) -> bool {
+        clause.derivation().is_some_and(|derivation| {
+            derivation
+                .as_slice()
+                .contains(&DerivationEntry::ClauseParent(ClauseDerivationRef::new(
+                    parent_ident,
+                    0,
+                )))
+        })
     }
 
     fn commutativity_axiom(bank: &mut TermBank, name: &str, ident: i64) -> (Clause, i64) {
@@ -9707,6 +10180,158 @@ mod tests {
         };
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().elim_leibniz_max_depth = 2;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 0);
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_primitive_enum_neg_generates_instances() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (predicate_var, a_code, clause) = {
+            let terms = state.terms_mut();
+            let predicate_var = unary_predicate_var(terms, -12);
+            let a = typed_const(terms, "pc_generate_prim_enum_a");
+            let atom = apply_terms(terms, &predicate_var, std::slice::from_ref(&a)).unwrap();
+            let true_term = terms.true_term().clone();
+            let literal = Eqn::alloc(atom, true_term, terms, true).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+            clause.set_ident(4_176);
+            clause.set_proof_depth(1);
+            clause.set_proof_size(4);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (predicate_var, a.f_code(), clause)
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().prim_enum_mode = PrimEnumMode::Neg;
+        control.heuristic_parms_mut().prim_enum_max_depth = 1;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 3);
+        assert!(predicate_var.binding().is_none());
+        let generated = state.tmp_store().iter().collect::<Vec<_>>();
+        for generated_clause in &generated {
+            assert_eq!(generated_clause.proof_depth(), 2);
+            assert_eq!(generated_clause.proof_size(), 5);
+            assert!(generated_clause.query_prop(CP_IS_SOS));
+            assert!(!generated_clause.query_prop(CP_NO_GENERATION));
+            assert!(derivation_contains_operation(
+                generated_clause,
+                DC_PRIM_ENUM
+            ));
+            assert!(derivation_contains_parent(generated_clause, 4_176));
+        }
+
+        let fresh_literal = generated
+            .iter()
+            .flat_map(|generated_clause| generated_clause.literals().as_slice())
+            .find(|literal| {
+                literal.left().is_applied_free_var()
+                    && literal
+                        .left()
+                        .argument(1)
+                        .is_some_and(|argument| argument.f_code() == a_code)
+            })
+            .unwrap_or_else(|| panic!("primitive enumeration should create a fresh pattern"));
+        assert!(fresh_literal.is_negative());
+        let fresh_head = fresh_literal
+            .left()
+            .argument(0)
+            .expect("fresh pattern application must have a head");
+        assert!(fresh_head.is_free_var());
+        assert_ne!(fresh_head.f_code(), predicate_var.f_code());
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_primitive_enum_processes_head_once() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let predicate_var = unary_predicate_var(terms, -14);
+            let a = typed_const(terms, "pc_generate_prim_enum_once_a");
+            let b = typed_const(terms, "pc_generate_prim_enum_once_b");
+            let first_atom = apply_terms(terms, &predicate_var, std::slice::from_ref(&a)).unwrap();
+            let second_atom = apply_terms(terms, &predicate_var, std::slice::from_ref(&b)).unwrap();
+            let true_term = terms.true_term().clone();
+            let first_literal = Eqn::alloc(first_atom, true_term.clone(), terms, true).unwrap();
+            let second_literal = Eqn::alloc(second_atom, true_term, terms, true).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![first_literal, second_literal]));
+            clause.set_ident(4_177);
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().prim_enum_mode = PrimEnumMode::Eq;
+        control.heuristic_parms_mut().prim_enum_max_depth = 0;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 3);
+        assert!(state
+            .tmp_store()
+            .iter()
+            .all(|generated_clause| derivation_contains_operation(generated_clause, DC_PRIM_ENUM)));
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_primitive_enum_respects_depth_limit() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let predicate_var = unary_predicate_var(terms, -16);
+            let a = typed_const(terms, "pc_generate_prim_enum_depth_a");
+            let atom = apply_terms(terms, &predicate_var, std::slice::from_ref(&a)).unwrap();
+            let true_term = terms.true_term().clone();
+            let literal = Eqn::alloc(atom, true_term, terms, true).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+            clause.set_proof_depth(2);
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().prim_enum_mode = PrimEnumMode::Neg;
+        control.heuristic_parms_mut().prim_enum_max_depth = 1;
         control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
         control.heuristic_parms_mut().enable_eq_factoring = false;
 

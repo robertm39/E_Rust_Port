@@ -133,6 +133,19 @@ impl VarBank {
         }
     }
 
+    pub fn set_fresh_count_to_used(&self) {
+        {
+            let mut inner = self.0.borrow_mut();
+            let used = if inner.max_var % 2 == 0 {
+                inner.max_var
+            } else {
+                inner.max_var + 1
+            };
+            inner.fresh_count = inner.fresh_count.max(used);
+        }
+        self.sync_shadow_fresh_count();
+    }
+
     pub fn clear_ext_names(&self) {
         self.clear_ext_names_no_reset();
         self.reset_v_counts();
@@ -647,6 +660,20 @@ mod tests {
         bank.set_v_counts_to_used();
         let third = bank.get_fresh_var(&i_type);
         assert_eq!(third.f_code(), -6);
+    }
+
+    #[test]
+    fn set_fresh_count_to_used_skips_explicit_high_codes() {
+        let types = TypeBank::new();
+        let bank = VarBank::new(&types);
+        let i_type = types.i_type();
+        let _ = bank.var_assert_alloc(-8, &i_type);
+
+        bank.set_v_counts_to_used();
+        bank.set_fresh_count_to_used();
+        let next = bank.get_fresh_var(&i_type);
+
+        assert_eq!(next.f_code(), -10);
     }
 
     #[test]
