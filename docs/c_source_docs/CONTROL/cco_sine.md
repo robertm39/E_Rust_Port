@@ -110,9 +110,12 @@ Source files reviewed: `CONTROL/cco_sine.h`, `CONTROL/cco_sine.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- In the normal compiled branch, `sine_get_filter` always starts from `AxFilterDefaultSet`. It parses a direct filter definition only when the second token is `(`, otherwise it looks up the entire input string as a default filter name and reports a usage error with the default-name list on failure. This means `Threshold(10)` is accepted as an anonymous extra filter, while `custom=Threshold(10)` is rejected despite `AxFilterDefParse` being able to parse that shape.
 - `find_auto_sine` uses generated raw problem-class limits, the mask `-aaaaaaa`, and parallel `raw_class`/`raw_sine` arrays embedded directly in `cco_sine.c`; it returns no filter for problems with no conjectures or hypotheses even if the generated class table would otherwise match.
 - `ProofStateSinE(state, "Auto")` calls that lookup, prints `% No SInE strategy applied` through `GlobalOut` when the lookup returns `NULL`, otherwise prints the selected filter name and destructively prunes both formula and clause owners through the selected ax-filter.
+- `src/heuristics/axfilter.rs` ports the normal-build `sine_get_filter` resolution behavior for default names, direct unnamed definitions, and unknown-name diagnostics. Destructive `ProofStateSinE` pruning remains pending until clause/formula selection can mutate stable Rust owners.
 - Change-later candidate: the generated Auto SInE class table and hard-coded limits are source-embedded C data. Once compatibility and update tests cover this path, consider deriving the Rust data from generated schedule metadata or a checked build-time extractor instead of preserving another hand-copied table.
+- Change-later candidate: the dead `NEVER_DEFINED` `sine_get_filter` branch would parse named definitions differently and would not preload the default set for direct definitions. Rust preserves the live branch; if a cleaned API allows inline named SInE definitions later, make that an explicit extension instead of silently changing C's normal-build option semantics.
 
 ### Porting Focus
 

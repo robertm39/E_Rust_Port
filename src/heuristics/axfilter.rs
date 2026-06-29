@@ -322,6 +322,66 @@ impl AxFilterSet {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SineFilterResolution {
+    filter: AxFilter,
+    filters: AxFilterSet,
+}
+
+impl SineFilterResolution {
+    #[must_use]
+    pub const fn filter(&self) -> &AxFilter {
+        &self.filter
+    }
+
+    #[must_use]
+    pub const fn filters(&self) -> &AxFilterSet {
+        &self.filters
+    }
+}
+
+/// Resolves a `SInE` filter string as C `sine_get_filter` does in the normal
+/// build: built-in names are looked up in `AxFilterDefaultSet`, while direct
+/// unnamed definitions such as `Threshold(10)` are parsed and appended to that
+/// default set.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the input is not name-starting, a direct definition
+/// is malformed, or a named filter is absent from the default set.
+pub fn sine_get_filter(source: &str) -> Result<SineFilterResolution, Diagnostic> {
+    let mut scanner = Scanner::from_option_string(source, true)?;
+    scanner.check_tok(TokenType::NAME)?;
+    let mut filters = AxFilterSet::default_set()?;
+
+    let filter = if scanner
+        .look_token(1)
+        .kind()
+        .intersects(TokenType::OPEN_BRACKET)
+    {
+        let filter = AxFilter::parse_definition(&mut scanner)?;
+        filters.add_filter(filter.clone());
+        filter
+    } else {
+        filters
+            .find_filter(source)
+            .cloned()
+            .ok_or_else(|| unknown_sine_filter_error(source, &filters))?
+    };
+
+    Ok(SineFilterResolution { filter, filters })
+}
+
+fn unknown_sine_filter_error(source: &str, filters: &AxFilterSet) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::USAGE_ERROR,
+        format!(
+            "Unknown SinE-filter '{source}' selected (valid choices: {})",
+            filters.names_string()
+        ),
+    )
+}
+
 #[must_use]
 pub fn get_gen_measure(name: &str) -> GeneralityMeasure {
     GENERALITY_MEASURE_NAMES
@@ -463,9 +523,10 @@ fn current_error(scanner: &Scanner, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        generality_measure_name, get_gen_measure, AxFilter, AxFilterSet, AxFilterType,
-        AX_FILTER_DEFAULT_SET, GENERALITY_MEASURE_NAMES,
+        generality_measure_name, get_gen_measure, sine_get_filter, AxFilter, AxFilterSet,
+        AxFilterType, AX_FILTER_DEFAULT_SET, GENERALITY_MEASURE_NAMES,
     };
+    use crate::basics::error::ErrorCode;
     use crate::clauses::f_generality::GeneralityMeasure;
     use crate::inout::scanner::Scanner;
 
@@ -660,6 +721,46 @@ mod tests {
                 .add_no_symbol_axioms
         );
         assert!(AX_FILTER_DEFAULT_SET.contains("gf500_h_gu_R04_F100_L20000"));
+    }
+
+    #[test]
+    fn sine_get_filter_resolves_default_names_and_direct_definitions() {
+        let named = sine_get_filter("threshold010000").unwrap();
+        assert_eq!(named.filter().type_, AxFilterType::Threshold);
+        assert_eq!(named.filter().threshold, 10_000);
+        assert_eq!(named.filters().elements(), 21);
+
+        let direct = sine_get_filter("Threshold(7)").unwrap();
+        assert_eq!(direct.filter().type_, AxFilterType::Threshold);
+        assert_eq!(direct.filter().threshold, 7);
+        assert_eq!(direct.filters().elements(), 22);
+        assert!(direct
+            .filter()
+            .name
+            .as_deref()
+            .is_some_and(|name| { name.starts_with("axfilter_auto") }));
+    }
+
+    #[test]
+    fn sine_get_filter_unknown_name_lists_default_choices() {
+        let error = sine_get_filter("missing_sine_filter").unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error
+            .message()
+            .contains("Unknown SinE-filter 'missing_sine_filter' selected"));
+        assert!(error.message().contains("threshold010000, LambdaDef"));
+        assert!(error.message().contains("gf600_gu_R05_F100_L20000add"));
+    }
+
+    #[test]
+    fn sine_get_filter_preserves_normal_build_named_definition_rejection() {
+        let error = sine_get_filter("custom=Threshold(7)").unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert!(error
+            .message()
+            .contains("Unknown SinE-filter 'custom=Threshold(7)' selected"));
     }
 
     #[test]
