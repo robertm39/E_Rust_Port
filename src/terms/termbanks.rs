@@ -1648,15 +1648,12 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        let formula = if scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+        let formula = if scanner.test_tok(
+            TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
+        ) {
             let quantor = self.tptp_quantor_parse(scanner)?;
             scanner.accept_tok(TokenType::OPEN_SQUARE)?;
             self.parse_quantified_tformula_tstp_subset(scanner, quantor)?
-        } else if scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Lambda Boolean formula arguments are not ported yet",
-            ));
         } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
             let formula = self.parse_tformula_tstp_subset(scanner)?;
@@ -2081,7 +2078,9 @@ impl TermBank {
         }
 
         let term = Term::top_alloc(op, arity);
-        term.set_type(Some(self.sig.type_bank().bool_type()));
+        if op != SIG_NAMED_LAMBDA_CODE {
+            term.set_type(Some(self.sig.type_bank().bool_type()));
+        }
         if self.sig.is_predicate(op) {
             term.set_prop(TP_PRED_POS);
         }
@@ -2100,11 +2099,15 @@ impl TermBank {
     }
 
     fn tptp_quantor_parse(&self, scanner: &mut Scanner) -> Result<FunCode, Diagnostic> {
-        scanner.check_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR)?;
+        scanner.check_tok(
+            TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
+        )?;
         let quantor = if scanner.test_tok(TokenType::EXIST_QUANTOR) {
             self.sig.qex_code()
-        } else {
+        } else if scanner.test_tok(TokenType::UNIV_QUANTOR) {
             self.sig.qall_code()
+        } else {
+            SIG_NAMED_LAMBDA_CODE
         };
         let quantor = Self::require_formula_op_code(quantor)?;
         scanner.next_token()?;
@@ -2795,8 +2798,8 @@ mod tests {
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
         Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_CONS_CODE,
-        SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE,
-        SIG_TRUE_CODE,
+        SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE, SIG_NIL_CODE,
+        SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
@@ -3387,6 +3390,47 @@ mod tests {
             Some(y),
             "right predicate keeps the second quantified variable"
         );
+    }
+
+    #[test]
+    fn checked_parser_reads_lambda_boolean_formula_operands() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let (bank, arg) = parse_bool_arg(
+            "takes_bool_arg((^[X:$i]: pred_bool_lam_l(X)) = (^[Y:$i]: pred_bool_lam_r(Y)))",
+        );
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        assert_eq!(arg.type_(), Some(bank.signature().type_bank().bool_type()));
+
+        let left = arg.argument(0).unwrap();
+        let right = arg.argument(1).unwrap();
+        assert_eq!(left.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(right.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(left.type_(), right.type_());
+
+        let lambda_type = left.type_().unwrap();
+        assert!(lambda_type.is_arrow());
+        assert_eq!(lambda_type.arity(), 2);
+        assert_eq!(lambda_type.args()[0], bank.signature().type_bank().i_type());
+        assert_eq!(
+            lambda_type.args()[1],
+            bank.signature().type_bank().bool_type()
+        );
+
+        let binder = left.argument(0).unwrap();
+        assert!(binder.is_free_var());
+        assert_eq!(binder.type_(), Some(bank.signature().type_bank().i_type()));
+
+        let body = left.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        let predicate = body.argument(0).unwrap();
+        assert_eq!(
+            bank.signature().find_name(predicate.f_code()),
+            Some("pred_bool_lam_l")
+        );
+        assert_eq!(predicate.argument(0), Some(binder));
+        assert_eq!(body.argument(1), Some(bank.true_term().clone()));
     }
 
     #[test]
