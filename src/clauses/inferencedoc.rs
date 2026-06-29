@@ -138,6 +138,224 @@ pub fn tstp_formula_print_end(output: &mut impl fmt::Write, comment: Option<&str
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClauseBinaryInference {
+    Paramodulation,
+    SimultaneousParamodulation,
+    SimplifyReflect,
+    ContextSimplifyReflect,
+}
+
+impl ClauseBinaryInference {
+    #[must_use]
+    pub const fn pcl_name(self) -> &'static str {
+        match self {
+            Self::Paramodulation => "pm",
+            Self::SimultaneousParamodulation => "spm",
+            Self::SimplifyReflect => "sr",
+            Self::ContextSimplifyReflect => "csr",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClauseUnaryInference {
+    EqualityResolution,
+    EqualityFactoring,
+    Factoring,
+    Split,
+    SplitConjunct,
+    Normalize,
+    Condense,
+    EvalAnswerLiteral,
+}
+
+impl ClauseUnaryInference {
+    #[must_use]
+    pub const fn pcl_name(self) -> &'static str {
+        match self {
+            Self::EqualityResolution => "er",
+            Self::EqualityFactoring => "ef",
+            Self::Factoring => "of",
+            Self::Split => "split",
+            Self::SplitConjunct => "split_conjunct",
+            Self::Normalize => "cn",
+            Self::Condense => "condense",
+            Self::EvalAnswerLiteral => "eval_answer_literal",
+        }
+    }
+}
+
+pub fn write_pcl_clause_binary_inference(
+    output: &mut impl fmt::Write,
+    inference: ClauseBinaryInference,
+    parent1_id: i64,
+    parent2_id: i64,
+) -> fmt::Result {
+    write!(
+        output,
+        "{}({parent1_id},{parent2_id})",
+        inference.pcl_name()
+    )
+}
+
+pub fn write_tstp_clause_binary_inference(
+    output: &mut impl fmt::Write,
+    inference: ClauseBinaryInference,
+    parent1_id: i64,
+    parent2_id: i64,
+) -> fmt::Result {
+    write!(
+        output,
+        "inference({},[status(thm)],[c_0_{parent1_id},c_0_{parent2_id}])",
+        inference.pcl_name()
+    )
+}
+
+pub fn write_pcl_clause_unary_inference(
+    output: &mut impl fmt::Write,
+    inference: ClauseUnaryInference,
+    parent_id: i64,
+) -> fmt::Result {
+    write!(output, "{}({parent_id})", inference.pcl_name())
+}
+
+pub fn write_tstp_clause_unary_inference(
+    output: &mut impl fmt::Write,
+    inference: ClauseUnaryInference,
+    parent_id: i64,
+) -> fmt::Result {
+    match inference {
+        ClauseUnaryInference::Split => {
+            write!(
+                output,
+                "inference(split,[split(esplit,[])],[c_0_{parent_id}])"
+            )
+        }
+        ClauseUnaryInference::SplitConjunct => write!(
+            output,
+            "inference(split_conjunct, [status(thm)],[c_0_{parent_id}])"
+        ),
+        ClauseUnaryInference::EvalAnswerLiteral => write!(
+            output,
+            "inference(eval_answer_literal,[status(thm)],[c_0_{parent_id}, theory(answers)])"
+        ),
+        ClauseUnaryInference::EqualityResolution
+        | ClauseUnaryInference::EqualityFactoring
+        | ClauseUnaryInference::Factoring
+        | ClauseUnaryInference::Normalize
+        | ClauseUnaryInference::Condense => write!(
+            output,
+            "inference({},[status(thm)],[c_0_{parent_id}])",
+            inference.pcl_name()
+        ),
+    }
+}
+
+/// Writes the C `print_ac_res` inference expression.
+///
+/// # Panics
+///
+/// Panics if `ac_axiom_ids` is empty, matching the C assertion that the
+/// signature-owned AC axiom stack is non-empty when AC-resolution is printed.
+pub fn write_pcl_clause_ac_resolution_inference(
+    output: &mut impl fmt::Write,
+    old_id: i64,
+    ac_axiom_ids: &[i64],
+) -> fmt::Result {
+    assert!(
+        !ac_axiom_ids.is_empty(),
+        "AC-resolution documentation requires at least one AC axiom"
+    );
+    write!(output, "ar({old_id}")?;
+    for axiom_id in ac_axiom_ids {
+        write!(output, ",{axiom_id}")?;
+    }
+    output.write_char(')')
+}
+
+/// Writes the C `print_ac_res` TSTP inference expression.
+///
+/// # Panics
+///
+/// Panics if `ac_axiom_ids` is empty, matching the C assertion that the
+/// signature-owned AC axiom stack is non-empty when AC-resolution is printed.
+pub fn write_tstp_clause_ac_resolution_inference(
+    output: &mut impl fmt::Write,
+    old_id: i64,
+    ac_axiom_ids: &[i64],
+) -> fmt::Result {
+    assert!(
+        !ac_axiom_ids.is_empty(),
+        "AC-resolution documentation requires at least one AC axiom"
+    );
+    write!(output, "inference(ar,[status(thm)],[c_0_{old_id}")?;
+    for axiom_id in ac_axiom_ids {
+        write!(output, ",c_0_{axiom_id}")?;
+    }
+    output.write_str("])")
+}
+
+pub fn write_pcl_clause_rewrite_inference(
+    output: &mut impl fmt::Write,
+    old_id: i64,
+    demodulator_ids: &[i64],
+) -> fmt::Result {
+    for _ in demodulator_ids {
+        output.write_str("rw(")?;
+    }
+    write!(output, "{old_id}")?;
+    for demodulator_id in demodulator_ids {
+        write!(output, ",{demodulator_id})")?;
+    }
+    Ok(())
+}
+
+pub fn write_tstp_clause_rewrite_inference(
+    output: &mut impl fmt::Write,
+    old_id: i64,
+    demodulator_ids: &[i64],
+) -> fmt::Result {
+    for _ in demodulator_ids {
+        output.write_str("inference(rw, [status(thm)],[")?;
+    }
+    write!(output, "c_0_{old_id}")?;
+    for demodulator_id in demodulator_ids {
+        write!(output, ",c_0_{demodulator_id}])")?;
+    }
+    Ok(())
+}
+
+pub fn write_pcl_clause_apply_defs_inference(
+    output: &mut impl fmt::Write,
+    parent_id: i64,
+    def_ids: &[i64],
+) -> fmt::Result {
+    for _ in def_ids {
+        output.write_str("apply_def(")?;
+    }
+    write!(output, "{parent_id}")?;
+    for def_id in def_ids {
+        write!(output, ",{def_id})")?;
+    }
+    Ok(())
+}
+
+pub fn write_tstp_clause_apply_defs_inference(
+    output: &mut impl fmt::Write,
+    parent_id: i64,
+    def_ids: &[i64],
+) -> fmt::Result {
+    for _ in def_ids {
+        output.write_str("inference(apply_def, [status(thm)],[")?;
+    }
+    write!(output, "c_0_{parent_id}")?;
+    for def_id in def_ids {
+        write!(output, ",c_0_{def_id}])")?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormulaParentInference {
     SplitEquiv,
     Simplification,
@@ -265,10 +483,15 @@ mod tests {
     use super::{
         pcl_formula_print_end, pcl_formula_print_start, pcl_print_end, pcl_print_start,
         pcl_type_str, tstp_formula_print_end, tstp_print_end,
-        write_pcl_formula_apply_defs_inference, write_pcl_formula_intro_def_inference,
-        write_pcl_formula_parent_inference, write_tstp_formula_apply_defs_inference,
+        write_pcl_clause_ac_resolution_inference, write_pcl_clause_apply_defs_inference,
+        write_pcl_clause_binary_inference, write_pcl_clause_rewrite_inference,
+        write_pcl_clause_unary_inference, write_pcl_formula_apply_defs_inference,
+        write_pcl_formula_intro_def_inference, write_pcl_formula_parent_inference,
+        write_tstp_clause_ac_resolution_inference, write_tstp_clause_apply_defs_inference,
+        write_tstp_clause_binary_inference, write_tstp_clause_rewrite_inference,
+        write_tstp_clause_unary_inference, write_tstp_formula_apply_defs_inference,
         write_tstp_formula_intro_def_inference, write_tstp_formula_parent_inference,
-        FormulaParentInference, PclStepPrintOptions,
+        ClauseBinaryInference, ClauseUnaryInference, FormulaParentInference, PclStepPrintOptions,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -469,6 +692,145 @@ mod tests {
         let mut rendered = String::new();
         tstp_formula_print_end(&mut rendered, None).unwrap();
         assert_eq!(rendered, ").\n");
+    }
+
+    #[test]
+    fn clause_binary_inference_rendering_matches_c_names_and_spacing() {
+        let mut rendered = String::new();
+        write_pcl_clause_binary_inference(
+            &mut rendered,
+            ClauseBinaryInference::Paramodulation,
+            11,
+            12,
+        )
+        .unwrap();
+        assert_eq!(rendered, "pm(11,12)");
+
+        let mut rendered = String::new();
+        write_tstp_clause_binary_inference(
+            &mut rendered,
+            ClauseBinaryInference::SimultaneousParamodulation,
+            11,
+            12,
+        )
+        .unwrap();
+        assert_eq!(rendered, "inference(spm,[status(thm)],[c_0_11,c_0_12])");
+
+        let mut rendered = String::new();
+        write_pcl_clause_binary_inference(
+            &mut rendered,
+            ClauseBinaryInference::SimplifyReflect,
+            21,
+            22,
+        )
+        .unwrap();
+        assert_eq!(rendered, "sr(21,22)");
+
+        let mut rendered = String::new();
+        write_tstp_clause_binary_inference(
+            &mut rendered,
+            ClauseBinaryInference::ContextSimplifyReflect,
+            21,
+            22,
+        )
+        .unwrap();
+        assert_eq!(rendered, "inference(csr,[status(thm)],[c_0_21,c_0_22])");
+    }
+
+    #[test]
+    fn clause_unary_inference_rendering_matches_c_special_cases() {
+        let mut rendered = String::new();
+        write_pcl_clause_unary_inference(
+            &mut rendered,
+            ClauseUnaryInference::EqualityResolution,
+            9,
+        )
+        .unwrap();
+        assert_eq!(rendered, "er(9)");
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(
+            &mut rendered,
+            ClauseUnaryInference::EqualityFactoring,
+            9,
+        )
+        .unwrap();
+        assert_eq!(rendered, "inference(ef,[status(thm)],[c_0_9])");
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(&mut rendered, ClauseUnaryInference::Factoring, 9)
+            .unwrap();
+        assert_eq!(rendered, "inference(of,[status(thm)],[c_0_9])");
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(&mut rendered, ClauseUnaryInference::Split, 9).unwrap();
+        assert_eq!(rendered, "inference(split,[split(esplit,[])],[c_0_9])");
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(&mut rendered, ClauseUnaryInference::SplitConjunct, 9)
+            .unwrap();
+        assert_eq!(rendered, "inference(split_conjunct, [status(thm)],[c_0_9])");
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(
+            &mut rendered,
+            ClauseUnaryInference::EvalAnswerLiteral,
+            9,
+        )
+        .unwrap();
+        assert_eq!(
+            rendered,
+            "inference(eval_answer_literal,[status(thm)],[c_0_9, theory(answers)])"
+        );
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(&mut rendered, ClauseUnaryInference::Normalize, 9)
+            .unwrap();
+        assert_eq!(rendered, "inference(cn,[status(thm)],[c_0_9])");
+
+        let mut rendered = String::new();
+        write_tstp_clause_unary_inference(&mut rendered, ClauseUnaryInference::Condense, 9)
+            .unwrap();
+        assert_eq!(rendered, "inference(condense,[status(thm)],[c_0_9])");
+    }
+
+    #[test]
+    fn clause_ac_resolution_inference_includes_all_signature_axioms() {
+        let mut rendered = String::new();
+        write_pcl_clause_ac_resolution_inference(&mut rendered, 3, &[70, 71]).unwrap();
+        assert_eq!(rendered, "ar(3,70,71)");
+
+        let mut rendered = String::new();
+        write_tstp_clause_ac_resolution_inference(&mut rendered, 3, &[70, 71]).unwrap();
+        assert_eq!(
+            rendered,
+            "inference(ar,[status(thm)],[c_0_3,c_0_70,c_0_71])"
+        );
+    }
+
+    #[test]
+    fn clause_rewrite_and_apply_defs_inferences_nest_like_c_stack_loops() {
+        let mut rendered = String::new();
+        write_pcl_clause_rewrite_inference(&mut rendered, 3, &[70, 71]).unwrap();
+        assert_eq!(rendered, "rw(rw(3,70),71)");
+
+        let mut rendered = String::new();
+        write_tstp_clause_rewrite_inference(&mut rendered, 3, &[70, 71]).unwrap();
+        assert_eq!(
+            rendered,
+            "inference(rw, [status(thm)],[inference(rw, [status(thm)],[c_0_3,c_0_70]),c_0_71])"
+        );
+
+        let mut rendered = String::new();
+        write_pcl_clause_apply_defs_inference(&mut rendered, 3, &[70, 71]).unwrap();
+        assert_eq!(rendered, "apply_def(apply_def(3,70),71)");
+
+        let mut rendered = String::new();
+        write_tstp_clause_apply_defs_inference(&mut rendered, 3, &[70, 71]).unwrap();
+        assert_eq!(
+            rendered,
+            "inference(apply_def, [status(thm)],[inference(apply_def, [status(thm)],[c_0_3,c_0_70]),c_0_71])"
+        );
     }
 
     #[test]
