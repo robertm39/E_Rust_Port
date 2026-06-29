@@ -497,6 +497,84 @@ pub fn term_struct_equal_no_deref(left: &Term, right: &Term) -> bool {
         })
 }
 
+fn lfho_deref_no_whnf(term: &Term, deref: DerefType) -> (Term, DerefType, usize) {
+    let limit = lfho_deref_limit(term, deref);
+    if deref == DerefType::Once
+        && term.is_applied_free_var()
+        && term
+            .argument(0)
+            .is_some_and(|head| head.binding().is_some())
+    {
+        return (expand_lfho_applied_free_var_once(term), deref, limit);
+    }
+
+    let mut current_deref = deref;
+    let term = term_deref(term, &mut current_deref);
+    (term, current_deref, limit)
+}
+
+fn expand_lfho_applied_free_var_once(term: &Term) -> Term {
+    assert!(term.is_applied_free_var(), "expected applied free variable");
+    assert!(
+        term.arity() > 1,
+        "applied free variable must have arguments"
+    );
+    let head = term.argument(0).expect("applied free variable has a head");
+    let binding = head.binding().expect("applied variable head is bound");
+
+    if binding.is_any_var() || binding.is_lambda() {
+        let expanded = Term::top_alloc(term.f_code(), term.arity());
+        expanded.set_properties(term.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        expanded.set_argument(0, binding);
+        for index in 1..term.arity() {
+            expanded.set_argument(index, initialized_arg(term, index));
+        }
+        expanded
+    } else {
+        let expanded = Term::top_alloc(binding.f_code(), binding.arity() + term.arity() - 1);
+        expanded.set_properties(binding.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        for index in 0..binding.arity() {
+            expanded.set_argument(index, initialized_arg(&binding, index));
+        }
+        for index in 1..term.arity() {
+            expanded.set_argument(binding.arity() + index - 1, initialized_arg(term, index));
+        }
+        expanded
+    }
+}
+
+fn lfho_deref_limit(term: &Term, deref: DerefType) -> usize {
+    if deref != DerefType::Once || !term.is_applied_free_var() {
+        return 0;
+    }
+    let Some(head) = term.argument(0) else {
+        return 0;
+    };
+    let Some(binding) = head.binding() else {
+        return 0;
+    };
+    if binding.is_lambda() {
+        1
+    } else {
+        binding.arity() + usize::from(binding.is_free_var())
+    }
+}
+
+fn convert_lfho_deref(index: usize, limit: usize, deref: DerefType) -> DerefType {
+    if deref == DerefType::Once && index < limit {
+        DerefType::Never
+    } else {
+        deref
+    }
+}
+
+fn initialized_arg(term: &Term, index: usize) -> Term {
+    term.argument(index)
+        .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
+}
+
 #[must_use]
 pub fn term_struct_equal_deref(
     left: &Term,
@@ -504,8 +582,10 @@ pub fn term_struct_equal_deref(
     mut left_deref: DerefType,
     mut right_deref: DerefType,
 ) -> bool {
-    let left = term_deref(left, &mut left_deref);
-    let right = term_deref(right, &mut right_deref);
+    let (left, left_current_deref, left_limit) = lfho_deref_no_whnf(left, left_deref);
+    let (right, right_current_deref, right_limit) = lfho_deref_no_whnf(right, right_deref);
+    left_deref = left_current_deref;
+    right_deref = right_current_deref;
 
     if !term_type_eq(&left, &right) {
         return false;
@@ -529,9 +609,14 @@ pub fn term_struct_equal_deref(
         .zip(right.argument_clones())
         .enumerate()
         .skip(start)
-        .all(|(_index, (left, right))| {
+        .all(|(index, (left, right))| {
             left.zip(right).is_some_and(|(left, right)| {
-                term_struct_equal_deref(&left, &right, left_deref, right_deref)
+                term_struct_equal_deref(
+                    &left,
+                    &right,
+                    convert_lfho_deref(index, left_limit, left_deref),
+                    convert_lfho_deref(index, right_limit, right_deref),
+                )
             })
         })
 }
@@ -548,8 +633,10 @@ pub fn term_struct_prefix_equal(
         return term_struct_equal_deref(left, right, left_deref, right_deref);
     }
 
-    let left = term_deref(left, &mut left_deref);
-    let mut right = term_deref(right, &mut right_deref);
+    let (left, left_current_deref, left_limit) = lfho_deref_no_whnf(left, left_deref);
+    let (mut right, right_current_deref, right_limit) = lfho_deref_no_whnf(right, right_deref);
+    left_deref = left_current_deref;
+    right_deref = right_current_deref;
     if right.is_applied_any_var() && right.arity().saturating_sub(remaining) == 1 {
         let Some(head) = right.argument(0) else {
             return false;
@@ -567,9 +654,15 @@ pub fn term_struct_prefix_equal(
     left.argument_clones()
         .into_iter()
         .zip(right.argument_clones())
-        .all(|(left, right)| {
+        .enumerate()
+        .all(|(index, (left, right))| {
             left.zip(right).is_some_and(|(left, right)| {
-                term_struct_equal_deref(&left, &right, left_deref, right_deref)
+                term_struct_equal_deref(
+                    &left,
+                    &right,
+                    convert_lfho_deref(index, left_limit, left_deref),
+                    convert_lfho_deref(index, right_limit, right_deref),
+                )
             })
         })
 }
@@ -645,15 +738,20 @@ pub fn term_lex_compare(left: &Term, right: &Term) -> i64 {
 
 #[must_use]
 pub fn term_is_subterm(super_term: &Term, test: &Term, mut deref: DerefType) -> bool {
-    let super_term = term_deref(super_term, &mut deref);
+    let (super_term, current_deref, limit) = lfho_deref_no_whnf(super_term, deref);
+    deref = current_deref;
     if &super_term == test {
         return true;
     }
     super_term
         .argument_clones()
         .into_iter()
-        .flatten()
-        .any(|arg| term_is_subterm(&arg, test, deref))
+        .enumerate()
+        .any(|(index, arg)| {
+            arg.is_some_and(|arg| {
+                term_is_subterm(&arg, test, convert_lfho_deref(index, limit, deref))
+            })
+        })
 }
 
 #[must_use]
@@ -663,7 +761,8 @@ pub fn term_is_subterm_deref(
     mut super_deref: DerefType,
     test_deref: DerefType,
 ) -> bool {
-    let super_term = term_deref(super_term, &mut super_deref);
+    let (super_term, current_deref, _limit) = lfho_deref_no_whnf(super_term, super_deref);
+    super_deref = current_deref;
     if term_struct_equal_deref(&super_term, test, super_deref, test_deref) {
         return true;
     }
@@ -1599,6 +1698,73 @@ mod tests {
         (sig, vars, term)
     }
 
+    struct AppliedPrefixFixture {
+        app: Term,
+        y: Term,
+        b: Term,
+        c: Term,
+        expected: Term,
+        fully_derefed: Term,
+        prefix_expected: Term,
+        prefix_fully_derefed: Term,
+    }
+
+    fn applied_prefix_fixture() -> AppliedPrefixFixture {
+        let types = TypeBank::new();
+        let i_type = types.i_type();
+        let f_code = 200;
+
+        let b = Term::const_cell_alloc(201);
+        b.set_type(Some(i_type.clone()));
+        let c = Term::const_cell_alloc(202);
+        c.set_type(Some(i_type.clone()));
+
+        let y = typed_var(-4, &i_type);
+        y.set_binding(Some(b.clone()));
+        let z = typed_var(-6, &i_type);
+        z.set_binding(Some(c.clone()));
+
+        let head_binding = Term::top_alloc(f_code, 1);
+        head_binding.set_type(Some(i_type.clone()));
+        head_binding.set_argument(0, y.clone());
+        let head = typed_var(-2, &i_type);
+        head.set_binding(Some(head_binding));
+
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type.clone()));
+        app.set_argument(0, head);
+        app.set_argument(1, z);
+
+        let expected = Term::top_alloc(f_code, 2);
+        expected.set_type(Some(i_type.clone()));
+        expected.set_argument(0, y.clone());
+        expected.set_argument(1, c.clone());
+
+        let fully_derefed = Term::top_alloc(f_code, 2);
+        fully_derefed.set_type(Some(i_type.clone()));
+        fully_derefed.set_argument(0, b.clone());
+        fully_derefed.set_argument(1, c.clone());
+
+        let prefix_expected = Term::top_alloc(f_code, 1);
+        prefix_expected.set_type(Some(i_type.clone()));
+        prefix_expected.set_argument(0, y.clone());
+
+        let prefix_fully_derefed = Term::top_alloc(f_code, 1);
+        prefix_fully_derefed.set_type(Some(i_type));
+        prefix_fully_derefed.set_argument(0, b.clone());
+
+        AppliedPrefixFixture {
+            app,
+            y,
+            b,
+            c,
+            expected,
+            fully_derefed,
+            prefix_expected,
+            prefix_fully_derefed,
+        }
+    }
+
     #[test]
     fn term_copy_allocates_free_variables_from_target_bank() {
         let types = TypeBank::new();
@@ -1942,6 +2108,65 @@ mod tests {
             DerefType::Never,
             DerefType::Never,
             1
+        ));
+    }
+
+    #[test]
+    fn structural_deref_expands_applied_free_vars_with_prefix_limit() {
+        let fixture = applied_prefix_fixture();
+
+        assert!(term_struct_equal_deref(
+            &fixture.app,
+            &fixture.expected,
+            DerefType::Once,
+            DerefType::Never
+        ));
+        assert!(!term_struct_equal_deref(
+            &fixture.app,
+            &fixture.fully_derefed,
+            DerefType::Once,
+            DerefType::Never
+        ));
+    }
+
+    #[test]
+    fn structural_prefix_equal_preserves_applied_binding_prefix() {
+        let fixture = applied_prefix_fixture();
+
+        assert!(term_struct_prefix_equal(
+            &fixture.prefix_expected,
+            &fixture.app,
+            DerefType::Never,
+            DerefType::Once,
+            1
+        ));
+        assert!(!term_struct_prefix_equal(
+            &fixture.prefix_fully_derefed,
+            &fixture.app,
+            DerefType::Never,
+            DerefType::Once,
+            1
+        ));
+    }
+
+    #[test]
+    fn subterm_check_expands_applied_free_vars_with_prefix_limit() {
+        let fixture = applied_prefix_fixture();
+
+        assert!(term_is_subterm(&fixture.app, &fixture.y, DerefType::Once));
+        assert!(term_is_subterm(&fixture.app, &fixture.c, DerefType::Once));
+        assert!(!term_is_subterm(&fixture.app, &fixture.b, DerefType::Once));
+    }
+
+    #[test]
+    fn subterm_deref_keeps_c_same_deref_descendant_behavior() {
+        let fixture = applied_prefix_fixture();
+
+        assert!(term_is_subterm_deref(
+            &fixture.app,
+            &fixture.b,
+            DerefType::Once,
+            DerefType::Never
         ));
     }
 
