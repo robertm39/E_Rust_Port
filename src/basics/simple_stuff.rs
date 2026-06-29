@@ -1,4 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -98,10 +100,17 @@ impl RandState {
     }
 }
 
+#[cfg(not(test))]
 static PROBLEM_TYPE: OnceLock<Mutex<ProblemType>> = OnceLock::new();
+#[cfg(test)]
+thread_local! {
+    static TEST_PROBLEM_TYPE: RefCell<ProblemType> =
+        const { RefCell::new(ProblemType::NotInitialized) };
+}
 static GLOBAL_JKISS_STATE: OnceLock<Mutex<RandState>> = OnceLock::new();
 static JKISS_SEED_SHADOW: OnceLock<Mutex<RandState>> = OnceLock::new();
 
+#[cfg(not(test))]
 fn problem_type_cell() -> &'static Mutex<ProblemType> {
     PROBLEM_TYPE.get_or_init(|| Mutex::new(ProblemType::NotInitialized))
 }
@@ -236,12 +245,35 @@ pub fn compute_gcd(mut left: i64, mut right: i64) -> i64 {
 }
 
 #[must_use]
+#[cfg(not(test))]
 pub fn problem_type() -> ProblemType {
     *lock_or_recover(problem_type_cell())
 }
 
+#[cfg(not(test))]
 pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
     let mut current = lock_or_recover(problem_type_cell());
+    set_problem_type_value(&mut current, problem_type)
+}
+
+#[cfg(test)]
+#[must_use]
+pub fn problem_type() -> ProblemType {
+    TEST_PROBLEM_TYPE.with(|current| *current.borrow())
+}
+
+#[cfg(test)]
+pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
+    TEST_PROBLEM_TYPE.with(|current| {
+        let mut current = current.borrow_mut();
+        set_problem_type_value(&mut current, problem_type)
+    })
+}
+
+fn set_problem_type_value(
+    current: &mut ProblemType,
+    problem_type: ProblemType,
+) -> Result<(), Diagnostic> {
     if *current == ProblemType::NotInitialized || *current == problem_type {
         *current = problem_type;
         Ok(())
@@ -253,8 +285,16 @@ pub fn set_problem_type(problem_type: ProblemType) -> Result<(), Diagnostic> {
     }
 }
 
+#[cfg(not(test))]
 pub fn reset_problem_type() {
     *lock_or_recover(problem_type_cell()) = ProblemType::NotInitialized;
+}
+
+#[cfg(test)]
+pub fn reset_problem_type() {
+    TEST_PROBLEM_TYPE.with(|current| {
+        *current.borrow_mut() = ProblemType::NotInitialized;
+    });
 }
 
 #[cfg(test)]

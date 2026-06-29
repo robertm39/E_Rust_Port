@@ -5,6 +5,7 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::signature::Signature;
 use crate::terms::termtypes::{term_deref, DerefType, Term, TP_PRED_POS};
+use std::cmp::Ordering;
 
 /// Compare two first-order terms with C `KBO6Compare`.
 ///
@@ -328,29 +329,7 @@ fn kbo_lin_cmp_lfho_no_whnf(
                 cmp_arities(&s, &t)
             };
 
-            if res != CompareResult::Equal {
-                if s.arity() == t.arity() {
-                    index += 1;
-                }
-                if index < s.arity() || index < t.arity() {
-                    for rest in index..s.arity() {
-                        mfy_vwb_lfho_lhs(
-                            ocb,
-                            &initialized_arg(&s, rest),
-                            convert_lfho_deref(rest, limit_s, deref_s),
-                        );
-                    }
-                    for rest in index..t.arity() {
-                        mfy_vwb_lfho_rhs(
-                            ocb,
-                            &initialized_arg(&t, rest),
-                            convert_lfho_deref(rest, limit_t, deref_t),
-                        );
-                    }
-                    res = balance_result_after_lex(ocb, res);
-                }
-                done = true;
-            } else {
+            if res == CompareResult::Equal {
                 assert_eq!(
                     s.arity(),
                     t.arity(),
@@ -358,6 +337,18 @@ fn kbo_lin_cmp_lfho_no_whnf(
                 );
                 index += 1;
                 done = index == s.arity();
+            } else {
+                if s.arity() == t.arity() {
+                    index += 1;
+                }
+                res = balance_lfho_rest_after_difference(
+                    ocb,
+                    LfhoRest::new(&s, limit_s, deref_s),
+                    LfhoRest::new(&t, limit_t, deref_t),
+                    index,
+                    res,
+                );
+                done = true;
             }
         }
     } else if s.is_free_var() {
@@ -389,24 +380,71 @@ fn kbo_lin_cmp_lfho_no_whnf(
     } else {
         mfy_vwb_lfho_lhs(ocb, &s, deref_s);
         mfy_vwb_lfho_rhs(ocb, &t, deref_t);
-        if ocb.wb > 0 {
-            res = greater_or_uncomparable(ocb);
-        } else if ocb.wb < 0 {
-            res = lesser_or_uncomparable(ocb);
-        } else {
-            let head_cmp = if s.is_top_level_any_var() || t.is_top_level_any_var() {
-                CompareResult::Uncomparable
-            } else {
-                ocb.fun_compare(signature, s.f_code(), t.f_code())
-            };
-            res = match head_cmp {
+        res = match ocb.wb.cmp(&0) {
+            Ordering::Greater => greater_or_uncomparable(ocb),
+            Ordering::Less => lesser_or_uncomparable(ocb),
+            Ordering::Equal => match lfho_head_compare(ocb, signature, &s, &t) {
                 CompareResult::Greater => greater_or_uncomparable(ocb),
                 CompareResult::Lesser => lesser_or_uncomparable(ocb),
                 _ => CompareResult::Uncomparable,
-            };
-        }
+            },
+        };
     }
     res
+}
+
+#[derive(Clone, Copy)]
+struct LfhoRest<'term> {
+    term: &'term Term,
+    limit: usize,
+    deref: DerefType,
+}
+
+impl<'term> LfhoRest<'term> {
+    const fn new(term: &'term Term, limit: usize, deref: DerefType) -> Self {
+        Self { term, limit, deref }
+    }
+}
+
+fn balance_lfho_rest_after_difference(
+    ocb: &mut OrderControlBlock,
+    left: LfhoRest<'_>,
+    right: LfhoRest<'_>,
+    index: usize,
+    res: CompareResult,
+) -> CompareResult {
+    if index < left.term.arity() || index < right.term.arity() {
+        for rest in index..left.term.arity() {
+            mfy_vwb_lfho_lhs(
+                ocb,
+                &initialized_arg(left.term, rest),
+                convert_lfho_deref(rest, left.limit, left.deref),
+            );
+        }
+        for rest in index..right.term.arity() {
+            mfy_vwb_lfho_rhs(
+                ocb,
+                &initialized_arg(right.term, rest),
+                convert_lfho_deref(rest, right.limit, right.deref),
+            );
+        }
+        balance_result_after_lex(ocb, res)
+    } else {
+        res
+    }
+}
+
+fn lfho_head_compare(
+    ocb: &OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+) -> CompareResult {
+    if s.is_top_level_any_var() || t.is_top_level_any_var() {
+        CompareResult::Uncomparable
+    } else {
+        ocb.fun_compare(signature, s.f_code(), t.f_code())
+    }
 }
 
 fn lfho_deref_no_whnf(term: &Term, deref: DerefType) -> (Term, DerefType, usize) {
@@ -1004,22 +1042,22 @@ mod tests {
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
         let type_ = bank.signature().type_bank().default_type();
-        let f = symbol(bank.signature_mut(), "kbo6_lfho_applied_prefix_f", 0);
-        let y = bank.vars().get_fresh_var(&type_);
-        let z = bank.vars().get_fresh_var(&type_);
-        let b = typed_const(&mut bank, "kbo6_lfho_applied_prefix_b");
-        let c = typed_const(&mut bank, "kbo6_lfho_applied_prefix_c");
-        let head_binding = app(f, std::slice::from_ref(&y));
+        let function = symbol(bank.signature_mut(), "kbo6_lfho_applied_prefix_f", 0);
+        let prefix_var = bank.vars().get_fresh_var(&type_);
+        let suffix_var = bank.vars().get_fresh_var(&type_);
+        let prefix_binding = typed_const(&mut bank, "kbo6_lfho_applied_prefix_b");
+        let suffix_binding = typed_const(&mut bank, "kbo6_lfho_applied_prefix_c");
+        let head_binding = app(function, std::slice::from_ref(&prefix_var));
         head_binding.set_type(Some(type_.clone()));
         let head_type = head_binding.type_().expect("binding must have a type");
         let head = bank.vars().get_fresh_var(&head_type);
-        let applied = app(SIG_PHONY_APP_CODE, &[head.clone(), z.clone()]);
+        let applied = app(SIG_PHONY_APP_CODE, &[head.clone(), suffix_var.clone()]);
         applied.set_type(Some(type_));
-        let expected = app(f, &[y.clone(), c.clone()]);
+        let expected = app(function, &[prefix_var.clone(), suffix_binding.clone()]);
         let mut subst = Substitution::new();
         subst.add_binding(&head, &head_binding);
-        subst.add_binding(&y, &b);
-        subst.add_binding(&z, &c);
+        subst.add_binding(&prefix_var, &prefix_binding);
+        subst.add_binding(&suffix_var, &suffix_binding);
         let mut ocb = ocb(bank.signature());
 
         assert_eq!(

@@ -4,7 +4,7 @@ use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::dbvars::DbVarBank;
-use crate::terms::functypes::{FunCode, FuncSymbType};
+use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
 use crate::terms::signature::{Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE};
 use crate::terms::signature::{
@@ -47,6 +47,20 @@ pub struct TermBank {
     garbage_state: TermProperties,
     gc: GcAdmin,
     term_store: TermCellStore,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LetTypeDeclaration {
+    name: String,
+    f_code: FunCode,
+    type_: Type,
+}
+
+fn let_type_declaration_codes(declarations: &[LetTypeDeclaration]) -> Vec<FunCode> {
+    declarations
+        .iter()
+        .map(|declaration| declaration.f_code)
+        .collect()
 }
 
 impl TermBank {
@@ -1365,10 +1379,7 @@ impl TermBank {
             return self.parse_ite_tformula_tstp_subset(scanner);
         }
         if scanner.test_tok(TokenType::LET_TOKEN) {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Scoped $let term parsing is not ported yet",
-            ));
+            return self.parse_let_tformula_tstp_subset(scanner);
         }
 
         let mut id = DynamicString::new();
@@ -1658,17 +1669,14 @@ impl TermBank {
             }
             let child = self.parse_literal_tformula_tstp_subset(scanner)?;
             self.tformula_fcode_alloc(
-                self.require_formula_op_code(self.sig.not_code())?,
+                Self::require_formula_op_code(self.sig.not_code())?,
                 child,
                 None,
             )?
         } else if scanner.test_tok(TokenType::ITE_TOKEN) {
             self.parse_ite_tformula_tstp_subset(scanner)?
         } else if scanner.test_tok(TokenType::LET_TOKEN) {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Boolean $let term arguments are not ported yet",
-            ));
+            self.parse_let_tformula_tstp_subset(scanner)?
         } else {
             self.parse_tformula_atom(scanner)?
         };
@@ -1716,8 +1724,8 @@ impl TermBank {
         let if_false = self.parse_tformula_tstp_subset(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
 
-        self.require_same_sort(&condition, &self.true_term, "$ite condition")?;
-        self.require_same_sort(&if_true, &if_false, "$ite branches")?;
+        Self::require_same_sort(&condition, &self.true_term, "$ite condition")?;
+        Self::require_same_sort(&if_true, &if_false, "$ite branches")?;
         let result_type = if_true.type_().ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::TYPE_ERROR,
@@ -1733,12 +1741,219 @@ impl TermBank {
         self.term_top_insert(ite)
     }
 
-    fn require_same_sort(
-        &self,
-        left: &Term,
-        right: &Term,
-        context: &str,
-    ) -> Result<(), Diagnostic> {
+    fn parse_let_tformula_tstp_subset(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        scanner.accept_tok(TokenType::LET_TOKEN)?;
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+
+        let type_declarations = self.parse_let_type_declarations(scanner)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+
+        let definitions = self.parse_let_symbol_definitions(scanner, &type_declarations)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+
+        self.sig
+            .enter_let_scope(&let_type_declaration_codes(&type_declarations));
+        let body = match self.parse_tformula_tstp_subset(scanner) {
+            Ok(body) => {
+                self.sig.exit_let_scope();
+                body
+            }
+            Err(error) => {
+                self.sig.exit_let_scope();
+                return Err(error);
+            }
+        };
+
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        self.make_let_term(definitions, body)
+    }
+
+    fn parse_let_type_declarations(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Vec<LetTypeDeclaration>, Diagnostic> {
+        let mut declarations = Vec::new();
+        if scanner.test_tok(TokenType::OPEN_SQUARE) {
+            scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+            declarations.push(self.parse_let_type_declaration(scanner)?);
+            while scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                declarations.push(self.parse_let_type_declaration(scanner)?);
+            }
+            scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+        } else {
+            declarations.push(self.parse_let_type_declaration(scanner)?);
+        }
+        Ok(declarations)
+    }
+
+    fn parse_let_type_declaration(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<LetTypeDeclaration, Diagnostic> {
+        let mut id = DynamicString::new();
+        let sym_type = func_symb_parse(scanner, &mut id)?;
+        if sym_type != FuncSymbType::IdentFreeFun {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "let declaration expects a function symbol",
+            ));
+        }
+
+        scanner.accept_tok(TokenType::COLON)?;
+        let type_ = self
+            .sig
+            .type_bank_mut()
+            .parse_type_from_current_problem(scanner)?;
+        let name = id.view().into_owned();
+        let f_code = self.sig.insert_let_id(&name, type_.clone());
+        Ok(LetTypeDeclaration {
+            name,
+            f_code,
+            type_,
+        })
+    }
+
+    fn parse_let_symbol_definitions(
+        &mut self,
+        scanner: &mut Scanner,
+        type_declarations: &[LetTypeDeclaration],
+    ) -> Result<Vec<Term>, Diagnostic> {
+        let mut definitions = Vec::new();
+        if scanner.test_tok(TokenType::OPEN_SQUARE) {
+            scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+            definitions.push(self.parse_let_symbol_definition(scanner, type_declarations)?);
+            while scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                definitions.push(self.parse_let_symbol_definition(scanner, type_declarations)?);
+            }
+            scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+        } else {
+            definitions.push(self.parse_let_symbol_definition(scanner, type_declarations)?);
+        }
+        Ok(definitions)
+    }
+
+    fn parse_let_symbol_definition(
+        &mut self,
+        scanner: &mut Scanner,
+        type_declarations: &[LetTypeDeclaration],
+    ) -> Result<Term, Diagnostic> {
+        let mut id = DynamicString::new();
+        let _sym_type = func_symb_parse(scanner, &mut id)?;
+        let name = id.view();
+        let Some(declaration) = type_declarations
+            .iter()
+            .find(|declaration| declaration.name == name)
+        else {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "symbol not in let declaration list",
+            ));
+        };
+
+        let variables = self.parse_let_definition_variables(scanner, &declaration.type_)?;
+        let parsed = (|| {
+            scanner.accept_tok(TokenType::COLON)?;
+            scanner.accept_tok(TokenType::EQUAL_SIGN)?;
+            let rhs = self.parse_tformula_tstp_subset(scanner)?;
+            let lhs = self.let_definition_lhs(declaration.f_code, &variables)?;
+            self.encode_equality_term(lhs, rhs, true)
+        })();
+        for _ in &variables {
+            self.vars.pop_env();
+        }
+        parsed
+    }
+
+    fn parse_let_definition_variables(
+        &mut self,
+        scanner: &mut Scanner,
+        type_: &Type,
+    ) -> Result<Vec<Term>, Diagnostic> {
+        let arity = type_get_max_arity(type_);
+        if arity == 0 {
+            return Ok(Vec::new());
+        }
+
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        let mut variables = Vec::with_capacity(arity);
+        let mut names = Vec::with_capacity(arity);
+        let parsed = (|| {
+            for index in 0..arity {
+                let mut id = DynamicString::new();
+                let sym_type = func_symb_parse(scanner, &mut id)?;
+                let name = id.view().into_owned();
+                if names.iter().any(|seen| seen == &name) {
+                    return Err(Diagnostic::new(
+                        ErrorCode::SYNTAX_ERROR,
+                        "variables must be distinct",
+                    ));
+                }
+                names.push(name.clone());
+                if sym_type != FuncSymbType::IdentVar {
+                    return Err(Diagnostic::new(
+                        ErrorCode::SYNTAX_ERROR,
+                        "variable is expected",
+                    ));
+                }
+
+                let arg_type = type_.args().get(index).ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorCode::TYPE_ERROR,
+                        "let definition type is missing an argument sort",
+                    )
+                })?;
+                self.vars.push_env();
+                variables.push(self.vars.ext_name_assert_alloc_sort(&name, arg_type));
+                if index + 1 != arity {
+                    scanner.accept_tok(TokenType::COMMA)?;
+                }
+            }
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            Ok(())
+        })();
+        if let Err(error) = parsed {
+            for _ in &variables {
+                self.vars.pop_env();
+            }
+            return Err(error);
+        }
+        Ok(variables)
+    }
+
+    fn let_definition_lhs(
+        &mut self,
+        f_code: FunCode,
+        variables: &[Term],
+    ) -> Result<Term, Diagnostic> {
+        let lhs = Term::top_alloc(f_code, variables.len());
+        for (index, variable) in variables.iter().enumerate() {
+            lhs.set_argument(index, variable.clone());
+        }
+        self.term_top_insert(lhs)
+    }
+
+    fn make_let_term(&mut self, definitions: Vec<Term>, body: Term) -> Result<Term, Diagnostic> {
+        let body_type = body.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$let body must have an inferred type",
+            )
+        })?;
+        let let_term = Term::top_alloc(SIG_LET_CODE, definitions.len() + 1);
+        let_term.set_type(Some(body_type));
+        for (index, definition) in definitions.into_iter().enumerate() {
+            let_term.set_argument(index, definition);
+        }
+        let_term.set_argument(let_term.arity() - 1, body);
+        self.term_top_insert(let_term)
+    }
+
+    fn require_same_sort(left: &Term, right: &Term, context: &str) -> Result<(), Diagnostic> {
         let left_type = left.type_().ok_or_else(|| {
             Diagnostic::new(
                 ErrorCode::TYPE_ERROR,
@@ -1891,7 +2106,7 @@ impl TermBank {
         } else {
             self.sig.qall_code()
         };
-        let quantor = self.require_formula_op_code(quantor)?;
+        let quantor = Self::require_formula_op_code(quantor)?;
         scanner.next_token()?;
         Ok(quantor)
     }
@@ -1920,10 +2135,10 @@ impl TermBank {
         } else {
             0
         };
-        self.require_formula_op_code(op)
+        Self::require_formula_op_code(op)
     }
 
-    fn require_formula_op_code(&self, op: FunCode) -> Result<FunCode, Diagnostic> {
+    fn require_formula_op_code(op: FunCode) -> Result<FunCode, Diagnostic> {
         if op == 0 {
             Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -2575,12 +2790,13 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::inout::scanner::Scanner;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
         Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_CONS_CODE,
-        SIG_FALSE_CODE, SIG_ITE_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+        SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NIL_CODE, SIG_PHONY_APP_CODE,
+        SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
@@ -2589,6 +2805,21 @@ mod tests {
         TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
     };
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn bank_with_symbol(name: &str, arity: i32) -> (TermBank, i64) {
         let mut sig = Signature::new(TypeBank::new());
@@ -3227,23 +3458,106 @@ mod tests {
     }
 
     #[test]
-    fn checked_parser_rejects_top_level_let_terms_until_scoped_let_port() {
+    fn checked_parser_reads_top_level_boolean_let_terms_like_tbterm_parse_real() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
         let mut bank = bool_arg_bank("takes_bool_arg");
-        let mut scanner = Scanner::from_user_string("$let", false).unwrap();
-        let error = bank
-            .parse_term_with_distinct_checks(&mut scanner)
-            .unwrap_err();
+        let mut scanner =
+            Scanner::from_user_string("$let(f:$o, f := pred_let_value, f)", false).unwrap();
+        let let_term = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
 
-        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error
-            .message()
-            .contains("Scoped $let term parsing is not ported yet"));
+        assert_eq!(let_term.f_code(), SIG_LET_CODE);
+        assert_eq!(
+            let_term.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        assert_eq!(let_term.arity(), 2);
+
+        let definition = let_term.argument(0).unwrap();
+        assert_eq!(definition.f_code(), bank.signature().eqn_code());
+        let defined_head = definition.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(defined_head.f_code()), Some("f"));
+        assert_eq!(
+            defined_head.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let rhs = definition.argument(1).unwrap();
+        assert_eq!(rhs.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(rhs.argument(0).unwrap().f_code()),
+            Some("pred_let_value")
+        );
+
+        let body = let_term.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        assert_eq!(body.argument(0).unwrap().f_code(), defined_head.f_code());
+        assert_eq!(body.argument(1), Some(bank.true_term().clone()));
     }
 
     #[test]
-    fn checked_parser_rejects_let_boolean_formula_arguments_until_scoped_let_port() {
+    fn checked_parser_reads_parameterized_boolean_let_terms() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
         let mut bank = bool_arg_bank("takes_bool_arg");
-        let mut scanner = Scanner::from_user_string("takes_bool_arg($let)", false).unwrap();
+        let mut scanner = Scanner::from_user_string(
+            "$let(f:$i>$o, f(X) := pred_let_param(X), f(let_arg_a))",
+            false,
+        )
+        .unwrap();
+        let let_term = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+
+        assert_eq!(let_term.f_code(), SIG_LET_CODE);
+        let definition = let_term.argument(0).unwrap();
+        let defined_head = definition.argument(0).unwrap();
+        let local_f_code = defined_head.f_code();
+        assert_eq!(defined_head.arity(), 1);
+        let variable = defined_head.argument(0).unwrap();
+        assert!(variable.is_free_var());
+
+        let rhs = definition.argument(1).unwrap();
+        let rhs_predicate = rhs.argument(0).unwrap();
+        assert_eq!(
+            bank.signature().find_name(rhs_predicate.f_code()),
+            Some("pred_let_param")
+        );
+        assert_eq!(rhs_predicate.argument(0), Some(variable));
+
+        let body = let_term.argument(1).unwrap();
+        let body_head = body.argument(0).unwrap();
+        assert_eq!(body_head.f_code(), local_f_code);
+        assert_eq!(
+            bank.signature()
+                .find_name(body_head.argument(0).unwrap().f_code()),
+            Some("let_arg_a")
+        );
+    }
+
+    #[test]
+    fn checked_parser_encodes_boolean_let_formula_arguments() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner =
+            Scanner::from_user_string("takes_bool_arg($let(f:$o, f := pred_let_arg, f))", false)
+                .unwrap();
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let arg = parsed.argument(0).unwrap();
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        assert_eq!(arg.argument(1), Some(bank.true_term().clone()));
+        let let_term = arg.argument(0).unwrap();
+        assert_eq!(let_term.f_code(), SIG_LET_CODE);
+        assert_eq!(
+            let_term.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+    }
+
+    #[test]
+    fn checked_parser_rejects_non_function_let_declaration_like_c() {
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner = Scanner::from_user_string("$let(X:$o, X := p, X)", false).unwrap();
         let error = bank
             .parse_term_with_distinct_checks(&mut scanner)
             .unwrap_err();
@@ -3251,7 +3565,7 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error
             .message()
-            .contains("Boolean $let term arguments are not ported yet"));
+            .contains("let declaration expects a function symbol"));
     }
 
     #[test]
