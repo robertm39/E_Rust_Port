@@ -117,7 +117,7 @@ C source references:
 
 Implemented:
 
-- C derivation opcode and argument-bit constants for currently wired clause-generation and simplification entries.
+- Full C derivation opcode, argument-bit, and `DerivationCode` constants, including represented clause-generation/simplification entries, formula/CNF-conversion entries kept for future formula owners, and higher-order entries with their `ArgIsHO` flag combinations.
 - Clause derivation stack entries for operations, compact clause-parent references, numeric arguments, and existing rewrite demodulator trace entries.
 - Clause-parent `ClausePushDerivation` subset, numeric-argument push helper, `ClauseIsEvalGC`, `ClauseIsDummyQuote`, parent extraction, initial-clause indication, and search-inference counting.
 - Derivation pushes for first-order ordered factoring, first-order equality factoring, first-order equality resolution, destructive equality-resolution normalization, disequality decomposition, condensation, contextual simplify-reflect, positive/negative simplify-reflect, and local rewriting.

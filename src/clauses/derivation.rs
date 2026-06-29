@@ -26,6 +26,15 @@ pub const DO_AC_RES: i64 = 11;
 pub const DO_CONDENSE: i64 = 12;
 pub const DO_NORMALIZE: i64 = 13;
 pub const DO_EVAL_ANSWERS: i64 = 14;
+pub const DO_NEGATE_CONJECTURE: i64 = 15;
+pub const DO_FOF_SIMPLIFY: i64 = 16;
+pub const DO_FNNF: i64 = 17;
+pub const DO_SHIFT_QUANTORS: i64 = 18;
+pub const DO_VAR_RENAME: i64 = 19;
+pub const DO_SKOLEMIZE: i64 = 20;
+pub const DO_DIST_DISJUNCTIONS: i64 = 21;
+pub const DO_ANNO_QUESTION: i64 = 22;
+pub const DO_EXPAND_DISTINCT: i64 = 23;
 pub const DO_PARAMOD: i64 = 24;
 pub const DO_SIM_PARAMOD: i64 = 25;
 pub const DO_ORDERED_FACTOR: i64 = 26;
@@ -33,9 +42,34 @@ pub const DO_EQ_FACTOR: i64 = 27;
 pub const DO_EQ_RES: i64 = 28;
 pub const DO_DIS_EQ_DECOMPOSE: i64 = 29;
 pub const DO_SAT_GEN: i64 = 30;
+pub const DO_PE_RESOLVE: i64 = 31;
+pub const DO_SPLIT_EQUIV: i64 = 32;
 pub const DO_INTRO_DEF: i64 = 33;
+pub const DO_SPLIT_CONJUNCT: i64 = 34;
+pub const DO_EQ_TO_EQ: i64 = 35;
+pub const DO_LIFT_LAMBDAS: i64 = 36;
+pub const DO_FOOL_UNROLL: i64 = 37;
+pub const DO_LIFT_ITE: i64 = 38;
+pub const DO_ELIMINATE_BVAR: i64 = 39;
+pub const DO_DYNAMIC_CNF: i64 = 40;
+pub const DO_FLEX_RESOLVE: i64 = 41;
+pub const DO_ARG_CONG: i64 = 42;
+pub const DO_NEG_EXT: i64 = 43;
+pub const DO_POS_EXT: i64 = 44;
+pub const DO_EXT_SUP: i64 = 45;
+pub const DO_EXT_EQ_RES: i64 = 46;
+pub const DO_EXT_EQ_FACT: i64 = 47;
+pub const DO_INV_REC: i64 = 48;
+pub const DO_CHOICE_AX: i64 = 49;
+pub const DO_LEIBNIZ_ELIM: i64 = 50;
+pub const DO_PRIM_ENUM: i64 = 51;
+pub const DO_CHOICE_INST: i64 = 52;
+pub const DO_TRIGGER: i64 = 53;
+pub const DO_PRUNE_ARG: i64 = 54;
 
+pub const DC_NOP: i64 = DO_NOP;
 pub const DC_CNF_QUOTE: i64 = DO_QUOTE | ARG1_CNF;
+pub const DC_FOF_QUOTE: i64 = DO_QUOTE | ARG1_FOF;
 pub const DC_CNF_ADD_ARG: i64 = DO_ADD_CNF_ARG | ARG1_CNF;
 pub const DC_CNF_EVAL_GC: i64 = DO_EVAL_GC;
 pub const DC_REWRITE: i64 = DO_REWRITE | ARG1_CNF;
@@ -49,6 +83,15 @@ pub const DC_AC_RES: i64 = DO_AC_RES | ARG1_NUM;
 pub const DC_CONDENSE: i64 = DO_CONDENSE;
 pub const DC_NORMALIZE: i64 = DO_NORMALIZE;
 pub const DC_EVAL_ANSWERS: i64 = DO_EVAL_ANSWERS;
+pub const DC_NEGATE_CONJECTURE: i64 = DO_NEGATE_CONJECTURE;
+pub const DC_FOF_SIMPLIFY: i64 = DO_FOF_SIMPLIFY;
+pub const DC_FNNF: i64 = DO_FNNF;
+pub const DC_SHIFT_QUANTORS: i64 = DO_SHIFT_QUANTORS;
+pub const DC_VAR_RENAME: i64 = DO_VAR_RENAME;
+pub const DC_SKOLEMIZE: i64 = DO_SKOLEMIZE;
+pub const DC_DIST_DISJUNCTIONS: i64 = DO_DIST_DISJUNCTIONS;
+pub const DC_ANNO_QUESTION: i64 = DO_ANNO_QUESTION;
+pub const DC_EXPAND_DISTINCT: i64 = DO_EXPAND_DISTINCT | ARG1_FOF;
 pub const DC_PARAMOD: i64 = DO_PARAMOD | ARG1_CNF | ARG2_CNF;
 pub const DC_SIM_PARAMOD: i64 = DO_SIM_PARAMOD | ARG1_CNF | ARG2_CNF;
 pub const DC_ORDERED_FACTOR: i64 = DO_ORDERED_FACTOR | ARG1_CNF;
@@ -56,6 +99,30 @@ pub const DC_EQ_FACTOR: i64 = DO_EQ_FACTOR | ARG1_CNF;
 pub const DC_EQ_RES: i64 = DO_EQ_RES | ARG1_CNF;
 pub const DC_DIS_EQ_DECOMPOSE: i64 = DO_DIS_EQ_DECOMPOSE | ARG1_CNF;
 pub const DC_SAT_GEN: i64 = DO_SAT_GEN | ARG1_CNF;
+pub const DC_PE_RESOLVE: i64 = DO_PE_RESOLVE | ARG1_CNF | ARG2_CNF;
+pub const DC_SPLIT_EQUIV: i64 = DO_SPLIT_EQUIV | ARG1_FOF;
+pub const DC_INTRO_DEF: i64 = DO_INTRO_DEF;
+pub const DC_SPLIT_CONJUNCT: i64 = DO_SPLIT_CONJUNCT | ARG1_FOF;
+pub const DC_EQ_TO_EQ: i64 = DO_EQ_TO_EQ;
+pub const DC_LIFT_LAMBDAS: i64 = DO_LIFT_LAMBDAS | ARG1_FOF;
+pub const DC_FOOL_UNROLL: i64 = DO_FOOL_UNROLL;
+pub const DC_LIFT_ITE: i64 = DO_LIFT_ITE;
+pub const DC_ELIMINATE_BVAR: i64 = DO_ELIMINATE_BVAR;
+pub const DC_DYNAMIC_CNF: i64 = DO_DYNAMIC_CNF | ARG1_CNF | ARG_IS_HO;
+pub const DC_FLEX_RESOLVE: i64 = DO_FLEX_RESOLVE | ARG_IS_HO;
+pub const DC_ARG_CONG: i64 = DO_ARG_CONG | ARG1_CNF | ARG_IS_HO;
+pub const DC_NEG_EXT: i64 = DO_NEG_EXT | ARG1_CNF | ARG_IS_HO;
+pub const DC_POS_EXT: i64 = DO_POS_EXT | ARG1_CNF | ARG_IS_HO;
+pub const DC_EXT_SUP: i64 = DO_EXT_SUP | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
+pub const DC_EXT_EQ_RES: i64 = DO_EXT_EQ_RES | ARG1_CNF | ARG_IS_HO;
+pub const DC_EXT_EQ_FACT: i64 = DO_EXT_EQ_FACT | ARG1_CNF | ARG_IS_HO;
+pub const DC_INV_REC: i64 = DO_INV_REC | ARG1_CNF | ARG_IS_HO;
+pub const DC_CHOICE_AX: i64 = DO_CHOICE_AX | ARG_IS_HO;
+pub const DC_LEIBNIZ_ELIM: i64 = DO_LEIBNIZ_ELIM | ARG1_CNF | ARG_IS_HO;
+pub const DC_PRIM_ENUM: i64 = DO_PRIM_ENUM | ARG1_CNF | ARG_IS_HO;
+pub const DC_CHOICE_INST: i64 = DO_CHOICE_INST | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
+pub const DC_TRIGGER: i64 = DO_TRIGGER | ARG1_CNF | ARG2_CNF | ARG_IS_HO;
+pub const DC_PRUNE_ARG: i64 = DO_PRUNE_ARG | ARG_IS_HO;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ClauseDerivationRef {
@@ -600,45 +667,45 @@ const fn derivation_op_id(op: i64) -> &'static str {
         DO_CONDENSE => "condense",
         DO_NORMALIZE => "cn",
         DO_EVAL_ANSWERS => "eval_answer_literal",
-        15 => "assume_negation",
-        16 => "fof_simplification",
-        17 => "fof_nnf",
-        18 => "shift_quantors",
-        19 => "variable_rename",
-        20 => "skolemize",
-        21 => "distribute",
-        22 => "add_answer_literal",
-        23 => "epxand_distinct",
+        DO_NEGATE_CONJECTURE => "assume_negation",
+        DO_FOF_SIMPLIFY => "fof_simplification",
+        DO_FNNF => "fof_nnf",
+        DO_SHIFT_QUANTORS => "shift_quantors",
+        DO_VAR_RENAME => "variable_rename",
+        DO_SKOLEMIZE => "skolemize",
+        DO_DIST_DISJUNCTIONS => "distribute",
+        DO_ANNO_QUESTION => "add_answer_literal",
+        DO_EXPAND_DISTINCT => "epxand_distinct",
         DO_PARAMOD => "pm",
         DO_SIM_PARAMOD => "spm",
         DO_ORDERED_FACTOR => "of",
         DO_EQ_FACTOR => "ef",
         DO_DIS_EQ_DECOMPOSE => "diseq_decomp",
         DO_SAT_GEN => "cdclpropres",
-        31 => "pred_elim_resolve",
-        32 => "split_equiv",
+        DO_PE_RESOLVE => "pred_elim_resolve",
+        DO_SPLIT_EQUIV => "split_equiv",
         DO_INTRO_DEF => "introduced(definition)",
-        34 => "split_conjunct",
-        35 => "lift_bool_eq",
-        36 => "lift_lambdas",
-        37 => "fool_unroll",
-        38 => "lift_ite",
-        39 => "eliminate_boolean_vars",
-        40 => "dynamic_cnf",
-        41 => "flex_resolve",
-        42 => "arg_cong",
-        43 => "neg_ext",
-        44 => "pos_ext",
-        45 => "ext_sup",
-        46 => "ext_eqres",
-        47 => "ext_eqfact",
-        48 => "recognize_injectivity",
-        49 => "introduce_choice_axiom",
-        50 => "eliminate_leibniz_eq",
-        51 => "primitive_enumeration",
-        52 => "choice_inst",
-        53 => "trigger",
-        54 => "prune_arg",
+        DO_SPLIT_CONJUNCT => "split_conjunct",
+        DO_EQ_TO_EQ => "lift_bool_eq",
+        DO_LIFT_LAMBDAS => "lift_lambdas",
+        DO_FOOL_UNROLL => "fool_unroll",
+        DO_LIFT_ITE => "lift_ite",
+        DO_ELIMINATE_BVAR => "eliminate_boolean_vars",
+        DO_DYNAMIC_CNF => "dynamic_cnf",
+        DO_FLEX_RESOLVE => "flex_resolve",
+        DO_ARG_CONG => "arg_cong",
+        DO_NEG_EXT => "neg_ext",
+        DO_POS_EXT => "pos_ext",
+        DO_EXT_SUP => "ext_sup",
+        DO_EXT_EQ_RES => "ext_eqres",
+        DO_EXT_EQ_FACT => "ext_eqfact",
+        DO_INV_REC => "recognize_injectivity",
+        DO_CHOICE_AX => "introduce_choice_axiom",
+        DO_LEIBNIZ_ELIM => "eliminate_leibniz_eq",
+        DO_PRIM_ENUM => "primitive_enumeration",
+        DO_CHOICE_INST => "choice_inst",
+        DO_TRIGGER => "trigger",
+        DO_PRUNE_ARG => "prune_arg",
         _ => "unknown",
     }
 }
@@ -647,9 +714,12 @@ const fn derivation_op_status(op: i64) -> Option<&'static str> {
     match op_code(op) {
         DO_NOP | DO_QUOTE | DO_INTRO_DEF => None,
         DO_ADD_CNF_ARG => Some("NA"),
-        15 => Some("cth"),
-        20 => Some("esa"),
-        3..=14 | 16..=19 | 21..=32 | 34..=54 => Some("thm"),
+        DO_NEGATE_CONJECTURE => Some("cth"),
+        DO_SKOLEMIZE => Some("esa"),
+        DO_EVAL_GC..=DO_EVAL_ANSWERS
+        | DO_FOF_SIMPLIFY..=DO_VAR_RENAME
+        | DO_DIST_DISJUNCTIONS..=DO_SPLIT_EQUIV
+        | DO_SPLIT_CONJUNCT..=DO_PRUNE_ARG => Some("thm"),
         _ => Some("unknown"),
     }
 }
@@ -657,8 +727,8 @@ const fn derivation_op_status(op: i64) -> Option<&'static str> {
 const fn derivation_op_theory(op: i64) -> Option<&'static str> {
     match op_code(op) {
         DO_ADD_CNF_ARG => Some("NA"),
-        DO_EVAL_ANSWERS | 22 => Some("answers"),
-        23 => Some("distinct"),
+        DO_EVAL_ANSWERS | DO_ANNO_QUESTION => Some("answers"),
+        DO_EXPAND_DISTINCT => Some("distinct"),
         _ => None,
     }
 }
@@ -739,10 +809,27 @@ mod tests {
         clause_push_numeric_derivation, deriv_stack_count_search_inferences,
         deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
         deriv_stack_tstp_string, derivation_entries, get_is_ho, op_code, op_is_generating,
-        set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef, ARG1_CNF, ARG1_NUM,
-        ARG2_CNF, ARG_IS_HO, DC_AC_RES, DC_APPLY_DEF, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
-        DC_CONDENSE, DC_CONTEXT_SR, DC_DIS_EQ_DECOMPOSE, DC_EQ_FACTOR, DC_EQ_RES, DC_EVAL_ANSWERS,
-        DC_LOCAL_REWRITE, DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE, DC_UNFOLD,
+        set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef, ARG1_CNF, ARG1_FOF,
+        ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION,
+        DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC,
+        DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS,
+        DC_DIS_EQ_DECOMPOSE, DC_DYNAMIC_CNF, DC_ELIMINATE_BVAR, DC_EQ_FACTOR, DC_EQ_RES,
+        DC_EQ_TO_EQ, DC_EVAL_ANSWERS, DC_EXPAND_DISTINCT, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
+        DC_EXT_SUP, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
+        DC_INTRO_DEF, DC_INV_REC, DC_LEIBNIZ_ELIM, DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_LOCAL_REWRITE,
+        DC_NEGATE_CONJECTURE, DC_NEG_EXT, DC_NOP, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
+        DC_PE_RESOLVE, DC_POS_EXT, DC_PRIM_ENUM, DC_PRUNE_ARG, DC_REWRITE, DC_SAT_GEN,
+        DC_SHIFT_QUANTORS, DC_SIM_PARAMOD, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV, DC_SR,
+        DC_TRIGGER, DC_UNFOLD, DC_VAR_RENAME, DO_AC_RES, DO_ADD_CNF_ARG, DO_ANNO_QUESTION,
+        DO_APPLY_DEF, DO_ARG_CONG, DO_CHOICE_AX, DO_CHOICE_INST, DO_CONDENSE, DO_CONTEXT_SR,
+        DO_DES_EQ_RES, DO_DIST_DISJUNCTIONS, DO_DIS_EQ_DECOMPOSE, DO_DYNAMIC_CNF,
+        DO_ELIMINATE_BVAR, DO_EQ_FACTOR, DO_EQ_RES, DO_EQ_TO_EQ, DO_EVAL_ANSWERS, DO_EVAL_GC,
+        DO_EXPAND_DISTINCT, DO_EXT_EQ_FACT, DO_EXT_EQ_RES, DO_EXT_SUP, DO_FLEX_RESOLVE, DO_FNNF,
+        DO_FOF_SIMPLIFY, DO_FOOL_UNROLL, DO_INTRO_DEF, DO_INV_REC, DO_LEIBNIZ_ELIM, DO_LIFT_ITE,
+        DO_LIFT_LAMBDAS, DO_LOCAL_REWRITE, DO_NEGATE_CONJECTURE, DO_NEG_EXT, DO_NOP, DO_NORMALIZE,
+        DO_ORDERED_FACTOR, DO_PARAMOD, DO_PE_RESOLVE, DO_POS_EXT, DO_PRIM_ENUM, DO_PRUNE_ARG,
+        DO_QUOTE, DO_REWRITE, DO_SAT_GEN, DO_SHIFT_QUANTORS, DO_SIM_PARAMOD, DO_SKOLEMIZE,
+        DO_SPLIT_CONJUNCT, DO_SPLIT_EQUIV, DO_SR, DO_TRIGGER, DO_UNFOLD, DO_VAR_RENAME,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -750,24 +837,153 @@ mod tests {
     use crate::terms::termtypes::RewriteDemodulator;
 
     #[test]
-    fn derivation_code_values_match_c_bit_layout() {
+    fn derivation_argument_bits_match_c_bit_layout() {
+        assert_eq!(ARG1_FOF, 256);
         assert_eq!(ARG1_CNF, 512);
         assert_eq!(ARG1_NUM, 1024);
+        assert_eq!(ARG2_FOF, 2048);
         assert_eq!(ARG2_CNF, 4096);
+        assert_eq!(ARG2_NUM, 8192);
         assert_eq!(ARG_IS_HO, 16384);
-        assert_eq!(DC_LOCAL_REWRITE, 5);
-        assert_eq!(DC_REWRITE, 516);
-        assert_eq!(DC_UNFOLD, 518);
-        assert_eq!(DC_APPLY_DEF, 263);
-        assert_eq!(DC_CNF_QUOTE, 513);
-        assert_eq!(DC_ORDERED_FACTOR, 538);
-        assert_eq!(DC_EQ_FACTOR, 539);
-        assert_eq!(DC_EQ_RES, 540);
-        assert_eq!(DC_AC_RES, 1035);
-        assert_eq!(DC_EVAL_ANSWERS, 14);
+    }
+
+    #[test]
+    fn derivation_opcodes_match_c_enum_order() {
+        let opcode_values = [
+            (DO_NOP, 0),
+            (DO_QUOTE, 1),
+            (DO_ADD_CNF_ARG, 2),
+            (DO_EVAL_GC, 3),
+            (DO_REWRITE, 4),
+            (DO_LOCAL_REWRITE, 5),
+            (DO_UNFOLD, 6),
+            (DO_APPLY_DEF, 7),
+            (DO_CONTEXT_SR, 8),
+            (DO_DES_EQ_RES, 9),
+            (DO_SR, 10),
+            (DO_AC_RES, 11),
+            (DO_CONDENSE, 12),
+            (DO_NORMALIZE, 13),
+            (DO_EVAL_ANSWERS, 14),
+            (DO_NEGATE_CONJECTURE, 15),
+            (DO_FOF_SIMPLIFY, 16),
+            (DO_FNNF, 17),
+            (DO_SHIFT_QUANTORS, 18),
+            (DO_VAR_RENAME, 19),
+            (DO_SKOLEMIZE, 20),
+            (DO_DIST_DISJUNCTIONS, 21),
+            (DO_ANNO_QUESTION, 22),
+            (DO_EXPAND_DISTINCT, 23),
+            (DO_PARAMOD, 24),
+            (DO_SIM_PARAMOD, 25),
+            (DO_ORDERED_FACTOR, 26),
+            (DO_EQ_FACTOR, 27),
+            (DO_EQ_RES, 28),
+            (DO_DIS_EQ_DECOMPOSE, 29),
+            (DO_SAT_GEN, 30),
+            (DO_PE_RESOLVE, 31),
+            (DO_SPLIT_EQUIV, 32),
+            (DO_INTRO_DEF, 33),
+            (DO_SPLIT_CONJUNCT, 34),
+            (DO_EQ_TO_EQ, 35),
+            (DO_LIFT_LAMBDAS, 36),
+            (DO_FOOL_UNROLL, 37),
+            (DO_LIFT_ITE, 38),
+            (DO_ELIMINATE_BVAR, 39),
+            (DO_DYNAMIC_CNF, 40),
+            (DO_FLEX_RESOLVE, 41),
+            (DO_ARG_CONG, 42),
+            (DO_NEG_EXT, 43),
+            (DO_POS_EXT, 44),
+            (DO_EXT_SUP, 45),
+            (DO_EXT_EQ_RES, 46),
+            (DO_EXT_EQ_FACT, 47),
+            (DO_INV_REC, 48),
+            (DO_CHOICE_AX, 49),
+            (DO_LEIBNIZ_ELIM, 50),
+            (DO_PRIM_ENUM, 51),
+            (DO_CHOICE_INST, 52),
+            (DO_TRIGGER, 53),
+            (DO_PRUNE_ARG, 54),
+        ];
+        for (actual, expected) in opcode_values {
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn derivation_codes_match_c_bit_layout() {
+        let derivation_code_values = [
+            (DC_NOP, 0),
+            (DC_CNF_QUOTE, 513),
+            (DC_FOF_QUOTE, 257),
+            (DC_CNF_ADD_ARG, 514),
+            (DC_CNF_EVAL_GC, 3),
+            (DC_REWRITE, 516),
+            (DC_LOCAL_REWRITE, 5),
+            (DC_UNFOLD, 518),
+            (DC_APPLY_DEF, 263),
+            (DC_CONTEXT_SR, 520),
+            (DC_SR, 522),
+            (DC_DES_EQ_RES, 9),
+            (DC_AC_RES, 1035),
+            (DC_CONDENSE, 12),
+            (DC_NORMALIZE, 13),
+            (DC_EVAL_ANSWERS, 14),
+            (DC_NEGATE_CONJECTURE, 15),
+            (DC_FOF_SIMPLIFY, 16),
+            (DC_FNNF, 17),
+            (DC_SHIFT_QUANTORS, 18),
+            (DC_VAR_RENAME, 19),
+            (DC_SKOLEMIZE, 20),
+            (DC_DIST_DISJUNCTIONS, 21),
+            (DC_ANNO_QUESTION, 22),
+            (DC_EXPAND_DISTINCT, 279),
+            (DC_PARAMOD, 4632),
+            (DC_SIM_PARAMOD, 4633),
+            (DC_ORDERED_FACTOR, 538),
+            (DC_EQ_FACTOR, 539),
+            (DC_EQ_RES, 540),
+            (DC_DIS_EQ_DECOMPOSE, 541),
+            (DC_SAT_GEN, 542),
+            (DC_PE_RESOLVE, 4639),
+            (DC_SPLIT_EQUIV, 288),
+            (DC_INTRO_DEF, 33),
+            (DC_SPLIT_CONJUNCT, 290),
+            (DC_EQ_TO_EQ, 35),
+            (DC_LIFT_LAMBDAS, 292),
+            (DC_FOOL_UNROLL, 37),
+            (DC_LIFT_ITE, 38),
+            (DC_ELIMINATE_BVAR, 39),
+            (DC_DYNAMIC_CNF, 16936),
+            (DC_FLEX_RESOLVE, 16425),
+            (DC_ARG_CONG, 16938),
+            (DC_NEG_EXT, 16939),
+            (DC_POS_EXT, 16940),
+            (DC_EXT_SUP, 21037),
+            (DC_EXT_EQ_RES, 16942),
+            (DC_EXT_EQ_FACT, 16943),
+            (DC_INV_REC, 16944),
+            (DC_CHOICE_AX, 16433),
+            (DC_LEIBNIZ_ELIM, 16946),
+            (DC_PRIM_ENUM, 16947),
+            (DC_CHOICE_INST, 21044),
+            (DC_TRIGGER, 21045),
+            (DC_PRUNE_ARG, 16438),
+        ];
+        for (actual, expected) in derivation_code_values {
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn derivation_opcode_helpers_match_c_macros() {
         assert_eq!(op_code(DC_EQ_RES), 28);
         assert!(op_is_generating(DC_EQ_FACTOR));
+        assert!(op_is_generating(DC_SAT_GEN));
+        assert!(!op_is_generating(DC_PE_RESOLVE));
         assert!(get_is_ho(set_is_ho(DC_EQ_RES)));
+        assert!(get_is_ho(DC_EXT_SUP));
     }
 
     #[test]
