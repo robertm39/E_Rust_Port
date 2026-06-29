@@ -5,7 +5,7 @@ use crate::basics::sysdate::{SysDate, SysDateIncrement};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
-    CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH,
+    CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
 };
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_is_orphaned_with, clause_remove_ac_resolved,
@@ -794,8 +794,13 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
         for source in ordered_axioms {
             let mut new = source.copy_to_bank(state.terms_mut())?;
             new.set_prop(CP_INITIAL);
-            let watchlist_outcome =
-                proof_state_check_watchlist(state, &mut new, static_watchlist, lambda_demod);
+            let watchlist_outcome = proof_state_check_watchlist_maybe_docs(
+                state,
+                &mut new,
+                static_watchlist,
+                lambda_demod,
+                doc_context,
+            )?;
             if watchlist_outcome.subsumes_watch {
                 watchlist_matches += 1;
             }
@@ -835,18 +840,77 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
 /// Runs C `check_watchlist` against the proof-state watchlist.
 ///
 /// The current Rust path updates the local watchlist FV index and archive.
-/// Long-lived `wlindices` deletion and proof-documentation output are wired
-/// with the later state-owned global-index/proof-output integration.
+/// Long-lived `wlindices` deletion is wired with the later state-owned
+/// global-index integration. Use [`proof_state_check_watchlist_with_docs`] for
+/// represented proof-documentation quote side effects.
+///
+/// # Panics
+///
+/// Panics if the internal non-documenting path reports a proof-documentation
+/// diagnostic, which would indicate a bug because no proof-doc writer is
+/// installed.
 #[must_use]
 pub fn proof_state_check_watchlist(
     state: &mut ProofState,
     clause: &mut Clause,
     static_watchlist: bool,
-    _lambda_demod: bool,
+    lambda_demod: bool,
 ) -> ProofStateWatchlistOutcome {
+    let mut doc_context = None;
+    proof_state_check_watchlist_impl::<String>(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        &mut doc_context,
+    )
+    .unwrap_or_else(|err| panic!("plain watchlist check unexpectedly failed: {err}"))
+}
+
+/// Runs C `check_watchlist` while emitting represented proof-documentation
+/// quotes for dynamic watchlist extraction.
+///
+/// # Errors
+///
+/// Returns any proof-documentation write diagnostic.
+pub fn proof_state_check_watchlist_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    lambda_demod: bool,
+) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
+    let mut doc_context = Some((output, session));
+    proof_state_check_watchlist_impl(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        &mut doc_context,
+    )
+}
+
+fn proof_state_check_watchlist_maybe_docs<W: fmt::Write>(
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
+    proof_state_check_watchlist_impl(state, clause, static_watchlist, lambda_demod, doc_context)
+}
+
+fn proof_state_check_watchlist_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    _lambda_demod: bool,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
     let (terms, watchlist, archive) = state.terms_watchlist_archive_mut();
     let Some(watchlist) = watchlist else {
-        return ProofStateWatchlistOutcome::default();
+        return Ok(ProofStateWatchlistOutcome::default());
     };
 
     clause.subsume_order_sort_literals(terms);
@@ -861,23 +925,33 @@ pub fn proof_state_check_watchlist(
         );
         if subsumed.is_some() {
             clause.set_prop(CP_SUBSUMES_WATCH);
-            return ProofStateWatchlistOutcome {
+            return Ok(ProofStateWatchlistOutcome {
                 subsumes_watch: true,
                 removed: 0,
-            };
+            });
         }
-        return ProofStateWatchlistOutcome::default();
+        return Ok(ProofStateWatchlistOutcome::default());
     }
 
-    let removed = remove_watchlist_subsumed(watchlist, archive, clause, terms);
+    let removed = remove_watchlist_subsumed(watchlist, archive, clause, terms, doc_context)?;
     if removed != 0 {
         clause.set_prop(CP_SUBSUMES_WATCH);
-        return ProofStateWatchlistOutcome {
+        if let Some((output, session)) = doc_context.as_mut() {
+            session.doc_clause_quote(
+                output,
+                terms,
+                6,
+                clause,
+                Some("extract_subsumed_watched"),
+                None,
+            )?;
+        }
+        return Ok(ProofStateWatchlistOutcome {
             subsumes_watch: true,
             removed,
-        };
+        });
     }
-    ProofStateWatchlistOutcome::default()
+    Ok(ProofStateWatchlistOutcome::default())
 }
 
 /// Runs the local owned-watchlist body of C `simplify_watchlist`.
@@ -979,12 +1053,13 @@ pub fn proof_state_simplify_watchlist(
     Ok(simplified)
 }
 
-fn remove_watchlist_subsumed(
+fn remove_watchlist_subsumed<W: fmt::Write>(
     watchlist: &mut ClauseSet,
     archive: &mut ClauseSet,
     subsumer: &Clause,
     terms: &TermBank,
-) -> i64 {
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
     let mut stack = PStack::new();
     let expected_removed = clause_set_find_subsumed_clauses_with_index(
         watchlist,
@@ -1004,13 +1079,28 @@ fn remove_watchlist_subsumed(
         let Some(mut clause) = watchlist.extract_by_id(ident) else {
             continue;
         };
+        if let Some((output, session)) = doc_context.as_mut() {
+            let comment = if clause.query_prop(CP_WATCH_ONLY) {
+                "extract_wl_subsumed"
+            } else {
+                "subsumed"
+            };
+            session.doc_clause_quote(
+                output,
+                terms,
+                6,
+                &mut clause,
+                Some(comment),
+                Some(subsumer),
+            )?;
+        }
         clause.set_prop(CP_IS_DEAD);
         archive.insert(clause);
         removed += 1;
     }
 
     debug_assert_eq!(removed, expected_removed);
-    removed
+    Ok(removed)
 }
 
 /// Moves all processed clauses back to `unprocessed`, matching C
@@ -2437,13 +2527,7 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     control: &mut ProofControl,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<Option<Clause>, Diagnostic> {
-    let generated_count = i64_to_u64_saturating(state.tmp_store().members());
-    let generated_lit_count = i64_to_u64_saturating(state.tmp_store().literals());
-    {
-        let statistics = state.statistics_mut();
-        statistics.generated_count += generated_count;
-        statistics.generated_lit_count += generated_lit_count;
-    }
+    proof_state_record_tmp_store_generated_snapshot(state);
 
     while let Some(mut clause) = state.tmp_store_mut().extract_first() {
         let context_sr = control.heuristic_parms().forward_context_sr_aggressive
@@ -2480,7 +2564,13 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
 
         let static_watchlist = control.heuristic_parms().watchlist_is_static;
         let lambda_demod = control.heuristic_parms().lambda_demod;
-        let _ = proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod);
+        let _ = proof_state_check_watchlist_maybe_docs(
+            state,
+            &mut clause,
+            static_watchlist,
+            lambda_demod,
+            &mut doc_context,
+        )?;
         if clause.is_empty() {
             return Ok(Some(clause));
         }
@@ -2541,6 +2631,14 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
         let _ = proof_state_move_eval_store_to_unprocessed(state);
     }
     Ok(None)
+}
+
+fn proof_state_record_tmp_store_generated_snapshot(state: &mut ProofState) {
+    let generated_count = i64_to_u64_saturating(state.tmp_store().members());
+    let generated_lit_count = i64_to_u64_saturating(state.tmp_store().literals());
+    let statistics = state.statistics_mut();
+    statistics.generated_count += generated_count;
+    statistics.generated_lit_count += generated_lit_count;
 }
 
 fn insert_new_forward_modify_options(
@@ -4554,18 +4652,18 @@ mod tests {
         proof_control_alloc, proof_control_clause_set_filter_reweigth,
         proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_check_ac_status,
-        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
-        proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
-        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
-        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
-        proof_state_init_indexing, proof_state_init_with_docs,
-        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_insert_new_clauses_with_docs, proof_state_insert_processed_clause,
-        proof_state_move_eval_store_to_unprocessed,
+        proof_state_check_watchlist_with_docs, proof_state_cleanup_unprocessed_clauses,
+        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
+        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
+        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
+        proof_state_init_with_docs, proof_state_init_with_global_indices,
+        proof_state_insert_new_clauses, proof_state_insert_new_clauses_with_docs,
+        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_global_indices,
@@ -4588,7 +4686,7 @@ mod tests {
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED,
         CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW, CP_SUBSUMES_WATCH,
-        CP_TYPE_CONJECTURE,
+        CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -5252,6 +5350,50 @@ mod tests {
         assert!(archived.query_prop(CP_IS_DEAD));
         let copied = state.unprocessed().find_by_id(axiom_id).unwrap();
         assert!(copied.query_prop(CP_INITIAL | CP_SUBSUMES_WATCH));
+    }
+
+    #[test]
+    fn proof_state_check_watchlist_with_docs_quotes_dynamic_extraction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut subsumer, mut watched) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_doc_watch", 4_032, 4_033);
+        subsumer.set_prop(CP_INPUT_FORMULA);
+        watched.set_prop(CP_INPUT_FORMULA | CP_WATCH_ONLY);
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let outcome = proof_state_check_watchlist_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut subsumer,
+            false,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            ProofStateWatchlistOutcome {
+                subsumes_watch: true,
+                removed: 1,
+            }
+        );
+        assert_eq!(session.id_source.current_ident(), 2);
+        assert!(rendered.contains("4033 : 'extract_wl_subsumed(4032)'"));
+        assert!(rendered.contains("4032 : 'extract_subsumed_watched'"));
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        let archived = state.archive().find_by_id(1).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD | CP_WATCH_ONLY));
+        assert!(!archived.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(subsumer.ident(), 2);
+        assert!(subsumer.query_prop(CP_SUBSUMES_WATCH));
+        assert!(!subsumer.query_prop(CP_INPUT_FORMULA));
     }
 
     #[test]
