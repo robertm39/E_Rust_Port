@@ -25,7 +25,8 @@ use crate::clauses::derivation::{
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnresolution::{
-    clause_er_normalize_var, compute_all_eqn_resolvents, EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+    clause_er_normalize_var, compute_all_eqn_resolvents, compute_all_eqn_resolvents_with_docs,
+    EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
 };
 use crate::clauses::factor::{
     compute_all_equality_factors, compute_all_equality_factors_with_docs,
@@ -3086,7 +3087,8 @@ pub fn proof_state_generate_new_clauses(
 }
 
 /// Runs the ported first-order selected-clause generators while emitting
-/// represented proof-documentation output for generated equality factors.
+/// represented proof-documentation output for generated equality factors and
+/// equality resolvents.
 ///
 /// # Errors
 ///
@@ -3125,7 +3127,7 @@ pub fn proof_state_generate_new_clauses_with_global_indices(
 
 /// Runs the ported first-order selected-clause generators with caller-owned
 /// global indices while emitting represented proof-documentation output for
-/// generated equality factors.
+/// generated equality factors and equality resolvents.
 ///
 /// # Errors
 ///
@@ -3149,6 +3151,10 @@ pub fn proof_state_generate_new_clauses_with_global_indices_and_docs(
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "C-compatible selected-clause generation keeps generator order and optional proof docs together"
+)]
 fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -3217,12 +3223,23 @@ fn proof_state_generate_new_clauses_impl<W: fmt::Write>(
             outcome.equality_factors = i64_to_u64_saturating(count);
         }
 
-        let count = compute_all_eqn_resolvents(
-            terms,
-            clause,
-            generation.tmp_store,
-            EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
-        )?;
+        let count = if let Some((output, session)) = doc_context.as_mut() {
+            compute_all_eqn_resolvents_with_docs(
+                &mut **output,
+                session,
+                terms,
+                clause,
+                generation.tmp_store,
+                EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+            )?
+        } else {
+            compute_all_eqn_resolvents(
+                terms,
+                clause,
+                generation.tmp_store,
+                EQ_RES_ON_MAXIMAL_LITERALS_ONLY,
+            )?
+        };
         outcome.equality_resolvents = i64_to_u64_saturating(count);
 
         let count = compute_dis_eq_decompositions(
@@ -8112,6 +8129,42 @@ mod tests {
         assert_eq!(state.statistics().resolv_count, 1);
         assert_eq!(state.tmp_store().members(), 1);
         assert!(state.tmp_store().iter().next().unwrap().is_empty());
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_with_docs_quotes_equality_resolution() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -74);
+            let constant = typed_const(terms, "pc_generate_doc_er_const");
+            let mut literal = literal(terms, &variable, &constant, false);
+            literal.set_prop(EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+            clause.set_ident(4_146);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        control.heuristic_parms_mut().enable_neg_unit_paramod = false;
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let outcome = proof_state_generate_new_clauses_with_docs(
+            &mut output,
+            &mut session,
+            &mut state,
+            &mut control,
+            &clause,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.equality_resolvents, 1);
+        assert_eq!(state.statistics().resolv_count, 1);
+        assert!(output.contains(" : er(4146)\n"));
+        assert_eq!(state.tmp_store().members(), 1);
+        assert_eq!(state.tmp_store().iter().next().unwrap().ident(), 1);
     }
 
     #[test]

@@ -5,20 +5,24 @@ use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_DES_EQ_RES, DC_EQ_RES};
 use crate::clauses::eqn::Eqn;
+use crate::clauses::inferencedoc::{
+    ClauseCreationInference, ClauseCreationParents, ProofDocSession,
+};
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 /// C `EqResOnMaximalLiteralsOnly` default.
 pub const EQ_RES_ON_MAXIMAL_LITERALS_ONLY: bool = true;
 
 /// Builds the first-order single-clause C `ComputeEqRes` result.
 ///
-/// Higher-order CSU enumeration and derivation/proof-output side effects are
-/// handled by later integration slices. This helper preserves the first-order
-/// destructive-normalization support path used by C `ClauseERNormalizeVar`.
+/// Higher-order CSU enumeration and derivation/proof-output side effects for
+/// the single-clause helper are handled by later integration slices. This
+/// helper preserves the first-order destructive-normalization support path used
+/// by C `ClauseERNormalizeVar`.
 ///
 /// # Errors
 ///
@@ -136,7 +140,9 @@ fn is_eq_res_candidate(literal: &Eqn, maximal_only: bool) -> bool {
 ///
 /// This mirrors C `ComputeAllEqnResolvents` for the first-order MGU path. Higher
 /// order CSU enumeration still belongs to a later slice, so higher-order problem
-/// type is rejected through [`compute_eq_res`].
+/// type is rejected through [`compute_eq_res`]. Use
+/// [`compute_all_eqn_resolvents_with_docs`] for represented
+/// proof-documentation output.
 ///
 /// # Errors
 ///
@@ -146,6 +152,34 @@ pub fn compute_all_eqn_resolvents(
     clause: &Clause,
     store: &mut ClauseSet,
     maximal_only: bool,
+) -> Result<i64, Diagnostic> {
+    compute_all_eqn_resolvents_impl::<String>(bank, clause, store, maximal_only, None)
+}
+
+/// Computes all first-order equality resolvents while emitting represented C
+/// `DocClauseCreationDefault(..., inf_eres, ...)` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`compute_all_eqn_resolvents`], plus any
+/// proof-documentation write diagnostic.
+pub fn compute_all_eqn_resolvents_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    maximal_only: bool,
+) -> Result<i64, Diagnostic> {
+    compute_all_eqn_resolvents_impl(bank, clause, store, maximal_only, Some((output, session)))
+}
+
+fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    maximal_only: bool,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut resolv_count = 0;
     if clause.negative_literal_count() == 0 || clause.query_prop(CP_NO_GENERATION) {
@@ -161,6 +195,16 @@ pub fn compute_all_eqn_resolvents(
             resolvent.set_proof_size(clause.proof_size().saturating_add(1));
             resolvent.set_tptp_type(clause.query_tptp_type());
             resolvent.set_prop(clause.give_props(CP_IS_SOS));
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_creation(
+                    &mut **output,
+                    bank,
+                    &mut resolvent,
+                    ClauseCreationInference::EqualityResolution,
+                    ClauseCreationParents::unary(clause),
+                    None,
+                )?;
+            }
             clause_push_derivation(&mut resolvent, DC_EQ_RES, Some(clause), None);
             store.insert(resolvent);
         }
@@ -217,9 +261,10 @@ pub fn clause_er_normalize_var(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_er_normalize_var, compute_all_eqn_resolvents, compute_eq_res,
-        first_eq_res_literal_index, next_eq_res_literal_index,
+        clause_er_normalize_var, compute_all_eqn_resolvents, compute_all_eqn_resolvents_with_docs,
+        compute_eq_res, first_eq_res_literal_index, next_eq_res_literal_index,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
@@ -229,6 +274,7 @@ mod tests {
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -390,6 +436,48 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn compute_all_eqn_resolvents_with_docs_prints_creation_step() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "er_doc_a");
+        let b = typed_const(&mut bank, "er_doc_b");
+        let mut diseq = lit(&mut bank, &x, &a, false);
+        diseq.set_prop(EP_IS_MAXIMAL);
+        let rest = lit(&mut bank, &x, &b, true);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![rest, diseq]));
+        clause.set_ident(52);
+        let mut store = ClauseSet::new();
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+
+        let count = compute_all_eqn_resolvents_with_docs(
+            &mut output,
+            &mut session,
+            &mut bank,
+            &clause,
+            &mut store,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert!(output.contains(" : er(52)\n"));
+        let stored = store
+            .iter()
+            .next()
+            .expect("one equality resolvent inserted");
+        assert_eq!(stored.ident(), 1);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_EQ_RES),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+            ]
+        );
     }
 
     #[test]
