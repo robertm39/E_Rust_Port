@@ -1361,6 +1361,16 @@ impl TermBank {
             return self.parse_cons_list_real(scanner, check_symbol_properties);
         }
 
+        if scanner.test_tok(TokenType::ITE_TOKEN) {
+            return self.parse_ite_tformula_tstp_subset(scanner);
+        }
+        if scanner.test_tok(TokenType::LET_TOKEN) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Scoped $let term parsing is not ported yet",
+            ));
+        }
+
         let mut id = DynamicString::new();
         let id_type = term_parse_operator(scanner, &mut id)?;
         let name = id.view().into_owned();
@@ -3188,6 +3198,46 @@ mod tests {
             ),
             Some("pred_ite_else")
         );
+    }
+
+    #[test]
+    fn checked_parser_reads_top_level_ite_terms_like_tbterm_parse_real() {
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner = Scanner::from_user_string(
+            "$ite(pred_top_ite_cond, pred_top_ite_then, pred_top_ite_else)",
+            false,
+        )
+        .unwrap();
+        let ite = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+
+        assert_eq!(ite.f_code(), SIG_ITE_CODE);
+        assert_eq!(ite.type_(), Some(bank.signature().type_bank().bool_type()));
+        assert_eq!(
+            ite.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            ite.argument(1).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            ite.argument(2).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+    }
+
+    #[test]
+    fn checked_parser_rejects_top_level_let_terms_until_scoped_let_port() {
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner = Scanner::from_user_string("$let", false).unwrap();
+        let error = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Scoped $let term parsing is not ported yet"));
     }
 
     #[test]
