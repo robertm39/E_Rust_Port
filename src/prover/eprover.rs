@@ -37,7 +37,8 @@ use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{
-    pcl_print_end, pcl_print_start, tstp_print_end, PclStepPrintOptions,
+    pcl_print_end, pcl_print_start, ClauseCreationInference, ClauseCreationParents,
+    PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
 };
 use crate::clauses::proofstate::{
     proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
@@ -2222,10 +2223,6 @@ impl<W: Write + ?Sized> ConfiguredOutput<'_, W> {
         match self {
             Self::Writer(writer) | Self::File { stdout: writer, .. } => writer.write_all(buffer),
         }
-    }
-
-    fn write_pcl_initial_marker(&mut self) -> io::Result<()> {
-        self.write_stdout_side_channel(b"XX\n")
     }
 }
 
@@ -5432,54 +5429,42 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     set: &mut ClauseSet,
     start_ident: i64,
 ) -> Result<i64, EProverError> {
-    let mut ident = start_ident.saturating_sub(1);
-    for clause in set.iter_mut() {
-        ident = ident.saturating_add(1);
-        clause.set_ident(ident);
-        write_initial_clause_doc(output, config, bank, clause)?;
-    }
-    Ok(ident.saturating_add(1))
-}
+    let mut session = ProofDocSession::new(
+        proof_doc_output_format(config),
+        config.output_level,
+        crate::basics::simple_stuff::ProblemType::FirstOrder,
+    );
+    session.pcl_shell_level = i32::try_from(config.pcl_output.shell_level).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "configured PCL shell level is outside C int range",
+        )
+    })?;
+    session.step_options = pcl_step_print_options(config);
+    session.id_source = ProofDocIdSource::from_current(start_ident.saturating_sub(1));
 
-fn write_initial_clause_doc<W: Write + ?Sized>(
-    output: &mut ConfiguredOutput<'_, W>,
-    config: &EProverConfig,
-    bank: &TermBank,
-    clause: &Clause,
-) -> Result<(), EProverError> {
-    match effective_doc_output_format(config) {
-        DocOutputFormat::Pcl => write_pcl_initial_clause_doc(output, config, bank, clause),
-        DocOutputFormat::Tstp => write_tstp_initial_clause_doc(output, config, bank, clause),
-        _ => {
-            write_comment_line(output, "Output format not implemented.")?;
-            Ok(())
+    for clause in set.iter_mut() {
+        let mut rendered = String::new();
+        let result = session.doc_clause_creation(
+            &mut rendered,
+            bank,
+            clause,
+            ClauseCreationInference::Initial,
+            ClauseCreationParents::none(),
+            None,
+        )?;
+        output.write_stdout_side_channel(result.stdout_before.as_bytes())?;
+        if let Some(offset) = result.stdout_after_offset {
+            let (before_stdout, after_stdout) = rendered.split_at(offset);
+            output.write_all(before_stdout.as_bytes())?;
+            output.write_stdout_side_channel(result.stdout_after.as_bytes())?;
+            output.write_all(after_stdout.as_bytes())?;
+        } else {
+            output.write_all(rendered.as_bytes())?;
+            output.write_stdout_side_channel(result.stdout_after.as_bytes())?;
         }
     }
-}
-
-fn write_pcl_initial_clause_doc<W: Write + ?Sized>(
-    output: &mut ConfiguredOutput<'_, W>,
-    config: &EProverConfig,
-    bank: &TermBank,
-    clause: &Clause,
-) -> Result<(), EProverError> {
-    output.write_pcl_initial_marker()?;
-    let mut prefix = String::new();
-    write_pcl_doc_step_start(
-        &mut prefix,
-        config,
-        bank,
-        clause,
-        config.pcl_output.shell_level < 2,
-    )
-    .map_err(initial_doc_write_error)?;
-    output.write_all(prefix.as_bytes())?;
-    output.write_pcl_initial_marker()?;
-    let mut suffix = source_info_pcl_string(clause.info());
-    pcl_print_end(&mut suffix, clause, None, pcl_step_print_options(config))
-        .map_err(initial_doc_write_error)?;
-    output.write_all(suffix.as_bytes())?;
-    Ok(())
+    Ok(session.id_source.current_ident().saturating_add(1))
 }
 
 fn write_pcl_doc_step_start(
@@ -5502,35 +5487,9 @@ const fn pcl_step_print_options(config: &EProverConfig) -> PclStepPrintOptions {
     PclStepPrintOptions {
         full_terms: config.pcl_output.full_terms,
         compact: config.pcl_output.compact,
+        print_types: config.encoding.print_types,
         eqn_print_options: EqnPrintOptions::tptp().with_print_types(config.encoding.print_types),
     }
-}
-
-fn write_tstp_initial_clause_doc<W: Write + ?Sized>(
-    output: &mut ConfiguredOutput<'_, W>,
-    config: &EProverConfig,
-    bank: &TermBank,
-    clause: &Clause,
-) -> Result<(), EProverError> {
-    let mut rendered = String::new();
-    clause_write_tstp_with_type_suffixes(
-        &mut rendered,
-        bank,
-        clause,
-        config.pcl_output.full_terms,
-        false,
-        crate::basics::simple_stuff::ProblemType::FirstOrder,
-        config.encoding.print_types,
-    )?;
-    write!(
-        &mut rendered,
-        ", {}",
-        source_info_tstp_string(clause.info())
-    )
-    .map_err(initial_doc_write_error)?;
-    tstp_print_end(&mut rendered, clause, None).map_err(initial_doc_write_error)?;
-    output.write_all(rendered.as_bytes())?;
-    Ok(())
 }
 
 const fn effective_doc_output_format(config: &EProverConfig) -> DocOutputFormat {
@@ -5540,11 +5499,15 @@ const fn effective_doc_output_format(config: &EProverConfig) -> DocOutputFormat 
     }
 }
 
-fn initial_doc_write_error(_error: fmt::Error) -> Diagnostic {
-    Diagnostic::new(
-        ErrorCode::OTHER_ERROR,
-        "failed to write initial clause documentation",
-    )
+const fn proof_doc_output_format(config: &EProverConfig) -> ProofDocOutputFormat {
+    match effective_doc_output_format(config) {
+        DocOutputFormat::NoFormat => ProofDocOutputFormat::NoFormat,
+        DocOutputFormat::Lop => ProofDocOutputFormat::Lop,
+        DocOutputFormat::Pcl => ProofDocOutputFormat::Pcl,
+        DocOutputFormat::Tstp => ProofDocOutputFormat::Tstp,
+        DocOutputFormat::Tptp => ProofDocOutputFormat::Tptp,
+        DocOutputFormat::Xml => ProofDocOutputFormat::Xml,
+    }
 }
 
 fn proof_doc_write_error(_error: fmt::Error) -> Diagnostic {

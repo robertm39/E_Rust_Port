@@ -252,8 +252,8 @@ Source files reviewed: `CLAUSES/ccl_inferencedoc.h`, `CLAUSES/ccl_inferencedoc.c
 ### Rust Port Status Notes
 
 - `src/clauses/inferencedoc.rs` now ports the C `OutputFormatType` discriminants, a `ClauseIdentCounter`-style id source, and the represented `DocClauseCreation` dispatch for initial clauses, paramodulation, simultaneous paramodulation, equality resolution, equality factoring, factoring, and splitting.
-- The creation helper renders C-shaped PCL and TSTP proof-documentation steps, including level gating, id assignment, parent arity assertions, source-info rendering, unsupported-format fallback output, and the accidental PCL initial-clause `XX` stdout markers as an explicit side-channel result.
-- Tests cover the creation helper's level gate, id assignment, PCL/TSTP surfaces, unsupported-format fallback, and exact output-format discriminants. Call-site integration into proof control remains separate work.
+- The creation helper renders C-shaped PCL and TSTP proof-documentation steps, including level gating, id assignment, parent arity assertions, source-info rendering, optional TSTP term type suffixes, unsupported-format fallback output, and the accidental PCL initial-clause `XX` stdout markers with the C interleaving point reported as explicit side-channel metadata.
+- Executable initial-clause and watchlist initial-clause documentation now use the shared creation helper. Tests cover the creation helper's level gate, id assignment, PCL/TSTP surfaces, unsupported-format fallback, exact output-format discriminants, output-file stdout marker leaks, and executable initial-documentation output; generated/modification proof-control call sites remain separate work.
 
 ### Porting Focus
 

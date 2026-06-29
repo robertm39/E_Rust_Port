@@ -3,7 +3,9 @@ use std::fmt;
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
-use crate::clauses::clause::{clause_write_pcl_with_options, clause_write_tstp, Clause};
+use crate::clauses::clause::{
+    clause_write_pcl_with_options, clause_write_tstp_with_type_suffixes, Clause,
+};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_WATCH_ONLY,
 };
@@ -15,6 +17,7 @@ use crate::terms::termbanks::TermBank;
 pub struct PclStepPrintOptions {
     pub full_terms: bool,
     pub compact: bool,
+    pub print_types: bool,
     pub eqn_print_options: EqnPrintOptions,
 }
 
@@ -23,6 +26,7 @@ impl Default for PclStepPrintOptions {
         Self {
             full_terms: true,
             compact: false,
+            print_types: false,
             eqn_print_options: EqnPrintOptions::tptp(),
         }
     }
@@ -122,6 +126,7 @@ pub struct ProofDocWriteResult {
     pub printed: bool,
     pub stdout_before: &'static str,
     pub stdout_after: &'static str,
+    pub stdout_after_offset: Option<usize>,
 }
 
 impl ProofDocWriteResult {
@@ -131,6 +136,7 @@ impl ProofDocWriteResult {
             printed: false,
             stdout_before: "",
             stdout_after: "",
+            stdout_after_offset: None,
         }
     }
 
@@ -140,15 +146,17 @@ impl ProofDocWriteResult {
             printed: true,
             stdout_before: "",
             stdout_after: "",
+            stdout_after_offset: None,
         }
     }
 
     #[must_use]
-    pub const fn pcl_initial() -> Self {
+    pub const fn pcl_initial(stdout_after_offset: usize) -> Self {
         Self {
             printed: true,
             stdout_before: "XX\n",
             stdout_after: "XX\n",
+            stdout_after_offset: Some(stdout_after_offset),
         }
     }
 }
@@ -282,20 +290,23 @@ impl ProofDocSession {
                     parent_refs.parent1.is_none() && parent_refs.parent2.is_none(),
                     "initial clause documentation must not have parents"
                 );
+                let mut prefix = String::new();
                 pcl_print_start(
-                    output,
+                    &mut prefix,
                     bank,
                     clause,
                     self.pcl_shell_level < 2,
                     self.step_options,
                 )
                 .map_err(doc_write_error)?;
+                let stdout_after_offset = prefix.len();
+                output.write_str(&prefix).map_err(doc_write_error)?;
                 output
                     .write_str(&source_info_pcl_string(clause.info()))
                     .map_err(doc_write_error)?;
                 pcl_print_end(output, clause, comment, self.step_options)
                     .map_err(doc_write_error)?;
-                Ok(ProofDocWriteResult::pcl_initial())
+                Ok(ProofDocWriteResult::pcl_initial(stdout_after_offset))
             }
             ClauseCreationInference::Paramodulation
             | ClauseCreationInference::SimultaneousParamodulation => {
@@ -367,13 +378,14 @@ impl ProofDocSession {
         parent_refs: ClauseCreationParents<'_>,
         comment: Option<&str>,
     ) -> Result<ProofDocWriteResult, Diagnostic> {
-        clause_write_tstp(
+        clause_write_tstp_with_type_suffixes(
             output,
             bank,
             clause,
             self.step_options.full_terms,
             false,
             self.problem_type,
+            self.step_options.print_types,
         )?;
         match inference {
             ClauseCreationInference::Initial => {
@@ -985,7 +997,10 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(result, ProofDocWriteResult::pcl_initial());
+        assert_eq!(
+            result,
+            ProofDocWriteResult::pcl_initial("     1 : :[] : ".len())
+        );
         assert_eq!(clause.ident(), 1);
         assert_eq!(
             rendered,
