@@ -2863,14 +2863,16 @@ fn proof_state_replacing_inferences_impl<W: fmt::Write>(
     packed: FvPackedClause,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<ReplacingInferenceOutcome, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder {
+    let mut clause = packed.into_clause();
+
+    if problem_type() == ProblemType::HigherOrder
+        && clause_needs_immediate_clausification(&clause, state.terms())
+    {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "replacing_inferences higher-order immediate clausification is not ported yet",
         ));
     }
-
-    let mut clause = packed.into_clause();
 
     if control.heuristic_parms().er_varlit_destructive {
         let strong = control.heuristic_parms().er_strong_destructive;
@@ -2928,6 +2930,14 @@ fn proof_state_replacing_inferences_impl<W: fmt::Write>(
     }
 
     Ok(ReplacingInferenceOutcome::Survivor(clause))
+}
+
+fn clause_needs_immediate_clausification(clause: &Clause, terms: &TermBank) -> bool {
+    clause
+        .literals()
+        .as_slice()
+        .iter()
+        .any(|literal| literal.is_clausifiable(terms))
 }
 
 /// Normalizes and inserts a surviving selected clause into a processed set.
@@ -10236,6 +10246,55 @@ mod tests {
         assert!(state.unprocessed().is_empty());
         assert_eq!(state.statistics().generated_count, 0);
         assert_eq!(state.statistics().other_redundant_count, 0);
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_higher_order_non_clausifiable_survives() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_replacing_ho_survivor", 4_084);
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+
+        let outcome = proof_state_replacing_inferences(&mut state, &mut control, packed)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let ReplacingInferenceOutcome::Survivor(survivor) = outcome else {
+            panic!("non-clausifiable higher-order clause should fall through");
+        };
+        assert_eq!(survivor.ident(), 4_084);
+        assert!(state.tmp_store().is_empty());
+        assert!(state.unprocessed().is_empty());
+    }
+
+    #[test]
+    fn proof_state_replacing_inferences_higher_order_clausifiable_remains_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let truth = terms.true_term().clone();
+            let falsity = terms.false_term().clone();
+            let equiv_code = terms.signature().equiv_code();
+            let encoded = bool_binary_with_code(terms, equiv_code, &truth, &falsity);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &encoded, &truth, true,
+            )]));
+            clause.set_ident(4_085);
+            clause
+        };
+        assert!(clause.literals().as_slice()[0].is_clausifiable(state.terms()));
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+
+        let error = proof_state_replacing_inferences(&mut state, &mut control, packed).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("immediate clausification"));
+        assert!(state.tmp_store().is_empty());
+        assert!(state.archive().is_empty());
     }
 
     #[test]
