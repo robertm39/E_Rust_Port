@@ -45,6 +45,8 @@ use crate::clauses::proofstate::{
     WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
+use crate::clauses::sine::select_threshold_clause_sets;
+use crate::heuristics::axfilter::{sine_get_filter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
     spec_features_compute_clause_set_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
@@ -4595,6 +4597,7 @@ fn run_prune_only<W: Write + ?Sized>(
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
     let _parsed_ax_no = parse_input_files_into_axioms(config, &mut state)?;
     write_preprocessing_config_debug_line(output, config)?;
+    let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
     let _next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
     write_comment_line_after_blank(output, "Pruning successful!")?;
@@ -4616,8 +4619,8 @@ fn run_proof_search<W: Write + ?Sized>(
     let auto_context =
         apply_auto_mode_preprocessing_selection(output, config, &state, &mut heuristic_params)?;
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
-    write_sine_auto_report(output, &state, &heuristic_params)?;
-    let relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
+    let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
+    let relevancy_pruned = sine_pruned + apply_clause_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
@@ -5312,18 +5315,62 @@ fn preprocessing_params_debug_line(params: &HeuristicParmsCell) -> String {
     )
 }
 
-fn write_sine_auto_report<W: Write + ?Sized>(
+fn apply_proof_state_sine<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
-    state: &crate::clauses::proofstate::ProofState,
-    params: &HeuristicParmsCell,
-) -> Result<(), EProverError> {
-    let Some("Auto") = params.sine.as_deref() else {
-        return Ok(());
+    configured_filter: Option<&str>,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<i64, EProverError> {
+    let Some(mut filter_name) = configured_filter else {
+        return Ok(0);
     };
-    if auto_sine_filter_name(state).is_none() {
-        write_comment_line(output, "No SInE strategy applied")?;
+    if filter_name == "NoSInE" {
+        return Ok(0);
     }
-    Ok(())
+    if filter_name == "Auto" {
+        let Some(auto_filter) = auto_sine_filter_name(state) else {
+            write_comment_line(output, "No SInE strategy applied")?;
+            return Ok(0);
+        };
+        filter_name = auto_filter;
+    }
+
+    writeln!(
+        output,
+        "{DEFAULT_COMCHAR_RAW} SinE strategy is {filter_name}"
+    )?;
+    let resolution = sine_get_filter(filter_name)?;
+    match resolution.filter().type_ {
+        AxFilterType::Threshold => Ok(apply_threshold_sine_filter(
+            state,
+            resolution.filter().threshold,
+        )),
+        AxFilterType::GSinE | AxFilterType::LambdaDefines => Ok(0),
+        AxFilterType::NoFilter => Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "resolved SInE filter has no concrete type",
+        )
+        .into()),
+    }
+}
+
+fn apply_threshold_sine_filter(
+    state: &mut crate::clauses::proofstate::ProofState,
+    threshold: i64,
+) -> i64 {
+    let original_axioms = state.axioms().members();
+    let selected_axioms = {
+        let mut clause_sets = PStack::new();
+        let mut selected_clauses = PStack::new();
+        clause_sets.push(state.axioms());
+        select_threshold_clause_sets(&clause_sets, 0, threshold, &mut selected_clauses)
+    };
+
+    if selected_axioms == original_axioms {
+        return 0;
+    }
+
+    state.axioms_mut().clear();
+    original_axioms - selected_axioms
 }
 
 fn auto_sine_filter_name(state: &crate::clauses::proofstate::ProofState) -> Option<&'static str> {
@@ -12271,6 +12318,40 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_threshold_sine_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-threshold-sine");
+        std::fs::write(&path, "p(a).\nq(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--lop-in",
+                "--sine=Threshold(1)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "% (lift_lambdas = 1, lambda_to_forall = 1,unroll_only_formulas = 1, sine = Threshold(1))\n\
+% SinE strategy is Threshold(1)\n\n\
+% Pruning successful!\n\
+% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_finds_empty_clause_from_false_lop_clause() {
         let _guard = global_state_lock();
         let path = temp_path("proof-found");
@@ -15287,6 +15368,39 @@ mod tests {
         assert!(printed.contains("% Removed by relevancy pruning/SinE    : 2\n"));
         assert!(printed.contains("% Initial clauses                      : 1\n"));
         assert!(printed.contains("\n% Clause set closed under restricted calculus!\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_statistics_count_threshold_sine_pruning() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-threshold-sine-statistics");
+        std::fs::write(&path, "p(a).\nq(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--print-statistics",
+                "--sine=Threshold(1)",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
+        assert!(printed.contains("% SinE strategy is Threshold(1)\n"));
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Removed by relevancy pruning/SinE    : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 0\n"));
+        assert!(printed.contains("\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
