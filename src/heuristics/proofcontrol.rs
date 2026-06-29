@@ -969,7 +969,7 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
 /// watched original as dead, normalizes the quoted flat copy with the processed
 /// demodulator sets, minimizes/AC-cleans it, marks maximal terms, and reinserts
 /// it through the watchlist FV index. Long-lived `wlindices` deletion/insertion
-/// and proof-output quotes remain later integration work.
+/// remains later integration work.
 ///
 /// # Errors
 ///
@@ -979,6 +979,34 @@ pub fn proof_state_simplify_watchlist(
     state: &mut ProofState,
     control: &mut ProofControl,
     clause: &Clause,
+) -> Result<i64, Diagnostic> {
+    proof_state_simplify_watchlist_impl::<String>(state, control, clause, None)
+}
+
+/// Runs C `simplify_watchlist` while emitting represented proof docs.
+///
+/// This wires rewrite documentation from watched-clause normalization and the
+/// `inf_minimize` modification quote emitted after superfluous literal removal.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_simplify_watchlist`], plus any
+/// proof-documentation write diagnostic.
+pub fn proof_state_simplify_watchlist_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+) -> Result<i64, Diagnostic> {
+    proof_state_simplify_watchlist_impl(state, control, clause, Some((output, session)))
+}
+
+fn proof_state_simplify_watchlist_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &Clause,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     if !clause.is_demodulator() || state.watchlist().is_none_or(ClauseSet::is_empty) {
         return Ok(0);
@@ -1026,19 +1054,44 @@ pub fn proof_state_simplify_watchlist(
             let (terms, processed_sets) = state.terms_and_processed_sets_mut();
             let demodulators: [&ClauseSet; 2] =
                 [&*processed_sets.pos_rules, &*processed_sets.pos_eqns];
-            clause_compute_li_normalform_plain(
-                terms,
-                ocb,
-                &mut handle,
-                &demodulators,
-                forward_demod,
-                prefer_general,
-                lambda_demod,
-            )?
+            match doc_context.as_mut() {
+                Some((output, session)) => clause_compute_li_normalform_plain_with_docs(
+                    output,
+                    session,
+                    terms,
+                    ocb,
+                    &mut handle,
+                    &demodulators,
+                    forward_demod,
+                    prefer_general,
+                    lambda_demod,
+                )?,
+                None => clause_compute_li_normalform_plain(
+                    terms,
+                    ocb,
+                    &mut handle,
+                    &demodulators,
+                    forward_demod,
+                    prefer_general,
+                    lambda_demod,
+                )?,
+            }
         };
         state.statistics_mut().rw_count += i64_to_u64_saturating(rw_delta);
 
-        let _removed_lits = clause_remove_superfluous_literals(&mut handle, state.terms());
+        let removed_lits = clause_remove_superfluous_literals(&mut handle, state.terms());
+        if removed_lits != 0 {
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_modification(
+                    output,
+                    state.terms(),
+                    &mut handle,
+                    ClauseModificationInference::Minimize,
+                    None,
+                    None,
+                )?;
+            }
+        }
         if control.ac_handling_active() {
             let _removed_ac = clause_remove_ac_resolved(&mut handle, state.terms());
         }
@@ -4680,12 +4733,12 @@ mod tests {
         proof_state_reset_processed, proof_state_reset_processed_with_docs,
         proof_state_reset_processed_with_global_indices, proof_state_saturate,
         proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
-        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
-        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
-        LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
+        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
+        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
+        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessedClauseClass,
+        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SaturateOutcome,
+        SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -8255,6 +8308,69 @@ mod tests {
         assert_eq!(literal.left(), &target);
         assert_eq!(literal.right(), &other);
         assert!(simplified.query_prop(CP_IS_ORIENTED));
+        assert!(state.statistics().rw_count >= 1);
+    }
+
+    #[test]
+    fn proof_state_simplify_watchlist_with_docs_emits_rewrite_and_minimize_steps() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (demodulator, watched, target, other) = {
+            let terms = state.terms_mut();
+            let target = typed_const(terms, "pc_watch_simpl_doc_target");
+            let other = typed_const(terms, "pc_watch_simpl_doc_other");
+            let compound = typed_unary(terms, "pc_watch_simpl_doc_f", &target);
+            let mut demod_lit = literal(terms, &compound, &target, true);
+            demod_lit.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+            let mut demodulator = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+            demodulator.set_ident(4_137);
+            demodulator.set_date(SysDate::from_raw(9));
+            demodulator.set_weight(demodulator.standard_weight());
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &compound, &other, true),
+                literal(terms, &other, &target, true),
+                literal(terms, &target, &target, false),
+            ]));
+            watched.set_ident(4_138);
+            watched.set_prop(CP_INPUT_FORMULA);
+            watched.set_weight(watched.standard_weight());
+            (demodulator, watched, target, other)
+        };
+        state.processed_pos_rules_mut().insert(demodulator.clone());
+        state.processed_pos_rules_mut().set_date(demodulator.date());
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 4, ProblemType::FirstOrder);
+        session.pcl_shell_level = 1;
+        let mut rendered = String::new();
+
+        let simplified = proof_state_simplify_watchlist_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &demodulator,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(simplified, 1);
+        assert_eq!(session.id_source.current_ident(), 2);
+        assert!(rendered.contains("rw(4138,4137)"));
+        assert!(rendered.contains("cn(1)"));
+        assert_eq!(state.watchlist().unwrap().members(), 1);
+        assert!(state
+            .archive()
+            .find_by_id(4_138)
+            .unwrap()
+            .query_prop(CP_IS_DEAD));
+        let simplified = state.watchlist().unwrap().find_by_id(2).unwrap();
+        assert_eq!(simplified.literal_number(), 1);
+        assert!(!simplified.query_prop(CP_INPUT_FORMULA));
+        let literal = &simplified.literals().as_slice()[0];
+        let kept_expected_equality = (literal.left() == &target && literal.right() == &other)
+            || (literal.left() == &other && literal.right() == &target);
+        assert!(kept_expected_equality);
         assert!(state.statistics().rw_count >= 1);
     }
 
