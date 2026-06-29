@@ -151,7 +151,7 @@ Source files reviewed: `CLAUSES/ccl_grounding.h`, `CLAUSES/ccl_grounding.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - `ClauseSetEqlitRecode` increments its result once per clause whose literals changed, even if multiple equational literals were recoded in that clause.
 - `GroundSetPrint` rebuilds each stored unit as a temporary ordinary clause, prints it without an internal newline through `ground_set_print_unit`, then appends the newline in the set loop before delegating compact non-units to `PropClauseSetPrint`. Rust now preserves that visible shape through an explicit LOP ground-set renderer.
-- `ClausePrintDimacs` takes a `FILE* out`, but the non-empty literal loop writes literal integers to `stdout` and only writes the trailing `0` line ending to `out`; preserve or intentionally fix that mixed-stream behavior only with DIMACS-output compatibility coverage.
+- `ClausePrintDimacs` takes a `FILE* out`, but the non-empty literal loop writes literal integers to `stdout` and only writes the trailing `0` line ending to `out`; Rust now preserves this through explicit split-writer helpers while retaining pure string renderers for intentionally single-buffer DIMACS output.
 - `ClauseSetPrintDimacs` has no separate header or sorting step; it delegates to `ClausePrintDimacs` for each clause in set iteration order, including the empty-clause two-clause workaround.
 
 ### Porting Focus

@@ -13,7 +13,7 @@ use crate::clauses::propclauses::{PropClause, PropClauseSet};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -255,6 +255,35 @@ impl GroundSet {
             result.push_str(&prop_clause_print_dimacs_string(clause));
         }
         result
+    }
+
+    /// Renders this ground set in C's split-stream DIMACS shape.
+    ///
+    /// C `GroundSetPrintDimacs` writes unit clauses fully to `out`, but
+    /// delegates compact non-unit clauses through `ClausePrintDimacs`, whose
+    /// non-empty literal loop writes to `stdout` and only writes the trailing
+    /// `0` line ending to `out`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first formatting error from either writer.
+    pub fn print_dimacs_to_writers(
+        &self,
+        out: &mut impl fmt::Write,
+        stdout: &mut impl fmt::Write,
+    ) -> fmt::Result {
+        for (&lit_no, &status) in &self.units {
+            if status.contains(GcuEncoding::Pos) {
+                writeln!(out, "  {lit_no} 0")?;
+            }
+            if status.contains(GcuEncoding::Neg) {
+                writeln!(out, " -{lit_no} 0")?;
+            }
+        }
+        for clause in self.non_units.clauses() {
+            prop_clause_print_dimacs_to_writers(out, stdout, clause)?;
+        }
+        Ok(())
     }
 
     /// Renders this ground set in E's LOP clause syntax.
@@ -907,6 +936,34 @@ pub fn clause_print_dimacs_string(clause: &Clause) -> String {
     result
 }
 
+/// Renders one clause in C's split-stream DIMACS shape.
+///
+/// C `ClausePrintDimacs` writes the empty-clause workaround entirely to `out`.
+/// For non-empty clauses it writes literal numbers to `stdout` and writes only
+/// the final ` 0\n` terminator to `out`.
+///
+/// # Errors
+///
+/// Returns the first formatting error from either writer.
+pub fn clause_print_dimacs_to_writers(
+    out: &mut impl fmt::Write,
+    stdout: &mut impl fmt::Write,
+    clause: &Clause,
+) -> fmt::Result {
+    if clause.is_empty() {
+        return out.write_str(" -1 0\n  1 0\n");
+    }
+
+    for literal in clause.literals().as_slice() {
+        if literal.is_positive() {
+            write!(stdout, "  {}", literal.left().entry_no())?;
+        } else {
+            write!(stdout, " -{}", literal.left().entry_no())?;
+        }
+    }
+    out.write_str(" 0\n")
+}
+
 #[must_use]
 pub fn clause_set_print_dimacs_string(clauses: &ClauseSet) -> String {
     let mut result = String::new();
@@ -914,6 +971,25 @@ pub fn clause_set_print_dimacs_string(clauses: &ClauseSet) -> String {
         result.push_str(&clause_print_dimacs_string(clause));
     }
     result
+}
+
+/// Renders a clause set in C's split-stream DIMACS shape.
+///
+/// This mirrors `ClauseSetPrintDimacs` by delegating each clause to
+/// [`clause_print_dimacs_to_writers`] in set iteration order.
+///
+/// # Errors
+///
+/// Returns the first formatting error from either writer.
+pub fn clause_set_print_dimacs_to_writers(
+    out: &mut impl fmt::Write,
+    stdout: &mut impl fmt::Write,
+    clauses: &ClauseSet,
+) -> fmt::Result {
+    for clause in clauses.iter() {
+        clause_print_dimacs_to_writers(out, stdout, clause)?;
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -942,6 +1018,25 @@ fn prop_clause_print_dimacs_string(clause: &PropClause) -> String {
     }
     result.push_str(" 0\n");
     result
+}
+
+fn prop_clause_print_dimacs_to_writers(
+    out: &mut impl fmt::Write,
+    stdout: &mut impl fmt::Write,
+    clause: &PropClause,
+) -> fmt::Result {
+    if clause.is_empty() {
+        return out.write_str(" -1 0\n  1 0\n");
+    }
+
+    for literal in clause.literals() {
+        if literal.properties().is_positive() {
+            write!(stdout, "  {}", literal.literal().entry_no())?;
+        } else {
+            write!(stdout, " -{}", literal.literal().entry_no())?;
+        }
+    }
+    out.write_str(" 0\n")
 }
 
 fn clause_slice_max_variable_count(clauses: &[Clause]) -> i64 {
@@ -994,9 +1089,10 @@ fn usize_diff_as_i32(left: usize, right: usize) -> i32 {
 mod tests {
     use super::{
         clause_cmp_by_len, clause_create_ground_instances, clause_eqlit_recode, clause_get_max_lit,
-        clause_print_dimacs_string, clause_set_create_constrained_ground_instances,
-        clause_set_create_ground_instances, clause_set_eqlit_recode,
-        clause_set_print_dimacs_string, clause_slice_create_constrained_ground_instances,
+        clause_print_dimacs_string, clause_print_dimacs_to_writers,
+        clause_set_create_constrained_ground_instances, clause_set_create_ground_instances,
+        clause_set_eqlit_recode, clause_set_print_dimacs_string,
+        clause_set_print_dimacs_to_writers, clause_slice_create_constrained_ground_instances,
         clause_slice_create_ground_instances, eqn_eqlit_recode, print_dimacs_header_string,
         GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState, VarSetInst,
         DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
@@ -1322,6 +1418,33 @@ mod tests {
     }
 
     #[test]
+    fn clause_dimacs_split_writers_match_c_stdout_leak() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "dimacs_split_p", &[]);
+        let second = predicate_atom(&mut bank, "dimacs_split_q", &[]);
+        let first_entry = first.entry_no();
+        let second_entry = second.entry_no();
+        let clause = clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ]);
+        let mut out = String::new();
+        let mut stdout = String::new();
+
+        clause_print_dimacs_to_writers(&mut out, &mut stdout, &clause).unwrap();
+
+        assert_eq!(stdout, format!("  {first_entry} -{second_entry}"));
+        assert_eq!(out, " 0\n");
+
+        let mut empty_out = String::new();
+        let mut empty_stdout = String::new();
+        clause_print_dimacs_to_writers(&mut empty_out, &mut empty_stdout, &Clause::empty())
+            .unwrap();
+        assert_eq!(empty_stdout, "");
+        assert_eq!(empty_out, " -1 0\n  1 0\n");
+    }
+
+    #[test]
     fn clause_set_dimacs_string_concatenates_clause_outputs_in_set_order() {
         let mut bank = test_bank();
         let first = predicate_atom(&mut bank, "dimacs_p", &[]);
@@ -1338,6 +1461,27 @@ mod tests {
             clause_set_print_dimacs_string(&set),
             format!("  {first_entry} 0\n -{second_entry} 0\n -1 0\n  1 0\n")
         );
+    }
+
+    #[test]
+    fn clause_set_dimacs_split_writers_delegate_in_set_order() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "dimacs_set_split_p", &[]);
+        let second = predicate_atom(&mut bank, "dimacs_set_split_q", &[]);
+        let first_entry = first.entry_no();
+        let second_entry = second.entry_no();
+        let set = ClauseSet::from_clauses([
+            clause_from(vec![predicate_literal(&mut bank, &first, true)]),
+            clause_from(vec![predicate_literal(&mut bank, &second, false)]),
+            Clause::empty(),
+        ]);
+        let mut out = String::new();
+        let mut stdout = String::new();
+
+        clause_set_print_dimacs_to_writers(&mut out, &mut stdout, &set).unwrap();
+
+        assert_eq!(stdout, format!("  {first_entry} -{second_entry}"));
+        assert_eq!(out, " 0\n 0\n -1 0\n  1 0\n");
     }
 
     #[test]
@@ -1427,6 +1571,38 @@ mod tests {
             format!(
                 "  {first_entry} 0\n -{second_entry} 0\n  {first_entry} -{second_entry} 0\n -1 0\n  1 0\n"
             )
+        );
+    }
+
+    #[test]
+    fn ground_set_dimacs_split_writers_preserve_c_non_unit_stdout_leak() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "ground_dimacs_split_p", &[]);
+        let second = predicate_atom(&mut bank, "ground_dimacs_split_q", &[]);
+        let first_entry = first.entry_no();
+        let second_entry = second.entry_no();
+        let mut set = GroundSet::new();
+
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+        assert!(set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ])));
+        assert!(set.insert(Clause::empty()));
+
+        let mut out = String::new();
+        let mut stdout = String::new();
+        set.print_dimacs_to_writers(&mut out, &mut stdout).unwrap();
+
+        assert_eq!(stdout, format!("  {first_entry} -{second_entry}"));
+        assert_eq!(
+            out,
+            format!("  {first_entry} 0\n -{second_entry} 0\n 0\n -1 0\n  1 0\n")
         );
     }
 
