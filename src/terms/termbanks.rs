@@ -11,7 +11,7 @@ use crate::terms::signature::{
     SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE,
 };
 use crate::terms::simpletypes::{
-    alloc_arrow_type, flatten_type, type_is_predicate, Type, TypeUniqueId,
+    alloc_arrow_type, flatten_type, type_get_max_arity, type_is_predicate, Type, TypeUniqueId,
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
@@ -1349,7 +1349,63 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        self.parse_term_simple_with_distinct_checks(scanner, true)
+        self.parse_term_real(scanner, true)
+    }
+
+    fn parse_term_real(
+        &mut self,
+        scanner: &mut Scanner,
+        check_symbol_properties: bool,
+    ) -> Result<Term, Diagnostic> {
+        if self.sig.supports_lists() && scanner.test_tok(TokenType::OPEN_SQUARE) {
+            return self.parse_cons_list_real(scanner, check_symbol_properties);
+        }
+
+        let mut id = DynamicString::new();
+        let id_type = term_parse_operator(scanner, &mut id)?;
+        let name = id.view().into_owned();
+        if id_type == FuncSymbType::IdentVar {
+            if scanner.test_tok(TokenType::COLON) {
+                scanner.accept_tok(TokenType::COLON)?;
+                let type_ = self
+                    .sig
+                    .type_bank_mut()
+                    .parse_type_from_current_problem(scanner)?;
+                return Ok(self.vars.ext_name_assert_alloc_sort(&name, &type_));
+            }
+            return Ok(self.vars.ext_name_assert_alloc(&name));
+        }
+
+        if scanner.test_tok(TokenType::OPEN_BRACKET) && check_symbol_properties {
+            reject_term_bank_distinct_argument_list(&self.sig, id_type)?;
+        }
+        let existing_code = self.sig.find_f_code(&name);
+        let symbol_type = if existing_code == 0 {
+            None
+        } else {
+            self.sig.get_type(existing_code).cloned()
+        };
+        let args =
+            self.parse_real_arg_list_opt(scanner, check_symbol_properties, symbol_type.as_ref())?;
+        let arity = i32::try_from(args.len()).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::RESOURCE_OUT,
+                "Term arity is too large for C-compatible signatures",
+            )
+        })?;
+        let f_code = term_sig_insert(&mut self.sig, &name, arity, false, id_type);
+        if f_code == 0 {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{name} used with incompatible arity {arity}"),
+            ));
+        }
+
+        let term = Term::top_alloc(f_code, args.len());
+        for (index, arg) in args.into_iter().enumerate() {
+            term.set_argument(index, arg);
+        }
+        self.term_top_insert(term)
     }
 
     fn parse_term_simple_with_distinct_checks(
@@ -1433,6 +1489,130 @@ impl TermBank {
             list = self.term_top_insert(cons)?;
         }
         Ok(list)
+    }
+
+    fn parse_cons_list_real(
+        &mut self,
+        scanner: &mut Scanner,
+        check_symbol_properties: bool,
+    ) -> Result<Term, Diagnostic> {
+        scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+        let mut elements = Vec::new();
+        if !scanner.test_tok(TokenType::CLOSE_SQUARE) {
+            elements.push(self.parse_term_real(scanner, check_symbol_properties)?);
+            while scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                elements.push(self.parse_term_real(scanner, check_symbol_properties)?);
+            }
+        }
+        scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+
+        let mut list = self.create_const_term(SIG_NIL_CODE)?;
+        for element in elements.into_iter().rev() {
+            let cons = Term::top_alloc(SIG_CONS_CODE, 2);
+            cons.set_argument(0, element);
+            cons.set_argument(1, list);
+            list = self.term_top_insert(cons)?;
+        }
+        Ok(list)
+    }
+
+    fn parse_real_arg_list_opt(
+        &mut self,
+        scanner: &mut Scanner,
+        check_symbol_properties: bool,
+        type_: Option<&Type>,
+    ) -> Result<Vec<Term>, Diagnostic> {
+        if !scanner.test_tok(TokenType::OPEN_BRACKET) {
+            return Ok(Vec::new());
+        }
+
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+        if scanner.test_tok(TokenType::CLOSE_BRACKET) {
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            return Ok(Vec::new());
+        }
+
+        let mut args = vec![self.parse_real_arg(scanner, check_symbol_properties, type_, 0)?];
+        while scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            let index = args.len();
+            args.push(self.parse_real_arg(scanner, check_symbol_properties, type_, index)?);
+        }
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+        Ok(args)
+    }
+
+    fn parse_real_arg(
+        &mut self,
+        scanner: &mut Scanner,
+        check_symbol_properties: bool,
+        type_: Option<&Type>,
+        index: usize,
+    ) -> Result<Term, Diagnostic> {
+        if type_
+            .is_some_and(|type_| index < type_get_max_arity(type_) && type_.args()[index].is_bool())
+        {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Boolean formula arguments require the full TFormulaTSTPParse path",
+            ));
+        }
+
+        let term = if check_symbol_properties {
+            self.parse_subterm(scanner)?
+        } else {
+            self.parse_term_real(scanner, true)?
+        };
+        Ok(self.normalize_boolean_term_arg(term))
+    }
+
+    fn parse_subterm(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let term = self.parse_term_real(scanner, true)?;
+        if !term.is_free_var() {
+            if self.sig.is_predicate(term.f_code()) {
+                if self.sig.is_fixed_type(term.f_code()) {
+                    return Err(Diagnostic::new(
+                        ErrorCode::SYNTAX_ERROR,
+                        "Predicate used as function symbol in preceding term",
+                    ));
+                }
+                self.sig.declare_is_function(term.f_code())?;
+                type_infer_sort(&mut self.sig, &term)?;
+                assert!(term.type_().is_some(), "type inference assigned a sort");
+            } else {
+                self.sig.fix_type(term.f_code());
+            }
+        }
+        Ok(term)
+    }
+
+    fn normalize_boolean_term_arg(&self, term: Term) -> Term {
+        if term.f_code() == self.sig.eqn_code() {
+            let Some(left) = term.argument(0) else {
+                return term;
+            };
+            let Some(right) = term.argument(1) else {
+                return term;
+            };
+            if left.is_free_var() && right.f_code() == SIG_TRUE_CODE {
+                return left;
+            }
+            if left.f_code() == SIG_TRUE_CODE && right.f_code() == SIG_TRUE_CODE {
+                return self.true_term.clone();
+            }
+        } else if term.f_code() == self.sig.neqn_code() {
+            let Some(left) = term.argument(0) else {
+                return term;
+            };
+            let Some(right) = term.argument(1) else {
+                return term;
+            };
+            if left.f_code() == SIG_TRUE_CODE && right.f_code() == SIG_TRUE_CODE {
+                return self.false_term.clone();
+            }
+        }
+        term
     }
 
     /// Creates and inserts a new Skolem term or definition atom.
@@ -2433,6 +2613,79 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains("Number cannot have argument list"));
+    }
+
+    #[test]
+    fn checked_parser_rejects_fixed_predicate_in_function_argument_position() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let outer = sig.insert_id("pred_arg_outer", 1, false);
+        let outer_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type]));
+        sig.declare_type(outer, outer_type).unwrap();
+        let predicate = sig.insert_id("pred_arg_p", 0, false);
+        sig.declare_final_type(predicate, bool_type).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+
+        let mut scanner = Scanner::from_user_string("pred_arg_outer(pred_arg_p)", false).unwrap();
+        let error = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("Predicate used as function symbol in preceding term"));
+    }
+
+    #[test]
+    fn checked_parser_fixes_unfixed_predicate_argument_ambiguity() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let bool_type = sig.type_bank().bool_type();
+        let outer = sig.insert_id("soft_pred_outer", 1, false);
+        let outer_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        sig.declare_type(outer, outer_type).unwrap();
+        let predicate = sig.insert_id("soft_pred_p", 1, false);
+        let predicate_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), bool_type.clone()]));
+        sig.declare_type(predicate, predicate_type).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+
+        let mut scanner =
+            Scanner::from_user_string("soft_pred_outer(soft_pred_p(soft_pred_a))", false).unwrap();
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let arg = parsed.argument(0).unwrap();
+
+        assert!(bank.signature().is_fixed_type(predicate));
+        assert!(bank.signature().is_predicate(predicate));
+        assert_eq!(arg.type_(), Some(bool_type));
+    }
+
+    #[test]
+    fn checked_parser_reports_boolean_formula_argument_gap_explicitly() {
+        let mut sig = Signature::new(TypeBank::new());
+        let bool_type = sig.type_bank().bool_type();
+        let i_type = sig.type_bank().i_type();
+        let takes_bool = sig.insert_id("takes_bool_arg", 1, false);
+        let takes_bool_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![bool_type, i_type]));
+        sig.declare_type(takes_bool, takes_bool_type).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+
+        let mut scanner = Scanner::from_user_string("takes_bool_arg($true)", false).unwrap();
+        let error = bank
+            .parse_term_with_distinct_checks(&mut scanner)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Boolean formula arguments"));
     }
 
     #[test]
