@@ -22,11 +22,11 @@ use crate::clauses::context_sr::{
 };
 use crate::clauses::derivation::{
     clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CNF_EVAL_GC,
-    DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_NEG_EXT, DC_POS_EXT,
+    DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::{EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
+use crate::clauses::eqn_props::{PatEqnDirection, EP_IS_PM_INTO_LIT, EP_IS_SELECTED};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::eqnresolution::{
     clause_er_normalize_var, clause_er_normalize_var_with_docs, compute_all_eqn_resolvents,
@@ -87,7 +87,8 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::inout::signals::time_is_up;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
-use crate::terms::lambda::{apply_terms, beta_normalize_db};
+use crate::terms::lambda::{apply_terms, beta_normalize_db, close_with_type_prefix};
+use crate::terms::match_mgu::occur_check;
 use crate::terms::simpletypes::{alloc_arrow_type, type_get_max_arity};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_has_f_code;
@@ -3315,6 +3316,14 @@ fn compute_ho_inferences(
         if parms.neg_ext != ExtInferenceType::NoLits {
             generated += compute_pos_ext(terms, clause, generation.tmp_store, parms.pos_ext)?;
         }
+        if parms.elim_leibniz_max_depth >= 0 {
+            generated += compute_leibniz_elimination(
+                terms,
+                clause,
+                generation.tmp_store,
+                parms.elim_leibniz_max_depth,
+            )?;
+        }
     }
     state.statistics_mut().neg_ext_count += u64::try_from(neg_ext_count).unwrap_or(u64::MAX);
     Ok(generated)
@@ -3331,12 +3340,6 @@ fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Dia
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "higher-order extensional superposition generation is not ported yet",
-        ));
-    }
-    if parms.elim_leibniz_max_depth >= 0 {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order Leibniz-equality elimination is not ported yet",
         ));
     }
     if parms.prim_enum_max_depth >= 0 {
@@ -3583,6 +3586,148 @@ fn term_drop_last_arg(bank: &mut TermBank, term: &Term) -> Term {
         }
         prefix
     }
+}
+
+fn compute_leibniz_elimination(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+    limit: i32,
+) -> Result<i64, Diagnostic> {
+    if clause.proof_depth() > i64::from(limit) {
+        return Ok(0);
+    }
+
+    let mut positive_vars = BTreeSet::new();
+    let mut negative_vars = BTreeSet::new();
+    for literal in clause.literals().as_slice() {
+        if let Some(var) = leibniz_literal_head_var(literal, bank) {
+            if literal.is_positive() {
+                positive_vars.insert(var.f_code());
+            } else {
+                negative_vars.insert(var.f_code());
+            }
+        }
+    }
+
+    let mut generated = 0;
+    for (literal_index, literal) in clause.literals().as_slice().iter().enumerate() {
+        let Some(var) = leibniz_literal_head_var(literal, bank) else {
+            continue;
+        };
+        let found_opposite = if literal.is_positive() {
+            negative_vars.contains(&var.f_code())
+        } else {
+            positive_vars.contains(&var.f_code())
+        };
+        if !found_opposite {
+            continue;
+        }
+
+        let applied = literal.left();
+        assert!(
+            applied.is_applied_free_var(),
+            "Leibniz literal must have an applied free-variable left side"
+        );
+        for arg_index in 1..applied.arity() {
+            let arg = applied.argument(arg_index).unwrap_or_else(|| {
+                panic!("applied variable argument {arg_index} must be initialized")
+            });
+            if occur_check(&arg, &var) {
+                continue;
+            }
+
+            let binding = leibniz_binding_for_arg(bank, literal, applied, arg_index, &arg)?;
+            make_leibniz_instance(bank, clause, literal_index, &var, binding, store)?;
+            generated += 1;
+        }
+    }
+
+    Ok(generated)
+}
+
+fn leibniz_literal_head_var(literal: &Eqn, bank: &TermBank) -> Option<Term> {
+    if literal.is_equ_lit(bank) || !literal.left().is_applied_free_var() {
+        return None;
+    }
+    assert_eq!(
+        literal.right(),
+        bank.true_term(),
+        "Leibniz predicate literal must use $true as right side"
+    );
+    literal.left().argument(0)
+}
+
+fn leibniz_binding_for_arg(
+    bank: &mut TermBank,
+    literal: &Eqn,
+    applied: &Term,
+    arg_index: usize,
+    arg: &Term,
+) -> Result<Term, Diagnostic> {
+    let arg_type = arg
+        .type_()
+        .expect("Leibniz applied-variable argument must have a type");
+    let db_index =
+        i64::try_from(applied.arity() - arg_index - 1).expect("Leibniz DB index fits in FunCode");
+    let db_var = bank.request_db_var(&arg_type, db_index);
+    let encoded = Eqn::terms_tb_term_encode(
+        bank,
+        &db_var,
+        arg,
+        !literal.is_positive(),
+        PatEqnDirection::Normal,
+    )?;
+    let binder_types = (1..applied.arity())
+        .map(|index| {
+            applied
+                .argument(index)
+                .and_then(|argument| argument.type_())
+                .unwrap_or_else(|| panic!("Leibniz binder argument {index} must have a type"))
+        })
+        .collect::<Vec<_>>();
+    close_with_type_prefix(bank, &binder_types, &encoded)
+}
+
+fn make_leibniz_instance(
+    bank: &mut TermBank,
+    clause: &Clause,
+    literal_index: usize,
+    var: &Term,
+    binding: Term,
+    store: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    assert!(
+        var.binding().is_none(),
+        "Leibniz predicate variable must be unbound"
+    );
+    assert_eq!(
+        var.type_(),
+        binding.type_(),
+        "Leibniz binding type must match predicate variable"
+    );
+
+    var.set_binding(Some(binding));
+    let result = (|| {
+        let mut new_literals = Vec::with_capacity(clause.literal_number().saturating_sub(1));
+        for (index, literal) in clause.literals().as_slice().iter().enumerate() {
+            if index != literal_index {
+                new_literals.push(literal.copy_instantiated_ho(bank)?);
+            }
+        }
+        let mut new_literals = EqnList::from_vec(new_literals);
+        beta_normalize_eqn_list(bank, &mut new_literals)?;
+        let _ = new_literals.remove_resolved(bank);
+        let _ = new_literals.remove_duplicates(bank);
+
+        let mut new_clause = Clause::alloc(new_literals);
+        let _ = clause_normalize_equations(&mut new_clause, bank);
+        set_ho_generation_proof_object(&mut new_clause, clause, None, DC_LEIBNIZ_ELIM, 1);
+        store.insert(new_clause);
+        Ok(())
+    })();
+    var.set_binding(None);
+    result
 }
 
 fn fresh_var_bank_for_arg_cong_clause(bank: &TermBank, clause: &Clause) -> VarBank {
@@ -5753,19 +5898,20 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_clause_set_filter_reweigth,
-        proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_check_ac_status,
-        proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
-        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
-        proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
-        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
+        apply_terms, do_literal_selection, do_literal_selection_with_bank,
+        do_literal_selection_with_selector, proof_control_alloc,
+        proof_control_clause_set_filter_reweigth, proof_control_clause_set_reweight,
+        proof_control_init, proof_control_init_heuristics, proof_control_reset_sat_solver,
+        proof_state_check_ac_status, proof_state_check_ac_status_with_output,
+        proof_state_check_watchlist_with_docs, proof_state_cleanup_unprocessed_clauses,
+        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
+        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
+        proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
@@ -5801,8 +5947,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_NEG_EXT,
-        DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_SR,
+        DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_LEIBNIZ_ELIM,
+        DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -5872,6 +6018,16 @@ mod tests {
 
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn unary_predicate_var(bank: &mut TermBank, f_code: i64) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let type_ = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
         bank.vars().var_assert_alloc(f_code, &type_)
     }
 
@@ -9446,6 +9602,111 @@ mod tests {
         };
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().pos_ext = ExtInferenceType::AllLits;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 0);
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_leibniz_generates_equality_instances() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (predicate_var, a_code, b_code, clause) = {
+            let terms = state.terms_mut();
+            let predicate_var = unary_predicate_var(terms, -8);
+            let a = typed_const(terms, "pc_generate_leibniz_a");
+            let b = typed_const(terms, "pc_generate_leibniz_b");
+            let applied_a = apply_terms(terms, &predicate_var, std::slice::from_ref(&a)).unwrap();
+            let applied_b = apply_terms(terms, &predicate_var, std::slice::from_ref(&b)).unwrap();
+            let true_term = terms.true_term().clone();
+            let pos = Eqn::alloc(applied_a, true_term.clone(), terms, true).unwrap();
+            let neg = Eqn::alloc(applied_b, true_term, terms, false).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![pos, neg]));
+            clause.set_ident(4_174);
+            clause.set_proof_depth(2);
+            clause.set_proof_size(5);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (predicate_var, a.f_code(), b.f_code(), clause)
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().elim_leibniz_max_depth = 2;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 2);
+        assert!(predicate_var.binding().is_none());
+        let generated = state.tmp_store().iter().collect::<Vec<_>>();
+        let first_literal = &generated[0].literals().as_slice()[0];
+        let second_literal = &generated[1].literals().as_slice()[0];
+        assert!(first_literal.is_positive());
+        assert!(second_literal.is_positive());
+        assert_eq!(first_literal.left().f_code(), b_code);
+        assert_eq!(first_literal.right().f_code(), a_code);
+        assert_eq!(second_literal.left().f_code(), a_code);
+        assert_eq!(second_literal.right().f_code(), b_code);
+
+        for generated_clause in generated {
+            assert_eq!(generated_clause.proof_depth(), 3);
+            assert_eq!(generated_clause.proof_size(), 6);
+            assert!(generated_clause.query_prop(CP_IS_SOS));
+            assert!(!generated_clause.query_prop(CP_NO_GENERATION));
+            assert_eq!(
+                generated_clause.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(DC_NORMALIZE),
+                    DerivationEntry::Operation(DC_LEIBNIZ_ELIM),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_174, 0)),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_leibniz_respects_depth_limit() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let predicate_var = unary_predicate_var(terms, -10);
+            let a = typed_const(terms, "pc_generate_leibniz_depth_a");
+            let b = typed_const(terms, "pc_generate_leibniz_depth_b");
+            let applied_a = apply_terms(terms, &predicate_var, std::slice::from_ref(&a)).unwrap();
+            let applied_b = apply_terms(terms, &predicate_var, std::slice::from_ref(&b)).unwrap();
+            let true_term = terms.true_term().clone();
+            let pos = Eqn::alloc(applied_a, true_term.clone(), terms, true).unwrap();
+            let neg = Eqn::alloc(applied_b, true_term, terms, false).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![pos, neg]));
+            clause.set_proof_depth(3);
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().elim_leibniz_max_depth = 2;
         control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
         control.heuristic_parms_mut().enable_eq_factoring = false;
 

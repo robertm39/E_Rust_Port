@@ -879,6 +879,16 @@ impl Eqn {
         Ok(handle)
     }
 
+    pub fn copy_instantiated_ho(&self, bank: &mut TermBank) -> Result<Self, Diagnostic> {
+        let lterm = bank.insert_instantiated_ho(&self.lterm, true)?;
+        let rterm = bank.insert_instantiated_ho(&self.rterm, true)?;
+        let mut handle = Self::alloc(lterm, rterm, bank, self.is_positive())?;
+        handle.copy_properties_from(self);
+        handle.del_prop(EP_MAX_IS_UP_TO_DATE);
+        handle.del_prop(EP_IS_ORIENTED);
+        Ok(handle)
+    }
+
     pub fn copy_disjoint(&self, bank: &mut TermBank) -> Result<Self, Diagnostic> {
         let lterm = bank.insert_disjoint(&self.lterm)?;
         let rterm = bank.insert_disjoint(&self.rterm)?;
