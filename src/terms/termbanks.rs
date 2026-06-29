@@ -625,8 +625,7 @@ impl TermBank {
             return Ok(term.clone());
         }
 
-        let mut current_deref = deref;
-        let term = term_deref(term, &mut current_deref);
+        let (term, current_deref, limit) = self.instantiated_deref_root(term, deref)?;
         if term.is_any_var() || term_is_ground_for_insert(&term) {
             return Ok(term);
         }
@@ -635,10 +634,58 @@ impl TermBank {
         copy.set_properties(TP_IGNORE_PROPS);
         for (index, arg) in term.argument_clones().into_iter().enumerate() {
             let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            let shared = self.insert_instantiated_deref(&arg, current_deref)?;
+            let shared = self.insert_instantiated_deref(
+                &arg,
+                Self::convert_lfho_deref(index, limit, current_deref),
+            )?;
             copy.set_argument(index, shared);
         }
         self.term_top_insert(copy)
+    }
+
+    fn instantiated_deref_root(
+        &mut self,
+        term: &Term,
+        deref: DerefType,
+    ) -> Result<(Term, DerefType, usize), Diagnostic> {
+        let limit = Self::deref_limit(term, deref);
+        if deref == DerefType::Once
+            && term.is_applied_free_var()
+            && term
+                .argument(0)
+                .is_some_and(|head| head.binding().is_some())
+        {
+            return Ok((self.deref_applied_free_var_once(term)?, deref, limit));
+        }
+
+        let mut current_deref = deref;
+        let term = term_deref(term, &mut current_deref);
+        Ok((term, current_deref, limit))
+    }
+
+    fn deref_limit(term: &Term, deref: DerefType) -> usize {
+        if deref == DerefType::Once
+            && term.is_applied_free_var()
+            && term
+                .argument(0)
+                .is_some_and(|head| head.binding().is_some())
+        {
+            let binding = term
+                .argument(0)
+                .and_then(|head| head.binding())
+                .expect("bound applied free variable has a binding");
+            Self::applied_binding_ignore_args(&binding)
+        } else {
+            0
+        }
+    }
+
+    fn convert_lfho_deref(index: usize, limit: usize, deref: DerefType) -> DerefType {
+        if deref == DerefType::Once && index < limit {
+            DerefType::Never
+        } else {
+            deref
+        }
     }
 
     /// Inserts a first-order instantiated term.
@@ -1922,6 +1969,80 @@ mod tests {
         assert_eq!(fo.argument(0), Some(a.clone()));
         assert!(!fo.query_prop(TP_CHECK_FLAG));
         assert_eq!(bank.insert_instantiated_fo(&a).unwrap(), a);
+    }
+
+    #[test]
+    fn instantiated_deref_expands_applied_function_bindings() {
+        let mut type_bank = TypeBank::new();
+        let i_type = type_bank.i_type();
+        let arrow =
+            type_bank.insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let mut sig = Signature::new(type_bank);
+        let g_code = sig.insert_id("inst_deref_g", 0, false);
+        sig.declare_type(g_code, arrow.clone()).unwrap();
+        let b_code = sig.insert_id("inst_deref_b", 0, false);
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let binding = Term::const_cell_alloc(g_code);
+        binding.set_type(Some(arrow.clone()));
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(arrow));
+        head.set_binding(Some(binding));
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, b.clone());
+
+        let expanded = bank
+            .insert_instantiated_deref(&app, DerefType::Once)
+            .unwrap();
+
+        assert_eq!(expanded.f_code(), g_code);
+        assert_eq!(expanded.arity(), 1);
+        assert_eq!(expanded.argument(0), Some(b));
+        assert!(expanded.is_shared());
+    }
+
+    #[test]
+    fn instantiated_deref_preserves_ignored_bound_prefix_args() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let f_code = sig.insert_id("inst_deref_prefix_f", 0, false);
+        sig.declare_type(f_code, i_type.clone()).unwrap();
+        let b_code = sig.insert_id("inst_deref_prefix_b", 0, false);
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        let c_code = sig.insert_id("inst_deref_prefix_c", 0, false);
+        sig.declare_type(c_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let b = bank.create_const_term(b_code).unwrap();
+        let c = bank.create_const_term(c_code).unwrap();
+        let y = Term::const_cell_alloc(-4);
+        y.set_type(Some(i_type.clone()));
+        y.set_binding(Some(b));
+        let z = Term::const_cell_alloc(-6);
+        z.set_type(Some(i_type.clone()));
+        z.set_binding(Some(c.clone()));
+        let head_binding = Term::top_alloc(f_code, 1);
+        head_binding.set_type(Some(i_type.clone()));
+        head_binding.set_argument(0, y.clone());
+        let head = Term::const_cell_alloc(-2);
+        head.set_type(Some(i_type.clone()));
+        head.set_binding(Some(head_binding));
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, z);
+
+        let expanded = bank
+            .insert_instantiated_deref(&app, DerefType::Once)
+            .unwrap();
+
+        assert_eq!(expanded.f_code(), f_code);
+        assert_eq!(expanded.arity(), 2);
+        assert_eq!(expanded.argument(0), Some(y));
+        assert_eq!(expanded.argument(1), Some(c));
+        assert!(expanded.is_shared());
     }
 
     #[test]
