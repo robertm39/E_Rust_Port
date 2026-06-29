@@ -116,6 +116,18 @@ Source files reviewed: `INOUT/cio_basicparser.h`, `INOUT/cio_basicparser.c`.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `ParseIntLimited` accepts the exact LP64 `LONG_MIN` spelling `-9223372036854775808` via unsigned-token arithmetic, while still rejecting `-0` as underflow. Rust preserves that sentinel behavior so generated strategy files can parse C's `LONG_MIN` fields.
 
+### Rust Port Status Notes
+
+- `src/inout/basicparser.rs` ports the shared parser helpers for booleans, signed and unsigned integers, floats, number-string classification, double arrays, filename token spans, basic includes, dotted identifiers, continuous no-whitespace token spans, and balanced delimiter skipping.
+- The Rust parser keeps token-consumption behavior explicit with `Scanner` methods and returns diagnostics instead of terminating directly, while callers that model C fatal parse paths can still surface those diagnostics as fatal errors.
+- Tests cover the C `ParseIntMax` sign quirk, `ParseIntLimited`'s LP64 `LONG_MIN` boundary, missing whitespace after a sign, numeric spelling classification, filename token stopping, include/dotted-id parsing, continuous spans, and delimiter mismatch diagnostics.
+
+### Change-Later Observations
+
+- C `ParseIntMax` negates the parsed magnitude in both the signed and unsigned branches. Rust preserves that surprising behavior for compatibility; after reference coverage proves no caller depends on it, this should be audited as a likely C bug.
+- C `ParseNumString` normalizes exponent markers to lowercase `e` for separated exponent tokens but preserves the raw `Idnum` spelling for compact forms such as `8e9`. Rust mirrors that split, but a future numeric token API could expose normalized and raw spellings separately.
+- C delimiter skipping is intentionally not a full syntax parser; it only tracks balanced `()`, `[]`, and `{}`. Keep the Rust helper as a syntax-skipping compatibility shim rather than reusing it for semantic parsing.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

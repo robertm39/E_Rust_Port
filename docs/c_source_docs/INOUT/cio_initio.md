@@ -79,6 +79,17 @@ Source files reviewed: `INOUT/cio_initio.h`, `INOUT/cio_initio.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/initio.rs` ports `InitIO`/`ExitIO` as process-global I/O state guarded by a mutex, including output initialization, program-name storage for later diagnostics, and `TPTP` environment capture with slash appending.
+- Rust preserves C's reinitialization shape where a later `InitIO` without `TPTP` leaves the previous directory value in place until `ExitIO` clears it.
+- Tests cover program-name storage, output reset, `TPTP` slash appending, empty `TPTP` preservation, and the reinitialization behavior.
+
+### Change-Later Observations
+
+- C stores `TPTP_dir` as a global heap string and only updates it when the environment variable is present. Rust mirrors that persistence; a future session-owned configuration object should make the inherited value explicit instead of implicit global state.
+- C `InitIO` also initializes process-global error state through `InitError(progname)`. Rust currently stores the program name and many diagnostics still pass context explicitly; unify these paths when the executable-level fatal-error renderer is complete.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -90,6 +90,18 @@ Source files reviewed: `INOUT/cio_tempfile.h`, `INOUT/cio_tempfile.c`.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/tempfile.rs` ports the process-global temporary-file registry, `TMPDIR`/`/tmp` directory selection, `epr_` prefix, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup warning collection.
+- Rust uses a `Mutex<BTreeSet<PathBuf>>` and atomic retry suffix generation instead of C's file-static `StrTree` plus `mkstemp`, keeping safe registration and cleanup behavior for current callers.
+- Tests cover TMPDIR placement, prefixing, registration count, source-copy contents, duplicate registration, cleanup of existing and missing files, and removal diagnostics.
+
+### Change-Later Observations
+
+- C `TempFileName` delegates suffix selection and file mode to `mkstemp`. Rust uses `create_new` with a generated six-character base-36 suffix; this preserves uniqueness, prefix, and empty-file creation but not exact libc suffix distribution or permissions.
+- C's global registry is cleared during cleanup even when unlinking a file fails. Rust mirrors that shape by clearing registrations and returning warnings; scoped run-state ownership would be cleaner after signal/atexit compatibility is designed.
+- `TempFileRemove` asserts that the removed path was registered. Rust reports whether the unregister step found the path, which is safer for tests and callers; exact assert-like behavior should remain a compatibility wrapper decision.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

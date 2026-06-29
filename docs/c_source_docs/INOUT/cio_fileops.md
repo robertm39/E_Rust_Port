@@ -100,6 +100,18 @@ Source files reviewed: `INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/inout/fileops.rs` ports `InputOpen`/`InputClose`, file loading, concatenation, copying, removal, printing, existence checks, and the slash-only filename helpers.
+- The Rust input-open helper preserves `NULL`/`-` as stdin, the fail-or-null behavior, regular-file checks, and C-shaped file diagnostics while representing inputs as safe `Read` owners.
+- Tests cover stdin selection, missing-file fail-or-null behavior, directory rejection, byte-preserving load/concat/copy/print helpers, remove errors, read-open based existence checks, and the Unix-style directory/base/suffix helper quirks.
+
+### Change-Later Observations
+
+- C `FileNameIsAbsolute`, `FileNameDirName`, `FileFindBaseName`, `FileNameBaseName`, and `FileNameStrip` treat only `/` as a separator. Rust preserves this even on Windows; native path-aware wrappers should be added separately if executable parity ever requires Windows path normalization.
+- C `FileExists` is a race-prone readability probe implemented by opening the path. Rust keeps the same observable "can open for reading" meaning; avoid replacing it with metadata-only existence checks in compatibility paths.
+- C `InputClose` reports rare `fclose` failures. Rust currently relies on owned file drop for input handles, so late close diagnostics are not surfaced; revisit this only if reference tests show callers observe those failures.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
