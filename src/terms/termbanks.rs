@@ -8,7 +8,7 @@ use crate::terms::functypes::{FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
 use crate::terms::signature::{Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE};
 use crate::terms::signature::{
-    SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE,
+    SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE,
 };
 use crate::terms::simpletypes::{
     alloc_arrow_type, flatten_type, type_get_max_arity, type_is_predicate, Type, TypeUniqueId,
@@ -27,7 +27,7 @@ use crate::terms::termtypes::{
     TP_OP_FLAG, TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
 };
 use crate::terms::termvars::VarBank;
-use crate::terms::typecheck::type_infer_sort;
+use crate::terms::typecheck::{type_declare_is_predicate, type_infer_sort};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -1553,10 +1553,8 @@ impl TermBank {
         if type_
             .is_some_and(|type_| index < type_get_max_arity(type_) && type_.args()[index].is_bool())
         {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Boolean formula arguments require the full TFormulaTSTPParse path",
-            ));
+            let formula = self.parse_tformula_tstp_subset(scanner)?;
+            return Ok(self.normalize_boolean_term_arg(formula));
         }
 
         let term = if check_symbol_properties {
@@ -1585,6 +1583,244 @@ impl TermBank {
             }
         }
         Ok(term)
+    }
+
+    fn parse_tformula_tstp_subset(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let mut formula = self.parse_literal_tformula_tstp_subset(scanner)?;
+        if scanner.test_tok(TokenType::FOF_ASSOC_OP) {
+            let op_token = scanner.current_token().kind();
+            let op = self.tptp_operator_convert(op_token)?;
+            while scanner.test_tok(op_token) {
+                scanner.accept_tok(op_token)?;
+                let right = self.parse_literal_tformula_tstp_subset(scanner)?;
+                formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+            }
+        } else if scanner.test_tok(TokenType::APPLICATION) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Higher-order formula application in Boolean term arguments is not ported yet",
+            ));
+        } else if scanner.test_tok(TokenType::FOF_BIN_OP) {
+            let mut op = self.tptp_operator_parse(scanner)?;
+            let right = self.parse_literal_tformula_tstp_subset(scanner)?;
+            if formula.type_().as_ref().is_some_and(Type::is_bool)
+                && (op == self.sig.eqn_code() || op == self.sig.neqn_code())
+            {
+                if !right.type_().as_ref().is_some_and(Type::is_bool) {
+                    return Err(Diagnostic::new(
+                        ErrorCode::TYPE_ERROR,
+                        "Boolean formula equality requires Boolean right operand",
+                    ));
+                }
+                op = if op == self.sig.eqn_code() {
+                    self.sig.equiv_code()
+                } else {
+                    self.sig.xor_code()
+                };
+            }
+            formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+        }
+        Ok(formula)
+    }
+
+    fn parse_literal_tformula_tstp_subset(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let formula = if scanner.test_tok(
+            TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
+        ) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Quantified Boolean formula arguments are not ported yet",
+            ));
+        } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let formula = self.parse_tformula_tstp_subset(scanner)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            formula
+        } else if scanner.test_tok(TokenType::TILDE_SIGN) {
+            scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            if scanner.test_tok(TokenType::APPLICATION) {
+                scanner.accept_tok(TokenType::APPLICATION)?;
+            }
+            let child = self.parse_literal_tformula_tstp_subset(scanner)?;
+            self.tformula_fcode_alloc(
+                self.require_formula_op_code(self.sig.not_code())?,
+                child,
+                None,
+            )?
+        } else if scanner.test_tok(TokenType::LET_TOKEN | TokenType::ITE_TOKEN) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Boolean $let/$ite term arguments are not ported yet",
+            ));
+        } else {
+            self.parse_tformula_atom(scanner)?
+        };
+        self.encode_predicate_as_eqn(formula)
+    }
+
+    fn parse_tformula_atom(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let mut left = self.parse_term_real(scanner, true)?;
+        let mut positive = true;
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+            if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+                positive = false;
+            }
+            scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+            let right = if left.type_().as_ref().is_some_and(Type::is_bool) {
+                let right = self.parse_tformula_tstp_subset(scanner)?;
+                left = self.encode_equality_term(left, self.true_term.clone(), true)?;
+                right
+            } else {
+                self.parse_term_real(scanner, true)?
+            };
+            self.encode_equality_term(left, right, positive)
+        } else {
+            self.prepare_predicate_formula_atom(&left)?;
+            Ok(left)
+        }
+    }
+
+    fn prepare_predicate_formula_atom(&mut self, term: &Term) -> Result<(), Diagnostic> {
+        if term.is_free_var() {
+            if term.type_().as_ref().is_some_and(type_is_predicate) {
+                return Ok(());
+            }
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Individual variable used at predicate position",
+            ));
+        }
+        type_declare_is_predicate(&mut self.sig, term)
+    }
+
+    fn encode_predicate_as_eqn(&mut self, formula: Term) -> Result<Term, Diagnostic> {
+        let is_encodable = (formula.is_any_var()
+            || !self.sig.is_logical_symbol(formula.f_code())
+            || formula.f_code() == self.sig.answer_code()
+            || formula.f_code() == SIG_TRUE_CODE
+            || formula.f_code() == SIG_FALSE_CODE
+            || formula.f_code() == SIG_ITE_CODE
+            || formula.f_code() == SIG_LET_CODE
+            || formula.is_phony_app())
+            && formula.type_().as_ref().is_some_and(Type::is_bool);
+        if !is_encodable {
+            return Ok(formula);
+        }
+
+        let (left, positive) = if formula.is_any_var() {
+            (formula, true)
+        } else if formula.f_code() == SIG_FALSE_CODE {
+            (self.true_term.clone(), false)
+        } else {
+            (formula, true)
+        };
+        self.encode_equality_term(left, self.true_term.clone(), positive)
+    }
+
+    fn encode_equality_term(
+        &mut self,
+        left: Term,
+        right: Term,
+        positive: bool,
+    ) -> Result<Term, Diagnostic> {
+        let f_code = self.sig.get_eqn_code(positive);
+        assert_ne!(f_code, 0, "equality code allocation must succeed");
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(self.sig.type_bank().bool_type()));
+        term.set_argument(0, left);
+        term.set_argument(1, right);
+        self.term_top_insert(term)
+    }
+
+    fn tformula_fcode_alloc(
+        &mut self,
+        op: FunCode,
+        arg1: Term,
+        arg2: Option<Term>,
+    ) -> Result<Term, Diagnostic> {
+        let arity = self.sig.find_arity(op).ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "TFormulaFCodeAlloc requires a known signature arity",
+            )
+        })?;
+        let arity = usize::try_from(arity).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "TFormulaFCodeAlloc requires unary or binary formula arity",
+            )
+        })?;
+        if arity != 1 && arity != 2 {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "TFormulaFCodeAlloc requires unary or binary formula arity",
+            ));
+        }
+        if arity == 2 && arg2.is_none() {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "TFormulaFCodeAlloc binary formula is missing its second argument",
+            ));
+        }
+
+        let term = Term::top_alloc(op, arity);
+        term.set_type(Some(self.sig.type_bank().bool_type()));
+        if self.sig.is_predicate(op) {
+            term.set_prop(TP_PRED_POS);
+        }
+        term.set_argument(0, arg1);
+        if let Some(arg2) = arg2 {
+            term.set_argument(1, arg2);
+        }
+        self.term_top_insert(term)
+    }
+
+    fn tptp_operator_parse(&mut self, scanner: &mut Scanner) -> Result<FunCode, Diagnostic> {
+        scanner.check_tok(TokenType::FOF_BIN_OP)?;
+        let op = self.tptp_operator_convert(scanner.current_token().kind())?;
+        scanner.next_token()?;
+        Ok(op)
+    }
+
+    fn tptp_operator_convert(&mut self, token: TokenType) -> Result<FunCode, Diagnostic> {
+        let op = if token == TokenType::FOF_OR {
+            self.sig.or_code()
+        } else if token == TokenType::FOF_AND {
+            self.sig.and_code()
+        } else if token == TokenType::FOF_LR_IMPL {
+            self.sig.impl_code()
+        } else if token == TokenType::FOF_RL_IMPL {
+            self.sig.bimpl_code()
+        } else if token == TokenType::FOF_EQUIV {
+            self.sig.equiv_code()
+        } else if token == TokenType::EQUAL_SIGN {
+            self.sig.get_eqn_code(true)
+        } else if token == TokenType::FOF_XOR {
+            self.sig.xor_code()
+        } else if token == TokenType::NEG_EQUAL_SIGN {
+            self.sig.get_eqn_code(false)
+        } else if token == TokenType::FOF_NAND {
+            self.sig.nand_code()
+        } else if token == TokenType::FOF_NOR {
+            self.sig.nor_code()
+        } else {
+            0
+        };
+        self.require_formula_op_code(op)
+    }
+
+    fn require_formula_op_code(&self, op: FunCode) -> Result<FunCode, Diagnostic> {
+        if op == 0 {
+            Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Boolean formula operator requires initialized internal FOF symbols",
+            ))
+        } else {
+            Ok(op)
+        }
     }
 
     fn normalize_boolean_term_arg(&self, term: Term) -> Term {
@@ -2258,6 +2494,29 @@ mod tests {
         (TermBank::new(sig).unwrap(), f_code)
     }
 
+    fn bool_arg_bank(outer_name: &str) -> TermBank {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let bool_type = sig.type_bank().bool_type();
+        let i_type = sig.type_bank().i_type();
+        let outer = sig.insert_id(outer_name, 1, false);
+        let outer_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![bool_type, i_type]));
+        sig.declare_type(outer, outer_type).unwrap();
+        TermBank::new(sig).unwrap()
+    }
+
+    fn parse_bool_arg(input: &str) -> (TermBank, Term) {
+        let mut bank = bool_arg_bank("takes_bool_arg");
+        let mut scanner = Scanner::from_user_string(input, false).unwrap();
+        let parsed = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+        let arg = parsed
+            .argument(0)
+            .unwrap_or_else(|| panic!("parsed Boolean wrapper has an argument"));
+        (bank, arg)
+    }
+
     struct AppliedPrefixFixture {
         bank: TermBank,
         f_code: i64,
@@ -2668,24 +2927,79 @@ mod tests {
     }
 
     #[test]
-    fn checked_parser_reports_boolean_formula_argument_gap_explicitly() {
-        let mut sig = Signature::new(TypeBank::new());
-        let bool_type = sig.type_bank().bool_type();
-        let i_type = sig.type_bank().i_type();
-        let takes_bool = sig.insert_id("takes_bool_arg", 1, false);
-        let takes_bool_type = sig
-            .type_bank_mut()
-            .insert_type_shared(alloc_arrow_type(vec![bool_type, i_type]));
-        sig.declare_type(takes_bool, takes_bool_type).unwrap();
-        let mut bank = TermBank::new(sig).unwrap();
+    fn checked_parser_reads_boolean_truth_constant_arguments() {
+        let (bank, true_arg) = parse_bool_arg("takes_bool_arg($true)");
+        assert_eq!(true_arg, bank.true_term().clone());
 
-        let mut scanner = Scanner::from_user_string("takes_bool_arg($true)", false).unwrap();
-        let error = bank
-            .parse_term_with_distinct_checks(&mut scanner)
-            .unwrap_err();
+        let (bank, false_arg) = parse_bool_arg("takes_bool_arg($false)");
+        assert_eq!(false_arg, bank.false_term().clone());
+    }
 
-        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains("Boolean formula arguments"));
+    #[test]
+    fn checked_parser_encodes_boolean_predicate_arguments_like_tformula() {
+        let (bank, arg) = parse_bool_arg("takes_bool_arg(pred_bool_arg)");
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        let left = arg.argument(0).unwrap();
+        let right = arg.argument(1).unwrap();
+        assert_eq!(
+            bank.signature().find_name(left.f_code()),
+            Some("pred_bool_arg")
+        );
+        assert!(bank.signature().is_predicate(left.f_code()));
+        assert_eq!(right, bank.true_term().clone());
+    }
+
+    #[test]
+    fn checked_parser_reads_equality_boolean_arguments() {
+        let (bank, arg) = parse_bool_arg("takes_bool_arg(eq_bool_a = eq_bool_b)");
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(arg.argument(0).unwrap().f_code()),
+            Some("eq_bool_a")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(arg.argument(1).unwrap().f_code()),
+            Some("eq_bool_b")
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_negated_boolean_formula_arguments() {
+        let (bank, arg) = parse_bool_arg("takes_bool_arg(~pred_bool_neg)");
+
+        assert_eq!(arg.f_code(), bank.signature().not_code());
+        let child = arg.argument(0).unwrap();
+        assert_eq!(child.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(child.argument(0).unwrap().f_code()),
+            Some("pred_bool_neg")
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_binary_boolean_formula_arguments() {
+        let (bank, arg) = parse_bool_arg("takes_bool_arg(pred_bool_l & pred_bool_r)");
+
+        assert_eq!(arg.f_code(), bank.signature().and_code());
+        let left = arg.argument(0).unwrap();
+        let right = arg.argument(1).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        assert_eq!(right.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("pred_bool_l")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(0).unwrap().f_code()),
+            Some("pred_bool_r")
+        );
     }
 
     #[test]
