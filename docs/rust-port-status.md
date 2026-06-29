@@ -117,9 +117,9 @@ C source references:
 
 Implemented:
 
-- Full C derivation opcode, argument-bit, and `DerivationCode` constants, including represented clause-generation/simplification entries, formula/CNF-conversion entries kept for future formula owners, and higher-order entries with their `ArgIsHO` flag combinations.
+- C `ProofOutput` and `ProofObjectType` discriminants, including the typo-preserving `SimpleDeriviation` proof-object name, plus the full C derivation opcode, argument-bit, and `DerivationCode` constants, including represented clause-generation/simplification entries, formula/CNF-conversion entries kept for future formula owners, and higher-order entries with their `ArgIsHO` flag combinations.
 - Clause derivation stack entries for operations, compact clause-parent references, numeric arguments, and existing rewrite demodulator trace entries.
-- Clause-parent `ClausePushDerivation` subset, numeric-argument push helper, `ClauseIsEvalGC`, `ClauseIsDummyQuote`, parent extraction, initial-clause indication, and search-inference counting.
+- Clause-parent `ClausePushDerivation` subset, numeric-argument push helper, `ClausePushACResDerivation` AC-axiom-count wrapper, `ClauseIsEvalGC`, `ClauseIsDummyQuote`, parent extraction, initial-clause indication, and search-inference counting.
 - Derivation pushes for first-order ordered factoring, first-order equality factoring, first-order equality resolution, destructive equality-resolution normalization, disequality decomposition, condensation, contextual simplify-reflect, positive/negative simplify-reflect, and local rewriting.
 - C-shaped PCL and TSTP derivation-stack expression rendering for represented clause-side stacks, used by current proof-object list and graph output where full derivation extraction has not yet replaced compact Rust references. Proof-found and stopped/saturation list output now expands represented clause ancestors, prints ancestors before extraction roots, and uses display-only sequential ids with represented parent references remapped for output.
 
@@ -132,6 +132,7 @@ Pending:
 Change-later notes:
 
 - C derivation parent references are compact clause identifiers paired with source tags rather than stable object handles. Rust preserves that representation for current proof-depth and inference-count behavior, but proof reconstruction should move to stable clause/formula handles before duplicate identifiers, archived copies, and requeued clauses become harder to distinguish.
+- C `ClausePushACResDerivation` records only `PStackGetSP(sig->ac_axioms)` rather than the AC axiom parents themselves. Rust currently takes that count explicitly; once signature-owned AC axiom parents are represented, prefer an API that keeps the proof-state parent handles near the count.
 - C proof-documentation pushes are interleaved with inference construction, simplification, archive movement, and global output. Rust currently records derivation metadata locally and defers output side effects; the eventual proof object layer should keep metadata creation separate from rendering so compatibility shims can reproduce C streams without making them the core API.
 
 ## Initial Crate And CLI Foundation

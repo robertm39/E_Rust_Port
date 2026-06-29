@@ -3,6 +3,64 @@ use crate::clauses::clause::Clause;
 use crate::terms::termtypes::RewriteDemodulator;
 use std::fmt::Write as _;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i32)]
+pub enum ProofOutput {
+    None = 0,
+    List = 1,
+    Graph1 = 2,
+    Graph2 = 3,
+    Graph3 = 4,
+}
+
+impl ProofOutput {
+    #[must_use]
+    pub const fn from_c_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::None),
+            1 => Some(Self::List),
+            2 => Some(Self::Graph1),
+            3 => Some(Self::Graph2),
+            4 => Some(Self::Graph3),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn c_value(self) -> i32 {
+        self as i32
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i32)]
+pub enum ProofObjectType {
+    InvalidObject = -1,
+    NoObject = 0,
+    SimpleDeriviation = 1,
+    DetailedDerivation = 2,
+    SingleStepDerivation = 3,
+}
+
+impl ProofObjectType {
+    #[must_use]
+    pub const fn from_c_value(value: i32) -> Option<Self> {
+        match value {
+            -1 => Some(Self::InvalidObject),
+            0 => Some(Self::NoObject),
+            1 => Some(Self::SimpleDeriviation),
+            2 => Some(Self::DetailedDerivation),
+            3 => Some(Self::SingleStepDerivation),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn c_value(self) -> i32 {
+        self as i32
+    }
+}
+
 pub const ARG1_FOF: i64 = 1 << 8;
 pub const ARG1_CNF: i64 = 1 << 9;
 pub const ARG1_NUM: i64 = 1 << 10;
@@ -289,6 +347,21 @@ pub fn clause_push_numeric_derivation(clause: &mut Clause, op: i64, arg1: i64) {
     let stack = clause.ensure_derivation();
     stack.push(DerivationEntry::Operation(op));
     stack.push(DerivationEntry::NumericArg(arg1));
+}
+
+/// Pushes the C `ClausePushACResDerivation` stack entries.
+///
+/// The C helper stores only `PStackGetSP(sig->ac_axioms)` as the numeric
+/// argument. Rust keeps the signature-owned AC axiom list outside this helper
+/// until signature/proof-state ownership is complete.
+///
+/// # Panics
+///
+/// Panics if `ac_axiom_count` does not fit in a C signed long equivalent.
+pub fn clause_push_ac_res_derivation(clause: &mut Clause, ac_axiom_count: usize) {
+    let count = i64::try_from(ac_axiom_count)
+        .unwrap_or_else(|_| panic!("AC axiom count must fit in signed long"));
+    clause_push_numeric_derivation(clause, DC_AC_RES, count);
 }
 
 /// Extracts the clause-side parent references from a C-shaped derivation stack.
@@ -805,11 +878,12 @@ pub fn derivation_entries(clause: &Clause) -> &[DerivationEntry] {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_is_dummy_quote, clause_is_eval_gc, clause_push_derivation,
-        clause_push_numeric_derivation, deriv_stack_count_search_inferences,
-        deriv_stack_extract_parents, deriv_stack_indicates_initial_clause, deriv_stack_pcl_string,
-        deriv_stack_tstp_string, derivation_entries, get_is_ho, op_code, op_is_generating,
-        set_is_ho, ClauseDerivationRef, DerivationEntry, DerivationParentRef, ARG1_CNF, ARG1_FOF,
+        clause_is_dummy_quote, clause_is_eval_gc, clause_push_ac_res_derivation,
+        clause_push_derivation, clause_push_numeric_derivation,
+        deriv_stack_count_search_inferences, deriv_stack_extract_parents,
+        deriv_stack_indicates_initial_clause, deriv_stack_pcl_string, deriv_stack_tstp_string,
+        derivation_entries, get_is_ho, op_code, op_is_generating, set_is_ho, ClauseDerivationRef,
+        DerivationEntry, DerivationParentRef, ProofObjectType, ProofOutput, ARG1_CNF, ARG1_FOF,
         ARG1_NUM, ARG2_CNF, ARG2_FOF, ARG2_NUM, ARG_IS_HO, DC_AC_RES, DC_ANNO_QUESTION,
         DC_APPLY_DEF, DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC,
         DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_DES_EQ_RES, DC_DIST_DISJUNCTIONS,
@@ -835,6 +909,31 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::termtypes::RewriteDemodulator;
+
+    #[test]
+    fn proof_output_discriminants_match_c_enum() {
+        assert_eq!(ProofOutput::None.c_value(), 0);
+        assert_eq!(ProofOutput::List.c_value(), 1);
+        assert_eq!(ProofOutput::Graph1.c_value(), 2);
+        assert_eq!(ProofOutput::Graph2.c_value(), 3);
+        assert_eq!(ProofOutput::Graph3.c_value(), 4);
+        assert_eq!(ProofOutput::from_c_value(2), Some(ProofOutput::Graph1));
+        assert_eq!(ProofOutput::from_c_value(5), None);
+    }
+
+    #[test]
+    fn proof_object_type_discriminants_match_c_enum_typo() {
+        assert_eq!(ProofObjectType::InvalidObject.c_value(), -1);
+        assert_eq!(ProofObjectType::NoObject.c_value(), 0);
+        assert_eq!(ProofObjectType::SimpleDeriviation.c_value(), 1);
+        assert_eq!(ProofObjectType::DetailedDerivation.c_value(), 2);
+        assert_eq!(ProofObjectType::SingleStepDerivation.c_value(), 3);
+        assert_eq!(
+            ProofObjectType::from_c_value(1),
+            Some(ProofObjectType::SimpleDeriviation)
+        );
+        assert_eq!(ProofObjectType::from_c_value(4), None);
+    }
 
     #[test]
     fn derivation_argument_bits_match_c_bit_layout() {
@@ -1015,6 +1114,36 @@ mod tests {
             &[
                 DerivationEntry::Operation(DC_AC_RES),
                 DerivationEntry::NumericArg(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn clause_push_ac_res_derivation_records_current_ac_axiom_count() {
+        let mut clause = Clause::alloc(EqnList::new());
+
+        clause_push_ac_res_derivation(&mut clause, 2);
+
+        assert_eq!(
+            derivation_entries(&clause),
+            &[
+                DerivationEntry::Operation(DC_AC_RES),
+                DerivationEntry::NumericArg(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn clause_push_ac_res_derivation_allows_empty_ac_axiom_stack() {
+        let mut clause = Clause::alloc(EqnList::new());
+
+        clause_push_ac_res_derivation(&mut clause, 0);
+
+        assert_eq!(
+            derivation_entries(&clause),
+            &[
+                DerivationEntry::Operation(DC_AC_RES),
+                DerivationEntry::NumericArg(0),
             ]
         );
     }
