@@ -145,4 +145,18 @@ Source files reviewed: `TERMS/cte_lambda.h`, `TERMS/cte_lambda.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning: C-shaped `ApplyTerms`, `CloseWithDBVar`, `CloseWithTypePrefix`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
+- The staged beta normalizer handles phony applications headed by DB lambdas, consumed-argument substitution with DB-index shifting, recursive beta normalization under lambdas and ordinary top cells, and the C `BetaNormalizeDB` special case that unwraps `$eq(logical_symbol, $true)`.
+- Full `LambdaNormalizeDB` parity is not complete yet because eta expansion/reduction, named-lambda-to-DB conversion, formula CNF decode/encode helpers, WHNF dereference/cache integration, and typed phony-application flattening remain later slices.
+
+### Change-Later Observations
+
+- C `WHNF_step` writes temporary bindings into DB-variable cells and clears them manually after substitution. Rust avoids mutating DB variable cells by carrying an explicit binding vector indexed by DB index; keep this safer representation unless profiling or C trace comparison exposes a compatibility issue.
+- C caches weak-head reductions in term cells (`TermGetCache`/`TermSetCache`). Rust currently recomputes the represented beta steps and immediately shares results through the term bank. Revisit cache parity if higher-order workloads show this path on hot traces.
+- C `LambdaNormalizeDB` delegates eta behavior through a file-static normalizer function pointer. Rust has not modeled that global hook yet; when eta normalization is ported, prefer an explicit normalizer owner unless C-compatible global mutation is observable.
+- C `flatten_and_make_shared` repairs intermediary phony applications whose head becomes an ordinary symbol after beta/eta work. Rust's staged beta path currently relies on the represented pruning shapes and term-bank application helper; revisit flattening before using the module as a general lambda normalizer.
+- The C comments contain several stale or copy-pasted descriptions around `ApplyTerms`, `UnfoldLambda`, and `GetEtaNormalizer`. Keep the source behavior, not the comments, as the compatibility reference.
 <!-- END MANUAL REVIEW: c_source_docs -->

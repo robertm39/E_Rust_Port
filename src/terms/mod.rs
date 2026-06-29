@@ -5,6 +5,7 @@ pub mod functypes;
 pub mod garbage_coll;
 pub mod ho_csu;
 pub mod idx_fp;
+pub mod lambda;
 pub mod match_mgu;
 pub mod replace;
 pub mod signature;

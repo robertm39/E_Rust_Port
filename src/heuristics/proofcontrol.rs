@@ -11,8 +11,8 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
-    clause_remove_ac_resolved, clause_remove_superfluous_literals, clause_resolve_flex_clause,
-    clause_set_delete_orphans_with,
+    clause_prune_args, clause_remove_ac_resolved, clause_remove_superfluous_literals,
+    clause_resolve_flex_clause, clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -1478,9 +1478,8 @@ fn proof_state_move_processed_set_to_tmp_by(
 /// # Errors
 ///
 /// Returns a diagnostic if proof-control ordering is missing, if a lower-level
-/// term operation fails, or if the current higher-order problem requests the
-/// not-yet-ported argument-pruning hook or a non-empty higher-order term
-/// ordering.
+/// term operation fails, or if the current higher-order problem requests a
+/// non-empty higher-order term ordering.
 pub fn proof_state_forward_modify_clause(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -1495,6 +1494,7 @@ pub fn proof_state_forward_modify_clause(
         clause,
         condense_clause,
         level,
+        problem_type(),
         None,
     )
 }
@@ -1528,6 +1528,7 @@ pub fn proof_state_forward_modify_clause_with_docs(
         clause,
         condense_clause,
         level,
+        problem_type(),
         Some((output, session)),
     )
 }
@@ -1538,13 +1539,14 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
     clause: &mut Clause,
     condense_clause: bool,
     level: RewriteLevel,
+    problem_type: ProblemType,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
     let prefer_general = control.heuristic_parms().prefer_general;
     let lambda_demod = control.heuristic_parms().lambda_demod;
     let local_rw = control.heuristic_parms().local_rw;
     let prune_args = control.heuristic_parms().prune_args;
-    let higher_order = problem_type() == ProblemType::HigherOrder;
+    let higher_order = problem_type == ProblemType::HigherOrder;
     let ac_handling_active = control.ac_handling_active();
     let strong_unit_forward_subsumption = control.strong_unit_forward_subsumption();
     let ocb = control.ocb.as_mut().ok_or_else(|| {
@@ -1619,7 +1621,9 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 break true;
             }
 
-            forward_modify_check_higher_order_prune_args(higher_order, prune_args)?;
+            if higher_order && prune_args {
+                let _ = clause_prune_args(clause, terms)?;
+            }
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
 
             forward_modify_positive_simplify_reflect(
@@ -1655,19 +1659,6 @@ fn forward_modify_check_higher_order_ordering(
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "ForwardModifyClause higher-order term ordering is not ported yet",
-        ));
-    }
-    Ok(())
-}
-
-fn forward_modify_check_higher_order_prune_args(
-    higher_order: bool,
-    prune_args: bool,
-) -> Result<(), Diagnostic> {
-    if higher_order && prune_args {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ForwardModifyClause higher-order ClausePruneArgs is not ported yet",
         ));
     }
     Ok(())
@@ -5401,9 +5392,10 @@ mod tests {
         proof_state_eval_clause_set, proof_state_filter_unprocessed,
         proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
         proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
-        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
-        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_docs,
+        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
+        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
+        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
+        proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
@@ -5428,7 +5420,7 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+    use crate::basics::simple_stuff::ProblemType;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
@@ -5562,18 +5554,22 @@ mod tests {
         bank.term_top_insert(term).unwrap()
     }
 
-    struct ProblemTypeReset;
+    struct TimeLimitsReset;
 
-    impl Drop for ProblemTypeReset {
+    impl Drop for TimeLimitsReset {
         fn drop(&mut self) {
-            reset_problem_type();
+            configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         }
     }
 
-    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
-        reset_problem_type();
-        set_problem_type(problem_type).unwrap();
-        ProblemTypeReset
+    #[must_use]
+    fn configure_time_limits_for_test(
+        hard_limit: u64,
+        soft_limit: u64,
+        schedule_limit: u64,
+    ) -> TimeLimitsReset {
+        configure_time_limits(hard_limit, soft_limit, schedule_limit);
+        TimeLimitsReset
     }
 
     fn literal(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -6514,8 +6510,6 @@ mod tests {
 
     #[test]
     fn proof_state_forward_modify_clause_higher_order_normalizes_encoded_equality() {
-        let _guard = global_state_lock();
-        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (mut clause, left, right) = {
             let terms = state.terms_mut();
@@ -6533,13 +6527,14 @@ mod tests {
         let mut control = proof_control_alloc();
         control.set_ocb(empty_ocb(state.terms()));
 
-        let trivial = proof_state_forward_modify_clause(
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
             &mut state,
             &mut control,
             &mut clause,
             false,
-            false,
             RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
         )
         .unwrap_or_else(|err| panic!("{err}"));
 
@@ -6560,8 +6555,6 @@ mod tests {
 
     #[test]
     fn proof_state_forward_modify_clause_higher_order_ordering_stays_explicit_diagnostic() {
-        let _guard = global_state_lock();
-        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut clause = {
             let terms = state.terms_mut();
@@ -6572,13 +6565,14 @@ mod tests {
         let mut control = proof_control_alloc();
         control.set_ocb(kbo_ocb(state.terms()));
 
-        let error = proof_state_forward_modify_clause(
+        let error = proof_state_forward_modify_clause_impl::<String>(
             &mut state,
             &mut control,
             &mut clause,
             false,
-            false,
             RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
         )
         .unwrap_err();
 
@@ -6587,9 +6581,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_higher_order_prune_args_stays_explicit_diagnostic() {
-        let _guard = global_state_lock();
-        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+    fn proof_state_forward_modify_clause_higher_order_prune_args_runs_without_candidates() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut clause = {
             let terms = state.terms_mut();
@@ -6601,18 +6593,18 @@ mod tests {
         control.set_ocb(empty_ocb(state.terms()));
         control.heuristic_parms_mut().prune_args = true;
 
-        let error = proof_state_forward_modify_clause(
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
             &mut state,
             &mut control,
             &mut clause,
             false,
-            false,
             RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
         )
-        .unwrap_err();
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("ClausePruneArgs"));
+        assert!(!trivial);
     }
 
     #[test]
@@ -9147,6 +9139,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_processes_until_unprocessed_empty() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
@@ -9183,7 +9178,7 @@ mod tests {
     #[test]
     fn proof_state_saturate_stops_on_cooperative_time_limit() {
         let _guard = global_state_lock();
-        configure_time_limits(0, RLIM_INFINITY_COMPAT, 0);
+        let _time_limits = configure_time_limits_for_test(0, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
@@ -9212,11 +9207,13 @@ mod tests {
         );
         assert_eq!(state.statistics().processed_count, 0);
         assert_eq!(state.unprocessed().members(), 1);
-        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
     }
 
     #[test]
     fn proof_state_saturate_closes_variable_predicate_horn_chain() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_fifo_hcb(&mut control, &state, "SaturatePredicateHornTest");
@@ -9282,6 +9279,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_with_global_indices_uses_indexed_paramodulation() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (selected, mut indexed_partner, source) = {
             let terms = state.terms_mut();
@@ -9335,6 +9335,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_stops_at_step_limit_after_iteration() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
@@ -9369,6 +9372,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_stops_on_active_empty_watchlist_only() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         state
             .load_watchlist(WatchlistSource::Inline, IoFormat::Lop)
@@ -9405,6 +9411,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_runs_due_sat_check_and_records_model() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
@@ -9443,6 +9452,9 @@ mod tests {
 
     #[test]
     fn proof_state_saturate_sat_check_refutes_opposite_pseudo_ground_units() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);

@@ -9,25 +9,28 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
     ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
-    DC_FLEX_RESOLVE, DC_NORMALIZE,
+    DC_FLEX_RESOLVE, DC_NORMALIZE, DC_PRUNE_ARG,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
     EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
+use crate::terms::lambda::{
+    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
+};
 use crate::terms::match_mgu::subst_mgu_complete;
-use crate::terms::signature::{FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE};
-use crate::terms::simpletypes::{arrow_type_flattened, type_is_predicate, Type};
+use crate::terms::signature::FP_IS_INJ_DEF_SKOLEM;
+use crate::terms::simpletypes::{arrow_type_flattened, type_get_max_arity, type_is_predicate};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_is_db_closed, term_standard_weight};
+use crate::terms::termfunc::{term_is_db_closed, term_is_ground, term_standard_weight};
 use crate::terms::termtypes::{
     term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
     TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS,
 };
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[must_use]
 pub fn pstack_clause_print_lop_string(
@@ -983,33 +986,6 @@ fn tformula_fcode_alloc(
     bank.term_top_insert(term)
 }
 
-fn close_with_db_var(
-    bank: &mut TermBank,
-    binder_type: &Type,
-    body: &Term,
-) -> Result<Term, Diagnostic> {
-    assert!(body.is_shared(), "lambda body must be a shared bank term");
-    let body_type = body.type_().ok_or_else(|| {
-        Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "CloseWithDBVar requires a typed lambda body",
-        )
-    })?;
-    let binder = bank.request_db_var(binder_type, 0);
-    let lambda = Term::top_alloc(SIG_DB_LAMBDA_CODE, 2);
-    lambda.set_argument(0, binder);
-    lambda.set_argument(1, body.clone());
-    let lambda_type =
-        bank.signature_mut()
-            .type_bank_mut()
-            .insert_type_shared(arrow_type_flattened(
-                std::slice::from_ref(binder_type),
-                &body_type,
-            ));
-    lambda.set_type(Some(lambda_type));
-    bank.term_top_insert(lambda)
-}
-
 fn unroll_binary_formula(formula: &Term, f_code: i64, args: &mut Vec<Term>) {
     let mut tasks = vec![formula.clone()];
     while let Some(task) = tasks.pop() {
@@ -1088,6 +1064,240 @@ fn formula_argument(formula: &Term, index: usize) -> Term {
     formula
         .argument(index)
         .unwrap_or_else(|| panic!("formula argument {index} is uninitialized"))
+}
+
+/// Applies C `ClausePruneArgs`.
+///
+/// The pass removes arguments from applied free variables when the argument is
+/// constant across all occurrences or repeated at another argument position.
+///
+/// # Errors
+///
+/// Returns a diagnostic if generated lambda bindings or rebuilt terms cannot be
+/// inserted through the term bank.
+///
+/// # Panics
+///
+/// Panics if a candidate higher-order variable is untyped or if an applied
+/// variable carries more explicit arguments than its type permits.
+pub fn clause_prune_args(clause: &mut Clause, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+    if clause.is_empty() {
+        return Ok(false);
+    }
+
+    let mut var_data = BTreeMap::new();
+    for literal in clause.literals().as_slice() {
+        collect_prune_arg_occurrences(literal.left(), &mut var_data);
+        collect_prune_arg_occurrences(literal.right(), &mut var_data);
+    }
+
+    remove_constant_args(&mut var_data);
+    remove_repeated_args(&mut var_data);
+
+    let mut substitution = Substitution::new();
+    let result = (|| {
+        if !compute_prune_arg_substitution(&var_data, bank, &mut substitution)? {
+            return Ok(false);
+        }
+        apply_prune_arg_substitution(clause, bank)?;
+        Ok(true)
+    })();
+    substitution.delete();
+    result
+}
+
+#[derive(Clone, Debug)]
+struct PruneArgVarData {
+    var: Term,
+    occurrences: Vec<Vec<Option<Term>>>,
+    removed_args: BTreeSet<usize>,
+}
+
+fn collect_prune_arg_occurrences(term: &Term, vars: &mut BTreeMap<usize, PruneArgVarData>) {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if let Some((var, args)) = prune_arg_candidate(&current) {
+            let key = term_identity_id(&var);
+            vars.entry(key)
+                .or_insert_with(|| PruneArgVarData {
+                    var,
+                    occurrences: Vec::new(),
+                    removed_args: BTreeSet::new(),
+                })
+                .occurrences
+                .push(args);
+        }
+
+        for index in usize::from(current.is_phony_app())..current.arity() {
+            let arg = current
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            if !term_is_ground(&arg) {
+                stack.push(arg);
+            }
+        }
+    }
+}
+
+fn prune_arg_candidate(term: &Term) -> Option<(Term, Vec<Option<Term>>)> {
+    let var = if term.is_applied_free_var() {
+        term.argument(0)
+            .unwrap_or_else(|| panic!("applied free variable head is uninitialized"))
+    } else if term.is_free_var() && term.type_().is_some_and(|type_| type_.is_arrow()) {
+        term.clone()
+    } else {
+        return None;
+    };
+
+    let var_type = var.type_().expect("higher-order variable must have a type");
+    let max_args = type_get_max_arity(&var_type);
+    let explicit_args = term.arity().saturating_sub(1);
+    assert!(
+        explicit_args <= max_args,
+        "applied variable has more arguments than its type permits"
+    );
+
+    let mut args = vec![None; max_args];
+    for index in 1..term.arity() {
+        args[index - 1] = Some(
+            term.argument(index)
+                .unwrap_or_else(|| panic!("applied variable argument {index} is uninitialized")),
+        );
+    }
+    Some((var, args))
+}
+
+fn remove_constant_args(vars: &mut BTreeMap<usize, PruneArgVarData>) {
+    for data in vars.values_mut() {
+        let Some(first_occurrence) = data.occurrences.first() else {
+            continue;
+        };
+        let mut arg_idx = 0;
+        while arg_idx < first_occurrence.len() {
+            let Some(first_arg) = first_occurrence[arg_idx].as_ref() else {
+                break;
+            };
+
+            let removable = term_is_db_closed(first_arg)
+                && !data.removed_args.contains(&arg_idx)
+                && data.occurrences[1..].iter().all(|occurrence| {
+                    occurrence
+                        .get(arg_idx)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|arg| arg == first_arg)
+                });
+            if removable {
+                data.removed_args.insert(arg_idx);
+            }
+            arg_idx += 1;
+        }
+    }
+}
+
+fn remove_repeated_args(vars: &mut BTreeMap<usize, PruneArgVarData>) {
+    for data in vars.values_mut() {
+        let Some(first_occurrence) = data.occurrences.first() else {
+            continue;
+        };
+        let num_args = first_occurrence.len();
+        let mut arg_i = 0;
+        while arg_i < num_args {
+            if first_occurrence[arg_i].is_none() {
+                break;
+            }
+
+            let mut arg_j = arg_i + 1;
+            while arg_j < num_args {
+                if first_occurrence[arg_j].is_none() {
+                    break;
+                }
+                let removable = !data.removed_args.contains(&arg_i)
+                    && !data.removed_args.contains(&arg_j)
+                    && data.occurrences.iter().all(|occurrence| {
+                        let Some(left) = occurrence.get(arg_i).and_then(Option::as_ref) else {
+                            return false;
+                        };
+                        occurrence
+                            .get(arg_j)
+                            .and_then(Option::as_ref)
+                            .is_some_and(|right| right == left)
+                    });
+                if removable {
+                    data.removed_args.insert(arg_i);
+                    break;
+                }
+                arg_j += 1;
+            }
+            arg_i += 1;
+        }
+    }
+}
+
+fn compute_prune_arg_substitution(
+    vars: &BTreeMap<usize, PruneArgVarData>,
+    bank: &mut TermBank,
+    substitution: &mut Substitution,
+) -> Result<bool, Diagnostic> {
+    let mut removed_any = false;
+    for data in vars.values() {
+        if data.removed_args.is_empty() {
+            continue;
+        }
+
+        let var_type = data
+            .var
+            .type_()
+            .expect("higher-order variable must have a type");
+        assert!(
+            var_type.is_arrow(),
+            "argument pruning expects an arrow-typed variable"
+        );
+        let max_args = type_get_max_arity(&var_type);
+        let ret_type = var_type.args()[var_type.arity() - 1].clone();
+        let mut retained_db_vars = Vec::new();
+        let mut retained_types = Vec::new();
+        for arg_idx in 0..max_args {
+            if data.removed_args.contains(&arg_idx) {
+                continue;
+            }
+            let arg_type = var_type.args()[arg_idx].clone();
+            retained_types.push(arg_type.clone());
+            retained_db_vars
+                .push(bank.request_db_var(&arg_type, usize_to_i64(max_args - arg_idx - 1)));
+        }
+
+        let fresh_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(arrow_type_flattened(&retained_types, &ret_type));
+        let fresh_var = bank.vars().get_fresh_var(&fresh_type);
+        let matrix = apply_terms(bank, &fresh_var, &retained_db_vars)?;
+        let closed = close_with_type_prefix(bank, &var_type.args()[..max_args], &matrix)?;
+        substitution.add_binding(&data.var, &closed);
+        removed_any = true;
+    }
+    Ok(removed_any)
+}
+
+fn apply_prune_arg_substitution(
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    for literal in clause.literals_mut().as_mut_slice() {
+        let left = bank.insert_instantiated_ho(literal.left(), true)?;
+        let left = beta_normalize_db(bank, &left)?;
+        let right = bank.insert_instantiated_ho(literal.right(), true)?;
+        let right = beta_normalize_db(bank, &right)?;
+        literal.set_left_raw(left);
+        literal.set_right_raw(right);
+    }
+
+    let _ = clause.literals_mut().remove_resolved(bank);
+    let _ = clause.literals_mut().remove_duplicates(bank);
+    clause.recompute_lit_counts();
+    clause.set_weight(clause.standard_weight());
+    clause_push_derivation(clause, DC_PRUNE_ARG, None, None);
+    Ok(())
 }
 
 /// Recognizes an injectivity definition and creates the inverse-function clause.
@@ -1408,8 +1618,8 @@ mod tests {
         clause_archive, clause_archive_copy, clause_boolean_simplification,
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
         clause_flip_literal_sign_index, clause_is_orphaned_with, clause_normalize_equations,
-        clause_recognize_injectivity, clause_remove_ac_resolved, clause_remove_literal,
-        clause_remove_literal_index, clause_remove_superfluous_literals,
+        clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
+        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
         clause_resolve_flex_clause, clause_set_archive_copy, clause_set_canonize,
         clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
         clause_set_replace_injectivity_defs, clause_unit_simplify_test, close_with_db_var,
@@ -1426,11 +1636,12 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_FLEX_RESOLVE, DC_NORMALIZE,
-        DC_ORDERED_FACTOR, DC_PARAMOD, DC_REWRITE,
+        DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
+    use crate::terms::lambda::apply_terms as lambda_apply_terms;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
     };
@@ -1476,11 +1687,29 @@ mod tests {
         bank.vars().var_assert_alloc(code, &predicate_type)
     }
 
+    fn higher_order_var(bank: &mut TermBank, code: i64, arg_count: usize) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let mut args = Vec::with_capacity(arg_count + 1);
+        for _ in 0..arg_count {
+            args.push(type_.clone());
+        }
+        args.push(type_);
+        let arrow = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(args));
+        bank.vars().var_assert_alloc(code, &arrow)
+    }
+
     fn applied_predicate_var(bank: &mut TermBank, code: i64, arg_name: &str) -> Term {
         let predicate = predicate_var(bank, code);
         let argument = typed_const(bank, arg_name);
         let applied = bank.term_apply_arg(&predicate, &argument);
         bank.term_top_insert(applied).unwrap()
+    }
+
+    fn apply_many(bank: &mut TermBank, head: &Term, args: &[Term]) -> Term {
+        lambda_apply_terms(bank, head, args).unwrap()
     }
 
     fn typed_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
@@ -2035,6 +2264,93 @@ mod tests {
         assert!(normalized.is_positive());
         assert!(normalized.is_equ_lit(&bank));
         assert!(!normalized.query_prop(EP_IS_ORIENTED | EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn clause_prune_args_removes_constant_argument_across_occurrences() {
+        let mut bank = test_bank();
+        let function = higher_order_var(&mut bank, -100, 2);
+        let constant = typed_const(&mut bank, "prune_const_a");
+        let x = typed_var(&bank, -102);
+        let y = typed_var(&bank, -104);
+        let first = apply_many(&mut bank, &function, &[constant.clone(), x.clone()]);
+        let second = apply_many(&mut bank, &function, &[constant, y.clone()]);
+        let rhs_first = typed_const(&mut bank, "prune_const_rhs_1");
+        let rhs_second = typed_const(&mut bank, "prune_const_rhs_2");
+        let mut clause = clause_from(vec![
+            literal(&mut bank, &first, &rhs_first, true),
+            literal(&mut bank, &second, &rhs_second, true),
+        ]);
+
+        assert!(clause_prune_args(&mut clause, &mut bank).unwrap());
+
+        let first_left = clause.literals().as_slice()[0].left();
+        let second_left = clause.literals().as_slice()[1].left();
+        assert!(first_left.is_applied_free_var());
+        assert!(second_left.is_applied_free_var());
+        assert_eq!(first_left.arity(), 2);
+        assert_eq!(second_left.arity(), 2);
+        assert_ne!(first_left.argument(0).as_ref(), Some(&function));
+        assert_eq!(first_left.argument(1).as_ref(), Some(&x));
+        assert_eq!(second_left.argument(1).as_ref(), Some(&y));
+        assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_PRUNE_ARG)]
+        );
+    }
+
+    #[test]
+    fn clause_prune_args_removes_repeated_argument_position() {
+        let mut bank = test_bank();
+        let function = higher_order_var(&mut bank, -110, 2);
+        let x = typed_var(&bank, -112);
+        let y = typed_var(&bank, -114);
+        let first = apply_many(&mut bank, &function, &[x.clone(), x.clone()]);
+        let second = apply_many(&mut bank, &function, &[y.clone(), y.clone()]);
+        let rhs_first = typed_const(&mut bank, "prune_repeat_rhs_1");
+        let rhs_second = typed_const(&mut bank, "prune_repeat_rhs_2");
+        let mut clause = clause_from(vec![
+            literal(&mut bank, &first, &rhs_first, true),
+            literal(&mut bank, &second, &rhs_second, true),
+        ]);
+
+        assert!(clause_prune_args(&mut clause, &mut bank).unwrap());
+
+        let first_left = clause.literals().as_slice()[0].left();
+        let second_left = clause.literals().as_slice()[1].left();
+        assert!(first_left.is_applied_free_var());
+        assert!(second_left.is_applied_free_var());
+        assert_eq!(first_left.arity(), 2);
+        assert_eq!(second_left.arity(), 2);
+        assert_ne!(first_left.argument(0).as_ref(), Some(&function));
+        assert_eq!(first_left.argument(1).as_ref(), Some(&x));
+        assert_eq!(second_left.argument(1).as_ref(), Some(&y));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_PRUNE_ARG)]
+        );
+    }
+
+    #[test]
+    fn clause_prune_args_ignores_variables_without_removable_arguments() {
+        let mut bank = test_bank();
+        let function = higher_order_var(&mut bank, -120, 2);
+        let x = typed_var(&bank, -122);
+        let y = typed_var(&bank, -124);
+        let first = apply_many(&mut bank, &function, &[x.clone(), y.clone()]);
+        let second = apply_many(&mut bank, &function, &[y, x]);
+        let rhs_first = typed_const(&mut bank, "prune_none_rhs_1");
+        let rhs_second = typed_const(&mut bank, "prune_none_rhs_2");
+        let mut clause = clause_from(vec![
+            literal(&mut bank, &first, &rhs_first, true),
+            literal(&mut bank, &second, &rhs_second, true),
+        ]);
+
+        assert!(!clause_prune_args(&mut clause, &mut bank).unwrap());
+
+        assert_eq!(clause.literals().as_slice()[0].left(), &first);
+        assert!(clause.derivation().is_none());
     }
 
     #[test]
