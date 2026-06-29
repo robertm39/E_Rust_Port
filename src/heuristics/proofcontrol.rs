@@ -11,8 +11,9 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::{
     clause_archive, clause_archive_copy, clause_boolean_simplification,
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
-    clause_prune_args, clause_remove_ac_resolved, clause_remove_superfluous_literals,
-    clause_resolve_flex_clause, clause_set_delete_orphans_with, tformula_fcode_alloc,
+    clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
+    clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
+    tformula_fcode_alloc,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::{condense, condense_with_docs};
@@ -3321,6 +3322,9 @@ fn compute_ho_inferences(
         if parms.neg_ext != ExtInferenceType::NoLits {
             generated += compute_pos_ext(terms, clause, generation.tmp_store, parms.pos_ext)?;
         }
+        if parms.inverse_recognition {
+            generated += compute_inverse_recognition(terms, clause, generation.tmp_store)?;
+        }
         if parms.elim_leibniz_max_depth >= 0 {
             generated += compute_leibniz_elimination(
                 terms,
@@ -3344,12 +3348,6 @@ fn compute_ho_inferences(
 }
 
 fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Diagnostic> {
-    if parms.inverse_recognition {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "higher-order inverse-recognition generation is not ported yet",
-        ));
-    }
     if parms.ext_rules_max_depth >= 0 {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -3363,6 +3361,18 @@ fn check_unsupported_ho_generation(parms: &HeuristicParmsCell) -> Result<(), Dia
         ));
     }
     Ok(())
+}
+
+fn compute_inverse_recognition(
+    bank: &mut TermBank,
+    clause: &Clause,
+    store: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    let Some(inverse_definition) = clause_recognize_injectivity(bank, clause)? else {
+        return Ok(0);
+    };
+    store.insert(inverse_definition);
+    Ok(1)
 }
 
 fn compute_arg_cong(
@@ -6395,14 +6405,15 @@ mod tests {
     use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED,
-        CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW, CP_NO_GENERATION,
-        CP_SUBSUMES_WATCH, CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
+        CP_IS_PROCESSED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
+        CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_WATCH_ONLY,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_LEIBNIZ_ELIM,
-        DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
+        DC_ARG_CONG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_INV_REC,
+        DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM,
+        DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -10180,6 +10191,118 @@ mod tests {
         };
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().elim_leibniz_max_depth = 2;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 0);
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_inverse_recognizes_definition() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (f_code, x_code, z_code, clause) = {
+            let terms = state.terms_mut();
+            let f_code = typed_binary_code(terms, "pc_generate_inverse_f");
+            let x = typed_var(terms, -18);
+            let y = typed_var(terms, -20);
+            let z = typed_var(terms, -22);
+            let left = typed_binary_with_code(terms, f_code, &x, &z);
+            let right = typed_binary_with_code(terms, f_code, &y, &z);
+            let negative = literal(terms, &left, &right, false);
+            let positive = literal(terms, &x, &y, true);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![negative, positive]));
+            clause.set_ident(4_178);
+            clause.set_proof_depth(4);
+            clause.set_proof_size(7);
+            clause.set_tptp_type(CP_TYPE_AXIOM);
+            clause.set_prop(CP_IS_SOS | CP_NO_GENERATION);
+            (f_code, x.f_code(), z.f_code(), clause)
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().inverse_recognition = true;
+        control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
+        control.heuristic_parms_mut().enable_eq_factoring = false;
+
+        let outcome = proof_state_generate_new_clauses_impl::<String>(
+            &mut state,
+            &mut control,
+            &clause,
+            ProblemType::HigherOrder,
+            None,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, GenerateNewClausesOutcome::default());
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.positive_literal_count(), 1);
+        assert_eq!(generated.negative_literal_count(), 0);
+        assert_eq!(generated.proof_depth(), 5);
+        assert_eq!(generated.proof_size(), 8);
+        assert_eq!(generated.query_tptp_type(), CP_TYPE_AXIOM);
+        assert!(generated.query_prop(CP_IS_PURE_INJECTIVITY));
+        assert!(generated.query_prop(CP_IS_SOS));
+        assert!(!generated.query_prop(CP_NO_GENERATION));
+        assert_eq!(
+            generated.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_INV_REC),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_178, 0)),
+            ],
+        );
+
+        let inverse_literal = &generated.literals().as_slice()[0];
+        assert!(inverse_literal.is_positive());
+        assert_eq!(inverse_literal.right().f_code(), x_code);
+        let inverse_term = inverse_literal.left();
+        assert_eq!(inverse_term.arity(), 2);
+        assert_eq!(
+            inverse_term.argument(0).map(|term| term.f_code()),
+            Some(z_code)
+        );
+        assert_eq!(
+            inverse_term
+                .argument(1)
+                .and_then(|argument| argument.argument(0))
+                .map(|term| term.f_code()),
+            Some(x_code),
+        );
+        assert_eq!(
+            inverse_term.argument(1).map(|term| term.f_code()),
+            Some(f_code)
+        );
+    }
+
+    #[test]
+    fn proof_state_generate_new_clauses_higher_order_inverse_ignores_non_definition() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let x = typed_var(terms, -24);
+            let y = typed_var(terms, -26);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(terms, &x, &y, true)]));
+            clause.set_ident(4_179);
+            clause.set_prop(CP_NO_GENERATION);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.heuristic_parms_mut().inverse_recognition = true;
         control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
         control.heuristic_parms_mut().enable_eq_factoring = false;
 

@@ -9,7 +9,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
     ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
-    DC_FLEX_RESOLVE, DC_NORMALIZE, DC_PRUNE_ARG,
+    DC_FLEX_RESOLVE, DC_INV_REC, DC_NORMALIZE, DC_PRUNE_ARG,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
@@ -1302,9 +1302,9 @@ fn apply_prune_arg_substitution(
 
 /// Recognizes an injectivity definition and creates the inverse-function clause.
 ///
-/// This is the plain clause-building part of C `ClauseRecognizeInjectivity`;
-/// proof-documentation and derivation-stack updates remain tied to the later
-/// derivation port.
+/// This mirrors C `ClauseRecognizeInjectivity`, including the `DCInvRec`
+/// derivation parent. Full proof-document output for this clause kind is still
+/// intentionally absent in C.
 ///
 /// # Errors
 ///
@@ -1574,6 +1574,7 @@ fn build_injectivity_inverse_clause(
     result.set_tptp_type(source.query_tptp_type());
     result.set_prop(source.give_props(CP_IS_SOS));
     result.set_prop(CP_IS_PURE_INJECTIVITY);
+    clause_push_derivation(&mut result, DC_INV_REC, Some(source), None);
     result.set_weight(result.standard_weight());
     Ok(result)
 }
@@ -1635,7 +1636,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_FLEX_RESOLVE, DC_NORMALIZE,
+        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_FLEX_RESOLVE, DC_INV_REC, DC_NORMALIZE,
         DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE,
     };
     use crate::clauses::eqn::Eqn;
@@ -2598,6 +2599,13 @@ mod tests {
         assert_eq!(recognized.query_tptp_type(), CP_TYPE_AXIOM);
         assert_eq!(recognized.proof_depth(), 5);
         assert_eq!(recognized.proof_size(), 8);
+        assert_eq!(
+            recognized.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_INV_REC),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(source.ident(), 0)),
+            ],
+        );
         assert_eq!(recognized.weight(), recognized.standard_weight());
 
         let inverse_literal = &recognized.literals().as_slice()[0];
