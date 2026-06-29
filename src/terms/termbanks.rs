@@ -7,7 +7,9 @@ use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
-use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_NAMED_LAMBDA_CODE};
+use crate::terms::signature::{
+    SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE,
+};
 use crate::terms::simpletypes::{
     alloc_arrow_type, flatten_type, type_is_predicate, Type, TypeUniqueId,
 };
@@ -288,6 +290,35 @@ impl TermBank {
         output
     }
 
+    /// Writes the C `TermPrintHO` application surface with an explicit deref mode.
+    ///
+    /// This covers the term-application part of `do_ho_print`: DB variables use
+    /// C's `Z<depth-index-1>` spelling, phony applications print only visible
+    /// arguments with ` @ ` separators, `$ite` uses its dedicated syntax, and
+    /// LFHO applied free-variable dereferencing uses the same no-cache
+    /// `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule as the debug printer. FOOL
+    /// formula and lambda pretty-printing remain deferred until the full
+    /// formula printer is integrated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_term_ho_deref(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+    ) -> fmt::Result {
+        self.write_ho_term(output, term, deref, 0)
+    }
+
+    #[must_use]
+    pub fn term_ho_deref_string(&self, term: &Term, deref: DerefType) -> String {
+        let mut output = String::new();
+        let _ = self.write_term_ho_deref(&mut output, term, deref);
+        output
+    }
+
     /// Writes the C `TBPrintTermCompact` form and sets `TPOutputFlag` on
     /// printed non-variable bank terms.
     ///
@@ -481,6 +512,73 @@ impl TermBank {
         let rendered = String::from_utf8(rendered).map_err(|_| fmt::Error)?;
         output.write_char(':')?;
         output.write_str(&rendered)
+    }
+
+    fn write_ho_term(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        deref: DerefType,
+        depth: i64,
+    ) -> fmt::Result {
+        let (term, current_deref, limit) = Self::print_deref_root_no_whnf(term, deref);
+        if term.f_code() == SIG_ITE_CODE {
+            assert_eq!(term.arity(), 3, "$ite expects three arguments");
+            output.write_str("$ite(")?;
+            self.write_ho_term(output, &initialized_arg(&term, 0), current_deref, depth)?;
+            output.write_str(", ")?;
+            self.write_ho_term(output, &initialized_arg(&term, 1), current_deref, depth)?;
+            output.write_str(", ")?;
+            self.write_ho_term(output, &initialized_arg(&term, 2), current_deref, depth)?;
+            output.write_char(')')?;
+            return Ok(());
+        }
+
+        if term.is_db_var() {
+            write!(output, "Z{}", depth - term.f_code() - 1)?;
+        } else if !term.is_top_level_any_var() {
+            if term.is_phony_app() {
+                let head = initialized_arg(&term, 0);
+                if head.is_lambda() {
+                    output.write_str("( ")?;
+                }
+                self.write_ho_term(output, &head, current_deref, depth)?;
+                if head.is_lambda() {
+                    output.write_str(" )")?;
+                }
+            } else {
+                self.write_symbol(output, term.f_code())?;
+            }
+        } else {
+            let var = if term.is_any_var() {
+                term.clone()
+            } else {
+                initialized_arg(&term, 0)
+            };
+            if var.is_free_var() {
+                write!(output, "{}", var_print_string(var.f_code()))?;
+            } else {
+                write!(output, "Z{}", depth - var.f_code() - 1)?;
+            }
+        }
+
+        let first_visible_arg = usize::from(term.is_phony_app());
+        for index in first_visible_arg..term.arity() {
+            output.write_str(" @ ")?;
+            let arg = initialized_arg(&term, index);
+            let child_deref = Self::convert_lfho_deref(index, limit, current_deref);
+            if arg.arity() != 0
+                || (child_deref != DerefType::Never
+                    && arg.binding().is_some_and(|binding| binding.arity() != 0))
+            {
+                output.write_char('(')?;
+                self.write_ho_term(output, &arg, child_deref, depth)?;
+                output.write_char(')')?;
+            } else {
+                self.write_ho_term(output, &arg, child_deref, depth)?;
+            }
+        }
+        Ok(())
     }
 
     fn write_ho_debug_term(
@@ -1690,6 +1788,11 @@ impl TermBank {
     }
 }
 
+fn initialized_arg(term: &Term, index: usize) -> Term {
+    term.argument(index)
+        .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
+}
+
 #[must_use]
 pub fn tb_term_del_prop_count(term: &Term, prop: TermProperties) -> i64 {
     let mut count = 0;
@@ -1805,7 +1908,7 @@ mod tests {
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
         Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_FALSE_CODE,
-        SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+        SIG_ITE_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termtypes::{
@@ -2057,6 +2160,73 @@ mod tests {
     }
 
     #[test]
+    fn ho_term_string_prints_application_surface_with_at_separators() {
+        let (bank, parsed) = parse_simple("f(a,g(b),X)");
+
+        assert_eq!(
+            bank.term_ho_deref_string(&parsed, DerefType::Never),
+            "f @ a @ (g @ b) @ X1"
+        );
+    }
+
+    #[test]
+    fn ho_term_string_skips_hidden_phony_application_head() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let arrow = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let head_code = sig.insert_id("ho_app_f", 0, false);
+        sig.declare_type(head_code, arrow).unwrap();
+        let arg_code = sig.insert_id("ho_app_a", 0, false);
+        sig.declare_type(arg_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let head = bank.create_const_term(head_code).unwrap();
+        let arg = bank.create_const_term(arg_code).unwrap();
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_type(Some(i_type));
+        app.set_argument(0, head);
+        app.set_argument(1, arg);
+
+        assert_eq!(
+            bank.term_ho_deref_string(&app, DerefType::Never),
+            "ho_app_f @ ho_app_a"
+        );
+    }
+
+    #[test]
+    fn ho_term_string_prints_db_variables_like_c_depth_formula() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let i_type = bank.signature().type_bank().i_type();
+        let db = bank.request_db_var(&i_type, 0);
+
+        assert_eq!(bank.term_ho_deref_string(&db, DerefType::Never), "Z-1");
+    }
+
+    #[test]
+    fn ho_term_string_prints_non_formula_ite_shape() {
+        let mut sig = Signature::new(TypeBank::new());
+        let i_type = sig.type_bank().i_type();
+        let a_code = sig.insert_id("ite_a", 0, false);
+        let b_code = sig.insert_id("ite_b", 0, false);
+        let c_code = sig.insert_id("ite_c", 0, false);
+        sig.declare_type(a_code, i_type.clone()).unwrap();
+        sig.declare_type(b_code, i_type.clone()).unwrap();
+        sig.declare_type(c_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        ite.set_type(Some(i_type));
+        ite.set_argument(0, bank.create_const_term(a_code).unwrap());
+        ite.set_argument(1, bank.create_const_term(b_code).unwrap());
+        ite.set_argument(2, bank.create_const_term(c_code).unwrap());
+
+        assert_eq!(
+            bank.term_ho_deref_string(&ite, DerefType::Never),
+            "$ite(ite_a, ite_b, ite_c)"
+        );
+    }
+
+    #[test]
     fn debug_deref_string_follows_ordinary_bindings() {
         let (bank, binding) = parse_simple("f(a)");
         let var = Term::const_cell_alloc(-2);
@@ -2100,6 +2270,18 @@ mod tests {
                 DerefType::Once,
             ),
             "debug_app_deref_f X2 debug_app_deref_c"
+        );
+    }
+
+    #[test]
+    fn ho_term_deref_expands_applied_free_vars_with_prefix_limit() {
+        let fixture = applied_prefix_fixture("print_app_deref");
+
+        assert_eq!(
+            fixture
+                .bank
+                .term_ho_deref_string(&fixture.app, DerefType::Once),
+            "print_app_deref_f @ X2 @ print_app_deref_c"
         );
     }
 
