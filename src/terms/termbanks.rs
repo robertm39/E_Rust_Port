@@ -6,12 +6,15 @@ use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
+use crate::terms::lambda::apply_terms as lambda_apply_terms;
 use crate::terms::signature::{Signature, SIG_CONS_CODE, SIG_NIL_CODE, SIG_TRUE_CODE};
 use crate::terms::signature::{
-    SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE,
+    FP_FOF_OP, SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
+    SIG_NAMED_LAMBDA_CODE,
 };
 use crate::terms::simpletypes::{
-    alloc_arrow_type, flatten_type, type_get_max_arity, type_is_predicate, Type, TypeUniqueId,
+    alloc_arrow_type, flatten_type, type_drop_first_arg, type_get_max_arity, type_is_predicate,
+    Type, TypeUniqueId,
 };
 use crate::terms::termcellstore::TermCellStore;
 use crate::terms::termfunc::{
@@ -1617,10 +1620,7 @@ impl TermBank {
                 formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
             }
         } else if scanner.test_tok(TokenType::APPLICATION) {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Higher-order formula application in Boolean term arguments is not ported yet",
-            ));
+            formula = self.parse_applied_tformula_tstp_subset(scanner, &formula)?;
         } else if scanner.test_tok(TokenType::FOF_BIN_OP) {
             let mut op = self.tptp_operator_parse(scanner)?;
             let right = self.parse_literal_tformula_tstp_subset(scanner)?;
@@ -1656,7 +1656,20 @@ impl TermBank {
             self.parse_quantified_tformula_tstp_subset(scanner, quantor)?
         } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-            let formula = self.parse_tformula_tstp_subset(scanner)?;
+            let formula = if scanner.test_tok(TokenType::FOF_BIN_OP)
+                && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
+            {
+                let op = self.tptp_operator_parse(scanner)?;
+                self.make_logical_tformula_head(op)?
+            } else if scanner.test_tok(TokenType::TILDE_SIGN)
+                && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
+            {
+                scanner.accept_tok(TokenType::TILDE_SIGN)?;
+                let op = Self::require_formula_op_code(self.sig.not_code())?;
+                self.make_logical_tformula_head(op)?
+            } else {
+                self.parse_tformula_tstp_subset(scanner)?
+            };
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             formula
         } else if scanner.test_tok(TokenType::TILDE_SIGN) {
@@ -1678,6 +1691,69 @@ impl TermBank {
             self.parse_tformula_atom(scanner)?
         };
         self.encode_predicate_as_eqn(formula)
+    }
+
+    fn parse_applied_tformula_tstp_subset(
+        &mut self,
+        scanner: &mut Scanner,
+        head: &Term,
+    ) -> Result<Term, Diagnostic> {
+        let head_type = self.tformula_head_type(head)?;
+        let max_args = type_get_max_arity(&head_type);
+        let head_is_logical = !head.is_free_var() && self.sig.query_prop(head.f_code(), FP_FOF_OP);
+        let mut args = Vec::new();
+
+        while scanner.test_tok(TokenType::APPLICATION) {
+            if args.len() >= max_args {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Too many arguments applied to the term",
+                ));
+            }
+            let expected_type = head_type.args().get(args.len()).ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "Applied formula head type is missing an argument sort",
+                )
+            })?;
+
+            scanner.accept_tok(TokenType::APPLICATION)?;
+            let mut arg = self.parse_tformula_application_arg(scanner, expected_type)?;
+            if head_is_logical {
+                arg = self.encode_predicate_as_eqn(arg)?;
+            }
+            Self::require_term_sort(&arg, expected_type, "formula application argument")?;
+            args.push(arg);
+        }
+
+        let applied = lambda_apply_terms(self, head, &args)?;
+        self.encode_predicate_as_eqn(applied)
+    }
+
+    fn parse_tformula_application_arg(
+        &mut self,
+        scanner: &mut Scanner,
+        expected_type: &Type,
+    ) -> Result<Term, Diagnostic> {
+        if scanner.test_tok(TokenType::OPEN_BRACKET) && !expected_type.is_bool() {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let arg = self.parse_tformula_application_arg(scanner, expected_type)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            return Ok(arg);
+        }
+
+        let arg = if expected_type.is_bool() || scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
+            self.parse_literal_tformula_tstp_subset(scanner)?
+        } else {
+            self.parse_term_real(scanner, true)?
+        };
+        Self::require_term_sort(&arg, expected_type, "formula application argument")?;
+        Ok(arg)
+    }
+
+    fn make_logical_tformula_head(&mut self, op: FunCode) -> Result<Term, Diagnostic> {
+        let head = Term::top_alloc(op, 0);
+        self.term_top_insert(head)
     }
 
     fn parse_quantified_tformula_tstp_subset(
@@ -1970,6 +2046,80 @@ impl TermBank {
             ));
         }
         Ok(())
+    }
+
+    fn require_term_sort(term: &Term, expected: &Type, context: &str) -> Result<(), Diagnostic> {
+        let Some(actual) = term.type_() else {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{context} has no inferred type"),
+            ));
+        };
+        if &actual != expected {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                format!("{context} has the wrong sort"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn tformula_head_type(&mut self, term: &Term) -> Result<Type, Diagnostic> {
+        if term.f_code() == SIG_ITE_CODE || term.f_code() == SIG_LET_CODE {
+            term.type_().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "formula application head has no inferred type",
+                )
+            })
+        } else if term.f_code() == self.sig.qex_code() || term.f_code() == self.sig.qall_code() {
+            Ok(self.sig.type_bank().bool_type())
+        } else if term.is_applied_any_var() {
+            let head = term.argument(0).ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "applied variable head is uninitialized",
+                )
+            })?;
+            head.type_().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "applied variable head has no inferred type",
+                )
+            })
+        } else if term.is_any_var() || term.is_lambda() {
+            term.type_().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "formula application head has no inferred type",
+                )
+            })
+        } else if term.is_phony_app() {
+            let head = term.argument(0).ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "phony application head is uninitialized",
+                )
+            })?;
+            let head_type = self.tformula_head_type(&head)?;
+            if !head_type.is_arrow() {
+                return Err(Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "phony application head type must be an arrow",
+                ));
+            }
+            Ok(self
+                .sig
+                .type_bank_mut()
+                .insert_type_shared(type_drop_first_arg(&head_type)))
+        } else {
+            self.sig.get_type(term.f_code()).cloned().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "formula application head has no declared type",
+                )
+            })
+        }
     }
 
     fn parse_tformula_atom(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
@@ -3431,6 +3581,62 @@ mod tests {
         );
         assert_eq!(predicate.argument(0), Some(binder));
         assert_eq!(body.argument(1), Some(bank.true_term().clone()));
+    }
+
+    #[test]
+    fn checked_parser_reads_applied_lambda_boolean_formula_arguments() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let (bank, arg) =
+            parse_bool_arg("takes_bool_arg((^[X:$i]: pred_bool_app_lam(X)) @ bool_app_arg)");
+
+        assert_eq!(arg.f_code(), bank.signature().eqn_code());
+        assert_eq!(arg.argument(1), Some(bank.true_term().clone()));
+
+        let applied = arg.argument(0).unwrap();
+        assert!(applied.is_phony_app());
+        assert_eq!(
+            applied.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+
+        let head = applied.argument(0).unwrap();
+        assert_eq!(head.f_code(), SIG_NAMED_LAMBDA_CODE);
+        let binder = head.argument(0).unwrap();
+        assert_eq!(binder.type_(), Some(bank.signature().type_bank().i_type()));
+
+        let body = head.argument(1).unwrap();
+        let predicate = body.argument(0).unwrap();
+        assert_eq!(
+            bank.signature().find_name(predicate.f_code()),
+            Some("pred_bool_app_lam")
+        );
+        assert_eq!(predicate.argument(0), Some(binder));
+
+        let argument = applied.argument(1).unwrap();
+        assert_eq!(
+            bank.signature().find_name(argument.f_code()),
+            Some("bool_app_arg")
+        );
+        assert_eq!(
+            argument.type_(),
+            Some(bank.signature().type_bank().i_type())
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_applied_logical_formula_heads() {
+        let (bank, arg) = parse_bool_arg("takes_bool_arg((~) @ pred_bool_app_logical)");
+
+        assert_eq!(arg.f_code(), bank.signature().not_code());
+        let child = arg.argument(0).unwrap();
+        assert_eq!(child.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(child.argument(0).unwrap().f_code()),
+            Some("pred_bool_app_logical")
+        );
+        assert_eq!(child.argument(1), Some(bank.true_term().clone()));
     }
 
     #[test]
