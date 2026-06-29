@@ -14,7 +14,8 @@ use crate::clauses::clausefunc::{
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::condensation::condense;
 use crate::clauses::context_sr::{
-    clause_contextual_simplify_reflect, clause_set_find_context_sr_clauses,
+    clause_contextual_simplify_reflect, clause_contextual_simplify_reflect_with_docs,
+    clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
     clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_EVAL_GC, DC_CNF_QUOTE,
@@ -1450,15 +1451,107 @@ pub fn proof_state_forward_contract_keep(
     counts: &mut ForwardContractCounts,
     options: ForwardContractOptions,
 ) -> Result<Option<FvPackedClause>, Diagnostic> {
-    if control.heuristic_parms().enable_given_forward_simpl {
-        if proof_state_forward_modify_clause(
+    proof_state_forward_contract_keep_impl::<String>(state, control, clause, counts, options, None)
+}
+
+/// Applies C `forward_contract_keep` while emitting represented proof docs.
+///
+/// This currently threads the represented `ForwardModifyClause` rewrite docs
+/// and contextual simplify-reflect modification docs through a shared proof-doc
+/// session. Other forward-contraction proof-output side effects remain at their
+/// existing renderer boundaries.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_forward_contract_keep`], plus
+/// any proof-documentation write diagnostic.
+pub fn proof_state_forward_contract_keep_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    options: ForwardContractOptions,
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    proof_state_forward_contract_keep_impl(
+        state,
+        control,
+        clause,
+        counts,
+        options,
+        Some((output, session)),
+    )
+}
+
+fn proof_state_forward_modify_clause_maybe_docs<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    options: ForwardContractOptions,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<bool, Diagnostic> {
+    match doc_context.as_mut() {
+        Some((output, session)) => proof_state_forward_modify_clause_with_docs(
+            output,
+            session,
             state,
             control,
             clause,
             options.context_sr,
             options.condense_clause,
             options.level,
-        )? {
+        ),
+        None => proof_state_forward_modify_clause(
+            state,
+            control,
+            clause,
+            options.context_sr,
+            options.condense_clause,
+            options.level,
+        ),
+    }
+}
+
+fn proof_state_contextual_simplify_reflect_maybe_docs<W: fmt::Write>(
+    state: &mut ProofState,
+    clause: &mut Clause,
+    doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<usize, Diagnostic> {
+    let (terms, processed_sets) = state.terms_and_processed_sets_mut();
+    match doc_context.as_mut() {
+        Some((output, session)) => clause_contextual_simplify_reflect_with_docs(
+            output,
+            session,
+            processed_sets.non_units,
+            clause,
+            terms,
+        ),
+        None => Ok(clause_contextual_simplify_reflect(
+            processed_sets.non_units,
+            clause,
+            terms,
+        )),
+    }
+}
+
+fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    clause: &mut Clause,
+    counts: &mut ForwardContractCounts,
+    options: ForwardContractOptions,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    if control.heuristic_parms().enable_given_forward_simpl {
+        let forward_trivial = proof_state_forward_modify_clause_maybe_docs(
+            state,
+            control,
+            clause,
+            options,
+            &mut doc_context,
+        )?;
+        if forward_trivial {
             counts.trivial += 1;
             return Ok(None);
         }
@@ -1512,10 +1605,11 @@ pub fn proof_state_forward_contract_keep(
         }
 
         if options.context_sr && clause.literal_number() > 1 {
-            let simplified = {
-                let (terms, processed_sets) = state.terms_and_processed_sets_mut();
-                clause_contextual_simplify_reflect(processed_sets.non_units, clause, terms)
-            };
+            let simplified = proof_state_contextual_simplify_reflect_maybe_docs(
+                state,
+                clause,
+                &mut doc_context,
+            )?;
             state.statistics_mut().context_sr_count +=
                 u64::try_from(simplified).unwrap_or(u64::MAX);
             clause_subsume_order_sort_lits(clause, state.terms());
@@ -1557,6 +1651,34 @@ pub fn proof_state_forward_contract_clause(
     let mut counts = ForwardContractCounts::default();
     let result =
         proof_state_forward_contract_keep(state, control, &mut clause, &mut counts, options)?;
+    state.statistics_mut().proc_forward_subsumed_count += counts.subsumed;
+    state.statistics_mut().proc_trivial_count += counts.trivial;
+    Ok(result)
+}
+
+/// Applies C `ForwardContractClause` while emitting represented proof docs.
+///
+/// # Errors
+///
+/// Returns diagnostics from [`proof_state_forward_contract_keep_with_docs`].
+pub fn proof_state_forward_contract_clause_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    mut clause: Clause,
+    options: ForwardContractOptions,
+) -> Result<Option<FvPackedClause>, Diagnostic> {
+    let mut counts = ForwardContractCounts::default();
+    let result = proof_state_forward_contract_keep_with_docs(
+        output,
+        session,
+        state,
+        control,
+        &mut clause,
+        &mut counts,
+        options,
+    )?;
     state.statistics_mut().proc_forward_subsumed_count += counts.subsumed;
     state.statistics_mut().proc_trivial_count += counts.trivial;
     Ok(result)
@@ -4174,16 +4296,17 @@ mod tests {
         proof_control_reset_sat_solver, proof_state_check_ac_status,
         proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
         proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_set,
-        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
-        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_with_global_indices, proof_state_init,
-        proof_state_init_ac_handling, proof_state_init_global_indices, proof_state_init_indexing,
-        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_insert_processed_clause, proof_state_move_eval_store_to_unprocessed,
-        proof_state_move_to_tmp_store, proof_state_move_to_tmp_store_with_global_indices,
-        proof_state_process_clause, proof_state_process_clause_with_global_indices,
+        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
+        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
+        proof_state_forward_modify_clause, proof_state_forward_modify_clause_with_docs,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_with_global_indices,
+        proof_state_init, proof_state_init_ac_handling, proof_state_init_global_indices,
+        proof_state_init_indexing, proof_state_init_with_global_indices,
+        proof_state_insert_new_clauses, proof_state_insert_processed_clause,
+        proof_state_move_eval_store_to_unprocessed, proof_state_move_to_tmp_store,
+        proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
+        proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_global_indices,
         proof_state_saturate, proof_state_saturate_with_global_indices,
@@ -4207,7 +4330,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_ORDERED_FACTOR, DC_SR,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONTEXT_SR, DC_ORDERED_FACTOR, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -4221,6 +4344,7 @@ mod tests {
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
+    use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::heuristics::hcb::{
         AcHandling, GroundingStrategy, HeuristicParmsCell,
         ParamodulationType as HcbParamodulationType, SplitClassType, SplitType,
@@ -5433,6 +5557,75 @@ mod tests {
         assert!(survivor.query_prop(CP_IS_ORIENTED));
         assert_eq!(survivor.prop_lit_number(EP_IS_SELECTED), 1);
         assert!(survivor.literals().as_slice().iter().any(Eqn::is_maximal));
+    }
+
+    #[test]
+    fn proof_state_forward_contract_clause_with_docs_emits_context_sr_step() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut subsumer, clause) = {
+            let terms = state.terms_mut();
+            let p_code = unary_predicate_code(terms, "pc_forward_contract_doc_p");
+            let q_code = unary_predicate_code(terms, "pc_forward_contract_doc_q");
+            let arg = typed_const(terms, "pc_forward_contract_doc_a");
+            let p_atom = unary_predicate(terms, p_code, &arg);
+            let q_atom = unary_predicate(terms, q_code, &arg);
+            let truth = terms.true_term().clone();
+            let mut subsumer = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &p_atom, &truth, true),
+                literal(terms, &q_atom, &truth, false),
+            ]));
+            subsumer.set_ident(4_087);
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &p_atom, &truth, true),
+                literal(terms, &q_atom, &truth, true),
+            ]));
+            clause.set_ident(4_088);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            (subsumer, clause)
+        };
+        clause_subsume_order_sort_lits(&mut subsumer, state.terms());
+        subsumer.set_weight(subsumer.standard_weight());
+        state.processed_non_units_mut().insert(subsumer);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let options = ForwardContractOptions {
+            non_unit_subsumption: false,
+            context_sr: true,
+            condense_clause: false,
+            level: RewriteLevel::RuleRewrite,
+        };
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let packed = proof_state_forward_contract_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            clause,
+            options,
+        )
+        .unwrap_or_else(|err| panic!("{err}"))
+        .expect("contextually simplified clause should survive");
+        let survivor = packed.clause();
+
+        assert_eq!(state.statistics().context_sr_count, 1);
+        assert_eq!(state.statistics().proc_forward_subsumed_count, 0);
+        assert_eq!(state.statistics().proc_trivial_count, 0);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert_eq!(survivor.ident(), 1);
+        assert_eq!(survivor.literal_number(), 1);
+        assert!(!survivor.is_any_prop_set(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW));
+        assert!(rendered.contains("csr(4088,4087)"));
+        assert!(survivor.query_prop(CP_IS_ORIENTED));
+        assert_eq!(
+            survivor.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_CONTEXT_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(4_087, 0)),
+            ]
+        );
     }
 
     #[test]

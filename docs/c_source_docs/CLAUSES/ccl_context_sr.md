@@ -80,13 +80,14 @@ Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `ClauseContextualSimplifyReflect` first snapshots the clause literals into a stack, sets the cached weight to `ClauseStandardWeight`, then pops literals in stack order. For each literal it flips the sign, sorts by subsumption order, and removes the flipped literal only if the modified clause is subsumed by the set.
-- When a contextual subsumer is found, C inherits `CPIsSOS`, clears `CPInitial|CPLimitedRW`, removes the literal, documents the modification, and pushes a `DCContextSR` derivation entry. The Rust plain helper preserves the mutation/property changes and now records `DCContextSR` with a compact subsumer reference; proof documentation remains pending.
+- When a contextual subsumer is found, C inherits `CPIsSOS`, clears `CPInitial|CPLimitedRW`, removes the literal, documents the modification, and pushes a `DCContextSR` derivation entry. The Rust plain helper preserves the mutation/property changes and records `DCContextSR` with a compact subsumer reference; an opt-in documenting helper now emits represented `DocClauseModification(inf_context_simplify_reflect, subsumer)` steps for proof-control callers with a `ProofDocSession`.
 - `ClauseSetFindContextSRClauses` flips and sorts the query for each literal and pushes every subsumed set clause, including duplicate pushes for the same clause if multiple flipped literals work.
 
 ### Change-Later Observations
 
 - C relies on raw `Eqn_p` stack entries remaining valid across literal-list sorting. Rust matches by literal properties and term handles while ignoring the mutable position field; revisit if duplicate literal identity becomes observable outside cleanup-normalized clauses.
 - C stores the raw contextual subsumer pointer in the derivation stack. Rust currently records a compact clause reference; replace it with a stable clause handle before proof-object traversal needs the full parent object.
+- C couples contextual simplify-reflect proof documentation to the same mutation loop and process-global output/id state. Rust keeps the compatibility behavior behind an explicit session/output wrapper; collapse this into a single proof-control output owner once the remaining proof-documentation call sites are threaded.
 
 ### Porting Focus
 

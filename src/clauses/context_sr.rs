@@ -1,3 +1,4 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
@@ -6,20 +7,53 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_CONTEXT_SR};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
+use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::subsumption::{
     clause_set_find_subsumed_clauses, clause_subsume_order_sort_lits, clause_subsumes_clause,
 };
 use crate::terms::termbanks::TermBank;
+use std::fmt;
 
 /// Performs C `ClauseContextualSimplifyReflect` over a plain clause set.
 ///
 /// Proof-documentation output is left to the future proof-control integration
 /// layer.
+///
+/// # Panics
+///
+/// Panics only if the internal non-documenting implementation unexpectedly
+/// reports a proof-documentation diagnostic.
 pub fn clause_contextual_simplify_reflect(
     set: &ClauseSet,
     clause: &mut Clause,
     bank: &TermBank,
 ) -> usize {
+    clause_contextual_simplify_reflect_impl::<String>(set, clause, bank, None)
+        .expect("undocumented contextual simplify-reflect cannot fail")
+}
+
+/// Performs C `ClauseContextualSimplifyReflect` while emitting represented
+/// proof docs for each successful literal deletion.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-documentation rendering fails.
+pub fn clause_contextual_simplify_reflect_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    set: &ClauseSet,
+    clause: &mut Clause,
+    bank: &TermBank,
+) -> Result<usize, Diagnostic> {
+    clause_contextual_simplify_reflect_impl(set, clause, bank, Some((output, session)))
+}
+
+fn clause_contextual_simplify_reflect_impl<W: fmt::Write>(
+    set: &ClauseSet,
+    clause: &mut Clause,
+    bank: &TermBank,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<usize, Diagnostic> {
     let mut result = 0;
     let mut literal_stack = literal_stack(clause);
     clause.set_weight(clause.standard_weight());
@@ -42,6 +76,16 @@ pub fn clause_contextual_simplify_reflect(
                 "flipped literal must still be present after subsumption"
             );
             debug_assert_eq!(clause.weight(), clause.standard_weight());
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_modification(
+                    output,
+                    bank,
+                    clause,
+                    ClauseModificationInference::ContextSimplifyReflect,
+                    Some(subsumer),
+                    None,
+                )?;
+            }
             result += 1;
             clause_push_derivation(clause, DC_CONTEXT_SR, Some(subsumer), None);
         } else {
@@ -50,7 +94,7 @@ pub fn clause_contextual_simplify_reflect(
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// Pushes clauses that C `ClauseSetFindContextSRClauses` would find.
@@ -138,14 +182,19 @@ fn usize_to_i64(value: usize) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{clause_contextual_simplify_reflect, clause_set_find_context_sr_clauses};
+    use super::{
+        clause_contextual_simplify_reflect, clause_contextual_simplify_reflect_with_docs,
+        clause_set_find_context_sr_clauses,
+    };
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_SOS, CP_LIMITED_RW};
+    use crate::clauses::clause_props::{CP_INITIAL, CP_INPUT_FORMULA, CP_IS_SOS, CP_LIMITED_RW};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_CONTEXT_SR};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -221,6 +270,53 @@ mod tests {
             &[
                 DerivationEntry::Operation(DC_CONTEXT_SR),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(10, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn contextual_simplify_reflect_with_docs_emits_csr_step() {
+        let mut bank = test_bank();
+        let p = predicate_atom(&mut bank, "p_doc");
+        let q = predicate_atom(&mut bank, "q_doc");
+        let subsumer = prepare(
+            clause_from(vec![
+                predicate_literal(&mut bank, &p, true),
+                predicate_literal(&mut bank, &q, false),
+            ]),
+            &bank,
+            30,
+        );
+        let set = ClauseSet::from_clauses([subsumer]);
+        let mut target = clause_from(vec![
+            predicate_literal(&mut bank, &p, true),
+            predicate_literal(&mut bank, &q, true),
+        ]);
+        target.set_ident(31);
+        target.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let removed = clause_contextual_simplify_reflect_with_docs(
+            &mut rendered,
+            &mut session,
+            &set,
+            &mut target,
+            &bank,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(removed, 1);
+        assert_eq!(target.ident(), 1);
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(!target.is_any_prop_set(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW));
+        assert!(rendered.contains("csr(31,30)"));
+        assert_eq!(
+            target.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_CONTEXT_SR),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::new(30, 0)),
             ]
         );
     }
