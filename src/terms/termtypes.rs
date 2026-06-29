@@ -663,11 +663,14 @@ pub fn term_identity_cmp(left: &Term, right: &Term) -> i32 {
 
 /// Dereferences a term according to the requested limit.
 ///
+/// Applied free-variable dereferencing follows the C LFHO top-node expansion
+/// shape without populating the C owner-bank binding cache. Bank insertion
+/// paths still use `TermBank` helpers when they need shared cache terms.
+///
 /// # Panics
 ///
-/// Panics if asked to dereference an applied variable. The C expansion path
-/// requires term-bank insertion and is intentionally left for the term-bank
-/// porting slice.
+/// Panics if a non-variable term has an active binding or if dereferencing
+/// reaches an applied-variable shape with uninitialized arguments.
 #[must_use]
 pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
     assert!(
@@ -684,10 +687,14 @@ pub fn term_deref(term: &Term, deref: &mut DerefType) -> Term {
 
     let mut current = term.clone();
     while *deref != DerefType::Never {
+        let originally_app_var = current.is_applied_free_var();
         let Some(next) = deref_step(&current) else {
             break;
         };
         current = next;
+        if originally_app_var {
+            break;
+        }
         *deref = DerefType::Never;
     }
     current
@@ -839,9 +846,49 @@ fn deref_step(term: &Term) -> Option<Term> {
             .argument(0)
             .is_some_and(|head| head.binding().is_some())
     {
-        panic!("applied-variable dereference requires term-bank support");
+        return Some(deref_applied_free_var_no_cache(term));
     }
     None
+}
+
+fn deref_applied_free_var_no_cache(term: &Term) -> Term {
+    assert!(term.is_applied_free_var(), "expected applied free variable");
+    assert!(term.arity() > 1, "applied variable must have arguments");
+    let head = term.argument(0).expect("applied variable has a head");
+    let binding = head.binding().expect("applied variable head is bound");
+
+    let expanded = if binding.is_any_var() || binding.is_lambda() {
+        let expanded = Term::top_alloc(term.f_code(), term.arity());
+        expanded.set_properties(term.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        expanded.set_argument(0, binding);
+        for index in 1..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            expanded.set_argument(index, arg);
+        }
+        expanded
+    } else {
+        let expanded = Term::top_alloc(binding.f_code(), binding.arity() + term.arity() - 1);
+        expanded.set_properties(binding.give_props(TP_PRED_POS));
+        expanded.set_type(term.type_());
+        for index in 0..binding.arity() {
+            let arg = binding
+                .argument(index)
+                .unwrap_or_else(|| panic!("binding argument {index} is uninitialized"));
+            expanded.set_argument(index, arg);
+        }
+        for index in 1..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            expanded.set_argument(binding.arity() + index - 1, arg);
+        }
+        expanded
+    };
+    expanded.set_prop(TP_IS_DEREFED_APP_VAR);
+    expanded
 }
 
 fn rewrite_index(level: RewriteLevel) -> usize {
@@ -915,8 +962,8 @@ mod tests {
         term_set_prop, term_stack_del_props, term_stack_set_props, term_var_del_prop,
         term_var_search_prop, term_var_set_prop, term_verify_prop, DerefType, RewriteLevel, Term,
         DEFAULT_FWEIGHT, DEFAULT_VWEIGHT, TERMS_INITIAL_ARGS, TP_CHECK_FLAG, TP_HAS_BOOL_SUBTERM,
-        TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_IGNORE_PROPS, TP_IS_DB_VAR, TP_IS_REWRITTEN,
-        TP_IS_SHARED, TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
+        TP_HAS_ETA_EXPANDABLE_SUBTERM, TP_IGNORE_PROPS, TP_IS_DB_VAR, TP_IS_DEREFED_APP_VAR,
+        TP_IS_REWRITTEN, TP_IS_SHARED, TP_OUTPUT_FLAG, TP_PRED_POS, TP_TOP_POS,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::sysdate::SysDate;
@@ -1001,6 +1048,55 @@ mod tests {
         let mut deref = DerefType::Once;
         assert_eq!(super::term_deref(&var, &mut deref), bound);
         assert_eq!(deref, DerefType::Never);
+    }
+
+    #[test]
+    fn deref_once_expands_applied_free_var_without_consuming_limit() {
+        let var = Term::const_cell_alloc(-2);
+        let prefix = Term::top_alloc(20, 1);
+        let prefix_arg = Term::const_cell_alloc(21);
+        prefix.set_argument(0, prefix_arg.clone());
+        var.set_binding(Some(prefix));
+        let suffix_arg = Term::const_cell_alloc(22);
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, var);
+        app.set_argument(1, suffix_arg.clone());
+        app.set_prop(TP_PRED_POS);
+
+        let mut deref = DerefType::Once;
+        let expanded = super::term_deref(&app, &mut deref);
+
+        assert_eq!(deref, DerefType::Once);
+        assert_eq!(expanded.f_code(), 20);
+        assert_eq!(expanded.arity(), 2);
+        assert_eq!(expanded.argument(0), Some(prefix_arg));
+        assert_eq!(expanded.argument(1), Some(suffix_arg));
+        assert!(expanded.query_prop(TP_IS_DEREFED_APP_VAR));
+        assert!(!expanded.query_prop(TP_PRED_POS));
+    }
+
+    #[test]
+    fn deref_always_repeatedly_expands_bound_applied_free_var_heads() {
+        let x = Term::const_cell_alloc(-2);
+        let y = Term::const_cell_alloc(-4);
+        let prefix = Term::top_alloc(30, 1);
+        let prefix_arg = Term::const_cell_alloc(31);
+        prefix.set_argument(0, prefix_arg.clone());
+        y.set_binding(Some(prefix));
+        x.set_binding(Some(y));
+        let suffix_arg = Term::const_cell_alloc(32);
+        let app = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        app.set_argument(0, x);
+        app.set_argument(1, suffix_arg.clone());
+
+        let mut deref = DerefType::Always;
+        let expanded = super::term_deref(&app, &mut deref);
+
+        assert_eq!(deref, DerefType::Always);
+        assert_eq!(expanded.f_code(), 30);
+        assert_eq!(expanded.arity(), 2);
+        assert_eq!(expanded.argument(0), Some(prefix_arg));
+        assert_eq!(expanded.argument(1), Some(suffix_arg));
     }
 
     #[test]

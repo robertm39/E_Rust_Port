@@ -237,6 +237,14 @@ Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `TermDeref` expands a bound applied free variable without decrementing `DEREF_ONCE`; callers use `DEREF_LIMIT`/`CONVERT_DEREF` to avoid following bindings in the prefix copied from the applied-variable head. Rust mirrors the expansion shape and the unconsumed one-step deref rule in the global term helper, while term-bank insertion paths keep their explicit prefix conversion.
+
+### Change Later Candidates
+
+- `applied_var_deref` stores expanded applied-variable terms in the source term's `binding_cache`, records the binding that made the cache fresh, inserts the expansion through the owning term bank, and marks the cached term with `TPIsDerefedAppVar`. Rust currently performs no-cache expansion for the global helper and separate bank-local expansion where callers already have a `TermBank`; add owner-bank metadata and cache invalidation before treating repeated LFHO dereference performance or cache-aware GC behavior as C-compatible.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
