@@ -407,6 +407,12 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 - `SelectDiversificationLiterals` and `SelectDiversificationPreferIntoLiterals` use `generic_uniq_selection()` with `needs_ordering=false`, so they do not mark maximal terms. The file-static `literal_weight_counter` increments once per literal, including positives, and negative candidates use the counter modulo `clause->neg_lit_no`. The prefer-into variant puts `-ClauseQueryProp(literal, EPIsPMIntoLit)` in `w1` before using the diversification value in `w2`.
 - `GetLitSelFun` and `GetLitSelName` are table-driven. Reverse lookup scans function pointers and returns the first matching name, so table order is part of the printable strategy surface.
 
+### Rust Port Status Notes
+
+- `src/heuristics/litselection.rs` ports the C-order literal-selection name table, table-index lookup, known-name checks, and `LitSelAppendNames`-style comma-separated rendering in addition to the currently ported selector bodies.
+- The Rust selector table keeps `NoSelection` and `NoGeneration` as distinct names even though their bodies are both no-ops, preserving the C distinction used by proof-control generation gates.
+- Tests cover selector table order, uniqueness, lookup misses, and rendered comma-separated output alongside selector-family behavior tests.
+
 ### Change-Later Observations
 
 - The literal-selection unit mixes several families of selectors with repeated "P" positive-literal variants and many near-duplicate weight helpers. Keep the initial Rust port close to the table and wrappers, but consider factoring shared scoring code only after reference tests cover representative selectors from each family.

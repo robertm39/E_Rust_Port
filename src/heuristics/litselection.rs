@@ -1,3 +1,4 @@
+use crate::basics::dstrings::DynamicString;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_IS_ORIENTED;
 use crate::clauses::eqn::Eqn;
@@ -161,6 +162,153 @@ pub const SELECT_CQ_PREC_W_NT_NP: &str = "SelectCQPrecWNTNp";
 pub const SELECT_CQI_PREC_W_NT_NP: &str = "SelectCQIPrecWNTNp";
 pub const SELECT_DIV_LITS: &str = "SelectDivLits";
 pub const SELECT_DIV_PREFER_INTO_LITS: &str = "SelectDivPreferIntoLits";
+
+pub const LITERAL_SELECTION_NAMES: &[&str] = &[
+    NO_SELECTION,
+    NO_GENERATION,
+    SELECT_NEGATIVE_LITERALS,
+    P_SELECT_NEGATIVE_LITERALS,
+    SELECT_PURE_VAR_NEG_LITERALS,
+    P_SELECT_PURE_VAR_NEG_LITERALS,
+    SELECT_LARGEST_NEG_LIT,
+    P_SELECT_LARGEST_NEG_LIT,
+    SELECT_SMALLEST_NEG_LIT,
+    P_SELECT_SMALLEST_NEG_LIT,
+    SELECT_LARGEST_ORIENTABLE,
+    P_SELECT_LARGEST_ORIENTABLE,
+    M_SELECT_LARGEST_ORIENTABLE,
+    SELECT_SMALLEST_ORIENTABLE,
+    P_SELECT_SMALLEST_ORIENTABLE,
+    M_SELECT_SMALLEST_ORIENTABLE,
+    SELECT_DIFF_NEG_LIT,
+    P_SELECT_DIFF_NEG_LIT,
+    SELECT_GROUND_NEG_LIT,
+    P_SELECT_GROUND_NEG_LIT,
+    SELECT_OPTIMAL_LIT,
+    P_SELECT_OPTIMAL_LIT,
+    SELECT_MIN_OPTIMAL_LIT,
+    P_SELECT_MIN_OPTIMAL_LIT,
+    SELECT_MIN_OPTIMAL_NO_TYPE_PRED,
+    P_SELECT_MIN_OPTIMAL_NO_TYPE_PRED,
+    SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED,
+    P_SELECT_MIN_OPTIMAL_NO_X_TYPE_PRED,
+    SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED,
+    P_SELECT_MIN_OPTIMAL_NO_RX_TYPE_PRED,
+    SELECT_COND_OPTIMAL_LIT,
+    P_SELECT_COND_OPTIMAL_LIT,
+    SELECT_ALL_COND_OPTIMAL_LIT,
+    P_SELECT_ALL_COND_OPTIMAL_LIT,
+    SELECT_OPTIMAL_RESTR_DEPTH2,
+    P_SELECT_OPTIMAL_RESTR_DEPTH2,
+    SELECT_OPTIMAL_RESTR_P_DEPTH2,
+    P_SELECT_OPTIMAL_RESTR_P_DEPTH2,
+    SELECT_OPTIMAL_RESTR_N_DEPTH2,
+    P_SELECT_OPTIMAL_RESTR_N_DEPTH2,
+    SELECT_NON_RR_OPTIMAL_LIT,
+    P_SELECT_NON_RR_OPTIMAL_LIT,
+    SELECT_NON_STRONG_RR_OPTIMAL_LIT,
+    P_SELECT_NON_STRONG_RR_OPTIMAL_LIT,
+    SELECT_ANTI_RR_OPTIMAL_LIT,
+    P_SELECT_ANTI_RR_OPTIMAL_LIT,
+    SELECT_NON_ANTI_RR_OPTIMAL_LIT,
+    P_SELECT_NON_ANTI_RR_OPTIMAL_LIT,
+    SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+    P_SELECT_STRONG_RR_NON_RR_OPTIMAL_LIT,
+    SELECT_UNLESS_UNIQ_MAX,
+    P_SELECT_UNLESS_UNIQ_MAX,
+    SELECT_UNLESS_POS_MAX,
+    P_SELECT_UNLESS_POS_MAX,
+    SELECT_UNLESS_UNIQ_POS_MAX,
+    P_SELECT_UNLESS_UNIQ_POS_MAX,
+    SELECT_UNLESS_UNIQ_MAX_POS,
+    P_SELECT_UNLESS_UNIQ_MAX_POS,
+    SELECT_COMPLEX,
+    P_SELECT_COMPLEX,
+    SELECT_COMPLEX_EXCEPT_RR_HORN,
+    P_SELECT_COMPLEX_EXCEPT_RR_HORN,
+    SELECT_L_COMPLEX,
+    P_SELECT_L_COMPLEX,
+    SELECT_MAX_L_COMPLEX,
+    P_SELECT_MAX_L_COMPLEX,
+    SELECT_MAX_L_COMPLEX_NO_TYPE_PRED,
+    P_SELECT_MAX_L_COMPLEX_NO_TYPE_PRED,
+    SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED,
+    P_SELECT_MAX_L_COMPLEX_NO_X_TYPE_PRED,
+    SELECT_COMPLEX_PREFER_NEQ,
+    P_SELECT_COMPLEX_PREFER_NEQ,
+    SELECT_COMPLEX_PREFER_EQ,
+    P_SELECT_COMPLEX_PREFER_EQ,
+    SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+    P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+    M_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+    SELECT_NEW_COMPLEX,
+    P_SELECT_NEW_COMPLEX,
+    SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+    P_SELECT_NEW_COMPLEX_EXCEPT_UNIQ_MAX_HORN,
+    SELECT_MIN_INFPOS,
+    P_SELECT_MIN_INFPOS,
+    H_SELECT_MIN_INFPOS,
+    G_SELECT_MIN_INFPOS,
+    SELECT_MIN_INFPOS_NO_TYPE_PRED,
+    P_SELECT_MIN_INFPOS_NO_TYPE_PRED,
+    SELECT_MIN2_INFPOS,
+    P_SELECT_MIN2_INFPOS,
+    SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+    P_SELECT_COMPLEX_EXCEPT_UNIQ_MAX_POS_HORN,
+    SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE,
+    P_SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE,
+    SELECT_DIV_LITS,
+    SELECT_DIV_PREFER_INTO_LITS,
+    SELECT_MAX_L_COMPLEX_G,
+    SELECT_MAX_L_COMPLEX_AVOID_POS_PRED,
+    SELECT_MAX_L_COMPLEX_APP_NT_NP,
+    SELECT_MAX_L_COMPLEX_APP_NO_TYPE,
+    SELECT_MAX_L_COMPLEX_AVOID_POS_U_PRED,
+    SELECT_COMPLEX_G,
+    SELECT_COMPLEX_AHP,
+    P_SELECT_COMPLEX_AHP,
+    SELECT_NEW_COMPLEX_AHP,
+    P_SELECT_NEW_COMPLEX_AHP,
+    SELECT_COMPLEX_AHP_EXCEPT_RR_HORN,
+    P_SELECT_COMPLEX_AHP_EXCEPT_RR_HORN,
+    SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN,
+    P_SELECT_NEW_COMPLEX_AHP_EXCEPT_RR_HORN,
+    SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN,
+    P_SELECT_NEW_COMPLEX_AHP_EXCEPT_UNIQ_MAX_HORN,
+    SELECT_NEW_COMPLEX_AHP_NS,
+    SELECT_VG_NON_CR,
+    SELECT_CQ_AR_EQ_LAST,
+    SELECT_CQ_AR_EQ_FIRST,
+    SELECT_CQI_AR_EQ_LAST,
+    SELECT_CQI_AR_EQ_FIRST,
+    SELECT_CQ_AR,
+    SELECT_CQI_AR,
+    SELECT_CQ_AR_NP_EQ_FIRST,
+    SELECT_CQI_AR_NP_EQ_FIRST,
+    SELECT_GR_CQ_AR_EQ_FIRST,
+    SELECT_CQ_GR_AR_EQ_FIRST,
+    SELECT_CQ_AR_NT_EQ_FIRST,
+    SELECT_CQI_AR_NT_EQ_FIRST,
+    SELECT_CQ_AR_NT_NP_EQ_FIRST,
+    SELECT_CQI_AR_NT_NP_EQ_FIRST,
+    SELECT_CQ_AR_NXT_EQ_FIRST,
+    SELECT_CQI_AR_NXT_EQ_FIRST,
+    SELECT_CQ_AR_NT_NP,
+    SELECT_CQI_AR_NT_NP,
+    SELECT_CQ_AR_NT,
+    SELECT_CQI_AR_NT,
+    SELECT_CQ_AR_NP,
+    SELECT_CQI_AR_NP,
+    SELECT_CQ_AR_NP_EQ_FIRST_UNLESS_PDOM,
+    SELECT_CQ_AR_NT_EQ_FIRST_UNLESS_PDOM,
+    SELECT_CQ_PREC_W,
+    SELECT_CQI_PREC_W,
+    SELECT_CQ_PREC_W_NT_NP,
+    SELECT_CQI_PREC_W_NT_NP,
+    SELECT_MAX_L_COMPLEX_AVOID_APP_VAR,
+    SELECT_MAX_L_COMPLEX_STRONGLY_AVOID_APP_VAR,
+    SELECT_MAX_L_COMPLEX_PREFER_APP_VAR,
+];
 
 const VAR_FACTOR: i64 = 3;
 const CQ_FORBIDDEN_WEIGHT: i64 = 100_000;
@@ -1063,6 +1211,37 @@ fn require_selector_bank<'bank>(
     bank: Option<&'bank TermBank>,
 ) -> Result<&'bank TermBank, UnsupportedLiteralSelection> {
     bank.ok_or_else(|| UnsupportedLiteralSelection::new(name))
+}
+
+#[must_use]
+pub const fn literal_selection_names() -> &'static [&'static str] {
+    LITERAL_SELECTION_NAMES
+}
+
+#[must_use]
+pub fn get_lit_sel_name(index: usize) -> Option<&'static str> {
+    LITERAL_SELECTION_NAMES.get(index).copied()
+}
+
+#[must_use]
+pub fn get_lit_sel_index(name: &str) -> Option<usize> {
+    LITERAL_SELECTION_NAMES
+        .iter()
+        .position(|candidate| *candidate == name)
+}
+
+#[must_use]
+pub fn is_known_lit_sel_name(name: &str) -> bool {
+    get_lit_sel_index(name).is_some()
+}
+
+pub fn lit_sel_append_names(output: &mut DynamicString) {
+    output.append_str_array(LITERAL_SELECTION_NAMES.iter().copied(), ", ");
+}
+
+#[must_use]
+pub fn lit_sel_names_string() -> String {
+    LITERAL_SELECTION_NAMES.join(", ")
 }
 
 /// C `SelectNoLiterals`: assert that no literal is selected and otherwise do
@@ -3945,6 +4124,7 @@ mod tests {
         SELECT_UNLESS_POS_MAX, SELECT_UNLESS_UNIQ_MAX, SELECT_UNLESS_UNIQ_MAX_POS,
         SELECT_UNLESS_UNIQ_MAX_SMALLEST_ORIENTABLE, SELECT_UNLESS_UNIQ_POS_MAX,
     };
+    use crate::basics::dstrings::DynamicString;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_IS_ORIENTED;
@@ -3958,9 +4138,42 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_IS_GROUND};
     use crate::terms::typebanks::TypeBank;
+    use std::collections::BTreeSet;
 
     fn test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    #[test]
+    fn literal_selection_name_table_preserves_c_order_and_append_shape() {
+        let names = super::literal_selection_names();
+
+        assert_eq!(names.first().copied(), Some(NO_SELECTION));
+        assert_eq!(names.get(1).copied(), Some(NO_GENERATION));
+        assert_eq!(names.get(101).copied(), Some(super::SELECT_COMPLEX_AHP));
+        assert_eq!(
+            names.last().copied(),
+            Some(super::SELECT_MAX_L_COMPLEX_PREFER_APP_VAR)
+        );
+        assert_eq!(super::get_lit_sel_name(0), Some(NO_SELECTION));
+        assert_eq!(super::get_lit_sel_name(names.len()), None);
+        assert_eq!(
+            super::get_lit_sel_index(super::SELECT_COMPLEX_AHP),
+            Some(101)
+        );
+        assert!(super::is_known_lit_sel_name(SELECT_DIV_LITS));
+        assert!(!super::is_known_lit_sel_name("MissingLiteralSelector"));
+
+        let unique_names = names.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(unique_names.len(), names.len());
+
+        let mut rendered = DynamicString::new();
+        super::lit_sel_append_names(&mut rendered);
+        assert_eq!(rendered.view().as_ref(), super::lit_sel_names_string());
+        assert!(rendered.view().starts_with("NoSelection, NoGeneration"));
+        assert!(rendered
+            .view()
+            .ends_with(super::SELECT_MAX_L_COMPLEX_PREFER_APP_VAR));
     }
 
     fn const_term(code: i64) -> Term {
