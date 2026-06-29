@@ -1750,13 +1750,11 @@ pub fn clause_print_tstp_core_string(
     output
 }
 
-/// Writes the C `ClauseTSTPPrint` shape for the ported first-order branches.
+/// Writes the C `ClauseTSTPPrint` shape for represented clause literals.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if the clause needs the higher-order formula-closure
-/// path, which depends on the not-yet-ported higher-order formula decoding
-/// pipeline, or if the output writer reports a formatting error.
+/// Returns a diagnostic if the output writer reports a formatting error.
 ///
 /// # Panics
 ///
@@ -1818,7 +1816,7 @@ pub fn clause_write_tstp_with_type_suffixes(
             print_types,
         )
         .map_err(tstp_write_error)?;
-    } else if problem_type == ProblemType::FirstOrder {
+    } else {
         clause_write_tstp_formula_closure_with_type_suffixes(
             output,
             bank,
@@ -1828,11 +1826,6 @@ pub fn clause_write_tstp_with_type_suffixes(
             print_types,
         )
         .map_err(tstp_write_error)?;
-    } else {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ClauseTSTPPrint higher-order formula rendering is not ported",
-        ));
     }
 
     if complete {
@@ -1841,7 +1834,7 @@ pub fn clause_write_tstp_with_type_suffixes(
     Ok(())
 }
 
-/// Returns the C `ClauseTSTPPrint` shape for the ported first-order branches.
+/// Returns the C `ClauseTSTPPrint` shape for represented clause literals.
 ///
 /// # Errors
 ///
@@ -2222,7 +2215,6 @@ mod tests {
         clause_print_tstp_core_string, clause_starts_maybe, clause_tstp_string,
         clause_write_tstp_with_type_suffixes, Clause,
     };
-    use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
@@ -2593,10 +2585,10 @@ mod tests {
             "thf(c_0_0, hypothesis, ($false))."
         );
 
-        let error =
-            clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("higher-order formula rendering"));
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap(),
+            "thf(c_5_77, negated_conjecture, (tstp_a=tstp_b|tstp_b!=tstp_a))."
+        );
     }
 
     #[test]
@@ -2643,6 +2635,11 @@ mod tests {
         assert_eq!(
             typed_output,
             "tcf(c_2_13, axiom, ![X1:$i, X2:person:person]:((typed_p(X1:$i):$o|typed_q(X2:person):$o)))."
+        );
+
+        assert_eq!(
+            clause_tstp_string(&bank, &clause, true, true, ProblemType::HigherOrder).unwrap(),
+            "thf(c_2_13, axiom, ![X1:$i, X2:person]:((typed_p(X1)|typed_q(X2))))."
         );
     }
 
