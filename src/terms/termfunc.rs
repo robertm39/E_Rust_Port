@@ -231,9 +231,8 @@ fn c_arity(arity: usize) -> Result<i32, Diagnostic> {
 ///
 /// # Panics
 ///
-/// Panics if a copied free or DB variable has no type, if variable-bank type
-/// invariants are violated, or if dereferencing an applied variable is
-/// requested before applied-variable bank support is ported.
+/// Panics if a copied free or DB variable has no type, or if variable-bank type
+/// invariants are violated.
 #[must_use]
 pub fn term_copy(
     source: &Term,
@@ -241,8 +240,7 @@ pub fn term_copy(
     mut dbvars: Option<&mut DbVarBank>,
     deref: DerefType,
 ) -> Term {
-    let mut current_deref = deref;
-    let source = term_deref(source, &mut current_deref);
+    let (source, current_deref, limit) = lfho_deref_no_whnf(source, deref);
     if source.is_free_var() {
         let type_ = source.type_().expect("copied free variables have types");
         return vars.var_assert_alloc(source.f_code(), &type_);
@@ -259,7 +257,12 @@ pub fn term_copy(
     let copy = Term::top_copy_without_args(&source);
     for (index, arg) in source.argument_clones().into_iter().enumerate() {
         let arg = arg.expect("term copy requires initialized args");
-        let copied = term_copy(&arg, vars, dbvars.as_deref_mut(), current_deref);
+        let copied = term_copy(
+            &arg,
+            vars,
+            dbvars.as_deref_mut(),
+            convert_lfho_deref(index, limit, current_deref),
+        );
         copy.set_argument(index, copied);
     }
     copy
@@ -269,13 +272,10 @@ pub fn term_copy(
 ///
 /// # Panics
 ///
-/// Panics if a traversed argument slot is uninitialized, or if dereferencing an
-/// applied variable is requested before applied-variable bank support is
-/// ported.
+/// Panics if a traversed argument slot is uninitialized.
 #[must_use]
 pub fn term_copy_keep_vars(source: &Term, deref: DerefType) -> Term {
-    let mut current_deref = deref;
-    let source = term_deref(source, &mut current_deref);
+    let (source, current_deref, limit) = lfho_deref_no_whnf(source, deref);
     if source.is_any_var() {
         return source;
     }
@@ -283,7 +283,7 @@ pub fn term_copy_keep_vars(source: &Term, deref: DerefType) -> Term {
     let copy = Term::top_copy_without_args(&source);
     for (index, arg) in source.argument_clones().into_iter().enumerate() {
         let arg = arg.expect("term copy requires initialized args");
-        let copied = term_copy_keep_vars(&arg, current_deref);
+        let copied = term_copy_keep_vars(&arg, convert_lfho_deref(index, limit, current_deref));
         copy.set_argument(index, copied);
     }
     copy
@@ -1828,6 +1828,45 @@ mod tests {
         assert_ne!(derefed, bound);
         assert_eq!(derefed.f_code(), 99);
         assert!(derefed.is_const());
+    }
+
+    #[test]
+    fn term_copy_expands_applied_free_vars_with_prefix_limit() {
+        let fixture = applied_prefix_fixture();
+        let target_vars = VarBank::new(&TypeBank::new());
+
+        let copied = term_copy(&fixture.app, &target_vars, None, DerefType::Once);
+
+        assert_eq!(copied.f_code(), fixture.expected.f_code());
+        assert_eq!(copied.arity(), 2);
+        let prefix = copied.argument(0).unwrap();
+        assert!(prefix.is_free_var());
+        assert_eq!(prefix.f_code(), fixture.y.f_code());
+        assert_ne!(prefix, fixture.y);
+        assert!(prefix.binding().is_none());
+        assert_eq!(target_vars.f_code_find(fixture.y.f_code()), Some(prefix));
+
+        let suffix = copied.argument(1).unwrap();
+        assert!(suffix.is_const());
+        assert_eq!(suffix.f_code(), fixture.c.f_code());
+        assert_ne!(suffix, fixture.c);
+        assert_ne!(copied.argument(0), Some(fixture.b));
+    }
+
+    #[test]
+    fn term_copy_keep_vars_expands_applied_free_vars_with_prefix_limit() {
+        let fixture = applied_prefix_fixture();
+
+        let copied = term_copy_keep_vars(&fixture.app, DerefType::Once);
+
+        assert_eq!(copied.f_code(), fixture.expected.f_code());
+        assert_eq!(copied.arity(), 2);
+        assert_eq!(copied.argument(0), Some(fixture.y.clone()));
+        let suffix = copied.argument(1).unwrap();
+        assert!(suffix.is_const());
+        assert_eq!(suffix.f_code(), fixture.c.f_code());
+        assert_ne!(suffix, fixture.c);
+        assert_ne!(copied.argument(0), Some(fixture.b));
     }
 
     #[test]
