@@ -31,7 +31,7 @@ use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
-use crate::clauses::inferencedoc::ProofDocSession;
+use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::neweval::PRIO_LARGEST_REASONABLE;
 use crate::clauses::paramodulation::{
     compute_all_paramodulants, compute_all_paramodulants_indexed,
@@ -1316,7 +1316,19 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             rw_steps += steps;
 
             let limited_rw = clause.query_prop(CP_LIMITED_RW);
-            let _removed_lits = clause_remove_superfluous_literals(clause, terms);
+            let removed_lits = clause_remove_superfluous_literals(clause, terms);
+            if removed_lits != 0 {
+                if let Some((output, session)) = doc_context.as_mut() {
+                    session.doc_clause_modification(
+                        output,
+                        terms,
+                        clause,
+                        ClauseModificationInference::Minimize,
+                        None,
+                        None,
+                    )?;
+                }
+            }
 
             if ac_handling_active {
                 let _ = clause_remove_ac_resolved(clause, terms);
@@ -4330,7 +4342,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONTEXT_SR, DC_ORDERED_FACTOR, DC_SR,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONTEXT_SR, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -5313,6 +5325,53 @@ mod tests {
         assert!(!clause.query_prop(CP_INITIAL));
         assert!(clause.query_prop(CP_INPUT_FORMULA));
         assert_eq!(session.id_source.current_ident(), 0);
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_with_docs_emits_minimize_step() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let first = typed_const(terms, "pc_forward_doc_min_a");
+            let second = typed_const(terms, "pc_forward_doc_min_b");
+            let positive = literal(terms, &first, &second, true);
+            let duplicate = literal(terms, &second, &first, true);
+            let false_literal = literal(terms, &first, &first, false);
+            let mut clause =
+                Clause::alloc(EqnList::from_vec(vec![positive, duplicate, false_literal]));
+            clause.set_ident(4_088);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            false,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(clause.literal_number(), 1);
+        assert!(!clause.is_any_prop_set(CP_INITIAL | CP_INPUT_FORMULA | CP_LIMITED_RW));
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.starts_with("     1 :"));
+        assert!(rendered.contains("cn(4088)"));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
     }
 
     #[test]
