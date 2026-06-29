@@ -693,6 +693,362 @@ impl ProofDocSession {
         }
     }
 
+    /// Ports C `DocClauseFromForm`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    pub fn doc_clause_from_form(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &mut Clause,
+        parent: &FormulaDocView<'_>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        clause.del_prop(CP_INPUT_FORMULA);
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                clause.set_ident(self.id_source.next_ident());
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_clause_unary_inference(
+                    output,
+                    ClauseUnaryInference::SplitConjunct,
+                    parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, None, self.step_options).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                clause.set_ident(self.id_source.next_ident());
+                clause_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    clause,
+                    self.step_options.full_terms,
+                    false,
+                    self.problem_type,
+                    self.step_options.print_types,
+                )?;
+                output.write_char(',').map_err(doc_write_error)?;
+                write_tstp_clause_unary_inference(
+                    output,
+                    ClauseUnaryInference::SplitConjunct,
+                    parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+                tstp_print_end(output, clause, None).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports C `DocClauseQuote`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an optional partner is provided without a comment, matching
+    /// C's assertion.
+    pub fn doc_clause_quote(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        target_level: i64,
+        clause: &mut Clause,
+        comment: Option<&str>,
+        opt_partner: Option<&Clause>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        clause.del_prop(CP_INPUT_FORMULA);
+        let old_id = clause.ident();
+        if self.output_level < target_level {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                clause.set_ident(self.id_source.next_ident());
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write!(output, "{old_id}").map_err(doc_write_error)?;
+                if let Some(partner) = opt_partner {
+                    let Some(comment) = comment else {
+                        panic!("clause quote with partner needs comment");
+                    };
+                    writeln!(output, " : '{comment}({})'", partner.ident())
+                        .map_err(doc_write_error)?;
+                } else {
+                    pcl_print_end(output, clause, comment, self.step_options)
+                        .map_err(doc_write_error)?;
+                }
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                clause.set_ident(self.id_source.next_ident());
+                clause_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    clause,
+                    self.step_options.full_terms,
+                    false,
+                    self.problem_type,
+                    self.step_options.print_types,
+                )?;
+                write!(output, ", c_0_{old_id}").map_err(doc_write_error)?;
+                if let Some(partner) = opt_partner {
+                    let Some(comment) = comment else {
+                        panic!("clause quote with partner needs comment");
+                    };
+                    writeln!(output, ",['{comment}(c_0_{})']).", partner.ident())
+                        .map_err(doc_write_error)?;
+                } else if let Some(comment) = comment {
+                    writeln!(output, ",['{comment}']).").map_err(doc_write_error)?;
+                } else {
+                    output.write_str(").\n").map_err(doc_write_error)?;
+                }
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports C `DocIntroSplitDef`.
+    pub fn doc_intro_split_def(
+        &mut self,
+        output: &mut impl fmt::Write,
+        formula: &mut FormulaDocView<'_>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        self.doc_formula_creation(
+            output,
+            formula,
+            FormulaCreationInference::IntroDef,
+            FormulaCreationParents::none(),
+            Some("split"),
+        )
+    }
+
+    /// Ports C `DocIntroSplitDefRest`.
+    ///
+    /// The C function accepts a comment parameter but always emits no comment;
+    /// this port keeps the argument to preserve the call shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    pub fn doc_intro_split_def_rest(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &mut Clause,
+        parent: &FormulaDocView<'_>,
+        _comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                clause.set_ident(self.id_source.next_ident());
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_clause_unary_inference(
+                    output,
+                    ClauseUnaryInference::SplitEquiv,
+                    parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, None, self.step_options).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                clause.set_ident(self.id_source.next_ident());
+                clause_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    clause,
+                    self.step_options.full_terms,
+                    false,
+                    self.problem_type,
+                    self.step_options.print_types,
+                )?;
+                output.write_char(',').map_err(doc_write_error)?;
+                write_tstp_clause_unary_inference(
+                    output,
+                    ClauseUnaryInference::SplitEquiv,
+                    parent.ident(),
+                )
+                .map_err(doc_write_error)?;
+                tstp_print_end(output, clause, None).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports C `DocClauseApplyDefs`.
+    ///
+    /// The C function accepts a comment parameter but hard-codes `split` in
+    /// both PCL and TSTP output.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP clause rendering reports an unsupported
+    /// clause shape.
+    pub fn doc_clause_apply_defs(
+        &mut self,
+        output: &mut impl fmt::Write,
+        bank: &TermBank,
+        clause: &mut Clause,
+        parent_id: i64,
+        def_ids: &[i64],
+        _comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                clause.set_ident(self.id_source.next_ident());
+                pcl_print_start(
+                    output,
+                    bank,
+                    clause,
+                    self.pcl_shell_level < 1,
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_clause_apply_defs_inference(output, parent_id, def_ids)
+                    .map_err(doc_write_error)?;
+                pcl_print_end(output, clause, Some("split"), self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                clause.set_ident(self.id_source.next_ident());
+                clause_write_tstp_with_type_suffixes(
+                    output,
+                    bank,
+                    clause,
+                    self.step_options.full_terms,
+                    false,
+                    self.problem_type,
+                    self.step_options.print_types,
+                )?;
+                output.write_char(',').map_err(doc_write_error)?;
+                write_tstp_clause_apply_defs_inference(output, parent_id, def_ids)
+                    .map_err(doc_write_error)?;
+                tstp_print_end(output, clause, Some("split")).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
+    /// Ports C `DocFormulaIntroDefs`.
+    pub fn doc_formula_intro_defs(
+        &mut self,
+        output: &mut impl fmt::Write,
+        formula: &mut FormulaDocView<'_>,
+        def_ids: &[i64],
+        comment: Option<&str>,
+    ) -> Result<ProofDocWriteResult, Diagnostic> {
+        if self.output_level < 2 {
+            return Ok(ProofDocWriteResult::suppressed());
+        }
+
+        let old_id = formula.ident();
+        formula.set_ident(self.id_source.next_ident());
+        match self.output_format {
+            ProofDocOutputFormat::Pcl => {
+                pcl_formula_print_start(
+                    output,
+                    formula.ident(),
+                    formula.query_tptp_type(),
+                    (self.pcl_shell_level < 1).then_some(formula.rendered_formula()),
+                    self.step_options,
+                )
+                .map_err(doc_write_error)?;
+                write_pcl_formula_apply_defs_inference(output, old_id, def_ids)
+                    .map_err(doc_write_error)?;
+                pcl_formula_print_end(output, comment, self.step_options)
+                    .map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::Tstp => {
+                write_tstp_formula_start(output, formula, self.problem_type)
+                    .map_err(doc_write_error)?;
+                output.write_str(", ").map_err(doc_write_error)?;
+                write_tstp_formula_apply_defs_inference(output, old_id, def_ids)
+                    .map_err(doc_write_error)?;
+                tstp_formula_print_end(output, comment).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+            ProofDocOutputFormat::NoFormat
+            | ProofDocOutputFormat::Lop
+            | ProofDocOutputFormat::Tptp
+            | ProofDocOutputFormat::Xml => {
+                write_unsupported_doc_format(output).map_err(doc_write_error)?;
+                Ok(ProofDocWriteResult::printed())
+            }
+        }
+    }
+
     fn write_pcl_clause_creation(
         &self,
         output: &mut impl fmt::Write,
@@ -1354,6 +1710,7 @@ pub enum ClauseUnaryInference {
     Factoring,
     Split,
     SplitConjunct,
+    SplitEquiv,
     Normalize,
     Condense,
     EvalAnswerLiteral,
@@ -1368,6 +1725,7 @@ impl ClauseUnaryInference {
             Self::Factoring => "of",
             Self::Split => "split",
             Self::SplitConjunct => "split_conjunct",
+            Self::SplitEquiv => "split_equiv",
             Self::Normalize => "cn",
             Self::Condense => "condense",
             Self::EvalAnswerLiteral => "eval_answer_literal",
@@ -1424,6 +1782,10 @@ pub fn write_tstp_clause_unary_inference(
         ClauseUnaryInference::SplitConjunct => write!(
             output,
             "inference(split_conjunct, [status(thm)],[c_0_{parent_id}])"
+        ),
+        ClauseUnaryInference::SplitEquiv => write!(
+            output,
+            "inference(split_equiv, [status(thm)],[c_0_{parent_id}])"
         ),
         ClauseUnaryInference::EvalAnswerLiteral => write!(
             output,
@@ -2317,6 +2679,266 @@ mod tests {
 
         assert_eq!(formula.ident(), 2);
         assert!(!formula.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "% Output format not implemented.\n");
+    }
+
+    #[test]
+    fn doc_clause_from_form_clears_input_and_prints_split_conjunct_parent() {
+        let bank = test_bank();
+        let parent = FormulaDocView::new(17, CP_TYPE_AXIOM, "p(a)");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_from_form(&mut rendered, &bank, &mut clause, &parent)
+            .unwrap();
+
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "     1 : :[] : split_conjunct(17)\n");
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        clause.set_ident(43);
+        clause.set_prop(CP_INPUT_FORMULA);
+        rendered.clear();
+        session
+            .doc_clause_from_form(&mut rendered, &bank, &mut clause, &parent)
+            .unwrap();
+
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false),inference(split_conjunct, [status(thm)],[c_0_17])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_from_form_unsupported_format_clears_but_does_not_assign_id() {
+        let bank = test_bank();
+        let parent = FormulaDocView::new(17, CP_TYPE_AXIOM, "p(a)");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::NoFormat, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_from_form(&mut rendered, &bank, &mut clause, &parent)
+            .unwrap();
+
+        assert_eq!(clause.ident(), 42);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert_eq!(rendered, "% Output format not implemented.\n");
+    }
+
+    #[test]
+    fn doc_clause_quote_prints_old_id_and_optional_partner_shapes() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(7);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut partner = Clause::empty();
+        partner.set_ident(20);
+        let mut rendered = String::new();
+
+        session
+            .doc_clause_quote(&mut rendered, &bank, 2, &mut clause, Some("proof"), None)
+            .unwrap();
+
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(rendered, "     1 : :[] : 7 : 'proof'\n");
+
+        clause.set_ident(8);
+        rendered.clear();
+        session
+            .doc_clause_quote(
+                &mut rendered,
+                &bank,
+                2,
+                &mut clause,
+                Some("subsumed"),
+                Some(&partner),
+            )
+            .unwrap();
+
+        assert_eq!(clause.ident(), 2);
+        assert_eq!(rendered, "     2 : :[] : 8 : 'subsumed(20)'\n");
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        clause.set_ident(9);
+        rendered.clear();
+        session
+            .doc_clause_quote(
+                &mut rendered,
+                &bank,
+                2,
+                &mut clause,
+                Some("subsumed"),
+                Some(&partner),
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false), c_0_9,['subsumed(c_0_20)']).\n"
+        );
+    }
+
+    #[test]
+    fn doc_clause_quote_respects_target_level_and_unsupported_id_timing() {
+        let bank = test_bank();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        clause.set_ident(42);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut rendered = String::new();
+
+        let result = session
+            .doc_clause_quote(&mut rendered, &bank, 2, &mut clause, Some("proof"), None)
+            .unwrap();
+
+        assert_eq!(result, ProofDocWriteResult::suppressed());
+        assert!(rendered.is_empty());
+        assert_eq!(clause.ident(), 42);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::NoFormat, 2, ProblemType::FirstOrder);
+        clause.set_ident(43);
+        rendered.clear();
+        session
+            .doc_clause_quote(&mut rendered, &bank, 2, &mut clause, Some("proof"), None)
+            .unwrap();
+
+        assert_eq!(clause.ident(), 43);
+        assert_eq!(session.id_source.current_ident(), 0);
+        assert_eq!(rendered, "% Output format not implemented.\n");
+    }
+
+    #[test]
+    fn doc_split_def_rest_and_clause_apply_defs_match_c_comments_and_spacing() {
+        let bank = test_bank();
+        let parent = FormulaDocView::new(10, CP_TYPE_AXIOM, "p(a)");
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut clause = Clause::empty();
+        let mut rendered = String::new();
+
+        session
+            .doc_intro_split_def_rest(&mut rendered, &bank, &mut clause, &parent, Some("ignored"))
+            .unwrap();
+
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(rendered, "     1 : :[] : split_equiv(10)\n");
+
+        rendered.clear();
+        session
+            .doc_clause_apply_defs(
+                &mut rendered,
+                &bank,
+                &mut clause,
+                9,
+                &[70, 71],
+                Some("ignored"),
+            )
+            .unwrap();
+
+        assert_eq!(clause.ident(), 2);
+        assert_eq!(
+            rendered,
+            "     2 : :[] : apply_def(apply_def(9,70),71) : 'split'\n"
+        );
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        rendered.clear();
+        session
+            .doc_intro_split_def_rest(&mut rendered, &bank, &mut clause, &parent, None)
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_1, plain, ($false),inference(split_equiv, [status(thm)],[c_0_10])).\n"
+        );
+
+        rendered.clear();
+        session
+            .doc_clause_apply_defs(&mut rendered, &bank, &mut clause, 9, &[70, 71], None)
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "cnf(c_0_2, plain, ($false),inference(apply_def, [status(thm)],[inference(apply_def, [status(thm)],[c_0_9,c_0_70]),c_0_71]),['split']).\n"
+        );
+    }
+
+    #[test]
+    fn doc_formula_intro_defs_and_split_wrapper_match_c_dispatch() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(7, CP_TYPE_AXIOM, "p(a)");
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_intro_defs(&mut rendered, &mut formula, &[20, 21], Some("defs"))
+            .unwrap();
+
+        assert_eq!(formula.ident(), 1);
+        assert_eq!(
+            rendered,
+            "     1 : :p(a) : apply_def(apply_def(7,20),21) : 'defs'\n"
+        );
+
+        rendered.clear();
+        let mut split_def = FormulaDocView::new(0, CP_TYPE_AXIOM, "def");
+        session
+            .doc_intro_split_def(&mut rendered, &mut split_def)
+            .unwrap();
+
+        assert_eq!(split_def.ident(), 2);
+        assert_eq!(rendered, "     2 : :def : introduced : 'split'\n");
+
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        formula.set_ident(7);
+        rendered.clear();
+        session
+            .doc_formula_intro_defs(&mut rendered, &mut formula, &[20, 21], None)
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "fof(c_0_1, plain, p(a), inference(apply_def,[status(thm)],[inference(apply_def,[status(thm)],[c_0_7,c_0_20]),c_0_21])).\n"
+        );
+    }
+
+    #[test]
+    fn doc_formula_intro_defs_unsupported_format_assigns_id_like_c() {
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::NoFormat, 2, ProblemType::FirstOrder);
+        let mut formula = FormulaDocView::new(7, CP_TYPE_AXIOM, "p(a)");
+        let mut rendered = String::new();
+
+        session
+            .doc_formula_intro_defs(&mut rendered, &mut formula, &[20], Some("defs"))
+            .unwrap();
+
+        assert_eq!(formula.ident(), 1);
+        assert_eq!(session.id_source.current_ident(), 1);
         assert_eq!(rendered, "% Output format not implemented.\n");
     }
 
