@@ -3,10 +3,11 @@ use crate::basics::pstacks::PStack;
 use crate::basics::sysdate::SysDate;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{
-    CP_INITIAL, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
+    CP_INITIAL, CP_INPUT_FORMULA, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED,
+    CP_LIMITED_RW,
 };
 use crate::clauses::clausefunc::clause_remove_superfluous_literals;
-use crate::clauses::clausepos::{term_compute_rw_sequence, RewriteSequenceEntry};
+use crate::clauses::clausepos::{term_compute_rw_sequence, ClausePos, RewriteSequenceEntry};
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
 use crate::clauses::derivation::{DC_LOCAL_REWRITE, DC_REWRITE};
 use crate::clauses::eqn::Eqn;
@@ -14,6 +15,7 @@ use crate::clauses::eqn_props::{
     EqnSide, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE, MAX_SIDE,
     MIN_SIDE,
 };
+use crate::clauses::inferencedoc::ProofDocSession;
 use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::orderings::cto_orderings::to_greater;
@@ -28,9 +30,12 @@ use crate::terms::termtypes::{
     TP_IS_REWRITTEN, TP_IS_RREWRITABLE, TP_IS_RREWRITTEN,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type LocalRwSystem = HashMap<usize, Term>;
+type RewriteDocCallback<'a> =
+    dyn FnMut(&TermBank, &mut Clause, usize, EqnSide, &Term) -> Result<(), Diagnostic> + 'a;
 
 pub static REWRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub static REWRITE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
@@ -42,31 +47,6 @@ pub static BWRW_MATCH_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct PlainRewriteTrace {
     sos_rewritten: bool,
-}
-
-struct TermRewriteTrace {
-    old: Term,
-    new: Term,
-}
-
-struct EqnNormalformTrace {
-    side: EqnSide,
-    left: Option<TermRewriteTrace>,
-    right: Option<TermRewriteTrace>,
-}
-
-impl EqnNormalformTrace {
-    fn new() -> Self {
-        Self {
-            side: EqnSide::NoSide,
-            left: None,
-            right: None,
-        }
-    }
-
-    fn has_rewrites(&self) -> bool {
-        self.left.is_some() || self.right.is_some()
-    }
 }
 
 /// Rewrites a clause with local rules extracted from that same clause.
@@ -589,7 +569,7 @@ pub fn eqn_li_normalform_plain(
     lambda_demod: bool,
 ) -> Result<EqnSide, Diagnostic> {
     let mut rewrite_trace = PlainRewriteTrace::default();
-    Ok(eqn_li_normalform_plain_trace(
+    eqn_li_normalform_plain_trace(
         bank,
         ocb,
         eqn,
@@ -599,13 +579,12 @@ pub fn eqn_li_normalform_plain(
         interred_rw,
         lambda_demod,
         &mut rewrite_trace,
-    )?
-    .side)
+    )
 }
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Private worker returns side rewrite traces for ClauseComputeLINormalform"
+    reason = "Private worker mirrors C eqn_li_normalform inputs"
 )]
 fn eqn_li_normalform_plain_trace(
     bank: &mut TermBank,
@@ -617,11 +596,11 @@ fn eqn_li_normalform_plain_trace(
     interred_rw: bool,
     lambda_demod: bool,
     rewrite_trace: &mut PlainRewriteTrace,
-) -> Result<EqnNormalformTrace, Diagnostic> {
+) -> Result<EqnSide, Diagnostic> {
     let left_old = eqn.left().clone();
     let right_old = eqn.right().clone();
     let restricted_rw = eqn.is_maximal() && eqn.is_positive() && eqn.is_oriented() && interred_rw;
-    let mut result = EqnNormalformTrace::new();
+    let mut result = EqnSide::NoSide;
 
     let left_new = term_li_normalform_plain_with_trace(
         bank,
@@ -637,11 +616,7 @@ fn eqn_li_normalform_plain_trace(
     if left_new != left_old {
         eqn.set_left_raw(left_new.clone());
         eqn.del_prop(EP_MAX_IS_UP_TO_DATE);
-        result.side = MAX_SIDE;
-        result.left = Some(TermRewriteTrace {
-            old: left_old,
-            new: left_new,
-        });
+        result = MAX_SIDE;
     }
 
     let right_new = term_li_normalform_plain_with_trace(
@@ -661,15 +636,11 @@ fn eqn_li_normalform_plain_trace(
             eqn.del_prop(EP_IS_EQU_LITERAL);
         }
         if eqn.is_oriented() {
-            result.side = eqn_side_union(result.side, MIN_SIDE);
+            result = eqn_side_union(result, MIN_SIDE);
         } else {
-            result.side = eqn_side_union(result.side, MAX_SIDE);
+            result = eqn_side_union(result, MAX_SIDE);
             eqn.del_prop(EP_MAX_IS_UP_TO_DATE);
         }
-        result.right = Some(TermRewriteTrace {
-            old: right_old,
-            new: right_new,
-        });
     }
 
     Ok(result)
@@ -733,6 +704,96 @@ pub fn clause_compute_li_normalform_plain(
     prefer_general: bool,
     lambda_demod: bool,
 ) -> Result<i64, Diagnostic> {
+    clause_compute_li_normalform_plain_impl(
+        bank,
+        ocb,
+        clause,
+        demodulators,
+        level,
+        prefer_general,
+        lambda_demod,
+        None,
+    )
+}
+
+/// Compute plain normal forms and emit C `DocClauseRewrite` steps when active.
+///
+/// C calls `DocClauseRewriteDefault` from `eqn_li_normalform` only when
+/// `OutputLevel >= 4`. This wrapper preserves that outer gate: lower output
+/// levels normalize exactly like [`clause_compute_li_normalform_plain`] and do
+/// not clear `CPInputFormula` or allocate proof-documentation ids.
+///
+/// # Errors
+///
+/// Returns diagnostics from side normalization or proof-documentation rendering.
+///
+/// # Panics
+///
+/// Panics under the same preconditions as
+/// [`clause_compute_li_normalform_plain`], and if rewrite documentation is
+/// requested for an invalid rewritten side.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible normalization plus proof-documentation plumbing keeps caller state explicit"
+)]
+pub fn clause_compute_li_normalform_plain_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &mut Clause,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    lambda_demod: bool,
+) -> Result<i64, Diagnostic> {
+    if session.output_level < 4 {
+        return clause_compute_li_normalform_plain(
+            bank,
+            ocb,
+            clause,
+            demodulators,
+            level,
+            prefer_general,
+            lambda_demod,
+        );
+    }
+
+    let mut write_doc = |bank: &TermBank,
+                         clause: &mut Clause,
+                         literal_index: usize,
+                         side: EqnSide,
+                         old_term: &Term|
+     -> Result<(), Diagnostic> {
+        write_clause_rewrite_doc(output, session, bank, clause, literal_index, side, old_term)
+    };
+
+    clause_compute_li_normalform_plain_impl(
+        bank,
+        ocb,
+        clause,
+        demodulators,
+        level,
+        prefer_general,
+        lambda_demod,
+        Some(&mut write_doc),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Shared implementation mirrors C ClauseComputeLINormalform state"
+)]
+fn clause_compute_li_normalform_plain_impl(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &mut Clause,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    lambda_demod: bool,
+    mut doc_rewrite: Option<&mut RewriteDocCallback<'_>>,
+) -> Result<i64, Diagnostic> {
     assert!(
         !clause.is_any_prop_set(CP_IS_D_INDEXED | CP_IS_S_INDEXED),
         "indexed clauses must be removed from rewrite indexes before normalization"
@@ -745,24 +806,19 @@ pub fn clause_compute_li_normalform_plain(
         done = true;
         for index in 0..clause.literals().len() {
             let interred_rw = clause.query_prop(CP_LIMITED_RW);
-            let eqn_trace = {
-                let literal = &mut clause.literals_mut().as_mut_slice()[index];
-                eqn_li_normalform_plain_trace(
-                    bank,
-                    ocb,
-                    literal,
-                    demodulators,
-                    level,
-                    prefer_general,
-                    interred_rw,
-                    lambda_demod,
-                    &mut rewrite_trace,
-                )?
-            };
-            let side = eqn_trace.side;
-            if eqn_trace.has_rewrites() {
-                record_eqn_normalform_trace(clause.ensure_derivation(), eqn_trace);
-            }
+            let side = clause_literal_li_normalform_plain(
+                bank,
+                ocb,
+                clause,
+                index,
+                demodulators,
+                level,
+                prefer_general,
+                interred_rw,
+                lambda_demod,
+                &mut rewrite_trace,
+                &mut doc_rewrite,
+            )?;
 
             let literal = &clause.literals().as_slice()[index];
             if eqn_side_contains(side, MAX_SIDE)
@@ -788,6 +844,119 @@ pub fn clause_compute_li_normalform_plain(
     }
 
     Ok(rewrite_steps)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors C eqn_li_normalform while keeping live clause documentation state"
+)]
+fn clause_literal_li_normalform_plain(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &mut Clause,
+    literal_index: usize,
+    demodulators: &[&ClauseSet],
+    level: RewriteLevel,
+    prefer_general: bool,
+    interred_rw: bool,
+    lambda_demod: bool,
+    rewrite_trace: &mut PlainRewriteTrace,
+    doc_rewrite: &mut Option<&mut RewriteDocCallback<'_>>,
+) -> Result<EqnSide, Diagnostic> {
+    let (left_old, restricted_rw) = {
+        let literal = &clause.literals().as_slice()[literal_index];
+        (
+            literal.left().clone(),
+            literal.is_maximal() && literal.is_positive() && literal.is_oriented() && interred_rw,
+        )
+    };
+    let mut result = EqnSide::NoSide;
+
+    let left_new = term_li_normalform_plain_with_trace(
+        bank,
+        ocb,
+        &left_old,
+        demodulators,
+        level,
+        prefer_general,
+        restricted_rw,
+        lambda_demod,
+        rewrite_trace,
+    )?;
+    if left_new != left_old {
+        {
+            let literal = &mut clause.literals_mut().as_mut_slice()[literal_index];
+            literal.set_left_raw(left_new.clone());
+            literal.del_prop(EP_MAX_IS_UP_TO_DATE);
+        }
+        result = MAX_SIDE;
+        if let Some(doc_rewrite) = doc_rewrite.as_mut() {
+            doc_rewrite(bank, clause, literal_index, EqnSide::LeftSide, &left_old)?;
+        }
+        record_term_normalform_trace(clause.ensure_derivation(), &left_old, &left_new);
+    }
+
+    let right_old = clause.literals().as_slice()[literal_index].right().clone();
+    let right_new = term_li_normalform_plain_with_trace(
+        bank,
+        ocb,
+        &right_old,
+        demodulators,
+        level,
+        prefer_general,
+        false,
+        lambda_demod,
+        rewrite_trace,
+    )?;
+    if right_new != right_old {
+        let right_side = {
+            let literal = &mut clause.literals_mut().as_mut_slice()[literal_index];
+            literal.set_right_raw(right_new.clone());
+            if literal.query_prop(EP_IS_EQU_LITERAL) && literal.right() == bank.true_term() {
+                literal.del_prop(EP_IS_EQU_LITERAL);
+            }
+            if literal.is_oriented() {
+                MIN_SIDE
+            } else {
+                literal.del_prop(EP_MAX_IS_UP_TO_DATE);
+                MAX_SIDE
+            }
+        };
+        result = eqn_side_union(result, right_side);
+        if let Some(doc_rewrite) = doc_rewrite.as_mut() {
+            doc_rewrite(bank, clause, literal_index, EqnSide::RightSide, &right_old)?;
+        }
+        record_term_normalform_trace(clause.ensure_derivation(), &right_old, &right_new);
+    }
+
+    Ok(result)
+}
+
+fn write_clause_rewrite_doc(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    bank: &TermBank,
+    clause: &mut Clause,
+    literal_index: usize,
+    side: EqnSide,
+    old_term: &Term,
+) -> Result<(), Diagnostic> {
+    let mut position: ClausePos<()> = ClausePos::for_clause(clause.clone());
+    assert!(
+        position.set_literal_index(Some(literal_index)),
+        "rewrite documentation side must refer to an existing literal"
+    );
+    position.set_side(side);
+
+    let _ = session.doc_clause_rewrite(output, bank, &mut position, old_term, None)?;
+    let documented = position
+        .clause()
+        .expect("rewrite documentation position must remain clause-backed");
+    clause.set_ident(documented.ident());
+    if !documented.query_prop(CP_INPUT_FORMULA) {
+        clause.del_prop(CP_INPUT_FORMULA);
+    }
+    Ok(())
 }
 
 /// Compute plain leftmost-innermost normal forms for every clause in a set.
@@ -831,24 +1000,12 @@ pub fn clause_set_compute_li_normalform_plain(
     Ok(result)
 }
 
-fn record_eqn_normalform_trace(
-    stack: &mut PStack<RewriteSequenceEntry>,
-    trace: EqnNormalformTrace,
-) {
-    if let Some(left) = trace.left {
-        let recorded = term_compute_rw_sequence(stack, &left.old, &left.new, DC_REWRITE);
-        debug_assert!(
-            recorded,
-            "changed left side should expose at least one rewrite link"
-        );
-    }
-    if let Some(right) = trace.right {
-        let recorded = term_compute_rw_sequence(stack, &right.old, &right.new, DC_REWRITE);
-        debug_assert!(
-            recorded,
-            "changed right side should expose at least one rewrite link"
-        );
-    }
+fn record_term_normalform_trace(stack: &mut PStack<RewriteSequenceEntry>, old: &Term, new: &Term) {
+    let recorded = term_compute_rw_sequence(stack, old, new, DC_REWRITE);
+    debug_assert!(
+        recorded,
+        "changed side should expose at least one rewrite link"
+    );
 }
 
 fn eqn_side_contains(side: EqnSide, needle: EqnSide) -> bool {
@@ -1374,17 +1531,20 @@ fn map_literal_terms(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_compute_li_normalform_plain, clause_local_rw,
-        clause_set_compute_li_normalform_plain, eqn_has_rw_side, eqn_li_normalform_plain,
-        find_rewritable_clauses, find_rewritable_clauses_indexed,
+        clause_compute_li_normalform_plain, clause_compute_li_normalform_plain_with_docs,
+        clause_local_rw, clause_set_compute_li_normalform_plain, eqn_has_rw_side,
+        eqn_li_normalform_plain, find_rewritable_clauses, find_rewritable_clauses_indexed,
         rewrite_with_clause_set_list_plain, rewrite_with_clause_set_plain,
         term_li_normalform_plain, BWRW_MATCH_ATTEMPTS, BWRW_MATCH_SUCCESSES, REWRITE_ATTEMPTS,
         REWRITE_SUCCESSES, REWRITE_UNBOUND_VAR_FAILS, REWRITE_UNCACHED,
     };
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_LIMITED_RW};
+    use crate::clauses::clause_props::{
+        CP_INITIAL, CP_INPUT_FORMULA, CP_IS_ORIENTED, CP_IS_SOS, CP_LIMITED_RW,
+    };
     use crate::clauses::clausepos::RewriteSequenceEntry;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
@@ -1393,6 +1553,7 @@ mod tests {
         EP_MAX_IS_UP_TO_DATE,
     };
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::subterm_index::SubtermIndex;
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
@@ -2170,6 +2331,119 @@ mod tests {
                 RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(102)),
             ]
         );
+    }
+
+    #[test]
+    fn clause_li_normalform_with_docs_emits_c_side_rewrite_steps() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -2);
+        let left_replacement = typed_const(&mut bank, "clause_doc_nf_a");
+        let left_arg = typed_const(&mut bank, "clause_doc_nf_b");
+        let right_replacement = typed_const(&mut bank, "clause_doc_nf_c");
+        let right_arg = typed_const(&mut bank, "clause_doc_nf_d");
+        let f_variable = typed_unary(&mut bank, "clause_doc_nf_f", &variable);
+        let f_left_arg = typed_unary(&mut bank, "clause_doc_nf_f", &left_arg);
+        let g_variable = typed_unary(&mut bank, "clause_doc_nf_g", &variable);
+        let g_right_arg = typed_unary(&mut bank, "clause_doc_nf_g", &right_arg);
+        let mut first_lit = eqn(&mut bank, &f_variable, &left_replacement, true);
+        oriented_demod(&mut first_lit);
+        let mut second_lit = eqn(&mut bank, &g_variable, &right_replacement, true);
+        oriented_demod(&mut second_lit);
+        let mut first_demod = Clause::alloc(EqnList::from_vec(vec![first_lit]));
+        first_demod.set_ident(101);
+        first_demod.set_date(SysDate::from_raw(5));
+        let mut second_demod = Clause::alloc(EqnList::from_vec(vec![second_lit]));
+        second_demod.set_ident(102);
+        second_demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([first_demod, second_demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &f_left_arg, &g_right_arg, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(7);
+        clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+        let mut ocb = kbo_ocb(&bank);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 4, ProblemType::FirstOrder);
+        session.pcl_shell_level = 1;
+        let mut rendered = String::new();
+
+        let steps = clause_compute_li_normalform_plain_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut bank,
+            &mut ocb,
+            &mut clause,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 2);
+        assert_eq!(clause.ident(), 2);
+        assert!(!clause.query_prop(CP_INITIAL | CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 2);
+        assert_eq!(rendered, "     1 : : : rw(7,101)\n     2 : : : rw(1,102)\n");
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                RewriteSequenceEntry::Operation(516),
+                RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(101)),
+                RewriteSequenceEntry::Operation(516),
+                RewriteSequenceEntry::Demodulator(RewriteDemodulator::new(102)),
+            ]
+        );
+    }
+
+    #[test]
+    fn clause_li_normalform_with_docs_preserves_c_output_level_four_gate() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -2);
+        let replacement = typed_const(&mut bank, "clause_doc_gate_a");
+        let arg = typed_const(&mut bank, "clause_doc_gate_b");
+        let rhs = typed_const(&mut bank, "clause_doc_gate_c");
+        let f_variable = typed_unary(&mut bank, "clause_doc_gate_f", &variable);
+        let f_arg = typed_unary(&mut bank, "clause_doc_gate_f", &arg);
+        let mut demod_lit = eqn(&mut bank, &f_variable, &replacement, true);
+        oriented_demod(&mut demod_lit);
+        let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
+        demod.set_ident(103);
+        demod.set_date(SysDate::from_raw(5));
+        let mut demod_set = ClauseSet::from_clauses([demod]);
+        demod_set.set_date(SysDate::from_raw(5));
+        let demodulators = [&demod_set];
+        let mut literal = eqn(&mut bank, &f_arg, &rhs, true);
+        literal.set_prop(EP_IS_ORIENTED | EP_IS_MAXIMAL | EP_MAX_IS_UP_TO_DATE);
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(7);
+        clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+        let mut ocb = kbo_ocb(&bank);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 3, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let steps = clause_compute_li_normalform_plain_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut bank,
+            &mut ocb,
+            &mut clause,
+            &demodulators,
+            RewriteLevel::RuleRewrite,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(steps, 1);
+        assert!(rendered.is_empty());
+        assert_eq!(clause.ident(), 7);
+        assert!(!clause.query_prop(CP_INITIAL));
+        assert!(clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 0);
     }
 
     #[test]
