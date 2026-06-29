@@ -3346,12 +3346,12 @@ pub fn proof_state_process_clause(
     proof_state_process_clause_impl::<String>(state, control, answer_limit, None, None)
 }
 
-/// Processes one selected clause while emitting represented C
-/// `document_processing` output.
+/// Processes one selected clause while emitting represented C proof output.
 ///
 /// This includes C's `OutputLevel` 1 selected-clause text and the target-level 6
-/// `new_given` proof-documentation quote. The plain helper remains output-free
-/// for callers that do not own a proof-output stream yet.
+/// `new_given` proof-documentation quote, plus represented documentation from
+/// the final `insert_new_clauses` tail. The plain helper remains output-free for
+/// callers that do not own a proof-output stream yet.
 ///
 /// # Errors
 ///
@@ -3593,7 +3593,11 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     if control.heuristic_parms().detsort_tmpset {
         proof_state_sort_tmp_store_by_struct_weight(state);
     }
-    let generated_empty = proof_state_insert_new_clauses(state, control)?;
+    let generated_empty = if let Some((output, session, _output_level)) = doc_context.as_mut() {
+        proof_state_insert_new_clauses_with_docs(&mut **output, session, state, control)?
+    } else {
+        proof_state_insert_new_clauses(state, control)?
+    };
 
     Ok(ProcessClauseOutcome::Processed {
         class,
@@ -8750,6 +8754,7 @@ mod tests {
         assert_eq!(backward.tmp_store_marked, 1);
         assert!(output.contains(" : 4156 : 'new_given'\n"));
         assert!(output.contains(" : 4157 : 'simplifiable'\n"));
+        assert!(output.contains(" : 3 : 'eval'\n"));
         assert!(state.processed_non_units().find_by_id(4_157).is_none());
         assert!(state.archive().find_by_id(2).is_some());
         assert!(state.tmp_store().is_empty());
