@@ -1627,12 +1627,14 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        let formula = if scanner.test_tok(
-            TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::LAMBDA_QUANTOR,
-        ) {
+        let formula = if scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+            let quantor = self.tptp_quantor_parse(scanner)?;
+            scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+            self.parse_quantified_tformula_tstp_subset(scanner, quantor)?
+        } else if scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
-                "Quantified Boolean formula arguments are not ported yet",
+                "Lambda Boolean formula arguments are not ported yet",
             ));
         } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
@@ -1659,6 +1661,34 @@ impl TermBank {
             self.parse_tformula_atom(scanner)?
         };
         self.encode_predicate_as_eqn(formula)
+    }
+
+    fn parse_quantified_tformula_tstp_subset(
+        &mut self,
+        scanner: &mut Scanner,
+        quantor: FunCode,
+    ) -> Result<Term, Diagnostic> {
+        self.vars.push_env();
+        let parsed = (|| {
+            let variable = self.parse_term_real(scanner, true)?;
+            if !variable.is_free_var() {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Variable expected, non-variable term found",
+                ));
+            }
+            let rest = if scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                self.parse_quantified_tformula_tstp_subset(scanner, quantor)?
+            } else {
+                scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+                scanner.accept_tok(TokenType::COLON)?;
+                self.parse_literal_tformula_tstp_subset(scanner)?
+            };
+            self.tformula_fcode_alloc(quantor, variable, Some(rest))
+        })();
+        self.vars.pop_env();
+        parsed
     }
 
     fn parse_tformula_atom(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
@@ -1783,6 +1813,18 @@ impl TermBank {
         let op = self.tptp_operator_convert(scanner.current_token().kind())?;
         scanner.next_token()?;
         Ok(op)
+    }
+
+    fn tptp_quantor_parse(&self, scanner: &mut Scanner) -> Result<FunCode, Diagnostic> {
+        scanner.check_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR)?;
+        let quantor = if scanner.test_tok(TokenType::EXIST_QUANTOR) {
+            self.sig.qex_code()
+        } else {
+            self.sig.qall_code()
+        };
+        let quantor = self.require_formula_op_code(quantor)?;
+        scanner.next_token()?;
+        Ok(quantor)
     }
 
     fn tptp_operator_convert(&mut self, token: TokenType) -> Result<FunCode, Diagnostic> {
@@ -2999,6 +3041,51 @@ mod tests {
             bank.signature()
                 .find_name(right.argument(0).unwrap().f_code()),
             Some("pred_bool_r")
+        );
+    }
+
+    #[test]
+    fn checked_parser_reads_universal_boolean_formula_arguments() {
+        let (bank, arg) = parse_bool_arg("takes_bool_arg(![X]: pred_bool_q(X))");
+
+        assert_eq!(arg.f_code(), bank.signature().qall_code());
+        let variable = arg.argument(0).unwrap();
+        assert!(variable.is_free_var());
+        let body = arg.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        let predicate = body.argument(0).unwrap();
+        assert_eq!(
+            bank.signature().find_name(predicate.f_code()),
+            Some("pred_bool_q")
+        );
+        assert_eq!(predicate.argument(0), Some(variable));
+        assert_eq!(body.argument(1), Some(bank.true_term().clone()));
+    }
+
+    #[test]
+    fn checked_parser_reads_nested_existential_boolean_formula_arguments() {
+        let (bank, arg) =
+            parse_bool_arg("takes_bool_arg(?[X,Y]:(pred_bool_ex(X) | pred_bool_ex(Y)))");
+
+        assert_eq!(arg.f_code(), bank.signature().qex_code());
+        let x = arg.argument(0).unwrap();
+        let inner = arg.argument(1).unwrap();
+        assert_eq!(inner.f_code(), bank.signature().qex_code());
+        let y = inner.argument(0).unwrap();
+        let body = inner.argument(1).unwrap();
+
+        assert_eq!(body.f_code(), bank.signature().or_code());
+        let left = body.argument(0).unwrap();
+        let right = body.argument(1).unwrap();
+        assert_eq!(
+            left.argument(0).unwrap().argument(0),
+            Some(x),
+            "left predicate keeps the first quantified variable"
+        );
+        assert_eq!(
+            right.argument(0).unwrap().argument(0),
+            Some(y),
+            "right predicate keeps the second quantified variable"
         );
     }
 
