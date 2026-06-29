@@ -1,6 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROCESSED, CP_IS_SOS, CP_SUBSUMES_WATCH};
+use crate::clauses::derivation::{derivation_entries, op_code, DerivationEntry, DO_ARG_CONG};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
@@ -412,8 +414,14 @@ pub fn prio_fun_defer_formulas(bank: &TermBank, clause: &Clause) -> EvalPriority
 }
 
 #[must_use]
-pub const fn prio_fun_prefer_easy_ho(_bank: &TermBank, _clause: &Clause) -> EvalPriority {
-    PRIO_NORMAL
+pub fn prio_fun_prefer_easy_ho(_bank: &TermBank, clause: &Clause) -> EvalPriority {
+    if problem_type() == ProblemType::HigherOrder
+        && derivation_has_operation_code(clause, DO_ARG_CONG)
+    {
+        PRIO_BEST
+    } else {
+        PRIO_NORMAL
+    }
 }
 
 #[must_use]
@@ -457,6 +465,12 @@ fn is_formula_subterm(bank: &TermBank, term: &Term) -> bool {
         && bank.signature().is_logical_symbol(term.f_code())
 }
 
+fn derivation_has_operation_code(clause: &Clause, target: i64) -> bool {
+    derivation_entries(clause)
+        .iter()
+        .any(|entry| matches!(entry, DerivationEntry::Operation(op) if op_code(*op) == target))
+}
+
 #[must_use]
 fn usize_to_eval_priority(value: usize) -> EvalPriority {
     EvalPriority::try_from(value).unwrap_or(EvalPriority::MAX)
@@ -483,8 +497,10 @@ mod tests {
         PRIO_PREFER,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_INITIAL, CP_IS_PROCESSED, CP_IS_SOS, CP_SUBSUMES_WATCH};
+    use crate::clauses::derivation::{clause_push_derivation, DC_ARG_CONG};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
@@ -495,6 +511,15 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_HAS_NON_PATTERN_VAR};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ResetProblemType;
+
+    impl Drop for ResetProblemType {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
 
     fn term_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -836,5 +861,26 @@ mod tests {
         assert_eq!(prio_fun_prefer_easy_ho(&bank, &clause), PRIO_NORMAL);
         assert_eq!(priority("PreferHOSteps", &bank, &clause), PRIO_NORMAL);
         assert_eq!(priority("PreferEasyHO", &bank, &clause), PRIO_NORMAL);
+    }
+
+    #[test]
+    fn prefer_easy_ho_detects_arg_cong_derivation_only_for_higher_order() {
+        let _guard = global_state_lock();
+        let _reset = ResetProblemType;
+        reset_problem_type();
+
+        let bank = term_bank();
+        let parent = Clause::empty();
+        let mut clause = Clause::empty();
+        clause_push_derivation(&mut clause, DC_ARG_CONG, Some(&parent), None);
+
+        assert_eq!(prio_fun_prefer_easy_ho(&bank, &clause), PRIO_NORMAL);
+        set_problem_type(ProblemType::FirstOrder).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(priority("PreferEasyHO", &bank, &clause), PRIO_NORMAL);
+
+        reset_problem_type();
+        set_problem_type(ProblemType::HigherOrder).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(prio_fun_prefer_easy_ho(&bank, &clause), PRIO_BEST);
+        assert_eq!(priority("PreferEasyHO", &bank, &clause), PRIO_BEST);
     }
 }
