@@ -1,4 +1,5 @@
 pub mod axiomsorter;
+pub mod bce;
 pub mod clause;
 pub mod clause_props;
 pub mod clausecpos;

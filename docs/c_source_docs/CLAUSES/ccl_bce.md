@@ -95,6 +95,16 @@ Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/clauses/bce.rs` ports the clause-level blocked-clause elimination helper over the current Rust `ClauseSet` owner, including predicate occurrence maps with C's max-occurrence cutoff behavior, per-literal BCE tasks over disjoint parent copies, minimum-remaining-candidate task scheduling, blocker resumption after archive moves, non-equational L-resolvent checks through first-order MGU plus complementary-literal closure, equational same-head L-resolvent construction through generated argument disequalities, and the C-shaped `% BCE start` / `% BCE eliminated` output wrapper.
+- Executable `--bce` still only records configuration. Proof-control/preprocessing integration remains pending so the helper can be called at the same point as C and with the right archive, temporary bank, and proof-output ownership.
+
+### Change-Later Observations
+
+- C stores BCE tasks, blockers, and occurrence maps through raw clause pointers, so duplicate identifiers and archive/requeue aliases are still distinct. Rust currently uses compact clause identifiers for the clause-level helper because stable clause handles are not represented across `ClauseSet` moves yet; replace this with stable handles before wiring BCE into long-lived proof-state preprocessing where duplicate identifiers can be observable.
+- `EliminateBlockedClauses` writes progress directly to `stdout` rather than the prover's main output stream. Rust keeps a pure helper plus an opt-in output wrapper; decide at executable integration whether stdout leakage is required for compatibility or should be isolated behind a compatibility output layer.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
