@@ -3512,7 +3512,18 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
 
     let static_watchlist = control.heuristic_parms().watchlist_is_static;
     let lambda_demod = control.heuristic_parms().lambda_demod;
-    let watchlist = proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod);
+    let watchlist = if let Some((output, session, _output_level)) = doc_context.as_mut() {
+        proof_state_check_watchlist_with_docs(
+            &mut **output,
+            session,
+            state,
+            &mut clause,
+            static_watchlist,
+            lambda_demod,
+        )?
+    } else {
+        proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod)
+    };
 
     let mut clause_date = proof_state_demodulator_date(state, RewriteLevel::FullRewrite);
     let backward = if let Some(indices) = indices.as_deref_mut() {
@@ -8769,6 +8780,76 @@ mod tests {
         assert!(state.processed_non_units().find_by_id(4_157).is_none());
         assert!(state.archive().find_by_id(2).is_some());
         assert!(state.tmp_store().is_empty());
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_quotes_dynamic_watchlist_extraction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, watched) = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_process_watch_doc_left");
+            let right = typed_const(terms, "pc_process_watch_doc_right");
+            let guard_left = typed_const(terms, "pc_process_watch_doc_guard_left");
+            let guard_right = typed_const(terms, "pc_process_watch_doc_guard_right");
+            let mut selected =
+                Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]));
+            selected.set_ident(4_160);
+            let mut watched = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &left, &right, true),
+                literal(terms, &guard_left, &guard_right, true),
+            ]));
+            watched.set_ident(4_161);
+            watched.set_prop(CP_INPUT_FORMULA | CP_WATCH_ONLY);
+            watched.set_weight(watched.standard_weight());
+            (selected, watched)
+        };
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.heuristic_parms_mut().watchlist_is_static = false;
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            6,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed {
+            class, watchlist, ..
+        } = outcome
+        else {
+            panic!("selected clause should survive processing");
+        };
+        assert_eq!(
+            watchlist,
+            ProofStateWatchlistOutcome {
+                subsumes_watch: true,
+                removed: 1,
+            }
+        );
+        assert_eq!(session.id_source.current_ident(), 3);
+        assert!(output.contains(" : 4160 : 'new_given'\n"));
+        assert!(output.contains(" : 4161 : 'extract_wl_subsumed(1)'\n"));
+        assert!(output.contains(" : 1 : 'extract_subsumed_watched'\n"));
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        let archived = state.archive().find_by_id(2).unwrap();
+        assert!(archived.query_prop(CP_IS_DEAD | CP_WATCH_ONLY));
+        assert!(!archived.query_prop(CP_INPUT_FORMULA));
+        assert!(match class {
+            ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(3),
+            ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(3),
+            ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(3),
+            ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(3),
+        }
+        .is_some());
     }
 
     #[test]
