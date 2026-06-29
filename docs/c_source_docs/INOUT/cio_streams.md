@@ -105,7 +105,7 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 ### Rust Port Status Notes
 
 - `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing.
-- Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, and pops back to the previous stream in LIFO order.
+- Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, and pops back to the previous stream in LIFO order; `Scanner` uses this stack for automatic include splicing.
 - Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, file-named in-memory sources for stdin-like data, and stacked stream push/pop restoration.
 
 ### Change-Later Observations

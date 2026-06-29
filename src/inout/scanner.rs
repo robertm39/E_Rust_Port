@@ -5,7 +5,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::stringtrees::StrTree;
 use crate::inout::fileops::{file_name_base_name, file_name_dir_name, file_name_is_absolute};
 use crate::inout::initio::tptp_dir;
-use crate::inout::streams::{InputStream, StreamType};
+use crate::inout::streams::{InputStream, InputStreamStack, StreamType};
 use std::path::Path;
 
 pub const MAX_TOKEN_LOOKAHEAD: usize = 4;
@@ -200,8 +200,7 @@ impl Token {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Scanner {
-    source: InputStream,
-    source_stack: Vec<InputStream>,
+    source_stack: InputStreamStack,
     default_dir: String,
     ignore_comments: bool,
     format: IoFormat,
@@ -277,9 +276,10 @@ impl Scanner {
         ignore_comments: bool,
         include_key: Option<String>,
     ) -> Result<Self, Diagnostic> {
+        let mut source_stack = InputStreamStack::new();
+        source_stack.open_stacked_input(source);
         let mut scanner = Self {
-            source,
-            source_stack: Vec::new(),
+            source_stack,
             default_dir: String::new(),
             ignore_comments,
             format: IoFormat::Lop,
@@ -312,6 +312,18 @@ impl Scanner {
     #[must_use]
     pub fn include_pos(&self) -> Option<&str> {
         self.include_pos.as_deref()
+    }
+
+    fn source(&self) -> &InputStream {
+        self.source_stack
+            .top()
+            .unwrap_or_else(|| panic!("scanner source stack must not be empty"))
+    }
+
+    fn source_mut(&mut self) -> &mut InputStream {
+        self.source_stack
+            .top_mut()
+            .unwrap_or_else(|| panic!("scanner source stack must not be empty"))
     }
 
     pub fn set_format(&mut self, format: IoFormat) {
@@ -529,17 +541,17 @@ impl Scanner {
 
     fn scan_token(&mut self, index: usize) -> Result<(), Diagnostic> {
         self.reset_scanned_token(index);
-        match self.source.current_char() {
+        match self.source().current_char() {
             None => self.tok_sequence[index].kind = TokenType::NO_TOKEN,
             Some(byte) if byte.is_ascii_whitespace() => self.scan_white(index),
             Some(byte) if is_start_id_char(byte) => self.scan_ident(index),
             Some(byte) if byte.is_ascii_digit() => self.scan_int(index),
             Some(b'#' | b'%') => self.scan_line_comment(index),
-            Some(b'/') if self.source.look_char(1) == Some(b'*') => {
+            Some(b'/') if self.source().look_char(1) == Some(b'*') => {
                 self.scan_c_comment(index)?;
             }
             Some(delimiter @ (b'"' | b'\'')) => self.scan_string(index, delimiter)?,
-            Some(b'$') if self.source.look_char(1).is_some_and(is_id_char) => {
+            Some(b'$') if self.source().look_char(1).is_some_and(is_id_char) => {
                 self.scan_semantic_identifier(index);
             }
             Some(_) => self.scan_punctuation(index)?,
@@ -548,19 +560,24 @@ impl Scanner {
     }
 
     fn reset_scanned_token(&mut self, index: usize) {
+        let source = self.source();
+        let source_bytes = source.source_bytes().to_vec();
+        let stream_type = source.stream_type();
+        let line = source.line();
+        let column = source.column();
         let token = &mut self.tok_sequence[index];
         token.literal.reset();
-        token.source = self.source.source_bytes().to_vec();
-        token.stream_type = self.source.stream_type();
-        token.line = self.source.line();
-        token.column = self.source.column();
+        token.source = source_bytes;
+        token.stream_type = stream_type;
+        token.line = line;
+        token.column = column;
         token.numval = 0;
         token.kind = TokenType::NO_TOKEN;
     }
 
     fn scan_white(&mut self, index: usize) {
         self.tok_sequence[index].kind = TokenType::WHITE_SPACE;
-        while let Some(byte) = self.source.current_char() {
+        while let Some(byte) = self.source().current_char() {
             if !byte.is_ascii_whitespace() {
                 break;
             }
@@ -571,7 +588,7 @@ impl Scanner {
     fn scan_ident(&mut self, index: usize) {
         let mut numstart = 0_usize;
         for offset in 0_usize.. {
-            let Some(byte) = self.source.current_char() else {
+            let Some(byte) = self.source().current_char() else {
                 break;
             };
             if !is_id_char(byte) {
@@ -597,7 +614,7 @@ impl Scanner {
 
     fn scan_int(&mut self, index: usize) {
         self.tok_sequence[index].kind = TokenType::POS_INT;
-        while let Some(byte) = self.source.current_char() {
+        while let Some(byte) = self.source().current_char() {
             if !byte.is_ascii_digit() {
                 break;
             }
@@ -609,21 +626,22 @@ impl Scanner {
 
     fn scan_line_comment(&mut self, index: usize) {
         self.tok_sequence[index].kind = TokenType::COMMENT;
-        while let Some(byte) = self.source.current_char() {
+        while let Some(byte) = self.source().current_char() {
             if byte == b'\n' {
                 break;
             }
             self.append_current_and_advance(index);
         }
         self.tok_sequence[index].literal.append_byte(b'\n');
-        self.source.next_char();
+        self.source_mut().next_char();
     }
 
     fn scan_c_comment(&mut self, index: usize) -> Result<(), Diagnostic> {
         self.tok_sequence[index].kind = TokenType::COMMENT;
-        while !(self.source.current_char() == Some(b'*') && self.source.look_char(1) == Some(b'/'))
+        while !(self.source().current_char() == Some(b'*')
+            && self.source().look_char(1) == Some(b'/'))
         {
-            if self.source.current_char().is_none() {
+            if self.source().current_char().is_none() {
                 return Err(self.token_error(index, "Unterminated C-style comment"));
             }
             self.append_current_and_advance(index);
@@ -644,7 +662,7 @@ impl Scanner {
 
         let mut escaped = false;
         loop {
-            let Some(byte) = self.source.current_char() else {
+            let Some(byte) = self.source().current_char() else {
                 return Err(self.token_error(index, "Unterminated string constant"));
             };
             if !escaped && byte == delimiter {
@@ -675,7 +693,7 @@ impl Scanner {
     }
 
     fn scan_punctuation(&mut self, index: usize) -> Result<(), Diagnostic> {
-        let kind = match self.source.current_char() {
+        let kind = match self.source().current_char() {
             Some(b'(') => TokenType::OPEN_BRACKET,
             Some(b')') => TokenType::CLOSE_BRACKET,
             Some(b'{') => TokenType::OPEN_CURLY,
@@ -712,13 +730,13 @@ impl Scanner {
     }
 
     fn scan_lesser_prefixed_operator(&mut self, index: usize) -> TokenType {
-        if self.source.look_char(1) == Some(b'~') && self.source.look_char(2) == Some(b'>') {
+        if self.source().look_char(1) == Some(b'~') && self.source().look_char(2) == Some(b'>') {
             self.append_current_and_advance(index);
             self.append_current_and_advance(index);
             TokenType::FOF_XOR
-        } else if self.source.look_char(1) == Some(b'=') {
+        } else if self.source().look_char(1) == Some(b'=') {
             self.append_current_and_advance(index);
-            if self.source.look_char(1) == Some(b'>') {
+            if self.source().look_char(1) == Some(b'>') {
                 self.append_current_and_advance(index);
                 TokenType::FOF_EQUIV
             } else {
@@ -730,7 +748,7 @@ impl Scanner {
     }
 
     fn scan_equal_prefixed_operator(&mut self, index: usize) -> TokenType {
-        if self.source.look_char(1) == Some(b'>') {
+        if self.source().look_char(1) == Some(b'>') {
             self.append_current_and_advance(index);
             TokenType::FOF_LR_IMPL
         } else {
@@ -739,7 +757,7 @@ impl Scanner {
     }
 
     fn scan_tilde_prefixed_operator(&mut self, index: usize) -> TokenType {
-        match self.source.look_char(1) {
+        match self.source().look_char(1) {
             Some(b'|') => {
                 self.append_current_and_advance(index);
                 TokenType::FOF_NOR
@@ -753,7 +771,7 @@ impl Scanner {
     }
 
     fn scan_exclamation_prefixed_operator(&mut self, index: usize) -> TokenType {
-        if self.source.look_char(1) == Some(b'=') {
+        if self.source().look_char(1) == Some(b'=') {
             self.append_current_and_advance(index);
             TokenType::NEG_EQUAL_SIGN
         } else {
@@ -762,10 +780,10 @@ impl Scanner {
     }
 
     fn append_current_and_advance(&mut self, index: usize) {
-        if let Some(byte) = self.source.current_char() {
+        if let Some(byte) = self.source().current_char() {
             self.tok_sequence[index].literal.append_byte(byte);
         }
-        self.source.next_char();
+        self.source_mut().next_char();
     }
 
     fn token_error(&self, index: usize, message: &str) -> Diagnostic {
@@ -809,17 +827,15 @@ impl Scanner {
 
     fn push_file_source(&mut self, path: &Path) -> Result<(), Diagnostic> {
         let stream = InputStream::from_file(path)?;
-        let previous = std::mem::replace(&mut self.source, stream);
-        self.source_stack.push(previous);
+        self.source_stack.open_stacked_input(stream);
         Ok(())
     }
 
     fn pop_source(&mut self) -> bool {
-        let Some(previous) = self.source_stack.pop() else {
+        if self.source_stack.len() <= 1 {
             return false;
-        };
-        self.source = previous;
-        true
+        }
+        self.source_stack.close_stacked_input().is_some()
     }
 }
 
