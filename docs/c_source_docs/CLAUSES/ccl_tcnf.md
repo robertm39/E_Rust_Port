@@ -157,10 +157,11 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 
 ### Rust Port Status Notes
 
-- A focused Rust port of `TFormulaSimplifyDecoded` is staged for `BooleanSimplification` in forward contraction. It covers decoded two-argument `and`/`or`, unary decoded `and`/`or` constant-to-DB-lambda cases, `not`, implication, equivalence/xor, `$eq`/`$neq`, recursive argument simplification, neutral/absorbing constants, duplicate removal, complement detection, and literal remapping through the term bank. The closed-lambda quantifier branch is still deferred for the higher-order/lambda-normalization slice.
+- A focused Rust port of `TFormulaSimplifyDecoded` is staged for `BooleanSimplification` in forward contraction. It covers decoded two-argument `and`/`or`, unary decoded `and`/`or` constant-to-DB-lambda cases, closed-lambda decoded quantifier matrix removal, `not`, implication, equivalence/xor, `$eq`/`$neq`, recursive argument simplification, neutral/absorbing constants, duplicate removal, complement detection, and literal remapping through the term bank.
 
 ### Change-Later Observations
 
 - `do_simplify_decoded` sorts flattened decoded `and`/`or` arguments by raw term pointer (`PCmp`) before deduplicating and folding the formula back into binary shape. This makes the resulting shared formula shape allocation-order dependent. Rust mirrors handle-identity ordering for compatibility; a later cleaned formula canonicalizer should switch to structural ordering only behind proof-search and proof-output reference tests.
 - `do_simplify_decoded` simplifies the child of unary decoded `and`/`or`, but when that child is neither the neutral nor absorbing Boolean constant it returns the original unary formula cell rather than the recursively simplified child. Rust preserves that visible behavior; revisit whether this is an accidental missed simplification once higher-order decoded-formula tests cover non-constant unary bodies.
+- `do_simplify_decoded` recognizes decoded quantifiers as unary `$qex`/`$qall` cells whose single argument is a DB lambda, despite the normal signature arity for those symbols being binary. Rust preserves this accepted shape; a later formula layer should model decoded binder forms directly instead of overloading ordinary function-symbol arity.
 <!-- END MANUAL REVIEW: c_source_docs -->

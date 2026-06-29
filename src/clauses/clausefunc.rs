@@ -19,7 +19,7 @@ use crate::terms::signature::{FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE};
 use crate::terms::simpletypes::{arrow_type_flattened, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::term_standard_weight;
+use crate::terms::termfunc::{term_is_db_closed, term_standard_weight};
 use crate::terms::termtypes::{
     term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
     TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS,
@@ -358,13 +358,13 @@ pub fn clause_eliminate_naked_boolean_variables(
 /// Applies C `BooleanSimplification` to a clause.
 ///
 /// The mapped term-level simplifier follows C `TFormulaSimplifyDecoded` for
-/// decoded two-argument Boolean formulas used by forward contraction.
+/// decoded Boolean formulas used by forward contraction.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic if the formula rebuild needs an unavailable signature
-/// arity, if term-bank insertion fails, or if a higher-order-only decoded
-/// formula shape reaches a branch that is not ported yet.
+/// arity, if term-bank insertion fails, or if a lambda body is unexpectedly
+/// untyped.
 pub fn clause_boolean_simplification(
     clause: &mut Clause,
     bank: &mut TermBank,
@@ -667,10 +667,14 @@ fn simplify_decoded_equivalence_like(
 fn simplify_decoded_quantifier(bank: &mut TermBank, formula: &Term) -> Result<Term, Diagnostic> {
     let formula = simplify_decoded_args(bank, formula, true)?;
     if formula.arity() == 1 && formula_argument(&formula, 0).is_lambda() {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "TFormulaSimplifyDecoded closed-lambda quantifier branch is not ported yet",
-        ));
+        let matrix = formula_argument(&formula_argument(&formula, 0), 1);
+        assert!(
+            matrix.type_().is_some_and(|type_| type_.is_bool()),
+            "decoded quantified lambda matrix must be Boolean"
+        );
+        if term_is_db_closed(&matrix) {
+            return Ok(matrix);
+        }
     }
     Ok(formula)
 }
@@ -1200,7 +1204,7 @@ mod tests {
         clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
         clause_remove_superfluous_literals, clause_set_archive_copy, clause_set_canonize,
         clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
-        clause_set_replace_injectivity_defs, clause_unit_simplify_test,
+        clause_set_replace_injectivity_defs, clause_unit_simplify_test, close_with_db_var,
         pstack_clause_print_lop_string, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
@@ -1280,6 +1284,14 @@ mod tests {
             .insert_type_shared(alloc_arrow_type(vec![bool_type.clone(), bool_type]));
         let term = Term::top_alloc(f_code, 1);
         term.set_type(Some(unary_type));
+        term.set_argument(0, arg.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn bool_result_unary_with_code(bank: &mut TermBank, f_code: i64, arg: &Term) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
         term.set_argument(0, arg.clone());
         bank.term_top_insert(term).unwrap()
     }
@@ -1759,6 +1771,34 @@ mod tests {
         assert!(binder.is_db_var());
         assert_eq!(body, false_term);
         assert_eq!(simplified.type_(), unary.type_());
+    }
+
+    #[test]
+    fn tformula_simplify_decoded_quantifier_closed_lambda_returns_matrix() {
+        let mut bank = test_bank();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let body = bank.true_term().clone();
+        let lambda = close_with_db_var(&mut bank, &bool_type, &body).unwrap();
+        let qex_code = bank.signature().qex_code();
+        let formula = bool_result_unary_with_code(&mut bank, qex_code, &lambda);
+
+        let simplified = tformula_simplify_decoded(&mut bank, &formula, true).unwrap();
+
+        assert_eq!(simplified, body);
+    }
+
+    #[test]
+    fn tformula_simplify_decoded_quantifier_open_lambda_keeps_formula() {
+        let mut bank = test_bank();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let open_body = bank.request_db_var(&bool_type, 1);
+        let lambda = close_with_db_var(&mut bank, &bool_type, &open_body).unwrap();
+        let qall_code = bank.signature().qall_code();
+        let formula = bool_result_unary_with_code(&mut bank, qall_code, &lambda);
+
+        let simplified = tformula_simplify_decoded(&mut bank, &formula, true).unwrap();
+
+        assert_eq!(simplified, formula);
     }
 
     #[test]

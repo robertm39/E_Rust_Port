@@ -154,7 +154,7 @@ Source files reviewed: `CONTROL/cco_ho_inferences.h`, `CONTROL/cco_ho_inferences
 
 ### Rust Port Status Notes
 
-- `BooleanSimplification` is partially staged in Rust through `src/clauses/clausefunc.rs` and called from `forward_contract_keep` at the C call site. The port covers decoded two-argument Boolean formula simplification, unary decoded `and`/`or` constant-to-DB-lambda cases, true-literal redundancy detection, superfluous-literal cleanup, and `DCNormalize` derivation metadata. Closed-lambda quantifier simplification remains deferred with a diagnostic.
+- `BooleanSimplification` is partially staged in Rust through `src/clauses/clausefunc.rs` and called from `forward_contract_keep` at the C call site. The port covers decoded two-argument Boolean formula simplification, unary decoded `and`/`or` constant-to-DB-lambda cases, closed-lambda decoded quantifier matrix removal, true-literal redundancy detection, superfluous-literal cleanup, and `DCNormalize` derivation metadata.
 
 ### Change-Later Observations
 
