@@ -1596,12 +1596,11 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
             "ForwardModifyClause requires initialized proof-control ordering",
         )
     })?;
-    forward_modify_check_higher_order_ordering(higher_order, ocb)?;
-
     let mut rw_steps = 0_i64;
     let trivial = {
         let (terms, processed_sets) = state.terms_and_processed_sets_mut();
         let demodulators: [&ClauseSet; 2] = [&*processed_sets.pos_rules, &*processed_sets.pos_eqns];
+        forward_modify_check_higher_order_ordering(higher_order, ocb, clause, &demodulators)?;
         loop {
             forward_modify_normalize_if_higher_order(higher_order, clause, terms);
             let steps = match doc_context.as_mut() {
@@ -1695,14 +1694,38 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
 fn forward_modify_check_higher_order_ordering(
     higher_order: bool,
     ocb: &OrderControlBlock,
+    clause: &Clause,
+    demodulators: &[&ClauseSet],
 ) -> Result<(), Diagnostic> {
-    if higher_order && ocb.ordering_type != TermOrdering::Empty {
+    if !higher_order || ocb.ordering_type == TermOrdering::Empty {
+        return Ok(());
+    }
+
+    let first_order_shaped = !clause_has_higher_order_ordering_surface(clause)
+        && !demodulators
+            .iter()
+            .any(|set| clause_set_has_higher_order_ordering_surface(set));
+    if ocb.ordering_type != TermOrdering::Kbo6 || !first_order_shaped {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "ForwardModifyClause higher-order term ordering is not ported yet",
         ));
     }
     Ok(())
+}
+
+fn clause_set_has_higher_order_ordering_surface(set: &ClauseSet) -> bool {
+    set.iter().any(clause_has_higher_order_ordering_surface)
+}
+
+fn clause_has_higher_order_ordering_surface(clause: &Clause) -> bool {
+    clause
+        .literals()
+        .exists_term(term_has_higher_order_ordering_surface)
+}
+
+fn term_has_higher_order_ordering_surface(term: &Term) -> bool {
+    term.has_higher_order_ordering_surface()
 }
 
 fn forward_modify_normalize_if_higher_order(
@@ -7774,6 +7797,15 @@ mod tests {
         )
     }
 
+    fn kbo6_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
     fn empty_ocb(bank: &TermBank) -> OrderControlBlock {
         OrderControlBlock::alloc(
             TermOrdering::Empty,
@@ -8631,7 +8663,9 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_higher_order_ordering_stays_explicit_diagnostic() {
+    fn proof_state_forward_modify_clause_higher_order_first_order_subset_uses_ordering() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut clause = {
             let terms = state.terms_mut();
@@ -8640,7 +8674,41 @@ mod tests {
             Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]))
         };
         let mut control = proof_control_alloc();
-        control.set_ocb(kbo_ocb(state.terms()));
+        control.set_ocb(kbo6_ocb(state.terms()));
+
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert!(clause.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_higher_order_applied_var_ordering_stays_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let predicate = unary_predicate_var(terms, -4_091);
+            let arg = typed_const(terms, "pc_ho_order_app_arg");
+            let applied = apply_terms(terms, &predicate, std::slice::from_ref(&arg))
+                .unwrap_or_else(|err| panic!("{err}"));
+            let truth = terms.true_term().clone();
+            Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &applied, &truth, true,
+            )]))
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo6_ocb(state.terms()));
 
         let error = proof_state_forward_modify_clause_impl::<String>(
             &mut state,

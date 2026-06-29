@@ -15,9 +15,10 @@ use crate::terms::termtypes::{term_deref, DerefType, Term};
 ///
 /// # Panics
 ///
-/// Panics if the global problem type is higher-order, if same-symbol terms do
-/// not have C-compatible matching arities, if term argument slots are
-/// uninitialized, or if the OCB lacks KBO weight/precedence storage.
+/// Panics if the global problem type is higher-order and either dereferenced
+/// term needs the LFHO KBO6 path, if same-symbol terms do not have
+/// C-compatible matching arities, if term argument slots are uninitialized, or
+/// if the OCB lacks KBO weight/precedence storage.
 pub fn kbo6_compare(
     ocb: &mut OrderControlBlock,
     signature: &Signature,
@@ -26,6 +27,7 @@ pub fn kbo6_compare(
     deref_s: DerefType,
     deref_t: DerefType,
 ) -> CompareResult {
+    assert_kbo6_surface_supported(s, t, deref_s, deref_t);
     kbo6_reset(ocb);
     kbo_lin_cmp(ocb, signature, s, t, deref_s, deref_t)
 }
@@ -59,6 +61,22 @@ fn kbo6_reset(ocb: &mut OrderControlBlock) {
     ocb.pos_bal = 0;
     ocb.neg_bal = 0;
     ocb.max_var = 0;
+}
+
+fn assert_kbo6_surface_supported(
+    s: &Term,
+    t: &Term,
+    mut deref_s: DerefType,
+    mut deref_t: DerefType,
+) {
+    if problem_type() == ProblemType::HigherOrder {
+        let s = term_deref(s, &mut deref_s);
+        let t = term_deref(t, &mut deref_t);
+        assert!(
+            !s.has_higher_order_ordering_surface() && !t.has_higher_order_ordering_surface(),
+            "LFHO KBO6 term ordering is not ported yet"
+        );
+    }
 }
 
 fn resize_vb(ocb: &mut OrderControlBlock, index: usize) {
@@ -150,12 +168,6 @@ fn kbo_lin_cmp(
     mut deref_s: DerefType,
     mut deref_t: DerefType,
 ) -> CompareResult {
-    assert_ne!(
-        problem_type(),
-        ProblemType::HigherOrder,
-        "first-order KBO6 path is not used for higher-order problems"
-    );
-
     let s = term_deref(s, &mut deref_s);
     let t = term_deref(t, &mut deref_t);
     let mut res = CompareResult::Equal;

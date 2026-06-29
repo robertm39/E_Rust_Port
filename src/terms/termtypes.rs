@@ -607,6 +607,18 @@ impl Term {
     }
 
     #[must_use]
+    pub fn has_higher_order_ordering_surface(&self) -> bool {
+        let mut stack = vec![self.clone()];
+        while let Some(term) = stack.pop() {
+            if term.is_db_var() || term.is_lambda() || term.is_phony_app() {
+                return true;
+            }
+            stack.extend(term.argument_clones().into_iter().flatten());
+        }
+        false
+    }
+
+    #[must_use]
     pub fn is_beta_reducible(&self) -> bool {
         self.query_prop(TP_IS_BETA_REDUCIBLE)
     }
