@@ -13,9 +13,12 @@ use crate::basics::os_wrapper::{
 };
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::pstacks::PStack;
-use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
+use crate::basics::simple_stuff::{
+    problem_type, reset_problem_type, set_problem_type, ProblemType,
+};
 use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::bce::eliminate_blocked_clauses_with_output;
 use crate::clauses::clause::{
     clause_parse, clause_print_lop_format_string_with_options,
     clause_print_tptp_format_string_with_options, clause_write_tstp_with_type_suffixes, Clause,
@@ -4603,6 +4606,13 @@ fn run_prune_only<W: Write + ?Sized>(
     write_preprocessing_config_debug_line(output, config)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
+    let bce_max_occs = i32_from_i64_config("bce_max_occs", config.preprocessing.bce.max_occs)?;
+    apply_blocked_clause_elimination(
+        output,
+        config.preprocessing.bce.enabled,
+        bce_max_occs,
+        &mut state,
+    )?;
     let _next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
     write_comment_line_after_blank(output, "Pruning successful!")?;
     write_tstp_status(output, "Unknown")?;
@@ -4626,6 +4636,12 @@ fn run_proof_search<W: Write + ?Sized>(
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let relevancy_pruned = sine_pruned + apply_clause_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
+    apply_blocked_clause_elimination(
+        output,
+        heuristic_params.bce,
+        heuristic_params.bce_max_occs,
+        &mut state,
+    )?;
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
     }
@@ -5500,6 +5516,33 @@ fn apply_clause_relevance_pruning(
         clause_set_relevance_prune(state.terms().signature(), state.axioms(), level);
     *state.axioms_mut() = pruned;
     removed
+}
+
+fn apply_blocked_clause_elimination<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    enabled: bool,
+    max_occs: i32,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<i64, EProverError> {
+    if !enabled || problem_type() != ProblemType::FirstOrder {
+        return Ok(0);
+    }
+
+    let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
+    let mut bce_output = String::new();
+    let result = {
+        let (bank, axioms, archive) = state.terms_axioms_archive_mut();
+        eliminate_blocked_clauses_with_output(
+            axioms,
+            archive,
+            max_occs,
+            bank,
+            &mut tmp_bank,
+            &mut bce_output,
+        )?
+    };
+    output.write_stdout_side_channel(bce_output.as_bytes())?;
+    Ok(result.eliminated_count)
 }
 
 fn load_configured_watchlist<W: Write + ?Sized>(
@@ -12488,6 +12531,39 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_bce_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-bce");
+        std::fs::write(
+            &path,
+            "cnf(left, axiom, (p(a)|q(a))).\n\
+             cnf(right, axiom, (~p(a)|q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--prune", "--bce=true", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}% BCE start: 2\n% BCE eliminated: 2.\n\n% Pruning successful!\n% SZS status Unknown\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_lambda_def_clears_represented_clause_axioms() {
         let _guard = global_state_lock();
         let path = temp_path("prune-lambda-def-clauses");
@@ -15662,6 +15738,42 @@ mod tests {
         assert!(printed.contains("% Parsed axioms                        : 4\n"));
         assert!(printed.contains("% Removed by relevancy pruning/SinE    : 1\n"));
         assert!(printed.contains("% Initial clauses                      : 3\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_applies_selected_bce_preprocessing() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-bce");
+        std::fs::write(
+            &path,
+            "cnf(left, axiom, (p(a)|q(a))).\n\
+             cnf(right, axiom, (~p(a)|q(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--bce=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
+        assert!(printed.contains("% Parsed axioms                        : 2\n"));
+        assert!(printed.contains("% Initial clauses                      : 2\n"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

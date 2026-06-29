@@ -320,6 +320,16 @@ impl ProofState {
         (terms, archive)
     }
 
+    pub fn terms_axioms_archive_mut(&mut self) -> (&mut TermBank, &mut ClauseSet, &mut ClauseSet) {
+        let Self {
+            terms,
+            axioms,
+            archive,
+            ..
+        } = self;
+        (terms, axioms, archive)
+    }
+
     pub fn terms_axioms_choice_opcodes_mut(
         &mut self,
     ) -> (
