@@ -83,6 +83,14 @@ Manual review status: reviewed for porting-relevant behavior on 2026-06-22.
 
 Source files reviewed: `TERMS/cte_termpos.h`, `TERMS/cte_termpos.c`.
 
+### Compatibility Notes
+
+- `TermPosDebugPrint` treats `sig == NULL` as address-debug mode and `sig != NULL` as term-debug mode. The term mode prints each stored superterm twice, first with `DEREF_NEVER`, then after a literal `...` with `DEREF_ALWAYS`, followed by `Subterm <index>`.
+
+### C Behaviors To Revisit After Compatibility
+
+- The nullable `Sig_p` mode switch combines raw address diagnostics and dereferenced term rendering in one API. Rust preserves both modes through explicit helpers; a later cleaned diagnostic API could separate these concerns once drop-in compatibility is established.
+
 ### Review Notes
 
 - Reviewed as a paired implementation/header unit in `TERMS` covering 2 source file(s), about 315 lines, 7 scanned public declarations, 2 scanned internal function definitions, and 5 structured function-comment blocks.

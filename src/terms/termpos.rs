@@ -1,4 +1,6 @@
-use crate::terms::termtypes::{term_identity_id, Term};
+use crate::basics::simple_stuff::ProblemType;
+use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::{term_identity_id, DerefType, Term};
 use std::fmt::{self, Write};
 
 pub const TERM_POS_ELEMENT_SIZE: usize = 2;
@@ -148,6 +150,42 @@ impl TermPos {
         }
         writeln!(output, "# --TermPos")
     }
+
+    /// Writes C `TermPosDebugPrint` output for a non-null signature.
+    ///
+    /// C prints each stored superterm twice: first with `DEREF_NEVER`, then
+    /// after a literal `...` with `DEREF_ALWAYS`, followed by the selected
+    /// child index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_debug_terms(
+        &self,
+        output: &mut impl Write,
+        bank: &TermBank,
+        problem_type: ProblemType,
+    ) -> fmt::Result {
+        writeln!(output, "# TermPos--")?;
+        for component in &self.components {
+            write!(output, "# ")?;
+            bank.write_term_deref_for_problem(
+                output,
+                &component.superterm,
+                problem_type,
+                DerefType::Never,
+            )?;
+            write!(output, "...")?;
+            bank.write_term_deref_for_problem(
+                output,
+                &component.superterm,
+                problem_type,
+                DerefType::Always,
+            )?;
+            writeln!(output, " Subterm {}", component.index)?;
+        }
+        writeln!(output, "# --TermPos")
+    }
 }
 
 #[must_use]
@@ -158,7 +196,12 @@ pub fn term_pos_is_top_pos(pos: &TermPos) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{term_pos_is_top_pos, TermPos, TERM_POS_ELEMENT_SIZE};
+    use crate::basics::simple_stuff::ProblemType;
+    use crate::inout::scanner::Scanner;
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
+    use crate::terms::typebanks::TypeBank;
 
     fn sample_term() -> (Term, Term, Term, Term, Term) {
         let root = Term::top_alloc(10, 2);
@@ -169,6 +212,11 @@ mod tests {
         root.set_argument(0, a.clone());
         root.set_argument(1, g.clone());
         (root, a, g, b, Term::const_cell_alloc(99))
+    }
+
+    fn parse_in_bank(bank: &mut TermBank, source: &str) -> Term {
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        bank.parse_term_simple(&mut scanner).unwrap()
     }
 
     #[test]
@@ -224,5 +272,45 @@ mod tests {
         pos.write_debug_addresses(&mut output).unwrap();
         assert!(output.starts_with("# TermPos--\n# <0x"));
         assert!(output.ends_with(" Subterm 0\n# --TermPos\n"));
+    }
+
+    #[test]
+    fn debug_term_print_uses_never_and_always_deref_pair() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let root = parse_in_bank(&mut bank, "f(X,g(a))");
+        let binding = parse_in_bank(&mut bank, "h(b)");
+        let var = bank.vars().ext_name_find("X").unwrap();
+        var.set_binding(Some(binding));
+        let mut pos = TermPos::new();
+        pos.push_component(root, 1);
+
+        let mut output = String::new();
+        pos.write_debug_terms(&mut output, &bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(
+            output,
+            "# TermPos--\n# f(X1,g(a))...f(h(b),g(a)) Subterm 1\n# --TermPos\n"
+        );
+    }
+
+    #[test]
+    fn debug_term_print_uses_higher_order_term_surface() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let root = parse_in_bank(&mut bank, "f(X)");
+        let binding = parse_in_bank(&mut bank, "g(a)");
+        let var = bank.vars().ext_name_find("X").unwrap();
+        var.set_binding(Some(binding));
+        let mut pos = TermPos::new();
+        pos.push_component(root, 0);
+
+        let mut output = String::new();
+        pos.write_debug_terms(&mut output, &bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(
+            output,
+            "# TermPos--\n# f @ X1...f @ (g @ a) Subterm 0\n# --TermPos\n"
+        );
     }
 }

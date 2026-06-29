@@ -198,6 +198,31 @@ impl TermBank {
         self.write_term_with_type_suffixes(output, term, full_terms, false)
     }
 
+    /// Writes the C `TermPrint` shape with an explicit dereference mode.
+    ///
+    /// This follows the `TermPrint` macro dispatch: first-order problems use
+    /// the conventional first-order surface, while higher-order problems use
+    /// the currently ported `TermPrintHO` application surface. FOOL formula,
+    /// list, `let`, and lambda pretty-printing remain part of the full
+    /// formula-printer integration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a printed non-constant term has an uninitialized argument.
+    pub fn write_term_deref_for_problem(
+        &self,
+        output: &mut impl fmt::Write,
+        term: &Term,
+        problem_type: ProblemType,
+        deref: DerefType,
+    ) -> fmt::Result {
+        if problem_type == ProblemType::HigherOrder {
+            self.write_term_ho_deref(output, term, deref)
+        } else {
+            self.write_plain_term_deref(output, term, deref)
+        }
+    }
+
     /// Writes a term with optional `TermPrintTypes`-style suffixes.
     ///
     /// C appends type suffixes only on the conventional full-term printer; the
