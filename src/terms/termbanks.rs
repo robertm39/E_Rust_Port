@@ -108,6 +108,10 @@ impl TermBank {
         &self.vars
     }
 
+    pub(crate) fn request_db_var(&mut self, type_: &Type, db_index: FunCode) -> Term {
+        self.db_vars.request_db_var(type_, db_index)
+    }
+
     #[must_use]
     pub(crate) fn copy_term(&mut self, source: &Term, deref: DerefType) -> Term {
         term_copy(source, &self.vars, Some(&mut self.db_vars), deref)

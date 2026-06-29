@@ -157,9 +157,10 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 
 ### Rust Port Status Notes
 
-- A focused Rust port of `TFormulaSimplifyDecoded` is staged for `BooleanSimplification` in forward contraction. It covers decoded two-argument `and`/`or`, `not`, implication, equivalence/xor, `$eq`/`$neq`, recursive argument simplification, neutral/absorbing constants, duplicate removal, complement detection, and literal remapping through the term bank. The unary decoded Boolean lambda branch and closed-lambda quantifier branch are still deferred for the higher-order/lambda-normalization slice.
+- A focused Rust port of `TFormulaSimplifyDecoded` is staged for `BooleanSimplification` in forward contraction. It covers decoded two-argument `and`/`or`, unary decoded `and`/`or` constant-to-DB-lambda cases, `not`, implication, equivalence/xor, `$eq`/`$neq`, recursive argument simplification, neutral/absorbing constants, duplicate removal, complement detection, and literal remapping through the term bank. The closed-lambda quantifier branch is still deferred for the higher-order/lambda-normalization slice.
 
 ### Change-Later Observations
 
 - `do_simplify_decoded` sorts flattened decoded `and`/`or` arguments by raw term pointer (`PCmp`) before deduplicating and folding the formula back into binary shape. This makes the resulting shared formula shape allocation-order dependent. Rust mirrors handle-identity ordering for compatibility; a later cleaned formula canonicalizer should switch to structural ordering only behind proof-search and proof-output reference tests.
+- `do_simplify_decoded` simplifies the child of unary decoded `and`/`or`, but when that child is neither the neutral nor absorbing Boolean constant it returns the original unary formula cell rather than the recursively simplified child. Rust preserves that visible behavior; revisit whether this is an accidental missed simplification once higher-order decoded-formula tests cover non-constant unary bodies.
 <!-- END MANUAL REVIEW: c_source_docs -->

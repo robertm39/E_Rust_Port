@@ -15,7 +15,8 @@ use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_POSITIVE;
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::match_mgu::subst_mgu_complete;
-use crate::terms::signature::FP_IS_INJ_DEF_SKOLEM;
+use crate::terms::signature::{FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE};
+use crate::terms::simpletypes::{arrow_type_flattened, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_standard_weight;
@@ -494,10 +495,19 @@ fn simplify_decoded_and_or(
     };
 
     match formula.arity() {
-        1 => Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "TFormulaSimplifyDecoded unary Boolean lambda branch is not ported yet",
-        )),
+        1 => {
+            let simplified = simplify_decoded_args(bank, formula, true)?;
+            let arg = formula_argument(&simplified, 0);
+            let bool_type = bank.signature().type_bank().bool_type();
+            if arg == neutral_element {
+                let body = bank.request_db_var(&bool_type, 0);
+                close_with_db_var(bank, &bool_type, &body)
+            } else if arg == absorbing_element {
+                close_with_db_var(bank, &bool_type, &arg)
+            } else {
+                Ok(formula.clone())
+            }
+        }
         2 => {
             let mut changed = false;
             let mut args = Vec::new();
@@ -760,6 +770,33 @@ fn tformula_fcode_alloc(
         term.set_argument(1, arg2);
     }
     bank.term_top_insert(term)
+}
+
+fn close_with_db_var(
+    bank: &mut TermBank,
+    binder_type: &Type,
+    body: &Term,
+) -> Result<Term, Diagnostic> {
+    assert!(body.is_shared(), "lambda body must be a shared bank term");
+    let body_type = body.type_().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "CloseWithDBVar requires a typed lambda body",
+        )
+    })?;
+    let binder = bank.request_db_var(binder_type, 0);
+    let lambda = Term::top_alloc(SIG_DB_LAMBDA_CODE, 2);
+    lambda.set_argument(0, binder);
+    lambda.set_argument(1, body.clone());
+    let lambda_type =
+        bank.signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(arrow_type_flattened(
+                std::slice::from_ref(binder_type),
+                &body_type,
+            ));
+    lambda.set_type(Some(lambda_type));
+    bank.term_top_insert(lambda)
 }
 
 fn unroll_binary_formula(formula: &Term, f_code: i64, args: &mut Vec<Term>) {
@@ -1164,7 +1201,7 @@ mod tests {
         clause_remove_superfluous_literals, clause_set_archive_copy, clause_set_canonize,
         clause_set_delete_orphans_with, clause_set_remove_superfluous_literals,
         clause_set_replace_injectivity_defs, clause_unit_simplify_test,
-        pstack_clause_print_lop_string,
+        pstack_clause_print_lop_string, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -1183,7 +1220,7 @@ mod tests {
     use crate::clauses::eqn_props::EP_IS_ORIENTED;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::signature::{
-        Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM,
+        Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
     };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1232,6 +1269,18 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn bool_unary_with_code(bank: &mut TermBank, f_code: i64, arg: &Term) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let unary_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![bool_type.clone(), bool_type]));
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(unary_type));
+        term.set_argument(0, arg.clone());
         bank.term_top_insert(term).unwrap()
     }
 
@@ -1676,6 +1725,40 @@ mod tests {
         assert_eq!(literal.left(), &variable);
         assert_eq!(literal.right(), &truth);
         assert!(!literal.is_equ_lit(&bank));
+    }
+
+    #[test]
+    fn tformula_simplify_decoded_unary_or_neutral_returns_identity_lambda() {
+        let mut bank = test_bank();
+        let false_term = bank.false_term().clone();
+        let or_code = bank.signature().or_code();
+        let unary = bool_unary_with_code(&mut bank, or_code, &false_term);
+
+        let simplified = tformula_simplify_decoded(&mut bank, &unary, true).unwrap();
+
+        assert_eq!(simplified.f_code(), SIG_DB_LAMBDA_CODE);
+        let binder = simplified.argument(0).unwrap();
+        let body = simplified.argument(1).unwrap();
+        assert!(binder.is_db_var());
+        assert_eq!(body, binder);
+        assert_eq!(simplified.type_(), unary.type_());
+    }
+
+    #[test]
+    fn tformula_simplify_decoded_unary_and_absorbing_returns_constant_lambda() {
+        let mut bank = test_bank();
+        let false_term = bank.false_term().clone();
+        let and_code = bank.signature().and_code();
+        let unary = bool_unary_with_code(&mut bank, and_code, &false_term);
+
+        let simplified = tformula_simplify_decoded(&mut bank, &unary, true).unwrap();
+
+        assert_eq!(simplified.f_code(), SIG_DB_LAMBDA_CODE);
+        let binder = simplified.argument(0).unwrap();
+        let body = simplified.argument(1).unwrap();
+        assert!(binder.is_db_var());
+        assert_eq!(body, false_term);
+        assert_eq!(simplified.type_(), unary.type_());
     }
 
     #[test]
