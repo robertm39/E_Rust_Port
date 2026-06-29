@@ -3,7 +3,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
-use crate::clauses::clause::Clause;
+use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
     CP_INITIAL, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_IR_VICTIM, CP_IS_ORIENTED, CP_IS_PROCESSED,
     CP_LIMITED_RW, CP_NO_GENERATION, CP_SUBSUMES_WATCH, CP_WATCH_ONLY,
@@ -3270,7 +3270,35 @@ pub fn proof_state_process_clause(
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    proof_state_process_clause_impl(state, control, answer_limit, None)
+    proof_state_process_clause_impl::<String>(state, control, answer_limit, None, None)
+}
+
+/// Processes one selected clause while emitting represented C
+/// `document_processing` output.
+///
+/// This includes C's `OutputLevel` 1 selected-clause text and the target-level 6
+/// `new_given` proof-documentation quote. The plain helper remains output-free
+/// for callers that do not own a proof-output stream yet.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_process_clause`], plus any
+/// output or proof-documentation write diagnostic.
+pub fn proof_state_process_clause_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    proof_state_process_clause_impl(
+        state,
+        control,
+        answer_limit,
+        None,
+        Some((output, session, output_level)),
+    )
 }
 
 /// Processes one selected clause using caller-owned global indices.
@@ -3292,22 +3320,55 @@ pub fn proof_state_process_clause_with_global_indices(
     answer_limit: i64,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    proof_state_process_clause_impl(state, control, answer_limit, Some(indices))
+    proof_state_process_clause_impl::<String>(state, control, answer_limit, Some(indices), None)
+}
+
+/// Processes one selected clause with caller-owned global indices while
+/// emitting represented C `document_processing` output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_process_clause_with_global_indices`], plus any output or
+/// proof-documentation write diagnostic.
+pub fn proof_state_process_clause_with_global_indices_and_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    proof_state_process_clause_impl(
+        state,
+        control,
+        answer_limit,
+        Some(indices),
+        Some((output, session, output_level)),
+    )
 }
 
 #[expect(
     clippy::too_many_lines,
     reason = "C-compatible ProcessClause staging keeps the selected-clause phases in order"
 )]
-fn proof_state_process_clause_impl(
+fn proof_state_process_clause_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
     };
+    if let Some((output, _session, output_level)) = doc_context.as_mut() {
+        if *output_level == 1 {
+            fmt::Write::write_str(&mut **output, DEFAULT_COMCHAR_RAW)
+                .map_err(proof_control_write_error)?;
+        }
+    }
     clause.remove_evaluations();
     clause.set_prop(CP_IS_PROCESSED);
     state.statistics_mut().processed_count += 1;
@@ -3326,7 +3387,8 @@ fn proof_state_process_clause_impl(
         condense_clause: control.heuristic_parms().condensing,
         level: RewriteLevel::FullRewrite,
     };
-    let Some(packed) = proof_state_forward_contract_clause(state, control, clause, options)? else {
+    let Some(mut packed) = proof_state_forward_contract_clause(state, control, clause, options)?
+    else {
         if let Some(archived_ref) = archived_ref {
             let _ = state.archive_mut().delete_by_id(archived_ref.ident());
         }
@@ -3357,6 +3419,15 @@ fn proof_state_process_clause_impl(
 
     debug_assert!(packed.clause().weight() == packed.clause().standard_weight());
     let ac_activated = proof_state_check_ac_status(state, control, packed.clause());
+    if let Some((output, session, output_level)) = doc_context.as_mut() {
+        proof_state_document_processing_with_docs(
+            &mut **output,
+            session,
+            *output_level,
+            state,
+            packed.clause_mut(),
+        )?;
+    }
     state.statistics_mut().proc_non_trivial_count += 1;
 
     let mut clause = match proof_state_replacing_inferences(state, control, packed)? {
@@ -3439,6 +3510,37 @@ fn proof_state_process_clause_impl(
         generation,
         generated_empty,
     })
+}
+
+fn proof_state_document_processing_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    output_level: i64,
+    state: &ProofState,
+    clause: &mut Clause,
+) -> Result<(), Diagnostic> {
+    if output_level == 0 {
+        return Ok(());
+    }
+    if output_level == 1 {
+        fmt::Write::write_str(output, "\n").map_err(proof_control_write_error)?;
+        fmt::Write::write_str(output, DEFAULT_COMCHAR_RAW).map_err(proof_control_write_error)?;
+        fmt::Write::write_str(
+            output,
+            &clause_print_lop_format_string(state.terms(), clause, true),
+        )
+        .map_err(proof_control_write_error)?;
+        fmt::Write::write_str(output, "\n").map_err(proof_control_write_error)?;
+    }
+    session.doc_clause_quote(output, state.terms(), 6, clause, Some("new_given"), None)?;
+    Ok(())
+}
+
+fn proof_control_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "failed to write proof-control output",
+    )
 }
 
 fn proof_state_global_index_processed_clause(
@@ -4795,7 +4897,7 @@ mod tests {
         proof_state_move_eval_store_to_unprocessed,
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
-        proof_state_process_clause_with_global_indices,
+        proof_state_process_clause_with_docs, proof_state_process_clause_with_global_indices,
         proof_state_queue_generated_clause_for_eval, proof_state_replacing_inferences,
         proof_state_reset_processed, proof_state_reset_processed_with_docs,
         proof_state_reset_processed_with_global_indices, proof_state_saturate,
@@ -4811,7 +4913,7 @@ mod tests {
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::ProblemType;
     use crate::basics::sysdate::SysDate;
-    use crate::clauses::clause::Clause;
+    use crate::clauses::clause::{clause_print_lop_format_string, Clause};
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_DEAD, CP_IS_GLOBAL_INDEXED, CP_IS_ORIENTED,
         CP_IS_PROCESSED, CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW, CP_SUBSUMES_WATCH,
@@ -7531,6 +7633,80 @@ mod tests {
         };
         assert_eq!(generation.paramodulants, 0);
         assert_eq!(state.statistics().paramod_count, 0);
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_prints_output_level_one_given_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_process_doc_l1", 4_152);
+        let expected_clause = clause_print_lop_format_string(state.terms(), &clause, true);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            1,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { class, .. } = outcome else {
+            panic!("selected clause should be processed");
+        };
+        assert_eq!(output, format!("%\n%{expected_clause}\n"));
+        assert!(match class {
+            ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(4_152),
+            ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(4_152),
+            ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(4_152),
+            ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(4_152),
+        }
+        .is_some());
+    }
+
+    #[test]
+    fn proof_state_process_clause_with_docs_emits_new_given_quote_at_level_six() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_process_doc_quote", 4_153);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        let mut output = String::new();
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
+
+        let outcome = proof_state_process_clause_with_docs(
+            &mut output,
+            &mut session,
+            6,
+            &mut state,
+            &mut control,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { class, .. } = outcome else {
+            panic!("selected clause should be processed");
+        };
+        assert!(!output.starts_with('%'));
+        assert!(output.contains(" : 4153 : 'new_given'\n"));
+        assert!(match class {
+            ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(1),
+            ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(1),
+            ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(1),
+            ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(1),
+        }
+        .is_some());
+        assert!(state.processed_pos_rules().find_by_id(4_153).is_none());
+        assert!(state.processed_pos_eqns().find_by_id(4_153).is_none());
+        assert!(state.processed_neg_units().find_by_id(4_153).is_none());
+        assert!(state.processed_non_units().find_by_id(4_153).is_none());
     }
 
     #[test]
