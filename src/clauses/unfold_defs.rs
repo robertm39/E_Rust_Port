@@ -10,6 +10,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_UNFOLD};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
+use crate::terms::lambda::{abstract_vars, apply_terms, whnf_step};
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -67,7 +68,7 @@ pub fn clause_unfold_eq_def(
     rside: &Term,
     bank: &mut TermBank,
 ) -> Result<bool, Diagnostic> {
-    if problem_type() != ProblemType::FirstOrder {
+    if problem_type() == ProblemType::NotInitialized {
         return Ok(false);
     }
 
@@ -110,7 +111,7 @@ pub fn clause_set_unfold_eq_def(
     demod_side: EqnSide,
     bank: &mut TermBank,
 ) -> Result<bool, Diagnostic> {
-    if problem_type() != ProblemType::FirstOrder {
+    if problem_type() == ProblemType::NotInitialized {
         return Ok(false);
     }
 
@@ -123,6 +124,11 @@ pub fn clause_set_unfold_eq_def(
         (literal.left().clone(), literal.right().clone())
     } else {
         (literal.right().clone(), literal.left().clone())
+    };
+    let (lside, rside) = if problem_type() == ProblemType::HigherOrder {
+        clause_extract_ho_definition(demodulator, demod_side, bank)?
+    } else {
+        (lside, rside)
     };
     let demod_is_conjecture = demodulator.is_conjecture();
     let mut changed = false;
@@ -167,7 +173,7 @@ pub fn clause_set_unfold_all_eq_defs(
     min_arity: usize,
     eqdef_incrlimit: i64,
 ) -> Result<i64, Diagnostic> {
-    if problem_type() != ProblemType::FirstOrder {
+    if problem_type() == ProblemType::NotInitialized {
         return Ok(0);
     }
 
@@ -230,7 +236,7 @@ pub fn clause_set_unfold_eq_def_normalize(
     eqdef_incrlimit: i64,
     eqdef_maxclauses: i64,
 ) -> Result<i64, Diagnostic> {
-    if problem_type() != ProblemType::FirstOrder
+    if problem_type() == ProblemType::NotInitialized
         || eqdef_incrlimit == i64::MIN
         || set.members() > eqdef_maxclauses
     {
@@ -293,7 +299,11 @@ fn term_unfold_def(
     } else {
         term.clone()
     };
-    let result = term_top_unfold_def_fo(bank, &candidate, lside, rside)?;
+    let result = match problem_type() {
+        ProblemType::FirstOrder => term_top_unfold_def_fo(bank, &candidate, lside, rside)?,
+        ProblemType::HigherOrder => term_top_unfold_def_ho(bank, &candidate, lside, rside)?,
+        ProblemType::NotInitialized => candidate.clone(),
+    };
     if result != candidate {
         *applications += 1;
     }
@@ -327,6 +337,93 @@ fn term_top_unfold_def_fo(
     let result = bank.insert_instantiated(rside)?;
     subst.backtrack();
     Ok(result)
+}
+
+fn term_top_unfold_def_ho(
+    bank: &mut TermBank,
+    term: &Term,
+    lside: &Term,
+    rside: &Term,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        !lside.is_top_level_any_var(),
+        "higher-order definition left side must not be a variable"
+    );
+    assert!(
+        !lside.is_lambda(),
+        "higher-order definition left side must be a symbol"
+    );
+    if lside.f_code() != term.f_code() {
+        return Ok(term.clone());
+    }
+    assert_eq!(
+        lside.type_(),
+        rside.type_(),
+        "higher-order definition sides must have the same type"
+    );
+    if term.arity() == 0 {
+        assert_eq!(
+            term.type_(),
+            rside.type_(),
+            "constant definition replacement must preserve type"
+        );
+        return Ok(rside.clone());
+    }
+
+    let args = term
+        .argument_clones()
+        .into_iter()
+        .enumerate()
+        .map(|(index, arg)| arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized")))
+        .collect::<Vec<_>>();
+    let applied = apply_terms(bank, rside, &args)?;
+    let result = whnf_step(bank, &applied)?;
+    assert_eq!(
+        result.type_(),
+        term.type_(),
+        "higher-order unfolding must preserve target type"
+    );
+    Ok(result)
+}
+
+fn clause_extract_ho_definition(
+    clause: &Clause,
+    def_side: EqnSide,
+    bank: &mut TermBank,
+) -> Result<(Term, Term), Diagnostic> {
+    assert!(
+        matches!(def_side, EqnSide::LeftSide | EqnSide::RightSide),
+        "higher-order definition side must select an equation side"
+    );
+    let literal = clause
+        .literals()
+        .as_slice()
+        .first()
+        .expect("definition demodulator must be a unit clause");
+    let (def_term, other_term) = if def_side == EqnSide::LeftSide {
+        (literal.left(), literal.right())
+    } else {
+        (literal.right(), literal.left())
+    };
+
+    let vars = def_term
+        .argument_clones()
+        .into_iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let arg = arg.unwrap_or_else(|| panic!("definition argument {index} is uninitialized"));
+            assert!(
+                arg.is_free_var(),
+                "higher-order definition arguments must be free variables"
+            );
+            arg
+        })
+        .collect::<Vec<_>>();
+    let abstracted = abstract_vars(bank, other_term, &vars)?;
+    let symbol = Term::top_alloc(def_term.f_code(), 0);
+    symbol.set_type(abstracted.type_());
+    let symbol = bank.term_top_insert(symbol)?;
+    Ok((symbol, abstracted))
 }
 
 fn find_eq_definition_from_start(
@@ -567,6 +664,47 @@ mod tests {
         let passive_literal = &passive.iter().next().unwrap().literals().as_slice()[0];
         assert!(!term_has_f_code(passive_literal.left(), f_code));
         assert!(!term_has_f_code(passive_literal.right(), f_code));
+    }
+
+    #[test]
+    fn clause_set_unfold_eq_def_normalize_higher_order_extracts_lambda_definition() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut terms = test_bank();
+        let mut tmp_terms = TermBank::new(terms.signature().clone()).unwrap();
+        let x = object_var(&terms, -2);
+        let a = object_const(&mut terms, "unfold_ho_a");
+        let c = object_const(&mut terms, "unfold_ho_c");
+        let f_code = object_unary_code(&mut terms, "unfold_ho_f");
+        let g_code = object_unary_code(&mut terms, "unfold_ho_g");
+        let f_x = unary_with_code(&mut terms, f_code, &x);
+        let g_x = unary_with_code(&mut terms, g_code, &x);
+        let f_a = unary_with_code(&mut terms, f_code, &a);
+        let def = clause(vec![literal(&mut terms, &f_x, &g_x, true)]);
+        let target = clause(vec![literal(&mut terms, &f_a, &c, true)]);
+        let mut set = ClauseSet::from_clauses([def, target]);
+        let mut archive = ClauseSet::new();
+
+        let removed = clause_set_unfold_eq_def_normalize(
+            &mut set,
+            None,
+            &mut archive,
+            &mut tmp_terms,
+            &mut terms,
+            20,
+            20_000,
+        )
+        .unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(archive.members(), 1);
+        assert_eq!(set.members(), 1);
+        let target_literal = &set.iter().next().unwrap().literals().as_slice()[0];
+        assert!(!term_has_f_code(target_literal.left(), f_code));
+        assert!(!term_has_f_code(target_literal.right(), f_code));
+        assert!(
+            term_has_f_code(target_literal.left(), g_code)
+                || term_has_f_code(target_literal.right(), g_code)
+        );
     }
 
     #[test]

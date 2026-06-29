@@ -148,13 +148,14 @@ Source files reviewed: `TERMS/cte_lambda.h`, `TERMS/cte_lambda.c`.
 
 ### Rust Port Status Notes
 
-- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning: C-shaped `ApplyTerms`, `CloseWithDBVar`, `CloseWithTypePrefix`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
+- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning and equality-definition unfolding: C-shaped `ApplyTerms`, `CloseWithDBVar`, `CloseWithTypePrefix`, `AbstractVars`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
 - The staged beta normalizer handles phony applications headed by DB lambdas, consumed-argument substitution with DB-index shifting, recursive beta normalization under lambdas and ordinary top cells, and the C `BetaNormalizeDB` special case that unwraps `$eq(logical_symbol, $true)`.
 - Full `LambdaNormalizeDB` parity is not complete yet because eta expansion/reduction, named-lambda-to-DB conversion, formula CNF decode/encode helpers, general cache-backed `WHNF_deref` integration, and typed phony-application flattening remain later slices. The KBO6 LFHO ordering path has a comparison-local weak-head dereference helper for `DEREF_ALWAYS`, but it does not model the shared term-bank cache boundary.
 
 ### Change-Later Observations
 
 - C `WHNF_step` writes temporary bindings into DB-variable cells and clears them manually after substitution. Rust avoids mutating DB variable cells by carrying an explicit binding vector indexed by DB index; keep this safer representation unless profiling or C trace comparison exposes a compatibility issue.
+- C `AbstractVars` temporarily writes DB-variable bindings into free-variable cells and relies on `replace_fvars` to shift them under nested lambdas. Rust keeps the same stack order and DB-index shifting with an explicit free-variable binding map instead of mutating shared variable cells.
 - C caches weak-head reductions in term cells (`TermGetCache`/`TermSetCache`). Rust currently recomputes the represented beta steps and immediately shares results through the term bank. Revisit cache parity if higher-order workloads show this path on hot traces.
 - C `WHNF_deref` obtains the owner bank from the term being normalized and can rebuild lambda prefixes through that shared bank. Rust's LFHO KBO6 helper intentionally avoids owner-bank lookup by creating comparison-only temporary surfaces; once term owner metadata is represented, decide whether to use the shared cache-backed helper in ordering too.
 - C `LambdaNormalizeDB` delegates eta behavior through a file-static normalizer function pointer. Rust has not modeled that global hook yet; when eta normalization is ported, prefer an explicit normalizer owner unless C-compatible global mutation is observable.

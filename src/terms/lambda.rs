@@ -3,7 +3,9 @@ use crate::terms::functypes::FunCode;
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{arrow_type_flattened, type_drop_first_arg, Type};
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::{term_is_db_closed, term_is_ground};
 use crate::terms::termtypes::Term;
+use std::collections::BTreeMap;
 
 /// Applies arguments to `head`, preserving C `ApplyTerms` sharing through the term bank.
 ///
@@ -114,6 +116,58 @@ pub fn close_with_type_prefix(
     Ok(result)
 }
 
+/// Abstracts the free-variable prefix over `matrix`, matching C `AbstractVars`.
+///
+/// Variables later in `var_prefix` are closer to the top of C's stack and
+/// receive lower De Bruijn indexes.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding the abstracted matrix or lambda prefix
+/// fails.
+///
+/// # Panics
+///
+/// Panics if `matrix` is not DB-closed, if a prefix entry is not a typed free
+/// variable, or if a rebuilt lambda violates the DB-lambda shape.
+pub fn abstract_vars(
+    bank: &mut TermBank,
+    matrix: &Term,
+    var_prefix: &[Term],
+) -> Result<Term, Diagnostic> {
+    assert!(
+        term_is_db_closed(matrix),
+        "AbstractVars requires a DB-closed matrix"
+    );
+    let mut bindings = BTreeMap::new();
+    let prefix_len = var_prefix.len();
+    for (index, variable) in var_prefix.iter().enumerate() {
+        assert!(
+            variable.is_free_var(),
+            "AbstractVars prefix entries must be free variables"
+        );
+        let type_ = variable
+            .type_()
+            .expect("AbstractVars prefix variables must be typed");
+        let db_index = i64::try_from(prefix_len - index - 1)
+            .expect("AbstractVars prefix length fits in FunCode");
+        bindings.insert(variable.f_code(), (db_index, type_));
+    }
+
+    let mut result = replace_free_vars(bank, matrix, &bindings, 0)?;
+    for variable in var_prefix.iter().rev() {
+        let type_ = variable
+            .type_()
+            .expect("AbstractVars prefix variables must be typed");
+        result = close_with_db_var(bank, &type_, &result)?;
+    }
+    assert!(
+        term_is_db_closed(&result),
+        "AbstractVars result must be DB-closed"
+    );
+    Ok(result)
+}
+
 /// Shifts loose DB variables by `shift_val`, matching C `ShiftDB`.
 ///
 /// # Errors
@@ -188,6 +242,59 @@ fn do_shift_db(
         copy.set_argument(index, shifted);
     }
 
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(term.clone())
+    }
+}
+
+fn replace_free_vars(
+    bank: &mut TermBank,
+    term: &Term,
+    bindings: &BTreeMap<FunCode, (FunCode, Type)>,
+    depth: FunCode,
+) -> Result<Term, Diagnostic> {
+    if term_is_ground(term) {
+        return Ok(term.clone());
+    }
+    if term.is_free_var() {
+        let Some((db_index, type_)) = bindings.get(&term.f_code()) else {
+            return Ok(term.clone());
+        };
+        return Ok(bank.request_db_var(type_, db_index + depth));
+    }
+    if term.is_lambda() {
+        assert_eq!(
+            term.f_code(),
+            SIG_DB_LAMBDA_CODE,
+            "free-variable replacement expects DB lambdas"
+        );
+        let binder = term
+            .argument(0)
+            .unwrap_or_else(|| panic!("lambda binder is uninitialized"));
+        assert!(binder.is_db_var(), "DB lambda binder must be a DB variable");
+        let matrix = term
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+        let new_matrix = replace_free_vars(bank, &matrix, bindings, depth + 1)?;
+        if new_matrix == matrix {
+            return Ok(term.clone());
+        }
+        let binder_type = binder.type_().expect("DB lambda binder must have a type");
+        return close_with_db_var(bank, &binder_type, &new_matrix);
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let replaced = replace_free_vars(bank, &arg, bindings, depth)?;
+        if replaced != arg {
+            changed = true;
+        }
+        copy.set_argument(index, replaced);
+    }
     if changed {
         bank.term_top_insert(copy)
     } else {
