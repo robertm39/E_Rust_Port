@@ -1,11 +1,13 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::derivation::{clause_push_derivation, DC_CONDENSE};
+use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
 use crate::clauses::subsumption::{
     clause_is_subsume_ordered, clause_subsume_order_sort_lits, clause_subsumes_clause,
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
+use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 static CONDENSATION_ATTEMPTS: AtomicI64 = AtomicI64::new(0);
@@ -100,6 +102,33 @@ pub fn condense_once(clause: &mut Clause, bank: &mut TermBank) -> Result<bool, D
 }
 
 pub fn condense(clause: &mut Clause, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+    condense_impl::<String>(clause, bank, None)
+}
+
+/// Condenses a clause while emitting represented proof documentation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if condensation term-bank insertion or proof-documentation rendering fails.
+///
+/// # Panics
+///
+/// Panics if the clause reaches C's condensation preconditions in a
+/// non-subsumption-ordered state or with a stale standard-weight cache.
+pub fn condense_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    clause: &mut Clause,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    condense_impl(clause, bank, Some((output, session)))
+}
+
+fn condense_impl<W: fmt::Write>(
+    clause: &mut Clause,
+    bank: &mut TermBank,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<bool, Diagnostic> {
     CONDENSATION_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
 
     let mut result = false;
@@ -111,6 +140,16 @@ pub fn condense(clause: &mut Clause, bank: &mut TermBank) -> Result<bool, Diagno
         }
         if result {
             CONDENSATION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+            if let Some((output, session)) = doc_context.as_mut() {
+                session.doc_clause_modification(
+                    output,
+                    bank,
+                    clause,
+                    ClauseModificationInference::Condense,
+                    None,
+                    None,
+                )?;
+            }
             clause_push_derivation(clause, DC_CONDENSE, None, None);
         }
     }
@@ -126,13 +165,16 @@ fn reset_condensation_counters() {
 #[cfg(test)]
 mod tests {
     use super::{
-        condensation_attempts, condensation_successes, condense, condense_once,
+        condensation_attempts, condensation_successes, condense, condense_once, condense_with_docs,
         reset_condensation_counters,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_INPUT_FORMULA;
     use crate::clauses::derivation::{DerivationEntry, DC_CONDENSE};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::subsumption::{clause_is_subsume_ordered, clause_subsume_order_sort_lits};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
@@ -234,6 +276,38 @@ mod tests {
         assert_eq!(condensation_attempts(), 1);
         assert_eq!(condensation_successes(), 1);
         assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_CONDENSE)]
+        );
+    }
+
+    #[test]
+    fn condense_with_docs_emits_single_condense_modification_step() {
+        let _guard = lock_counter_tests();
+        reset_condensation_counters();
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let constant = typed_const(&mut bank, "doc_condense_a");
+        let instance = typed_const(&mut bank, "doc_condense_b");
+        let mut clause = clause_from(vec![
+            literal(&mut bank, &variable, &constant, true),
+            literal(&mut bank, &instance, &constant, true),
+        ]);
+        clause.set_ident(50);
+        clause.set_prop(CP_INPUT_FORMULA);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        assert!(condense_with_docs(&mut rendered, &mut session, &mut clause, &mut bank).unwrap());
+
+        assert_eq!(condensation_attempts(), 1);
+        assert_eq!(condensation_successes(), 1);
+        assert_eq!(clause.ident(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("condense(50)"));
         assert_eq!(
             clause.derivation().unwrap().as_slice(),
             &[DerivationEntry::Operation(DC_CONDENSE)]

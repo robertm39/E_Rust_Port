@@ -12,7 +12,7 @@ use crate::clauses::clausefunc::{
     clause_remove_superfluous_literals, clause_set_delete_orphans_with,
 };
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
-use crate::clauses::condensation::condense;
+use crate::clauses::condensation::{condense, condense_with_docs};
 use crate::clauses::context_sr::{
     clause_contextual_simplify_reflect, clause_contextual_simplify_reflect_with_docs,
     clause_set_find_context_sr_clauses,
@@ -1340,7 +1340,15 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
 
             clause.orient_literals(ocb, terms);
 
-            if condense_clause && condense(clause, terms)? {
+            let condensed = if condense_clause {
+                match doc_context.as_mut() {
+                    Some((output, session)) => condense_with_docs(output, session, clause, terms)?,
+                    None => condense(clause, terms)?,
+                }
+            } else {
+                false
+            };
+            if condensed {
                 clause.orient_literals(ocb, terms);
             }
 
@@ -4342,7 +4350,8 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONTEXT_SR, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_SR,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE, DC_CONTEXT_SR, DC_NORMALIZE, DC_ORDERED_FACTOR,
+        DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -5371,6 +5380,52 @@ mod tests {
         assert_eq!(
             clause.derivation().unwrap().as_slice(),
             &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_with_docs_emits_condense_step() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let variable = typed_var(terms, -2);
+            let constant = typed_const(terms, "pc_forward_doc_condense_a");
+            let instance = typed_const(terms, "pc_forward_doc_condense_b");
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![
+                literal(terms, &variable, &constant, true),
+                literal(terms, &instance, &constant, true),
+            ]));
+            clause.set_ident(4_089);
+            clause.set_prop(CP_INPUT_FORMULA);
+            clause
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let trivial = proof_state_forward_modify_clause_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            true,
+            RewriteLevel::RuleRewrite,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert_eq!(clause.ident(), 1);
+        assert_eq!(clause.literal_number(), 1);
+        assert!(!clause.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(session.id_source.current_ident(), 1);
+        assert!(rendered.contains("condense(4089)"));
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_CONDENSE)]
         );
     }
 
