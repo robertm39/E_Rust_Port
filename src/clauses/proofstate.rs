@@ -330,6 +330,24 @@ impl ProofState {
         (terms, axioms, archive)
     }
 
+    pub fn terms_axioms_watchlist_archive_mut(
+        &mut self,
+    ) -> (
+        &mut TermBank,
+        &mut ClauseSet,
+        Option<&mut ClauseSet>,
+        &mut ClauseSet,
+    ) {
+        let Self {
+            terms,
+            axioms,
+            watchlist,
+            archive,
+            ..
+        } = self;
+        (terms, axioms, watchlist.as_mut(), archive)
+    }
+
     pub fn terms_axioms_choice_opcodes_mut(
         &mut self,
     ) -> (

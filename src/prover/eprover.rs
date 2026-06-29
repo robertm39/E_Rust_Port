@@ -5556,7 +5556,7 @@ fn apply_clause_set_preprocessing(
     eqdef_maxclauses: i64,
 ) -> Result<i64, EProverError> {
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
-    let (bank, axioms, archive) = state.terms_axioms_archive_mut();
+    let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
     let mut removed = 0;
     if !no_preprocessing {
         removed += clause_set_preprocess(
@@ -5571,7 +5571,7 @@ fn apply_clause_set_preprocessing(
     }
     removed += clause_set_unfold_eq_def_normalize(
         axioms,
-        None,
+        watchlist,
         archive,
         &mut tmp_bank,
         bank,
@@ -17256,6 +17256,53 @@ mod tests {
         let final_doc_pos = printed.find(final_doc).unwrap();
         assert!(input_doc_pos < watch_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
+        assert!(printed.contains("% SZS status ResourceOut\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_output_level_two_unfolds_inline_watchlist_before_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-inline-watch-eqdef-docs");
+        std::fs::write(
+            &path,
+            "cnf(def, axiom, (f(X)=X)).\n\
+             tcf(watch, watchlist, p(f(a))).\n\
+             cnf(input, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--output-level=2",
+                "--no-generation",
+                "--watchlist=Use inline watchlist type",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        let input_doc = format!("cnf(c_0_1, axiom, (p(a)), file('{path_arg}', input)).\n");
+        let watch_doc =
+            format!("cnf(c_0_2, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
+        let final_doc =
+            "cnf(c_0_3, plain, (p(a)), c_0_1,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+        let input_doc_pos = printed.find(&input_doc).unwrap();
+        let watch_doc_pos = printed.find(&watch_doc).unwrap();
+        let final_doc_pos = printed.find(final_doc).unwrap();
+        assert!(input_doc_pos < watch_doc_pos);
+        assert!(watch_doc_pos < final_doc_pos);
+        assert!(!printed.contains("p(f(a))"));
+        assert!(!printed.contains(&format!("file('{path_arg}', def)")));
         assert!(printed.contains("% SZS status ResourceOut\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
