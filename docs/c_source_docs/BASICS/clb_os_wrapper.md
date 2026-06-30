@@ -122,7 +122,7 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - File-static state should be audited for thread-safety and reset behavior in the Rust port.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- Rust may use narrowly scoped unsafe external-DLL interop for this unit when a native platform API is required; keep those calls behind safe wrappers and document pointer/initialization invariants at the boundary.
+- Rust may use narrowly scoped unsafe external DLL/shared-library interop for this unit when a native platform API is required; keep those calls behind safe wrappers and document pointer/initialization invariants at the boundary.
 
 ### Porting Focus
 
@@ -132,6 +132,6 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 
 ### Change-Later Candidates
 
-- `SetMemoryLimit` labels the second branch as `RLIMIT_AS` when that macro is present, but the C call still passes `RLIMIT_DATA`. Preserve observable behavior while resource-limit compatibility is incomplete; after reference tests cover memory-limit handling, decide whether this is a typo to fix or a platform-specific compatibility quirk to keep.
-- Rust's Linux resource-usage path intentionally reads `/proc/self/stat` and `/proc/self/status` without adding a new unsafe libc boundary. This captures self/child CPU ticks and the process `VmHWM` value, but exact `getrusage` semantics, `sysconf(_SC_CLK_TCK)` for unusual tick rates, and child peak-resident aggregation remain compatibility targets for a later resource-abstraction pass.
+- `SetMemoryLimit` labels the second branch as `RLIMIT_AS` when that macro is present, but the C call still passes `RLIMIT_DATA`. Rust now mirrors that duplicated `RLIMIT_DATA` behavior on Linux; after reference tests cover memory-limit handling, decide whether this is a typo to fix or a platform-specific compatibility quirk to keep.
+- Rust's Linux resource-usage path intentionally reads `/proc/self/stat` and `/proc/self/status` without broad libc resource-usage FFI. This captures self/child CPU ticks and the process `VmHWM` value, but exact `getrusage` semantics, `sysconf(_SC_CLK_TCK)` for unusual tick rates, and child peak-resident aggregation remain compatibility targets for a later resource-abstraction pass.
 <!-- END MANUAL REVIEW: c_source_docs -->

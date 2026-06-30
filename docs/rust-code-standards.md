@@ -39,7 +39,7 @@ Docs-only changes should run the Markdown link checker from `DOCS.md`.
 
 ## Unsafe Rust
 
-Unsafe Rust is prohibited except when it is necessary for interacting with external DLLs.
+Unsafe Rust is prohibited except when it is necessary for interacting with external DLLs or shared libraries.
 
 Do not add unsafe Rust for ordinary porting work, including:
 
@@ -50,9 +50,9 @@ Do not add unsafe Rust for ordinary porting work, including:
 - Calls to unsafe APIs through wrapper code
 - Other unsafe Rust constructs
 
-Unsafe code for external DLL interop must be narrowly scoped, document the safety invariants at the unsafe boundary, and be wrapped behind safe Rust APIs wherever practical.
+Unsafe code for external DLL/shared-library interop must be narrowly scoped, document the safety invariants at the unsafe boundary, and be wrapped behind safe Rust APIs wherever practical.
 
-If a non-DLL porting task appears to require unsafe Rust, document the blocker and look for a safe design first. Do not add unsafe code outside the external-DLL exception without a project-level standards change.
+If a non-external-library porting task appears to require unsafe Rust, document the blocker and look for a safe design first. Do not add unsafe code outside the external-DLL/shared-library exception without a project-level standards change.
 
 ## Panics And Fatal Errors
 
@@ -90,7 +90,7 @@ Prefer the Rust standard library and small, focused crates. Add a dependency onl
 
 Before adding a crate, review and document its license, maintenance status, transitive dependency impact, feature flags, and whether it changes compatibility or deployment assumptions. Use minimal features where practical.
 
-A dependency must not bypass this project's unsafe-Rust policy through project wrapper code. If a crate exposes unsafe APIs, keep their use out of this project unless the use is required for documented external DLL interop or the unsafe policy is formally changed.
+A dependency must not bypass this project's unsafe-Rust policy through project wrapper code. If a crate exposes unsafe APIs, keep their use out of this project unless the use is required for documented external DLL/shared-library interop or the unsafe policy is formally changed.
 
 ## Documentation Expectations
 

@@ -30,22 +30,61 @@ impl RLimResult {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn set_soft_rlimit(resource: i32, limit: u64) -> RLimResult {
+    linux_rlimit::set_soft_rlimit(resource, limit)
+}
+
+#[cfg(not(target_os = "linux"))]
 #[must_use]
 pub const fn set_soft_rlimit(_resource: i32, _limit: u64) -> RLimResult {
     RLimResult::Failed
 }
 
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn get_soft_rlimit(resource: i32) -> u64 {
+    linux_rlimit::get_soft_rlimit(resource)
+}
+
+#[cfg(not(target_os = "linux"))]
 #[must_use]
 pub const fn get_soft_rlimit(_resource: i32) -> u64 {
     0
 }
 
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
+    if mem_limit == 0 {
+        return RLimResult::Success;
+    }
+
+    let data_result = set_soft_rlimit(linux_rlimit::RLIMIT_DATA, mem_limit);
+    // Preserve the C implementation's RLIMIT_AS branch bug: when RLIMIT_AS is
+    // available, it labels the warning as RLIMIT_AS but still passes RLIMIT_DATA.
+    let as_result = set_soft_rlimit(linux_rlimit::RLIMIT_DATA, mem_limit);
+    combine_rlimit_results(data_result, as_result)
+}
+
+#[cfg(not(target_os = "linux"))]
 #[must_use]
 pub const fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
         RLimResult::Success
     } else {
         RLimResult::Failed
+    }
+}
+
+#[cfg(any(test, target_os = "linux"))]
+#[must_use]
+const fn combine_rlimit_results(first: RLimResult, second: RLimResult) -> RLimResult {
+    match (first, second) {
+        (RLimResult::Failed, _) | (_, RLimResult::Failed) => RLimResult::Failed,
+        (RLimResult::Reduced, _) | (_, RLimResult::Reduced) => RLimResult::Reduced,
+        (RLimResult::Success, RLimResult::Success) => RLimResult::Success,
     }
 }
 
@@ -509,14 +548,73 @@ mod windows_kernel32 {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod linux_rlimit {
+    use super::RLimResult;
+    use std::mem::MaybeUninit;
+
+    pub(super) const RLIMIT_DATA: i32 = 2;
+
+    #[repr(C)]
+    struct RLimit {
+        current: u64,
+        maximum: u64,
+    }
+
+    extern "C" {
+        fn getrlimit(resource: i32, limit: *mut RLimit) -> i32;
+        fn setrlimit(resource: i32, limit: *const RLimit) -> i32;
+    }
+
+    pub(super) fn set_soft_rlimit(resource: i32, mut limit: u64) -> RLimResult {
+        let mut rlimit = MaybeUninit::<RLimit>::uninit();
+        // SAFETY: rlimit points to writable, properly aligned storage for the
+        // C library to initialize on success. The resource integer is passed
+        // through exactly like C's SetSoftRlimit wrapper.
+        if unsafe { getrlimit(resource, rlimit.as_mut_ptr()) } == -1 {
+            return RLimResult::Failed;
+        }
+        // SAFETY: getrlimit returned success, so the rlimit buffer is
+        // initialized by the C library.
+        let mut rlimit = unsafe { rlimit.assume_init() };
+
+        let mut result = RLimResult::Success;
+        if rlimit.maximum < limit {
+            result = RLimResult::Reduced;
+            limit = rlimit.maximum;
+        }
+        rlimit.current = limit;
+
+        // SAFETY: rlimit is a valid pointer to an initialized rlimit struct
+        // whose layout matches Linux's two-rlim_t struct rlimit ABI.
+        if unsafe { setrlimit(resource, &raw const rlimit) } == -1 {
+            return RLimResult::Failed;
+        }
+        result
+    }
+
+    pub(super) fn get_soft_rlimit(resource: i32) -> u64 {
+        let mut rlimit = MaybeUninit::<RLimit>::uninit();
+        // SAFETY: rlimit points to writable, properly aligned storage for the
+        // C library to initialize on success.
+        if unsafe { getrlimit(resource, rlimit.as_mut_ptr()) } == -1 {
+            return 0;
+        }
+        // SAFETY: getrlimit returned success, so the rlimit buffer is
+        // initialized by the C library.
+        unsafe { rlimit.assume_init().current }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        current_resource_usage, format_resource_usage, get_core_number, get_msec_time,
-        get_sec_time, get_sec_time_mod, get_soft_rlimit, get_system_page_size,
+        combine_rlimit_results, current_resource_usage, format_resource_usage, get_core_number,
+        get_msec_time, get_sec_time, get_sec_time_mod, get_system_page_size,
         get_system_phys_memory, get_usec_clock, get_usec_time, parse_linux_stat_cpu_ticks,
         parse_linux_status_vm_hwm_kib, secure_fclose, secure_fopen, set_memory_limit,
-        set_soft_rlimit, stride_memory, RLimResult, ResourceUsage,
+        stride_memory, RLimResult, ResourceUsage,
     };
     use crate::basics::error::ErrorCode;
     use std::io::Write;
@@ -528,12 +626,41 @@ mod tests {
         assert_eq!(RLimResult::Success.c_value(), 2);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn unsupported_resource_limits_are_explicit() {
+        use super::{get_soft_rlimit, set_soft_rlimit};
+
         assert_eq!(set_soft_rlimit(0, 1), RLimResult::Failed);
         assert_eq!(get_soft_rlimit(0), 0);
         assert_eq!(set_memory_limit(0), RLimResult::Success);
         assert_eq!(set_memory_limit(1), RLimResult::Failed);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_rlimit_boundary_reports_invalid_resource_like_c() {
+        use super::{get_soft_rlimit, set_soft_rlimit};
+
+        assert_eq!(set_soft_rlimit(-1, 1), RLimResult::Failed);
+        assert_eq!(get_soft_rlimit(-1), 0);
+        assert_eq!(set_memory_limit(0), RLimResult::Success);
+    }
+
+    #[test]
+    fn rlimit_results_combine_like_memory_limit_attempts() {
+        assert_eq!(
+            combine_rlimit_results(RLimResult::Success, RLimResult::Success),
+            RLimResult::Success
+        );
+        assert_eq!(
+            combine_rlimit_results(RLimResult::Reduced, RLimResult::Success),
+            RLimResult::Reduced
+        );
+        assert_eq!(
+            combine_rlimit_results(RLimResult::Success, RLimResult::Failed),
+            RLimResult::Failed
+        );
     }
 
     #[test]
