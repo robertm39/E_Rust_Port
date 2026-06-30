@@ -6,7 +6,9 @@ use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::{FormulaProperties, CP_IS_LAMBDA_DEF};
 use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
-use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
+use crate::clauses::f_generality::{
+    clause_compute_d_rel, formula_compute_d_rel, GenDistrib, GeneralityMeasure,
+};
 use crate::clauses::formulasets::{formula_set_stack_cardinality, FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -21,6 +23,7 @@ pub struct DRel<'a> {
     f_code: FunCode,
     activated: bool,
     d_clauses: PStack<&'a Clause>,
+    d_formulas: PStack<&'a WrappedFormula>,
 }
 
 impl<'a> DRel<'a> {
@@ -30,6 +33,7 @@ impl<'a> DRel<'a> {
             f_code,
             activated: false,
             d_clauses: PStack::new(),
+            d_formulas: PStack::new(),
         }
     }
 
@@ -56,6 +60,15 @@ impl<'a> DRel<'a> {
         &mut self.d_clauses
     }
 
+    #[must_use]
+    pub const fn d_formulas(&self) -> &PStack<&'a WrappedFormula> {
+        &self.d_formulas
+    }
+
+    pub fn d_formulas_mut(&mut self) -> &mut PStack<&'a WrappedFormula> {
+        &mut self.d_formulas
+    }
+
     pub fn write_debug(
         &self,
         output: &mut impl fmt::Write,
@@ -68,10 +81,13 @@ impl<'a> DRel<'a> {
             "{DEFAULT_COMCHAR_RAW} {f_code:6} {name:<15}: {clause_count:6} clauses, {formula_count:6} formulas",
             f_code = self.f_code,
             clause_count = self.d_clauses.len(),
-            formula_count = 0
+            formula_count = self.d_formulas.len()
         )?;
         output.write_str(DEFAULT_COMCHAR_RAW)?;
         output.write_str("formulas: ")?;
+        for formula in self.d_formulas.as_slice() {
+            write!(output, "{}, ", formula.get_id(true))?;
+        }
         stderr.write_char('\n')
     }
 
@@ -192,6 +208,63 @@ impl<'a> DRelation<'a> {
         }
     }
 
+    pub fn add_formula(
+        &mut self,
+        generality: &mut GenDistrib,
+        params: FormulaDRelationParams,
+        signature: &Signature,
+        formula: &'a WrappedFormula,
+    ) {
+        let mut symbols = PStack::new();
+        formula_compute_d_rel(
+            generality,
+            params.gen_measure,
+            params.benevolence,
+            params.generosity,
+            formula,
+            &mut symbols,
+            params.trim_implications,
+        );
+        if params.force_definition {
+            if let Some(f_code) = formula.get_lambda_defined_symbol(signature) {
+                if !symbols.as_slice().contains(&f_code) {
+                    symbols.push(f_code);
+                }
+            }
+        }
+        if symbols.is_empty() {
+            self.get_f_entry(0).d_formulas_mut().push(formula);
+        } else {
+            while let Some(symbol) = symbols.pop() {
+                self.get_f_entry(symbol).d_formulas_mut().push(formula);
+            }
+        }
+    }
+
+    pub fn add_formula_set(
+        &mut self,
+        generality: &mut GenDistrib,
+        params: FormulaDRelationParams,
+        signature: &Signature,
+        set: &'a FormulaSet,
+    ) {
+        for formula in set.iter() {
+            self.add_formula(generality, params, signature, formula);
+        }
+    }
+
+    pub fn add_formula_sets(
+        &mut self,
+        generality: &mut GenDistrib,
+        params: FormulaDRelationParams,
+        signature: &Signature,
+        sets: &PStack<&'a FormulaSet>,
+    ) {
+        for set in sets.as_slice() {
+            self.add_formula_set(generality, params, signature, set);
+        }
+    }
+
     #[must_use]
     pub fn total_entries(&self) -> i64 {
         usize_to_i64(
@@ -199,7 +272,7 @@ impl<'a> DRelation<'a> {
                 .iter()
                 .skip(1)
                 .filter_map(Option::as_ref)
-                .map(|entry| entry.d_clauses().len())
+                .map(|entry| entry.d_clauses().len() + entry.d_formulas().len())
                 .sum(),
         )
     }
@@ -264,6 +337,28 @@ pub struct ClauseSineParams {
     pub max_set_size: i64,
     pub max_set_fraction: f64,
     pub add_no_symbol_axioms: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FormulaDRelationParams {
+    pub gen_measure: GeneralityMeasure,
+    pub benevolence: f64,
+    pub generosity: i64,
+    pub trim_implications: bool,
+    pub force_definition: bool,
+}
+
+impl FormulaDRelationParams {
+    #[must_use]
+    pub const fn new(gen_measure: GeneralityMeasure) -> Self {
+        Self {
+            gen_measure,
+            benevolence: 1.0,
+            generosity: i64::MAX,
+            trim_implications: false,
+            force_definition: false,
+        }
+    }
 }
 
 impl ClauseSineParams {
@@ -735,6 +830,7 @@ mod tests {
         pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_sets,
         select_definitions_formula_sets, select_threshold_clause_formula_sets,
         select_threshold_clause_sets, AxiomType, ClauseSineParams, DRel, DRelation,
+        FormulaDRelationParams,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -751,7 +847,8 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::f_generality::{GenDistrib, GeneralityMeasure};
     use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_TRUE_CODE};
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -768,43 +865,52 @@ mod tests {
         assert_eq!(rel.f_code(), 7);
         assert!(!rel.is_activated());
         assert!(rel.d_clauses().is_empty());
+        assert!(rel.d_formulas().is_empty());
         rel.set_activated(true);
         assert!(rel.is_activated());
 
         let zero_clause = Clause::empty();
         let first = Clause::empty();
         let second = Clause::empty();
+        let zero_formula = WrappedFormula::wt_formula_alloc(typed_const(&mut test_bank(), "zero"));
+        let formula = WrappedFormula::wt_formula_alloc(typed_const(&mut test_bank(), "formula"));
         let mut relation = DRelation::new();
         assert_eq!(relation.allocated_size(), 10);
         relation.get_f_entry(0).d_clauses_mut().push(&zero_clause);
+        relation.get_f_entry(0).d_formulas_mut().push(&zero_formula);
         relation.get_f_entry(3).d_clauses_mut().push(&first);
         relation.get_f_entry(12).d_clauses_mut().push(&second);
+        relation.get_f_entry(12).d_formulas_mut().push(&formula);
 
         assert_eq!(relation.allocated_size(), 13);
         assert_eq!(relation.get_f_entry(12).f_code(), 12);
-        assert_eq!(relation.total_entries(), 2);
+        assert_eq!(relation.total_entries(), 3);
     }
 
     #[test]
-    fn drel_debug_print_preserves_clause_counts_and_stderr_newline_quirk() {
+    fn drel_debug_print_preserves_counts_formula_ids_and_stderr_newline_quirk() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "debug_a");
         let clause = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let mut formula = WrappedFormula::wt_formula_alloc(a.clone());
+        formula.set_info(Some(ClauseInfo::new(Some("debug_formula"), None, 1, 1)));
         let mut rel = DRel::new(a.f_code());
         rel.d_clauses_mut().push(&clause);
+        rel.d_formulas_mut().push(&formula);
 
         let (output, stderr) = rel.debug_string(bank.signature());
 
         assert_eq!(
             output,
             format!(
-                "% {f_code:6} {name:<15}: {clauses:6} clauses, {formulas:6} formulas\n%formulas: ",
+                "% {f_code:6} {name:<15}: {clauses:6} clauses, {formulas:6} formulas\n%formulas: debug_formula, ",
                 f_code = a.f_code(),
                 name = "debug_a",
                 clauses = 1,
-                formulas = 0
+                formulas = 1
             )
         );
+        assert!(output.ends_with("%formulas: debug_formula, "));
         assert_eq!(stderr, "\n");
     }
 
@@ -815,6 +921,8 @@ mod tests {
         let b = typed_const(&mut bank, "debug_rel_b");
         let clause_a = clause_from(vec![literal(&mut bank, &a, &a, true)]);
         let clause_b = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        let mut formula_a = WrappedFormula::wt_formula_alloc(a.clone());
+        formula_a.set_info(Some(ClauseInfo::new(Some("debug_formula_a"), None, 1, 1)));
         let zero_clause = Clause::empty();
         let mut relation = DRelation::new();
         relation
@@ -826,11 +934,16 @@ mod tests {
             .get_f_entry(a.f_code())
             .d_clauses_mut()
             .push(&clause_a);
+        relation
+            .get_f_entry(a.f_code())
+            .d_formulas_mut()
+            .push(&formula_a);
 
         let (output, stderr) = relation.debug_string(bank.signature());
 
         assert!(output.starts_with(&format!("% {:6} {:<15}", a.f_code(), "debug_rel_a")));
         assert!(output.contains(&format!("% {:6} {:<15}", b.f_code(), "debug_rel_b")));
+        assert!(output.contains("%formulas: debug_formula_a, "));
         assert!(!output.contains("UNNAMED_DB"));
         assert_eq!(stderr, "\n\n");
     }
@@ -866,6 +979,47 @@ mod tests {
             Some(1)
         );
         assert_eq!(relation.total_entries(), 2);
+    }
+
+    #[test]
+    fn drelation_add_formula_uses_drel_symbols_and_zero_fallback_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "sine_drel_form_a");
+        let b = typed_const(&mut bank, "sine_drel_form_b");
+        let selected =
+            WrappedFormula::wt_formula_alloc(typed_unary(&mut bank, "sine_drel_form_f", &a));
+        let internal =
+            WrappedFormula::wt_formula_alloc(bank.create_const_term(SIG_TRUE_CODE).unwrap());
+        let mut set = FormulaSet::new();
+        let selected_id = set.insert(selected);
+        let internal_id = set.insert(internal);
+        let mut sets = PStack::new();
+        sets.push(&set);
+        let mut generality = GenDistrib::new(bank.signature());
+        for formula in set.iter() {
+            generality.add_formula(formula, false, 1);
+        }
+        let mut relation = DRelation::new();
+        let mut params = FormulaDRelationParams::new(GeneralityMeasure::Terms);
+        params.benevolence = 10.0;
+        params.generosity = 0;
+
+        relation.add_formula_sets(&mut generality, params, bank.signature(), &sets);
+
+        assert_eq!(
+            relation
+                .entry(a.f_code())
+                .map(|entry| entry.d_formulas().as_slice()[0].entry_id()),
+            Some(selected_id)
+        );
+        assert_eq!(
+            relation
+                .entry(0)
+                .map(|entry| entry.d_formulas().as_slice()[0].entry_id()),
+            Some(internal_id)
+        );
+        assert_eq!(relation.total_entries(), 2);
+        assert!(relation.entry(b.f_code()).is_none());
     }
 
     #[test]
@@ -912,6 +1066,22 @@ mod tests {
             .unwrap();
         let term = Term::const_cell_alloc(f_code);
         term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let arrow = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_.clone()]));
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, arrow)
+            .unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(type_));
+        term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
     }
 

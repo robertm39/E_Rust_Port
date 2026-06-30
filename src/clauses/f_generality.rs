@@ -1,8 +1,11 @@
 use crate::basics::pstacks::PStack;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::termfunc::term_add_symbol_dist_exist;
+use crate::terms::termtypes::Term;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -144,6 +147,43 @@ impl GenDistrib {
         self.add_clause_set_stack(stack, start, -1);
     }
 
+    pub fn add_formula(&mut self, formula: &WrappedFormula, trim_implications: bool, factor: i16) {
+        let mut symbol_stack = Vec::new();
+        term_add_symbol_dist_exist(
+            formula_d_rel_term(formula, trim_implications),
+            &mut self.f_distrib,
+            &mut symbol_stack,
+        );
+        self.merge_single_res(&symbol_stack, factor);
+        self.clear_scratch_symbols(symbol_stack);
+    }
+
+    pub fn add_formula_set(&mut self, set: &FormulaSet, trim_implications: bool, factor: i16) {
+        for formula in set.iter() {
+            self.add_formula(formula, trim_implications, factor);
+        }
+    }
+
+    pub fn add_formula_set_stack(
+        &mut self,
+        stack: &PStack<&FormulaSet>,
+        start: usize,
+        trim_implications: bool,
+        factor: i16,
+    ) {
+        for set in stack.as_slice().iter().skip(start) {
+            self.add_formula_set(set, trim_implications, factor);
+        }
+    }
+
+    pub fn add_formula_sets(&mut self, stack: &PStack<&FormulaSet>, trim_implications: bool) {
+        self.add_formula_set_stack(stack, 0, trim_implications, 1);
+    }
+
+    pub fn backtrack_formula_sets(&mut self, stack: &PStack<&FormulaSet>, start: usize) {
+        self.add_formula_set_stack(stack, start, false, -1);
+    }
+
     pub fn write_debug(
         &self,
         output: &mut impl fmt::Write,
@@ -265,6 +305,25 @@ pub fn clause_compute_d_rel(
     generality.clear_scratch_symbols(symbol_stack);
 }
 
+pub fn formula_compute_d_rel(
+    generality: &mut GenDistrib,
+    gentype: GeneralityMeasure,
+    benevolence: f64,
+    generosity: i64,
+    formula: &WrappedFormula,
+    res: &mut PStack<FunCode>,
+    trim_implications: bool,
+) {
+    let mut symbol_stack = Vec::new();
+    term_add_symbol_dist_exist(
+        formula_d_rel_term(formula, trim_implications),
+        &mut generality.f_distrib,
+        &mut symbol_stack,
+    );
+    generality.compute_d_rel(gentype, benevolence, generosity, &symbol_stack, res);
+    generality.clear_scratch_symbols(symbol_stack);
+}
+
 #[must_use]
 pub fn fun_gen_tg_cmp(left: FunGen, right: FunGen) -> i32 {
     cmp_order(fun_gen_tg_order(&left, &right))
@@ -314,6 +373,14 @@ fn generosity_index(generosity: i64, len: usize) -> usize {
     )
 }
 
+fn formula_d_rel_term(formula: &WrappedFormula, trim_implications: bool) -> &Term {
+    assert!(
+        !(trim_implications && formula.is_conjecture()),
+        "SInE implication trimming is deferred until TermTrimImplications is ported"
+    );
+    formula.formula()
+}
+
 fn cmp_order(ordering: Ordering) -> i32 {
     match ordering {
         Ordering::Less => -1,
@@ -359,13 +426,16 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_compute_d_rel, fun_gen_cg_cmp, fun_gen_tg_cmp, FunGen, GenDistrib, GeneralityMeasure,
+        clause_compute_d_rel, formula_compute_d_rel, fun_gen_cg_cmp, fun_gen_tg_cmp, FunGen,
+        GenDistrib, GeneralityMeasure,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_TYPE_CONJECTURE;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
     use crate::terms::signature::{SIG_FALSE_CODE, SIG_TRUE_CODE};
@@ -413,6 +483,10 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    fn wrapped_formula(term: Term) -> WrappedFormula {
+        WrappedFormula::wt_formula_alloc(term)
     }
 
     fn entry_counts(dist: &GenDistrib, f_code: FunCode) -> (i64, i64) {
@@ -499,6 +573,63 @@ mod tests {
     }
 
     #[test]
+    fn gen_distrib_add_formula_counts_terms_and_resets_scratch_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "form_a");
+        let b = typed_const(&mut bank, "form_b");
+        let f_of_a = typed_unary(&mut bank, "form_f", &a);
+        let g_of_b = typed_unary(&mut bank, "form_g", &b);
+        let formula = wrapped_formula(typed_unary(&mut bank, "form_h", &f_of_a));
+        let second = wrapped_formula(g_of_b);
+        let mut dist = GenDistrib::new(bank.signature());
+
+        dist.add_formula(&formula, false, 1);
+        dist.add_formula(&second, false, 1);
+
+        assert_eq!(entry_counts(&dist, a.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, f_of_a.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, b.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, second.formula().f_code()), (1, 1));
+        assert_eq!(dist.scratch_value(a.f_code()), Some(0));
+        assert_eq!(dist.scratch_value(f_of_a.f_code()), Some(0));
+        assert_eq!(dist.scratch_value(b.f_code()), Some(0));
+        assert_eq!(dist.scratch_value(second.formula().f_code()), Some(0));
+
+        dist.add_formula(&formula, false, -1);
+        assert_eq!(entry_counts(&dist, a.f_code()), (0, 0));
+        assert_eq!(entry_counts(&dist, f_of_a.f_code()), (0, 0));
+    }
+
+    #[test]
+    fn gen_distrib_formula_set_stack_and_backtrack_preserve_c_start_and_trim_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "form_stack_a");
+        let b = typed_const(&mut bank, "form_stack_b");
+        let f_of_a = typed_unary(&mut bank, "form_stack_f", &a);
+        let g_of_b = typed_unary(&mut bank, "form_stack_g", &b);
+        let mut first = FormulaSet::new();
+        let mut second = FormulaSet::new();
+        first.insert(wrapped_formula(f_of_a.clone()));
+        second.insert(wrapped_formula(g_of_b.clone()));
+        let mut stack = PStack::new();
+        stack.push(&first);
+        stack.push(&second);
+        let mut dist = GenDistrib::new(bank.signature());
+
+        dist.add_formula_sets(&stack, false);
+        assert_eq!(entry_counts(&dist, a.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, f_of_a.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, b.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, g_of_b.f_code()), (1, 1));
+
+        dist.backtrack_formula_sets(&stack, 1);
+        assert_eq!(entry_counts(&dist, a.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, f_of_a.f_code()), (1, 1));
+        assert_eq!(entry_counts(&dist, b.f_code()), (0, 0));
+        assert_eq!(entry_counts(&dist, g_of_b.f_code()), (0, 0));
+    }
+
+    #[test]
     fn clause_compute_d_rel_applies_generosity_limit_and_resets_scratch() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "drel_a");
@@ -537,6 +668,42 @@ mod tests {
     }
 
     #[test]
+    fn formula_compute_d_rel_applies_generosity_limit_and_resets_scratch() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "form_drel_a");
+        let b = typed_const(&mut bank, "form_drel_b");
+        let c = typed_const(&mut bank, "form_drel_c");
+        let form_a = wrapped_formula(a.clone());
+        let form_b = wrapped_formula(b.clone());
+        let form_c = wrapped_formula(c.clone());
+        let current = wrapped_formula(typed_unary(&mut bank, "form_drel_f", &c));
+        let mut dist = GenDistrib::new(bank.signature());
+        dist.add_formula(&form_a, false, 1);
+        for _ in 0..2 {
+            dist.add_formula(&form_b, false, 1);
+        }
+        for _ in 0..3 {
+            dist.add_formula(&form_c, false, 1);
+        }
+        dist.add_formula(&current, false, 1);
+
+        let mut res = PStack::new();
+        formula_compute_d_rel(
+            &mut dist,
+            GeneralityMeasure::Terms,
+            10.0,
+            1,
+            &current,
+            &mut res,
+            false,
+        );
+
+        assert_eq!(res.as_slice(), &[current.formula().f_code(), c.f_code()]);
+        assert_eq!(dist.scratch_value(current.formula().f_code()), Some(0));
+        assert_eq!(dist.scratch_value(c.f_code()), Some(0));
+    }
+
+    #[test]
     fn clause_compute_d_rel_filters_symbols_below_internal_boundary() {
         let mut bank = test_bank();
         let true_term = bank.create_const_term(SIG_TRUE_CODE).unwrap();
@@ -556,6 +723,49 @@ mod tests {
         );
 
         assert!(res.is_empty());
+    }
+
+    #[test]
+    fn formula_compute_d_rel_filters_symbols_below_internal_boundary() {
+        let mut bank = test_bank();
+        let true_term = bank.create_const_term(SIG_TRUE_CODE).unwrap();
+        let formula = wrapped_formula(true_term);
+        let mut dist = GenDistrib::new(bank.signature());
+        dist.add_formula(&formula, false, 1);
+        let mut res = PStack::new();
+
+        formula_compute_d_rel(
+            &mut dist,
+            GeneralityMeasure::Terms,
+            10.0,
+            0,
+            &formula,
+            &mut res,
+            false,
+        );
+
+        assert!(res.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "SInE implication trimming is deferred")]
+    fn formula_compute_d_rel_rejects_trimmed_conjectures_until_term_trim_is_ported() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "form_trim_a");
+        let mut formula = wrapped_formula(a);
+        formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut dist = GenDistrib::new(bank.signature());
+        let mut res = PStack::new();
+
+        formula_compute_d_rel(
+            &mut dist,
+            GeneralityMeasure::Terms,
+            10.0,
+            0,
+            &formula,
+            &mut res,
+            true,
+        );
     }
 
     #[test]
