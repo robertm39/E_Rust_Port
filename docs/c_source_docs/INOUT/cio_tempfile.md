@@ -92,13 +92,13 @@ Source files reviewed: `INOUT/cio_tempfile.h`, `INOUT/cio_tempfile.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/tempfile.rs` ports the process-global temporary-file registry, `TMPDIR`/`/tmp` directory selection, `epr_` prefix, immediate empty-file creation, source-copy creation, explicit removal/unregistration, and cleanup warning collection.
-- Rust uses a `Mutex<BTreeSet<PathBuf>>` and atomic retry suffix generation instead of C's file-static `StrTree` plus `mkstemp`, keeping safe registration and cleanup behavior for current callers.
+- `src/inout/tempfile.rs` ports the process-global temporary-file registry, `TMPDIR`/`/tmp` directory selection, `epr_` prefix, Linux `mkstemp` creation with immediate close, non-Linux atomic `create_new` fallback creation, source-copy creation, explicit removal/unregistration, and cleanup warning collection.
+- Rust uses a `Mutex<BTreeSet<PathBuf>>` instead of C's file-static `StrTree`, keeping safe registration and cleanup behavior for current callers.
 - Tests cover TMPDIR placement, prefixing, registration count, source-copy contents, duplicate registration, cleanup of existing and missing files, and removal diagnostics.
 
 ### Change-Later Observations
 
-- C `TempFileName` delegates suffix selection and file mode to `mkstemp`. Rust uses `create_new` with a generated six-character base-36 suffix; this preserves uniqueness, prefix, and empty-file creation but not exact libc suffix distribution or permissions.
+- C `TempFileName` delegates suffix selection and file mode to `mkstemp`. Rust now mirrors that on Linux through a scoped libc boundary, while non-Linux targets still use `create_new` with a generated six-character base-36 suffix; this preserves uniqueness, prefix, and empty-file creation but not exact libc suffix distribution or permissions.
 - C's global registry is cleared during cleanup even when unlinking a file fails. Rust mirrors that shape by clearing registrations and returning warnings; scoped run-state ownership would be cleaner after signal/atexit compatibility is designed.
 - `TempFileRemove` asserts that the removed path was registered. Rust reports whether the unregister step found the path, which is safer for tests and callers; exact assert-like behavior should remain a compatibility wrapper decision.
 
