@@ -987,6 +987,83 @@ pub(crate) fn tformula_fcode_alloc(
     bank.term_top_insert(term)
 }
 
+/// Shifts universal quantifiers in a term-encoded NNF formula outward.
+///
+/// This matches C `TFormulaShiftQuantors` for a single formula. The input is
+/// expected to satisfy the C preconditions: quantified variables are disjoint,
+/// the formula is in negation normal form, and every remaining quantifier is
+/// universal.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding a shifted connective or quantifier fails.
+///
+/// # Panics
+///
+/// Panics if the formula violates the C precondition that shifted quantifiers
+/// are universal, or if formula cells are malformed.
+pub fn tformula_shift_quantors(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let mut vars = Vec::new();
+    let mut shifted = extract_formula_core(bank, form, &mut vars)?;
+    while let Some(var) = vars.pop() {
+        shifted = tformula_fcode_alloc(bank, bank.signature().qall_code(), var, Some(shifted))?;
+    }
+    Ok(shifted)
+}
+
+fn extract_formula_core(
+    bank: &mut TermBank,
+    form: &Term,
+    vars: &mut Vec<Term>,
+) -> Result<Term, Diagnostic> {
+    let (qall_code, qex_code, and_code, or_code) = {
+        let sig = bank.signature();
+        (
+            sig.qall_code(),
+            sig.qex_code(),
+            sig.and_code(),
+            sig.or_code(),
+        )
+    };
+
+    let mut current = form.clone();
+    while current.f_code() == qall_code || current.f_code() == qex_code {
+        assert_eq!(
+            current.f_code(),
+            qall_code,
+            "TFormulaShiftQuantors expects only universal quantifiers"
+        );
+        assert_eq!(
+            current.arity(),
+            2,
+            "quantified formula cell must have variable and body arguments"
+        );
+        vars.push(formula_argument(&current, 0));
+        current = formula_argument(&current, 1);
+    }
+
+    if current.arity() == 2 && (current.f_code() == and_code || current.f_code() == or_code) {
+        let stack_len = vars.len();
+        let left = formula_argument(&current, 0);
+        let right = formula_argument(&current, 1);
+        let shifted_left = extract_formula_core(bank, &left, vars)?;
+        let shifted_right = extract_formula_core(bank, &right, vars)?;
+        if vars.len() != stack_len {
+            return tformula_fcode_alloc(bank, current.f_code(), shifted_left, Some(shifted_right));
+        }
+        assert_eq!(
+            shifted_left, left,
+            "left formula changed without shifted vars"
+        );
+        assert_eq!(
+            shifted_right, right,
+            "right formula changed without shifted vars"
+        );
+    }
+
+    Ok(current)
+}
+
 fn unroll_binary_formula(formula: &Term, f_code: i64, args: &mut Vec<Term>) {
     let mut tasks = vec![formula.clone()];
     while let Some(task) = tasks.pop() {
@@ -1757,7 +1834,7 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_simplify_decoded,
+        tformula_shift_quantors, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -2583,6 +2660,54 @@ mod tests {
         let simplified = tformula_simplify_decoded(&mut bank, &formula, true).unwrap();
 
         assert_eq!(simplified, formula);
+    }
+
+    #[test]
+    fn tformula_shift_quantors_moves_universals_outward_in_c_stack_order() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -130);
+        let y = typed_var(&bank, -132);
+        let a = typed_const(&mut bank, "shift_quant_a");
+        let b = typed_const(&mut bank, "shift_quant_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &y, &b);
+        let qall_code = bank.signature().qall_code();
+        let or_code = bank.signature().or_code();
+        let inner_quant = bool_binary_with_code(&mut bank, qall_code, &y, &right_atom);
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &left_atom, &inner_quant);
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &disjunction);
+
+        let shifted = tformula_shift_quantors(&mut bank, &formula).unwrap();
+
+        assert_eq!(shifted.f_code(), qall_code);
+        assert_eq!(shifted.argument(0).as_ref(), Some(&x));
+        let second_quant = shifted.argument(1).unwrap();
+        assert_eq!(second_quant.f_code(), qall_code);
+        assert_eq!(second_quant.argument(0).as_ref(), Some(&y));
+        let body = second_quant.argument(1).unwrap();
+        assert_eq!(body.f_code(), or_code);
+        assert_eq!(body.argument(0).as_ref(), Some(&left_atom));
+        assert_eq!(body.argument(1).as_ref(), Some(&right_atom));
+    }
+
+    #[test]
+    fn tformula_shift_quantors_only_descends_through_and_or_like_c() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -134);
+        let a = typed_const(&mut bank, "shift_quant_guard_a");
+        let b = typed_const(&mut bank, "shift_quant_guard_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &b);
+        let qall_code = bank.signature().qall_code();
+        let impl_code = bank.signature().impl_code();
+        let quant = bool_binary_with_code(&mut bank, qall_code, &x, &right_atom);
+        let implication = bool_binary_with_code(&mut bank, impl_code, &left_atom, &quant);
+
+        let shifted = tformula_shift_quantors(&mut bank, &implication).unwrap();
+
+        assert_eq!(shifted, implication);
     }
 
     #[test]
