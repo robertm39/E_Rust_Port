@@ -133,5 +133,5 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 ### Change-Later Candidates
 
 - `SetMemoryLimit` labels the second branch as `RLIMIT_AS` when that macro is present, but the C call still passes `RLIMIT_DATA`. Rust now mirrors that duplicated `RLIMIT_DATA` behavior on Linux; after reference tests cover memory-limit handling, decide whether this is a typo to fix or a platform-specific compatibility quirk to keep.
-- Rust's Linux resource-usage path intentionally reads `/proc/self/stat` and `/proc/self/status` without broad libc resource-usage FFI. This captures self/child CPU ticks and the process `VmHWM` value, but exact `getrusage` semantics, `sysconf(_SC_CLK_TCK)` for unusual tick rates, and child peak-resident aggregation remain compatibility targets for a later resource-abstraction pass.
+- Rust's Linux resource-usage path now uses a narrow `getrusage` boundary for the C-shaped resource footer, with `/proc/self/stat` and `/proc/self/status` retained only as fallback. Exact target units for maximum resident set size remain a compatibility detail to keep visible in output tests.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -164,7 +164,10 @@ pub fn current_resource_usage() -> ResourceUsage {
 
     #[cfg(target_os = "linux")]
     {
-        if let Some(usage) = linux_resource_usage() {
+        if let Some(usage) = linux_getrusage_resource_usage() {
+            return usage;
+        }
+        if let Some(usage) = linux_proc_resource_usage() {
             return usage;
         }
     }
@@ -297,7 +300,37 @@ fn fallback_user_time_seconds() -> f64 {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_resource_usage() -> Option<ResourceUsage> {
+fn linux_getrusage_resource_usage() -> Option<ResourceUsage> {
+    let self_usage = linux_resource::getrusage(linux_resource::RUSAGE_SELF)?;
+    let child_usage = linux_resource::getrusage(linux_resource::RUSAGE_CHILDREN)?;
+    Some(resource_usage_from_linux_rusage(&self_usage, &child_usage))
+}
+
+#[cfg(any(test, target_os = "linux"))]
+#[allow(clippy::cast_precision_loss)]
+fn resource_usage_from_linux_rusage(
+    self_usage: &linux_resource::RUsage,
+    child_usage: &linux_resource::RUsage,
+) -> ResourceUsage {
+    ResourceUsage {
+        user_time_seconds: timeval_seconds(self_usage.user_time)
+            + timeval_seconds(child_usage.user_time),
+        system_time_seconds: timeval_seconds(self_usage.system_time)
+            + timeval_seconds(child_usage.system_time),
+        // C PrintRusage adds child CPU time but still prints the parent
+        // ru_maxrss field.
+        max_resident_pages: u64::try_from(self_usage.max_resident_set_size).unwrap_or(0),
+    }
+}
+
+#[cfg(any(test, target_os = "linux"))]
+#[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
+fn timeval_seconds(time: linux_resource::TimeVal) -> f64 {
+    time.seconds as f64 + time.microseconds as f64 / 1_000_000.0
+}
+
+#[cfg(target_os = "linux")]
+fn linux_proc_resource_usage() -> Option<ResourceUsage> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     let (user_ticks, system_ticks) = parse_linux_stat_cpu_ticks(&stat)?;
     let status = std::fs::read_to_string("/proc/self/status").ok();
@@ -616,14 +649,101 @@ mod linux_rlimit {
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
+#[allow(unsafe_code)]
+mod linux_resource {
+    use std::ffi::c_long;
+    #[cfg(target_os = "linux")]
+    use std::mem::MaybeUninit;
+
+    #[cfg(target_os = "linux")]
+    pub(super) const RUSAGE_SELF: i32 = 0;
+    #[cfg(target_os = "linux")]
+    pub(super) const RUSAGE_CHILDREN: i32 = -1;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(C)]
+    pub(super) struct TimeVal {
+        pub(super) seconds: c_long,
+        pub(super) microseconds: c_long,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(C)]
+    pub(super) struct RUsage {
+        pub(super) user_time: TimeVal,
+        pub(super) system_time: TimeVal,
+        pub(super) max_resident_set_size: c_long,
+        shared_memory_size: c_long,
+        unshared_data_size: c_long,
+        unshared_stack_size: c_long,
+        minor_page_faults: c_long,
+        major_page_faults: c_long,
+        swaps: c_long,
+        block_input_operations: c_long,
+        block_output_operations: c_long,
+        ipc_messages_sent: c_long,
+        ipc_messages_received: c_long,
+        signals_received: c_long,
+        voluntary_context_switches: c_long,
+        involuntary_context_switches: c_long,
+    }
+
+    #[cfg(target_os = "linux")]
+    extern "C" {
+        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn getrusage(who: i32) -> Option<RUsage> {
+        let mut usage = MaybeUninit::<RUsage>::uninit();
+        // SAFETY: usage points to writable, properly aligned storage for the C
+        // library to initialize on success. The selector is one of the POSIX
+        // RUSAGE_* constants used by the C source.
+        if unsafe { getrusage(who, usage.as_mut_ptr()) } == -1 {
+            return None;
+        }
+        // SAFETY: getrusage returned success, so usage is initialized.
+        Some(unsafe { usage.assume_init() })
+    }
+
+    #[cfg(test)]
+    impl RUsage {
+        pub(super) const fn new(
+            user_time: TimeVal,
+            system_time: TimeVal,
+            max_resident_set_size: c_long,
+        ) -> Self {
+            Self {
+                user_time,
+                system_time,
+                max_resident_set_size,
+                shared_memory_size: 0,
+                unshared_data_size: 0,
+                unshared_stack_size: 0,
+                minor_page_faults: 0,
+                major_page_faults: 0,
+                swaps: 0,
+                block_input_operations: 0,
+                block_output_operations: 0,
+                ipc_messages_sent: 0,
+                ipc_messages_received: 0,
+                signals_received: 0,
+                voluntary_context_switches: 0,
+                involuntary_context_switches: 0,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         combine_rlimit_results, current_resource_usage, format_resource_usage, get_core_number,
         get_msec_time, get_sec_time, get_sec_time_mod, get_system_page_size,
         get_system_phys_memory, get_usec_clock, get_usec_time, parse_linux_stat_cpu_ticks,
-        parse_linux_status_vm_hwm_kib, secure_fclose, secure_fopen, set_memory_limit,
-        stride_memory, RLimResult, ResourceUsage,
+        parse_linux_status_vm_hwm_kib, resource_usage_from_linux_rusage, secure_fclose,
+        secure_fopen, set_memory_limit, stride_memory, RLimResult, ResourceUsage,
     };
     use crate::basics::error::ErrorCode;
     use std::io::Write;
@@ -739,6 +859,41 @@ mod tests {
         let status = "Name:\teprover\nVmRSS:\t   2048 kB\nVmHWM:\t   4096 kB\n";
 
         assert_eq!(parse_linux_status_vm_hwm_kib(status), Some(4096));
+    }
+
+    #[test]
+    fn linux_getrusage_conversion_matches_c_print_rusage_shape() {
+        let self_usage = super::linux_resource::RUsage::new(
+            super::linux_resource::TimeVal {
+                seconds: 1,
+                microseconds: 250_000,
+            },
+            super::linux_resource::TimeVal {
+                seconds: 0,
+                microseconds: 500_000,
+            },
+            42,
+        );
+        let child_usage = super::linux_resource::RUsage::new(
+            super::linux_resource::TimeVal {
+                seconds: 2,
+                microseconds: 750_000,
+            },
+            super::linux_resource::TimeVal {
+                seconds: 3,
+                microseconds: 125_000,
+            },
+            99,
+        );
+
+        assert_eq!(
+            resource_usage_from_linux_rusage(&self_usage, &child_usage),
+            ResourceUsage {
+                user_time_seconds: 4.0,
+                system_time_seconds: 3.625,
+                max_resident_pages: 42,
+            }
+        );
     }
 
     #[test]
