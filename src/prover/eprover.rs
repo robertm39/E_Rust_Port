@@ -9516,6 +9516,9 @@ fn parse_simple_old_tptp_fof_elementary_formula(
         let formulas = parse_simple_old_tptp_fof_elementary_formula(scanner, bank)?;
         return Ok(vec![SimpleFofFormula::Negation(formulas)]);
     }
+    if let Some(formulas) = parse_simple_fof_fool_term_atom(scanner, bank)? {
+        return Ok(formulas);
+    }
 
     let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
     Ok(simple_fof_literal_formulas(vec![literal]))
@@ -9728,6 +9731,8 @@ fn parse_simple_fof_primary_formula(
             Ok(formulas)
         } else if scanner.test_id("$distinct") {
             parse_simple_fof_distinct_formula(scanner, bank)
+        } else if let Some(formulas) = parse_simple_fof_fool_term_atom(scanner, bank)? {
+            Ok(formulas)
         } else {
             let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
             Ok(simple_fof_literal_formulas(vec![literal]))
@@ -9930,6 +9935,25 @@ fn parse_simple_fof_truth_constant(
         return Ok(Some(simple_fof_truth_formula(false)));
     }
     Ok(None)
+}
+
+fn parse_simple_fof_fool_term_atom(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
+    if !scanner.test_tok(TokenType::ITE_TOKEN | TokenType::LET_TOKEN) {
+        return Ok(None);
+    }
+
+    let term = bank.parse_term_with_distinct_checks(scanner)?;
+    if !term.type_().as_ref().is_some_and(Type::is_bool) {
+        return Err(Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            "FOOL formula atom must have Boolean type",
+        ));
+    }
+    let literal = Eqn::alloc(term, bank.true_term().clone(), bank, true)?;
+    Ok(Some(simple_fof_literal_formulas(vec![literal])))
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -12458,6 +12482,64 @@ mod tests {
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("tff(let_bool, axiom, $let(f:$o,f:=app_"));
         assert!(printed.contains(",f))."));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_rewrites_boolean_ite_equality_as_equivalence() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-boolean-ite-equality");
+        std::fs::write(
+            &path,
+            "fof(eq_bool, axiom, ($ite(p(a), q(a), r(a)) = s(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_bool, axiom, ($ite("));
+        assert!(printed.contains("<=>app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_rewrites_boolean_ite_disequality_as_xor() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-boolean-ite-disequality");
+        std::fs::write(
+            &path,
+            "fof(ne_bool, axiom, ($ite(p(a), q(a), r(a)) != s(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(ne_bool, axiom, ($ite("));
+        assert!(printed.contains("<~>app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -19896,6 +19978,36 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-boolean-let");
         std::fs::write(&path, "fof(let_bool, axiom, $let(f:$o, f := p(a), f)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_fof_boolean_ite_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-boolean-ite-equality");
+        std::fs::write(
+            &path,
+            "fof(eq_bool, axiom, ($ite(p(a), q(a), r(a)) = s(a))).\n\
+             fof(ne_bool, axiom, ($ite(p(a), q(a), r(a)) != s(a))).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
