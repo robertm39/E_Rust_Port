@@ -17639,6 +17639,38 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_treats_conjectures_as_questions_with_answer_literal() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-conjecture-as-question-answer");
+        std::fs::write(
+            &path,
+            "fof(hume, axiom, philosopher(hume)).\n\
+             fof(phil_wise, axiom, ![X]:(philosopher(X) => wise(X))).\n\
+             fof(goal, conjecture, ?[X]:wise(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--conjectures-are-questions", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed
+            .contains("% SZS status Theorem\n% SZS answers Tuple [[hume]|_]\n\n% Proof found!\n"));
+        assert!(!printed.contains("% No proof found!"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_reports_saturated_clause_set_as_satisfiable() {
         let _guard = global_state_lock();
         let path = temp_path("proof-saturated");
