@@ -4479,7 +4479,19 @@ pub fn tformula_to_cnf(
     Ok(set.members() - old_clause_number)
 }
 
-fn post_cnf_encode_clause_terms(
+/// Applies C `PostCNFEncodeFormulas` to both sides of each clause literal.
+///
+/// This is used after CNF extraction in higher-order mode and by the staged
+/// `WFormulaCNF2` clause-wrapper shortcut.
+///
+/// # Errors
+///
+/// Returns a diagnostic if encoding any literal side fails.
+///
+/// # Panics
+///
+/// Panics if a literal mapper violates the term-bank sharing preconditions.
+pub fn post_cnf_encode_clause_terms(
     bank: &mut TermBank,
     clause: &mut Clause,
 ) -> Result<(), Diagnostic> {

@@ -11,12 +11,18 @@ use crate::clauses::clause_props::{
     CP_TYPE_QUESTION,
 };
 use crate::clauses::clausefunc::{
-    tformula_app_encode_string, tformula_clause_closed_encode, tformula_closure,
-    tformula_collect_clause, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
-    tformula_preload_types, tformula_tptp_string, TFormulaTptpPrintOptions,
+    post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
+    tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_is_literal,
+    tformula_is_prop_true, tformula_mark_polarity, tformula_preload_types, tformula_to_cnf,
+    tformula_tptp_string, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
+use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{
+    clause_push_formula_derivation, FormulaDerivationRef, DC_FOF_QUOTE,
+};
 use crate::terms::functypes::FunCode;
+use crate::terms::lambda::lambda_normalize_db;
 use crate::terms::signature::Signature;
 use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::termbanks::tb_term_collect_subterms;
@@ -25,6 +31,7 @@ use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
 use crate::terms::termtypes::{term_has_interpreted_symbol, Term, TP_OP_FLAG};
+use crate::terms::termvars::VarBank;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
@@ -84,6 +91,12 @@ impl FormulaTstpPrintOptions {
         self.clause_mode = clause_mode;
         self
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WrappedFormulaCnfResult {
+    pub clauses_generated: i64,
+    pub formula_derivation_ops: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -402,6 +415,70 @@ impl WrappedFormula {
             clause,
             problem_type,
         )?))
+    }
+
+    /// Transforms this wrapped formula into CNF clauses, matching C
+    /// `WFormulaCNF2` for the currently ported term-level CNF phases.
+    ///
+    /// The wrapper formula is first DB-lambda normalized. Clause-backed
+    /// wrappers are converted directly into one clause with `DCFofQuote`
+    /// provenance. Formula-backed wrappers are transformed through
+    /// `WTFormulaConjunctiveNF3`, update this wrapper's formula payload, and
+    /// then delegate to the staged `TFormulaToCNF` core.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if lambda normalization, clause conversion,
+    /// higher-order post-CNF encoding, CNF transformation, or clause insertion
+    /// preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term, if the miniscope limit is
+    /// negative, or if a malformed encoded literal/formula violates the C CNF
+    /// preconditions.
+    pub fn cnf2_into(
+        &mut self,
+        bank: &mut TermBank,
+        set: &mut ClauseSet,
+        fresh_vars: &VarBank,
+        miniscope_limit: i64,
+        fool_unroll: bool,
+        problem_type: ProblemType,
+    ) -> Result<WrappedFormulaCnfResult, Diagnostic> {
+        let normalized = lambda_normalize_db(bank, self.formula())?;
+        self.set_formula(normalized);
+        let source = FormulaDerivationRef::new(self.ident);
+
+        if self.is_clause {
+            let mut clause = self.form_clause_to_clause(bank)?;
+            clause_push_formula_derivation(&mut clause, DC_FOF_QUOTE, Some(source), None);
+            if problem_type == ProblemType::HigherOrder {
+                post_cnf_encode_clause_terms(bank, &mut clause)?;
+            }
+            set.insert(clause);
+            return Ok(WrappedFormulaCnfResult {
+                clauses_generated: 1,
+                formula_derivation_ops: Vec::new(),
+            });
+        }
+
+        let cnf_result =
+            tformula_conjunctive_nf3(bank, self.formula(), miniscope_limit, fool_unroll)?;
+        self.set_formula(cnf_result.formula().clone());
+        let clauses_generated = tformula_to_cnf(
+            bank,
+            self.formula(),
+            self.query_tptp_type(),
+            set,
+            fresh_vars,
+            source,
+            problem_type,
+        )?;
+        Ok(WrappedFormulaCnfResult {
+            clauses_generated,
+            formula_derivation_ops: cnf_result.derivation_ops().to_vec(),
+        })
     }
 
     /// Renders C's `WFormulaTPTPPrint` shape for a formula-backed wrapper.
@@ -1095,6 +1172,11 @@ mod tests {
     };
     use crate::clauses::clausefunc::{tformula_clause_encode, tformula_decode_polarity};
     use crate::clauses::clauseinfo::ClauseInfo;
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{
+        DerivationEntry, FormulaDerivationRef, DC_DIST_DISJUNCTIONS, DC_FOF_QUOTE,
+        DC_SPLIT_CONJUNCT,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::lambda::close_with_db_var;
@@ -1103,6 +1185,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
 
     fn test_bank() -> TermBank {
@@ -1678,6 +1761,96 @@ mod tests {
         assert!(as_clause_core.starts_with("cnf(flex_clause, negated_conjecture, ("));
         assert!(as_clause_core.contains("wf_flex_clause_a=wf_flex_clause_b|"));
         assert!(as_clause_core.ends_with("))."));
+    }
+
+    #[test]
+    fn wrapped_formula_cnf2_quotes_clause_wrappers_directly() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_cnf_clause_a");
+        let b = typed_const(&mut bank, "wf_cnf_clause_b");
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &b, true)]));
+        let formula = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_is_clause(true);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        let source = FormulaDerivationRef::new(wrapped.ident());
+        let mut set = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = wrapped
+            .cnf2_into(
+                &mut bank,
+                &mut set,
+                &fresh_vars,
+                100,
+                false,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.clauses_generated, 1);
+        assert_eq!(result.formula_derivation_ops, Vec::<i64>::new());
+        let generated = set.iter().next().unwrap();
+        assert_eq!(generated.query_tptp_type(), CP_TYPE_AXIOM);
+        assert!(generated.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            generated.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(source),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapped_formula_cnf2_runs_formula_pipeline_and_extracts_clauses() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_cnf_a");
+        let b = typed_const(&mut bank, "wf_cnf_b");
+        let c = typed_const(&mut bank, "wf_cnf_c");
+        let d = typed_const(&mut bank, "wf_cnf_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_left = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let right_right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let right_conjunction =
+            bool_binary_with_code(&mut bank, and_code, &right_left, &right_right);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &right_conjunction);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let source = FormulaDerivationRef::new(wrapped.ident());
+        let mut set = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = wrapped
+            .cnf2_into(
+                &mut bank,
+                &mut set,
+                &fresh_vars,
+                100,
+                false,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.clauses_generated, 2);
+        assert!(result
+            .formula_derivation_ops
+            .contains(&DC_DIST_DISJUNCTIONS));
+        assert_eq!(set.members(), 2);
+        for clause in set.iter() {
+            assert_eq!(clause.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+            assert_eq!(
+                &clause.derivation().unwrap().as_slice()[..2],
+                &[
+                    DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                    DerivationEntry::FormulaParent(source),
+                ]
+            );
+        }
     }
 
     #[test]
