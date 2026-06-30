@@ -2856,6 +2856,29 @@ mod tests {
     }
 
     #[test]
+    fn eqn_fof_parse_accepts_top_level_boolean_let_atom() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("$let(f:$o, f := p(a), f)", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let literal = eqn_fof_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(
+            literal.left().f_code(),
+            crate::terms::signature::SIG_LET_CODE
+        );
+        assert!(literal
+            .left()
+            .type_()
+            .as_ref()
+            .is_some_and(crate::terms::simpletypes::Type::is_bool));
+        assert_eq!(literal.right(), bank.true_term());
+        assert!(literal.is_positive());
+    }
+
+    #[test]
     fn eqn_print_string_matches_c_lop_tptp_and_option_shapes() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "print_a");

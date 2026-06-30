@@ -9670,7 +9670,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, formula-level equality, XORs, formula-level disequality, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, top-level Boolean $ite/$let atoms, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, formula-level equality, XORs, formula-level disequality, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -16652,6 +16652,30 @@ mod tests {
     }
 
     #[test]
+    fn run_cnf_only_accepts_boolean_let_formula_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-boolean-let");
+        std::fs::write(&path, "fof(let_bool, axiom, $let(f:$o, f := p(a), f)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("$let($eq(f,$eq(p(a),$true)),$eq(f,$true)) <- .\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_prints_initial_clause_docs_in_default_pcl() {
         let _guard = global_state_lock();
         let path = temp_path("proof-initial-docs-pcl");
@@ -19442,6 +19466,31 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-boolean-ite");
         std::fs::write(&path, "fof(ite_bool, axiom, $ite(p(a), q(a), ~r(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_fof_boolean_let_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-boolean-let");
+        std::fs::write(&path, "fof(let_bool, axiom, $let(f:$o, f := p(a), f)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
