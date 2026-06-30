@@ -1,13 +1,18 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_print_tstp_core_string,
+    clause_tstp_string, Clause,
+};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM,
     CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
     CP_TYPE_QUESTION,
 };
 use crate::clauses::clausefunc::{
-    tformula_app_encode_string, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
+    tformula_app_encode_string, tformula_clause_closed_encode, tformula_closure,
+    tformula_collect_clause, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
     tformula_preload_types, tformula_tptp_string, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
@@ -356,6 +361,49 @@ impl WrappedFormula {
         ))
     }
 
+    /// Converts C's wrapped clause formula back into a `Clause`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if collecting a literal or allocating the resulting
+    /// clause fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if an encoded literal has
+    /// malformed arguments.
+    pub fn form_clause_to_clause(&self, bank: &mut TermBank) -> Result<Clause, Diagnostic> {
+        let mut clause = tformula_collect_clause(bank, self.formula(), None)?;
+        clause.set_properties(self.properties);
+        clause.set_info(self.info.clone());
+        Ok(clause)
+    }
+
+    /// Universally closes a clause encoding as C `WFormulaOfClause` does.
+    ///
+    /// C allocates a fresh formula wrapper and intentionally does not copy
+    /// clause metadata onto it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if literal encoding, closure allocation, or
+    /// quantifier allocation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any clause literal violates term-bank sharing preconditions.
+    pub fn of_clause(
+        bank: &mut TermBank,
+        clause: &Clause,
+        problem_type: ProblemType,
+    ) -> Result<Self, Diagnostic> {
+        Ok(Self::wt_formula_alloc(tformula_clause_closed_encode(
+            bank,
+            clause,
+            problem_type,
+        )?))
+    }
+
     /// Renders C's `WFormulaTPTPPrint` shape for a formula-backed wrapper.
     ///
     /// # Errors
@@ -405,31 +453,43 @@ impl WrappedFormula {
         problem_type: ProblemType,
         options: FormulaTstpPrintOptions,
     ) -> Result<String, Diagnostic> {
-        if self.is_clause {
-            let branch = match options.clause_mode {
-                FormulaTstpClauseMode::AsFormula => {
-                    "WFormulaTSTPPrintFlex clause-as-formula closure is not ported"
-                }
-                FormulaTstpClauseMode::AsClauseCore => {
-                    "WFormulaTSTPPrintFlex clause core printing is not ported"
-                }
-            };
-            return Err(formula_set_write_error(branch));
-        }
-
         let formula_kind = if problem_type == ProblemType::HigherOrder {
             "thf"
+        } else if self.is_clause && options.clause_mode == FormulaTstpClauseMode::AsClauseCore {
+            if self.is_untyped() {
+                "cnf"
+            } else {
+                "tcf"
+            }
         } else if self.is_untyped() {
             "fof"
         } else {
             "tff"
         };
-        let rendered = tformula_tptp_string(
-            bank,
-            self.formula(),
-            options.full_terms,
-            TFormulaTptpPrintOptions::tstp(problem_type),
-        )?;
+        let rendered = if self.is_clause {
+            match options.clause_mode {
+                FormulaTstpClauseMode::AsFormula => {
+                    let closure = tformula_closure(bank, self.formula(), true)?;
+                    tformula_tptp_string(
+                        bank,
+                        &closure,
+                        options.full_terms,
+                        TFormulaTptpPrintOptions::tstp(problem_type),
+                    )?
+                }
+                FormulaTstpClauseMode::AsClauseCore => {
+                    let clause = self.form_clause_to_clause(bank)?;
+                    clause_print_tstp_core_string(bank, &clause, options.full_terms, false)
+                }
+            }
+        } else {
+            tformula_tptp_string(
+                bank,
+                self.formula(),
+                options.full_terms,
+                TFormulaTptpPrintOptions::tstp(problem_type),
+            )?
+        };
         let mut output = format!(
             "{formula_kind}({}, {}, {rendered}",
             self.get_id(options.keep_input_names),
@@ -492,6 +552,19 @@ impl WrappedFormula {
         output_format: FormulaPrintFormat,
         keep_input_names: bool,
     ) -> Result<String, Diagnostic> {
+        if self.is_clause {
+            let clause = self.form_clause_to_clause(bank)?;
+            return match output_format {
+                FormulaPrintFormat::Lop => {
+                    Ok(clause_print_lop_format_string(bank, &clause, full_terms))
+                }
+                FormulaPrintFormat::Tptp => Ok(clause_print_tptp_format_string(bank, &clause)),
+                FormulaPrintFormat::Tstp => {
+                    clause_tstp_string(bank, &clause, full_terms, true, problem_type)
+                }
+            };
+        }
+
         match output_format {
             FormulaPrintFormat::Lop | FormulaPrintFormat::Tptp => {
                 self.tptp_string(bank, full_terms, problem_type, keep_input_names)
@@ -1012,15 +1085,18 @@ mod tests {
     use super::{
         formula_set_definition_statistics, formula_set_stack_cardinality,
         formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat, FormulaSet,
-        FormulaTstpPrintOptions, WrappedFormula,
+        FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
     };
     use crate::basics::simple_stuff::ProblemType;
+    use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
     };
-    use crate::clauses::clausefunc::tformula_decode_polarity;
+    use crate::clauses::clausefunc::{tformula_clause_encode, tformula_decode_polarity};
     use crate::clauses::clauseinfo::ClauseInfo;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
     use crate::terms::lambda::close_with_db_var;
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
@@ -1096,6 +1172,10 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.term_top_insert(term).unwrap()
+    }
+
+    fn eqn(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
+        Eqn::alloc(left.clone(), right.clone(), bank, positive).unwrap()
     }
 
     fn quantified_with_code(
@@ -1437,6 +1517,167 @@ mod tests {
         assert!(tstp_output.ends_with(")."));
         assert!(incomplete_tstp.starts_with("fof(wf_print_neg, negated_conjecture, "));
         assert!(!incomplete_tstp.ends_with(")."));
+    }
+
+    #[test]
+    fn wrapped_formula_clause_conversion_preserves_properties_and_source_info() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_clause_a");
+        let b = typed_const(&mut bank, "wf_clause_b");
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &b, true),
+            eqn(&mut bank, &b, &a, false),
+        ]));
+        let formula = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_is_clause(true);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        wrapped.set_info(Some(ClauseInfo::new(
+            Some("wrapped_clause"),
+            Some("source.p"),
+            4,
+            2,
+        )));
+
+        let converted = wrapped.form_clause_to_clause(&mut bank).unwrap();
+
+        assert_eq!(converted.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert!(converted.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            converted.info().and_then(ClauseInfo::name),
+            Some("wrapped_clause")
+        );
+        assert_eq!(
+            converted.info().and_then(ClauseInfo::source),
+            Some("source.p")
+        );
+        assert_eq!(converted.literal_number(), 2);
+        assert_eq!(converted.positive_literal_count(), 1);
+        assert_eq!(converted.negative_literal_count(), 1);
+    }
+
+    #[test]
+    fn wrapped_formula_of_clause_closes_formula_and_drops_clause_metadata() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "wf_of_clause_a");
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &x, &a, true)]));
+        clause.set_tptp_type(CP_TYPE_AXIOM);
+        clause.set_prop(CP_INPUT_FORMULA);
+        clause.set_info(Some(ClauseInfo::new(Some("source_clause"), None, 1, 1)));
+
+        let wrapped = WrappedFormula::of_clause(&mut bank, &clause, ProblemType::FirstOrder)
+            .expect("clause can be encoded as a closed formula");
+        let rendered = wrapped
+            .tstp_string(&mut bank, true, true, ProblemType::FirstOrder, true)
+            .unwrap();
+
+        assert!(!wrapped.is_clause());
+        assert_eq!(wrapped.properties(), CP_IGNORE_PROPS);
+        assert_eq!(wrapped.info(), None);
+        assert!(rendered.contains("plain, ![X1]:(X1=wf_of_clause_a)"));
+    }
+
+    #[test]
+    fn wrapped_formula_print_string_dispatches_clause_wrappers_like_clause_print() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_print_clause_a");
+        let b = typed_const(&mut bank, "wf_print_clause_b");
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &b, true),
+            eqn(&mut bank, &b, &a, false),
+        ]));
+        let formula = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_is_clause(true);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        wrapped.set_info(Some(ClauseInfo::new(
+            Some("wrapped_print_clause"),
+            None,
+            1,
+            1,
+        )));
+
+        let lop = wrapped
+            .print_string(
+                &mut bank,
+                true,
+                ProblemType::FirstOrder,
+                FormulaPrintFormat::Lop,
+                true,
+            )
+            .unwrap();
+        let old_tptp_output = wrapped
+            .print_string(
+                &mut bank,
+                true,
+                ProblemType::FirstOrder,
+                FormulaPrintFormat::Tptp,
+                true,
+            )
+            .unwrap();
+        let structured_output = wrapped
+            .print_string(
+                &mut bank,
+                true,
+                ProblemType::FirstOrder,
+                FormulaPrintFormat::Tstp,
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(
+            lop,
+            "?- wf_print_clause_a!=wf_print_clause_b, wf_print_clause_b=wf_print_clause_a."
+        );
+        assert!(old_tptp_output.starts_with("input_clause("));
+        assert!(old_tptp_output.contains(",conjecture,["));
+        assert!(old_tptp_output.contains("++equal(wf_print_clause_a, wf_print_clause_b)"));
+        assert!(old_tptp_output.contains("--equal(wf_print_clause_b, wf_print_clause_a)"));
+        assert!(structured_output.starts_with("cnf("));
+        assert!(structured_output.contains(", negated_conjecture, "));
+        assert!(structured_output.contains("(wf_print_clause_a=wf_print_clause_b|"));
+        assert!(structured_output.ends_with(")."));
+    }
+
+    #[test]
+    fn wrapped_formula_tstp_flex_handles_clause_as_formula_and_core_modes() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_flex_clause_a");
+        let b = typed_const(&mut bank, "wf_flex_clause_b");
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &b, true),
+            eqn(&mut bank, &b, &a, false),
+        ]));
+        let formula = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_is_clause(true);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        wrapped.set_info(Some(ClauseInfo::new(Some("flex_clause"), None, 1, 1)));
+
+        let as_formula = wrapped
+            .tstp_string_flex(
+                &mut bank,
+                ProblemType::FirstOrder,
+                FormulaTstpPrintOptions::complete_formula(true, true),
+            )
+            .unwrap();
+        let as_clause_core = wrapped
+            .tstp_string_flex(
+                &mut bank,
+                ProblemType::FirstOrder,
+                FormulaTstpPrintOptions::complete_formula(true, true)
+                    .with_clause_mode(FormulaTstpClauseMode::AsClauseCore),
+            )
+            .unwrap();
+
+        assert!(as_formula.starts_with("fof(flex_clause, negated_conjecture, "));
+        assert!(as_formula.contains("wf_flex_clause_a=wf_flex_clause_b"));
+        assert!(as_formula.ends_with(")."));
+        assert!(as_clause_core.starts_with("cnf(flex_clause, negated_conjecture, ("));
+        assert!(as_clause_core.contains("wf_flex_clause_a=wf_flex_clause_b|"));
+        assert!(as_clause_core.ends_with("))."));
     }
 
     #[test]
