@@ -1,16 +1,18 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clause_props::{
-    CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY, CP_IS_SOS,
-    CP_IS_S_INDEXED, CP_LIMITED_RW,
+    FormulaProperties, CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY,
+    CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
-    ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
-    DC_DIST_DISJUNCTIONS, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC,
-    DC_NORMALIZE, DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_VAR_RENAME,
+    clause_push_derivation, clause_push_formula_derivation, op_has_cnf_arg1, op_has_cnf_arg2,
+    op_is_generating, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
+    FormulaDerivationRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS, DC_ELIMINATE_BVAR,
+    DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
+    DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
@@ -18,7 +20,8 @@ use crate::clauses::eqn_props::{
 };
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::lambda::{
-    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix, lambda_eta_reduce_db,
+    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
+    lambda_eta_reduce_db, post_cnf_encode_formulas,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::replace::tb_term_pos_replace;
@@ -37,6 +40,7 @@ use crate::terms::termtypes::{
     term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
     TP_CHECK_FLAG, TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY, TP_PRED_POS,
 };
+use crate::terms::termvars::VarBank;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -428,8 +432,11 @@ pub fn clause_eliminate_naked_boolean_variables(
     if eliminated_var {
         let copied = clause.literals().copy_opt(bank)?;
         clause.replace_literals(copied);
-        let _ = clause_remove_superfluous_literals(clause, bank);
+        let removed = clause_remove_superfluous_literals(clause, bank);
         clause.recompute_lit_counts();
+        if removed == 0 {
+            clause_push_derivation(clause, DC_NORMALIZE, None, None);
+        }
     }
     if eliminated_var || became_tautology {
         clause.set_weight(clause.standard_weight());
@@ -3337,6 +3344,143 @@ fn apply_cnf_fool_unroll(
     Ok(())
 }
 
+/// Collects a disjunction-shaped term formula into a clause.
+///
+/// This matches C `TFormulaCollectClause`: top-level disjunctions are flattened
+/// with C's stack order, encoded equality/disequality terms become literals,
+/// `$true` becomes a true literal, and `$false` is dropped. If `fresh_vars` is
+/// present, variables in the collected clause are normalized through that
+/// caller-owned variable bank.
+///
+/// # Errors
+///
+/// Returns a diagnostic if decoding a literal, allocating a true literal, or
+/// normalizing/copying variables through the term bank fails.
+///
+/// # Panics
+///
+/// Panics if an encoded literal has malformed arguments.
+pub fn tformula_collect_clause(
+    bank: &mut TermBank,
+    form: &Term,
+    fresh_vars: Option<&VarBank>,
+) -> Result<Clause, Diagnostic> {
+    let or_code = bank.signature().or_code();
+    let mut tasks = vec![form.clone()];
+    let mut literal_stack = Vec::new();
+
+    while let Some(current) = tasks.pop() {
+        if current.f_code() == or_code && current.arity() == 2 {
+            tasks.push(formula_argument(&current, 0));
+            tasks.push(formula_argument(&current, 1));
+            continue;
+        }
+        if tformula_is_literal(bank, &current) {
+            literal_stack.push(Eqn::tb_term_decode(bank, &current)?);
+            continue;
+        }
+        if current == *bank.true_term() {
+            literal_stack.push(Eqn::create_true_lit(bank)?);
+        }
+        // C drops $false and silently ignores any unexpected non-literal leaf.
+    }
+
+    let literals = literal_stack.into_iter().rev().collect();
+    let mut clause = Clause::alloc(EqnList::from_vec(literals));
+    if let Some(fresh_vars) = fresh_vars {
+        clause.normalize_vars(bank, fresh_vars)?;
+    }
+    clause.set_weight(clause.standard_weight());
+    Ok(clause)
+}
+
+/// Splits a term-encoded CNF formula into variable-normalized clauses.
+///
+/// This is the staged term-level core of C `TFormulaToCNF`. It skips leading
+/// universal quantifiers, splits top-level conjunctions with C's stack order,
+/// collects each conjunct as a clause, sets the requested TPTP role, records the
+/// `DCSplitConjunct` formula-parent derivation, runs naked Boolean-variable
+/// elimination, optionally post-encodes higher-order formula terms, inserts the
+/// clauses into `set`, and returns the number inserted.
+///
+/// Full `DocClauseFromForm` output is deferred until a real `WFormula` owner and
+/// proof-document session are available.
+///
+/// # Errors
+///
+/// Returns a diagnostic if clause collection, naked Boolean-variable
+/// elimination, or higher-order post-CNF encoding fails.
+///
+/// # Panics
+///
+/// Panics if the input violates the C preconditions of the collected formula
+/// shape or if an encoded literal is malformed.
+pub fn tformula_to_cnf(
+    bank: &mut TermBank,
+    form: &Term,
+    type_: FormulaProperties,
+    set: &mut ClauseSet,
+    fresh_vars: &VarBank,
+    source: FormulaDerivationRef,
+    problem_type: ProblemType,
+) -> Result<i64, Diagnostic> {
+    let old_clause_number = set.members();
+    let qall_code = bank.signature().qall_code();
+    let and_code = bank.signature().and_code();
+
+    let mut handle = form.clone();
+    while handle.f_code() == qall_code {
+        handle = formula_argument(&handle, 1);
+    }
+
+    let mut tasks = vec![handle];
+    while let Some(current) = tasks.pop() {
+        if current.f_code() == and_code && current.arity() == 2 {
+            tasks.push(formula_argument(&current, 0));
+            tasks.push(formula_argument(&current, 1));
+            continue;
+        }
+
+        let mut clause = tformula_collect_clause(bank, &current, Some(fresh_vars))?;
+        clause.set_tptp_type(type_);
+        clause_push_formula_derivation(&mut clause, DC_SPLIT_CONJUNCT, Some(source), None);
+
+        if clause_eliminate_naked_boolean_variables(&mut clause, bank)? {
+            clause_push_derivation(&mut clause, DC_ELIMINATE_BVAR, None, None);
+        }
+
+        if problem_type == ProblemType::HigherOrder {
+            post_cnf_encode_clause_terms(bank, &mut clause)?;
+        }
+
+        set.insert(clause);
+    }
+
+    Ok(set.members() - old_clause_number)
+}
+
+fn post_cnf_encode_clause_terms(
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<(), Diagnostic> {
+    for literal in clause.literals_mut().as_mut_slice() {
+        let old_left = literal.left().clone();
+        let old_right = literal.right().clone();
+        let new_left = post_cnf_encode_formulas(bank, &old_left)?;
+        let new_right = post_cnf_encode_formulas(bank, &old_right)?;
+        literal.map_terms(bank, |term| {
+            if term == &old_left {
+                new_left.clone()
+            } else {
+                new_right.clone()
+            }
+        });
+    }
+    clause.recompute_lit_counts();
+    clause.set_weight(clause.standard_weight());
+    Ok(())
+}
+
 fn extract_formula_core(
     bank: &mut TermBank,
     form: &Term,
@@ -4273,27 +4417,29 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
-        tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
-        tformula_estimate_clauses, tformula_expand_literals, tformula_find_defs,
-        tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
-        tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
-        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_unroll_fool,
-        tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
+        tformula_collect_clause, tformula_conjunctive_nf, tformula_conjunctive_nf3,
+        tformula_copy_def, tformula_create_def, tformula_decode_polarity, tformula_def_rename,
+        tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
+        tformula_find_defs, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
+        tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
+        tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
+        tformula_to_cnf, tformula_unroll_fool, tformula_var_rename, TFormulaDefinitions,
+        TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_PURE_INJECTIVITY, CP_IS_SOS, CP_LIMITED_RW,
-        CP_TYPE_AXIOM,
+        CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS, DC_FLEX_RESOLVE,
-        DC_FNNF, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
-        DC_PRUNE_ARG, DC_REWRITE, DC_VAR_RENAME,
+        FormulaDerivationRef, DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS,
+        DC_ELIMINATE_BVAR, DC_FLEX_RESOLVE, DC_FNNF, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
+        DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
@@ -4308,6 +4454,7 @@ mod tests {
     use crate::terms::termtypes::{
         DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY, TP_POS_POLARITY,
     };
+    use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
     use std::collections::BTreeMap;
 
@@ -6266,6 +6413,149 @@ mod tests {
     }
 
     #[test]
+    fn tformula_collect_clause_preserves_order_and_handles_truth_constants() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "collect_a");
+        let b = typed_const(&mut bank, "collect_b");
+        let c = typed_const(&mut bank, "collect_c");
+        let d = typed_const(&mut bank, "collect_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let first = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let second = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+        let or_code = bank.signature().or_code();
+        let left = bool_binary_with_code(&mut bank, or_code, &first, &false_term);
+        let right = bool_binary_with_code(&mut bank, or_code, &true_term, &second);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &right);
+
+        let clause = tformula_collect_clause(&mut bank, &formula, None).unwrap();
+
+        assert_eq!(clause.literal_number(), 3);
+        assert_eq!(clause.weight(), clause.standard_weight());
+        let literals = clause.literals().as_slice();
+        assert_eq!(literals[0].left(), &a);
+        assert_eq!(literals[0].right(), &b);
+        assert!(literals[0].is_positive());
+        assert!(literals[1].is_true(&bank));
+        assert_eq!(literals[2].left(), &c);
+        assert_eq!(literals[2].right(), &d);
+        assert!(literals[2].is_positive());
+    }
+
+    #[test]
+    fn tformula_collect_clause_normalizes_variables_with_fresh_bank() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -210);
+        let a = typed_const(&mut bank, "collect_norm_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let clause = tformula_collect_clause(&mut bank, &formula, Some(&fresh_vars)).unwrap();
+
+        assert_eq!(clause.literal_number(), 1);
+        assert_eq!(clause.weight(), clause.standard_weight());
+        let literal = &clause.literals().as_slice()[0];
+        assert!(literal.left().is_free_var());
+        assert_ne!(literal.left(), &x);
+        assert_eq!(literal.right(), &a);
+        assert!(literal.is_positive());
+    }
+
+    #[test]
+    fn tformula_to_cnf_skips_universals_and_splits_conjuncts_like_c() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -220);
+        let a = typed_const(&mut bank, "to_cnf_a");
+        let b = typed_const(&mut bank, "to_cnf_b");
+        let c = typed_const(&mut bank, "to_cnf_c");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let and_code = bank.signature().and_code();
+        let body = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let qall_code = bank.signature().qall_code();
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let source = FormulaDerivationRef::new(77);
+        let mut set = ClauseSet::new();
+
+        let count = tformula_to_cnf(
+            &mut bank,
+            &quantified,
+            CP_TYPE_NEG_CONJECTURE,
+            &mut set,
+            &fresh_vars,
+            source,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(set.members(), 2);
+        let clauses = set.iter().collect::<Vec<_>>();
+        for clause in &clauses {
+            assert_eq!(clause.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+            assert_eq!(
+                clause.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                    DerivationEntry::FormulaParent(source),
+                ]
+            );
+        }
+        let first_literal = &clauses[0].literals().as_slice()[0];
+        assert_eq!(first_literal.left(), &b);
+        assert_eq!(first_literal.right(), &c);
+        let second_literal = &clauses[1].literals().as_slice()[0];
+        assert!(second_literal.left().is_free_var());
+        assert_ne!(second_literal.left(), &x);
+        assert_eq!(second_literal.right(), &a);
+    }
+
+    #[test]
+    fn tformula_to_cnf_records_boolean_elimination_derivations() {
+        let mut bank = test_bank();
+        let x = bool_var(&bank, -230);
+        let true_term = bank.true_term().clone();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let positive = bool_binary_with_code(&mut bank, eqn_code, &x, &true_term);
+        let negative = bool_binary_with_code(&mut bank, neqn_code, &x, &true_term);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &positive, &negative);
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+        let source = FormulaDerivationRef::new(88);
+        let mut set = ClauseSet::new();
+
+        let count = tformula_to_cnf(
+            &mut bank,
+            &formula,
+            CP_TYPE_NEG_CONJECTURE,
+            &mut set,
+            &fresh_vars,
+            source,
+            ProblemType::FirstOrder,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let clause = set.iter().next().unwrap();
+        assert_eq!(clause.literal_number(), 1);
+        assert!(clause.literals().find_true(&bank).is_some());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SPLIT_CONJUNCT),
+                DerivationEntry::FormulaParent(source),
+                DerivationEntry::Operation(DC_NORMALIZE),
+                DerivationEntry::Operation(DC_ELIMINATE_BVAR),
+            ]
+        );
+    }
+
+    #[test]
     fn tformula_var_rename_refreshes_nested_shadowed_quantifiers() {
         let mut bank = test_bank();
         let x = typed_var(&bank, -150);
@@ -6602,6 +6892,10 @@ mod tests {
         assert_eq!(remaining.right(), bank.true_term());
         assert!(variable.binding().is_none());
         assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
     }
 
     #[test]
@@ -6623,6 +6917,10 @@ mod tests {
         assert_eq!(remaining.right(), bank.true_term());
         assert!(variable.binding().is_none());
         assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
     }
 
     #[test]
@@ -6641,6 +6939,10 @@ mod tests {
         assert!(clause.is_trivial(&bank));
         assert!(variable.binding().is_none());
         assert_eq!(clause.weight(), clause.standard_weight());
+        assert_eq!(
+            clause.derivation().unwrap().as_slice(),
+            &[DerivationEntry::Operation(DC_NORMALIZE)]
+        );
     }
 
     #[test]
