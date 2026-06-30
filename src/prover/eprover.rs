@@ -7,6 +7,8 @@ use std::path::Path;
 
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
+#[cfg(all(windows, not(test)))]
+use crate::basics::os_wrapper::set_hard_cpu_limit;
 #[cfg(not(test))]
 use crate::basics::os_wrapper::set_memory_limit;
 use crate::basics::os_wrapper::{
@@ -2324,12 +2326,25 @@ fn cpu_rlimit_to_apply(config: &EProverConfig) -> Option<u64> {
     }
 }
 
+#[cfg(any(test, windows))]
+fn native_hard_cpu_limit_to_apply(config: &EProverConfig) -> Option<u64> {
+    let hard_limit = c_rlimit_from_arg(config.cpu_limit?);
+    (hard_limit != RLIM_INFINITY_COMPAT).then_some(hard_limit)
+}
+
 fn apply_os_resource_limit_state(config: &EProverConfig) {
     #[cfg(all(target_os = "linux", not(test)))]
     {
         if let Some(cpu_limit) = cpu_rlimit_to_apply(config) {
             let _ = set_soft_rlimit(RLIMIT_CPU_COMPAT, cpu_limit);
             let _ = set_soft_rlimit(RLIMIT_CORE_COMPAT, 0);
+        }
+    }
+
+    #[cfg(all(windows, not(test)))]
+    {
+        if let Some(cpu_limit) = native_hard_cpu_limit_to_apply(config) {
+            let _ = set_hard_cpu_limit(cpu_limit);
         }
     }
 
@@ -9507,9 +9522,9 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 mod tests {
     use super::{
         auto_memory_limit_from_system_mb, cpu_rlimit_to_apply, fv_index_params_from_config,
-        heuristic_parms_from_config, order_parms_from_config, preprocessing_config_debug_line,
-        process_options, proof_control_from_config, run, run_config,
-        temporary_executable_term_bank, write_saturation_proof_object_clause,
+        heuristic_parms_from_config, native_hard_cpu_limit_to_apply, order_parms_from_config,
+        preprocessing_config_debug_line, process_options, proof_control_from_config, run,
+        run_config, temporary_executable_term_bank, write_saturation_proof_object_clause,
         write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
         EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
         GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
@@ -9647,6 +9662,7 @@ mod tests {
         assert_eq!(config.soft_cpu_limit, None);
         assert_eq!(config.schedule_time_limit, Some(300));
         assert_eq!(cpu_rlimit_to_apply(&config), Some(300));
+        assert_eq!(native_hard_cpu_limit_to_apply(&config), Some(300));
 
         let action =
             process_options(["eprover", "--soft-cpu-limit=25", "--cpu-limit=100"]).unwrap();
@@ -9657,6 +9673,7 @@ mod tests {
         assert_eq!(config.soft_cpu_limit, Some(25));
         assert_eq!(config.schedule_time_limit, Some(100));
         assert_eq!(cpu_rlimit_to_apply(&config), Some(25));
+        assert_eq!(native_hard_cpu_limit_to_apply(&config), Some(100));
 
         let action =
             process_options(["eprover", "--cpu-limit=100", "--soft-cpu-limit=25"]).unwrap();
@@ -9665,12 +9682,20 @@ mod tests {
         };
         assert_eq!(config.schedule_time_limit, Some(25));
         assert_eq!(cpu_rlimit_to_apply(&config), Some(25));
+        assert_eq!(native_hard_cpu_limit_to_apply(&config), Some(100));
 
         let action = process_options(["eprover"]).unwrap();
         let EProverAction::Run(config) = action else {
             panic!("expected run config");
         };
         assert_eq!(cpu_rlimit_to_apply(&config), None);
+        assert_eq!(native_hard_cpu_limit_to_apply(&config), None);
+
+        let action = process_options(["eprover", "--cpu-limit=-1"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(native_hard_cpu_limit_to_apply(&config), None);
     }
 
     #[test]

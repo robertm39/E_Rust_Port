@@ -101,6 +101,12 @@ pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
 
 #[cfg(windows)]
 #[must_use]
+pub fn set_hard_cpu_limit(limit_seconds: u64) -> RLimResult {
+    windows_kernel32::set_process_cpu_limit(limit_seconds)
+}
+
+#[cfg(windows)]
+#[must_use]
 pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
         RLimResult::Success
@@ -477,14 +483,16 @@ mod windows_kernel32 {
     use std::mem::{size_of, MaybeUninit};
     use std::num::NonZeroUsize;
     use std::ptr;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
     type Bool = i32;
     type Dword = u32;
     type Handle = *mut c_void;
 
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
+    pub(super) const JOB_OBJECT_LIMIT_PROCESS_TIME: Dword = 0x0000_0002;
     pub(super) const JOB_OBJECT_LIMIT_PROCESS_MEMORY: Dword = 0x0000_0100;
+    const HUNDRED_NS_PER_SEC: u64 = 10_000_000;
 
     #[repr(C)]
     struct FileTime {
@@ -536,7 +544,7 @@ mod windows_kernel32 {
 
     #[repr(C)]
     pub(super) struct JobObjectBasicLimitInformation {
-        per_process_user_time_limit: i64,
+        pub(super) per_process_user_time_limit: i64,
         per_job_user_time_limit: i64,
         pub(super) limit_flags: Dword,
         minimum_working_set_size: usize,
@@ -599,17 +607,48 @@ mod windows_kernel32 {
         ) -> Bool;
     }
 
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(super) struct JobLimitState {
+        pub(super) process_time_100ns: Option<i64>,
+        pub(super) process_memory_limit: Option<usize>,
+    }
+
     pub(super) fn set_process_memory_limit(limit: u64) -> RLimResult {
         let Ok(limit) = usize::try_from(limit) else {
             return RLimResult::Failed;
         };
+        update_process_limits(|limits| limits.process_memory_limit = Some(limit))
+    }
+
+    pub(super) fn set_process_cpu_limit(limit_seconds: u64) -> RLimResult {
+        let Some(limit) = seconds_to_100ns(limit_seconds) else {
+            return RLimResult::Failed;
+        };
+        update_process_limits(|limits| limits.process_time_100ns = Some(limit))
+    }
+
+    fn update_process_limits(update: impl FnOnce(&mut JobLimitState)) -> RLimResult {
+        static PROCESS_LIMITS: Mutex<JobLimitState> = Mutex::new(JobLimitState {
+            process_time_100ns: None,
+            process_memory_limit: None,
+        });
+
+        let mut limits = match PROCESS_LIMITS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        update(&mut limits);
+        apply_process_limits(*limits)
+    }
+
+    fn apply_process_limits(limits: JobLimitState) -> RLimResult {
         let Some(job) = process_limit_job() else {
             return RLimResult::Failed;
         };
         let Ok(info_size) = Dword::try_from(size_of::<JobObjectExtendedLimitInformation>()) else {
             return RLimResult::Failed;
         };
-        let mut info = job_object_extended_limit_information(limit);
+        let mut info = job_object_extended_limit_information(limits);
 
         // SAFETY: job is a live job-object handle retained for the process
         // lifetime, info points to an initialized JOBOBJECT_EXTENDED_LIMIT_INFORMATION
@@ -627,6 +666,11 @@ mod windows_kernel32 {
         } else {
             RLimResult::Success
         }
+    }
+
+    pub(super) fn seconds_to_100ns(seconds: u64) -> Option<i64> {
+        let ticks = seconds.checked_mul(HUNDRED_NS_PER_SEC)?;
+        i64::try_from(ticks).ok()
     }
 
     pub(super) fn process_times_100ns() -> Option<(u64, u64)> {
@@ -755,13 +799,21 @@ mod windows_kernel32 {
     }
 
     pub(super) const fn job_object_extended_limit_information(
-        process_memory_limit: usize,
+        limits: JobLimitState,
     ) -> JobObjectExtendedLimitInformation {
+        let (time_flag, time_limit) = match limits.process_time_100ns {
+            Some(limit) => (JOB_OBJECT_LIMIT_PROCESS_TIME, limit),
+            None => (0, 0),
+        };
+        let (memory_flag, memory_limit) = match limits.process_memory_limit {
+            Some(limit) => (JOB_OBJECT_LIMIT_PROCESS_MEMORY, limit),
+            None => (0, 0),
+        };
         JobObjectExtendedLimitInformation {
             basic_limit_information: JobObjectBasicLimitInformation {
-                per_process_user_time_limit: 0,
+                per_process_user_time_limit: time_limit,
                 per_job_user_time_limit: 0,
-                limit_flags: JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+                limit_flags: time_flag | memory_flag,
                 minimum_working_set_size: 0,
                 maximum_working_set_size: 0,
                 active_process_limit: 0,
@@ -777,7 +829,7 @@ mod windows_kernel32 {
                 write_transfer_count: 0,
                 other_transfer_count: 0,
             },
-            process_memory_limit,
+            process_memory_limit: memory_limit,
             job_memory_limit: 0,
             peak_process_memory_used: 0,
             peak_job_memory_used: 0,
@@ -1074,15 +1126,39 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_job_memory_limit_info_sets_process_limit() {
-        let info = super::windows_kernel32::job_object_extended_limit_information(4096);
+    fn windows_job_limit_info_sets_combined_process_limits() {
+        let info = super::windows_kernel32::job_object_extended_limit_information(
+            super::windows_kernel32::JobLimitState {
+                process_time_100ns: Some(30_000_000),
+                process_memory_limit: Some(4096),
+            },
+        );
 
         assert_eq!(
             info.basic_limit_information.limit_flags
                 & super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY,
             super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY
         );
+        assert_eq!(
+            info.basic_limit_information.limit_flags
+                & super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_TIME,
+            super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_TIME
+        );
+        assert_eq!(
+            info.basic_limit_information.per_process_user_time_limit,
+            30_000_000
+        );
         assert_eq!(info.process_memory_limit, 4096);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cpu_limit_seconds_convert_to_job_time_units() {
+        assert_eq!(
+            super::windows_kernel32::seconds_to_100ns(3),
+            Some(30_000_000)
+        );
+        assert_eq!(super::windows_kernel32::seconds_to_100ns(u64::MAX), None);
     }
 
     #[cfg(target_os = "linux")]
