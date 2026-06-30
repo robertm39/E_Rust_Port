@@ -34,7 +34,9 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_is_db_closed, term_is_ground, term_standard_weight};
+use crate::terms::termfunc::{
+    term_is_db_closed, term_is_ground, term_is_untyped, term_standard_weight,
+};
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
     term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
@@ -1029,7 +1031,17 @@ fn negate_decoded_formula(bank: &mut TermBank, term: &Term) -> Result<Term, Diag
     tformula_fcode_alloc(bank, bank.signature().not_code(), term.clone(), None)
 }
 
-pub(crate) fn tformula_fcode_alloc(
+/// Allocates a unary or binary formula node with the given function code.
+///
+/// This matches C `TFormulaFCodeAlloc`: the operator arity comes from the
+/// signature, non-lambda formula nodes receive Boolean type, predicate
+/// formulas receive `TPPredPos`, and the result is inserted into the term bank.
+///
+/// # Errors
+///
+/// Returns a diagnostic if `op` is unknown, is not unary or binary, is missing
+/// a required second argument, or cannot be inserted into the term bank.
+pub fn tformula_fcode_alloc(
     bank: &mut TermBank,
     op: i64,
     arg1: Term,
@@ -1334,7 +1346,20 @@ fn fool_should_ignore(term: &Term, bank: &TermBank) -> bool {
     term.is_free_var()
 }
 
-fn tformula_negate(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+/// Returns the logical negation of a term-encoded formula.
+///
+/// This matches C `TFormulaNegate`: literal roots have their equality code
+/// toggled, while non-literals are wrapped in a formula negation. Unlike
+/// [`tformula_neg_alloc`], an existing root negation is not flattened.
+///
+/// # Errors
+///
+/// Returns a diagnostic if allocating the toggled literal or negation fails.
+///
+/// # Panics
+///
+/// Panics if a literal formula lacks either C-required argument.
+pub fn tformula_negate(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
     if tformula_is_literal(bank, form) {
         let f_code = bank.signature().get_other_eqn_code(form.f_code());
         return tformula_fcode_alloc(
@@ -1587,15 +1612,22 @@ fn tprop_arg_return(bank: &TermBank, left: &Term, right: &Term, positive: bool) 
     }
 }
 
-fn tformula_is_prop_true(bank: &TermBank, form: &Term) -> bool {
+#[must_use]
+pub fn tformula_is_prop_true(bank: &TermBank, form: &Term) -> bool {
     tformula_is_prop_const(bank, form, true)
 }
 
-fn tformula_is_prop_false(bank: &TermBank, form: &Term) -> bool {
+#[must_use]
+pub fn tformula_is_prop_false(bank: &TermBank, form: &Term) -> bool {
     tformula_is_prop_const(bank, form, false)
 }
 
-fn tformula_is_prop_const(bank: &TermBank, form: &Term, positive: bool) -> bool {
+/// Returns whether `form` is C's encoded propositional constant.
+///
+/// This matches C `TFormulaIsPropConst`: `$true` is represented as
+/// `$eq($true,$true)` and `$false` as `$neq($true,$true)`.
+#[must_use]
+pub fn tformula_is_prop_const(bank: &TermBank, form: &Term, positive: bool) -> bool {
     let expected_code = if positive {
         bank.signature().eqn_code()
     } else {
@@ -1607,7 +1639,17 @@ fn tformula_is_prop_const(bank: &TermBank, form: &Term, positive: bool) -> bool 
         && form.argument(1).as_ref() == Some(bank.true_term())
 }
 
-fn tformula_prop_constant_alloc(bank: &mut TermBank, positive: bool) -> Result<Term, Diagnostic> {
+/// Allocates C's encoded propositional true or false formula.
+///
+/// This matches C `TFormulaPropConstantAlloc`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the encoded literal cannot be allocated.
+pub fn tformula_prop_constant_alloc(
+    bank: &mut TermBank,
+    positive: bool,
+) -> Result<Term, Diagnostic> {
     let f_code = bank.signature_mut().get_eqn_code(positive);
     let true_term = bank.true_term().clone();
     tformula_fcode_alloc(bank, f_code, true_term.clone(), Some(true_term))
@@ -1766,6 +1808,30 @@ pub fn tformula_add_quantor(
     tformula_fcode_alloc(bank, quantifier, variable.clone(), Some(form.clone()))
 }
 
+/// Allocates a formula with an explicit quantifier symbol.
+///
+/// This matches C `TFormulaQuantorAlloc`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the quantified formula cannot be allocated.
+///
+/// # Panics
+///
+/// Panics if `variable` is not a free variable.
+pub fn tformula_quantor_alloc(
+    bank: &mut TermBank,
+    quantifier: i64,
+    variable: &Term,
+    arg: &Term,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        variable.is_free_var(),
+        "TFormulaQuantorAlloc expects a free variable"
+    );
+    tformula_fcode_alloc(bank, quantifier, variable.clone(), Some(arg.clone()))
+}
+
 /// Wraps a formula in universal or existential quantifiers for `variables`.
 ///
 /// This matches C `TFormulaAddQuantors` for a caller-provided variable order:
@@ -1803,6 +1869,68 @@ pub fn tformula_closure(
 ) -> Result<Term, Diagnostic> {
     let variables = tformula_collect_free_vars(bank, form);
     tformula_add_quantors(bank, form, universal, &variables)
+}
+
+/// Combines a stack of formulas with `op`, destructively popping the stack.
+///
+/// This matches C `TFormulaStackToForm`: an empty stack returns `$true`; a
+/// non-empty stack starts from the last pushed formula and wraps remaining
+/// popped formulas on the left.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a binary formula allocation fails.
+pub fn tformula_stack_to_form(
+    bank: &mut TermBank,
+    stack: &mut Vec<Term>,
+    op: i64,
+) -> Result<Term, Diagnostic> {
+    let Some(mut result) = stack.pop() else {
+        return Ok(bank.true_term().clone());
+    };
+
+    while let Some(handle) = stack.pop() {
+        result = tformula_fcode_alloc(bank, op, handle, Some(result))?;
+    }
+    Ok(result)
+}
+
+/// Expands a `$distinct` pseudo-formula into pairwise disequalities.
+///
+/// This matches C `TFormulaExpandDistinct`: all `i < j` argument pairs are
+/// converted to `$neq(arg_i,arg_j)`, then combined with
+/// [`tformula_stack_to_form`] using conjunction.
+///
+/// # Errors
+///
+/// Returns a diagnostic if allocating a disequality or conjunction fails.
+///
+/// # Panics
+///
+/// Panics if `distinct` has uninitialized argument slots.
+pub fn tformula_expand_distinct(bank: &mut TermBank, distinct: &Term) -> Result<Term, Diagnostic> {
+    let disequality_code = bank.signature_mut().get_eqn_code(false);
+    let mut disequalities = Vec::new();
+    for left_index in 0..distinct.arity() {
+        let left = formula_argument(distinct, left_index);
+        for right_index in (left_index + 1)..distinct.arity() {
+            let right = formula_argument(distinct, right_index);
+            let disequality =
+                tformula_fcode_alloc(bank, disequality_code, left.clone(), Some(right))?;
+            disequalities.push(disequality);
+        }
+    }
+
+    let and_code = bank.signature().and_code();
+    tformula_stack_to_form(bank, &mut disequalities, and_code)
+}
+
+/// Returns whether a formula tree contains only individual and Boolean types.
+///
+/// This matches C `TFormulaIsUntyped`, delegated to the term-level query.
+#[must_use]
+pub fn tformula_is_untyped(form: &Term) -> bool {
+    term_is_untyped(form)
 }
 
 /// Estimates the number of clauses produced by clausifying a formula.
@@ -2618,7 +2746,17 @@ fn troot_nnf_once(bank: &mut TermBank, form: &Term, polarity: i32) -> Result<Ter
     Ok(form.clone())
 }
 
-fn tformula_encode_predicate_as_eqn(
+/// Encodes Boolean predicate-like terms as equality or disequality formulas.
+///
+/// This matches C `EncodePredicateAsEqn`: Boolean variables, non-logical
+/// Boolean terms, answers, `$true`, `$false`, `$ite`, `$let`, and phony
+/// applications become comparisons with `$true`; `$false` is encoded as
+/// `$true != $true`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the encoded equality cannot be allocated.
+pub fn tformula_encode_predicate_as_eqn(
     bank: &mut TermBank,
     formula: Term,
 ) -> Result<Term, Diagnostic> {
@@ -4621,12 +4759,15 @@ mod tests {
         tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
         tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
         tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
-        tformula_estimate_clauses, tformula_expand_literals, tformula_find_defs,
-        tformula_has_free_vars, tformula_is_closed, tformula_lit_alloc, tformula_mark_polarity,
-        tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_nnf,
-        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
-        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_to_cnf,
-        tformula_unroll_fool, tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
+        tformula_encode_predicate_as_eqn, tformula_estimate_clauses, tformula_expand_distinct,
+        tformula_expand_literals, tformula_find_defs, tformula_has_free_vars, tformula_is_closed,
+        tformula_is_prop_const, tformula_is_prop_false, tformula_is_prop_true, tformula_is_untyped,
+        tformula_lit_alloc, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
+        tformula_neg_alloc, tformula_negate, tformula_nnf, tformula_prop_constant_alloc,
+        tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
+        tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
+        tformula_stack_to_form, tformula_to_cnf, tformula_unroll_fool, tformula_var_rename,
+        TFormulaDefinitions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -4777,6 +4918,16 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn distinct_formula(bank: &mut TermBank, args: &[Term]) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(bank.signature().distinct_code(), args.len());
+        term.set_type(Some(type_));
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index, arg.clone());
+        }
         bank.term_top_insert(term).unwrap()
     }
 
@@ -6735,6 +6886,151 @@ mod tests {
         assert_eq!(body.f_code(), bank.signature().eqn_code());
         assert_eq!(body.argument(0).as_ref(), Some(&x));
         assert_eq!(body.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn tformula_prop_constant_helpers_use_encoded_truth_literals() {
+        let mut bank = test_bank();
+
+        let true_formula = tformula_prop_constant_alloc(&mut bank, true).unwrap();
+        let false_formula = tformula_prop_constant_alloc(&mut bank, false).unwrap();
+
+        assert!(tformula_is_prop_true(&bank, &true_formula));
+        assert!(tformula_is_prop_const(&bank, &true_formula, true));
+        assert!(!tformula_is_prop_false(&bank, &true_formula));
+        assert!(tformula_is_prop_false(&bank, &false_formula));
+        assert!(tformula_is_prop_const(&bank, &false_formula, false));
+        assert!(!tformula_is_prop_true(&bank, &false_formula));
+    }
+
+    #[test]
+    fn tformula_encode_predicate_as_eqn_wraps_boolean_predicate_shapes() {
+        let mut bank = test_bank();
+        let bool_variable = bool_var(&bank, -330);
+
+        let encoded_var =
+            tformula_encode_predicate_as_eqn(&mut bank, bool_variable.clone()).unwrap();
+
+        assert_eq!(encoded_var.f_code(), bank.signature().eqn_code());
+        assert_eq!(encoded_var.argument(0).as_ref(), Some(&bool_variable));
+        assert_eq!(encoded_var.argument(1).as_ref(), Some(bank.true_term()));
+
+        let false_term = bank.false_term().clone();
+        let encoded_false = tformula_encode_predicate_as_eqn(&mut bank, false_term).unwrap();
+        assert!(tformula_is_prop_false(&bank, &encoded_false));
+
+        let plain_term = typed_const(&mut bank, "predicate_encode_plain");
+        let encoded_plain =
+            tformula_encode_predicate_as_eqn(&mut bank, plain_term.clone()).unwrap();
+        assert_eq!(encoded_plain, plain_term);
+    }
+
+    #[test]
+    fn tformula_negate_toggles_literals_and_wraps_non_literals() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "negate_a");
+        let b = typed_const(&mut bank, "negate_b");
+        let c = typed_const(&mut bank, "negate_c");
+        let d = typed_const(&mut bank, "negate_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+
+        let negated_literal = tformula_negate(&mut bank, &left).unwrap();
+
+        assert_eq!(negated_literal.f_code(), bank.signature().neqn_code());
+        assert_eq!(negated_literal.argument(0).as_ref(), Some(&a));
+        assert_eq!(negated_literal.argument(1).as_ref(), Some(&b));
+
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        let negated_formula = tformula_negate(&mut bank, &conjunction).unwrap();
+
+        assert_eq!(negated_formula.f_code(), bank.signature().not_code());
+        assert_eq!(negated_formula.argument(0).as_ref(), Some(&conjunction));
+    }
+
+    #[test]
+    fn tformula_quantor_alloc_and_untyped_query_match_term_shape() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -340);
+        let a = typed_const(&mut bank, "quantor_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let qall_code = bank.signature().qall_code();
+
+        let quantified = tformula_quantor_alloc(&mut bank, qall_code, &x, &atom).unwrap();
+
+        assert_eq!(quantified.f_code(), qall_code);
+        assert_eq!(quantified.argument(0).as_ref(), Some(&x));
+        assert_eq!(quantified.argument(1).as_ref(), Some(&atom));
+        assert!(tformula_is_untyped(&quantified));
+
+        let higher_order = higher_order_var(&mut bank, -342, 1);
+        let typed_atom = bool_binary_with_code(&mut bank, eqn_code, &higher_order, &higher_order);
+        assert!(!tformula_is_untyped(&typed_atom));
+    }
+
+    #[test]
+    fn tformula_stack_to_form_pops_like_c() {
+        let mut bank = test_bank();
+        let first_left = typed_const(&mut bank, "stack_a");
+        let first_right = typed_const(&mut bank, "stack_b");
+        let second_left = typed_const(&mut bank, "stack_c");
+        let second_right = typed_const(&mut bank, "stack_d");
+        let third_left = typed_const(&mut bank, "stack_e");
+        let third_right = typed_const(&mut bank, "stack_f");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let first = bool_binary_with_code(&mut bank, eqn_code, &first_left, &first_right);
+        let second = bool_binary_with_code(&mut bank, eqn_code, &second_left, &second_right);
+        let third = bool_binary_with_code(&mut bank, eqn_code, &third_left, &third_right);
+        let mut stack = vec![first.clone(), second.clone(), third.clone()];
+        let or_code = bank.signature().or_code();
+
+        let formula = tformula_stack_to_form(&mut bank, &mut stack, or_code).unwrap();
+
+        assert!(stack.is_empty());
+        assert_eq!(formula.f_code(), or_code);
+        assert_eq!(formula.argument(0).as_ref(), Some(&first));
+        let right = formula.argument(1).unwrap();
+        assert_eq!(right.f_code(), or_code);
+        assert_eq!(right.argument(0).as_ref(), Some(&second));
+        assert_eq!(right.argument(1).as_ref(), Some(&third));
+
+        let mut empty = Vec::new();
+        let truth = tformula_stack_to_form(&mut bank, &mut empty, or_code).unwrap();
+        assert_eq!(&truth, bank.true_term());
+    }
+
+    #[test]
+    fn tformula_expand_distinct_builds_pairwise_disequality_chain() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "distinct_a");
+        let b = typed_const(&mut bank, "distinct_b");
+        let c = typed_const(&mut bank, "distinct_c");
+        let distinct = distinct_formula(&mut bank, &[a.clone(), b.clone(), c.clone()]);
+
+        let expanded = tformula_expand_distinct(&mut bank, &distinct).unwrap();
+
+        assert_eq!(expanded.f_code(), bank.signature().and_code());
+        let first_pair = expanded.argument(0).unwrap();
+        assert_eq!(first_pair.f_code(), bank.signature().neqn_code());
+        assert_eq!(first_pair.argument(0).as_ref(), Some(&a));
+        assert_eq!(first_pair.argument(1).as_ref(), Some(&b));
+        let tail = expanded.argument(1).unwrap();
+        assert_eq!(tail.f_code(), bank.signature().and_code());
+        let second_pair = tail.argument(0).unwrap();
+        assert_eq!(second_pair.f_code(), bank.signature().neqn_code());
+        assert_eq!(second_pair.argument(0).as_ref(), Some(&a));
+        assert_eq!(second_pair.argument(1).as_ref(), Some(&c));
+        let third_pair = tail.argument(1).unwrap();
+        assert_eq!(third_pair.f_code(), bank.signature().neqn_code());
+        assert_eq!(third_pair.argument(0).as_ref(), Some(&b));
+        assert_eq!(third_pair.argument(1).as_ref(), Some(&c));
+
+        let singleton = distinct_formula(&mut bank, &[a]);
+        let expanded_singleton = tformula_expand_distinct(&mut bank, &singleton).unwrap();
+        assert_eq!(&expanded_singleton, bank.true_term());
     }
 
     #[test]
