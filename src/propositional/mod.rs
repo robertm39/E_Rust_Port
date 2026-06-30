@@ -1,5 +1,6 @@
 //! Propositional reasoning support ported from E's `PROPOSITIONAL` units.
 
+pub mod propsig;
 pub mod varset;
 
 /// C `PLiteralCode`.
