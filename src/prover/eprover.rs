@@ -10273,6 +10273,39 @@ mod tests {
         )
     }
 
+    fn without_selected_clause_progress(output: &str) -> String {
+        let normalized_szs = output.replace("\n%% SZS", "\n% SZS");
+        let mut lines = Vec::new();
+        let mut removed_selected_progress = false;
+
+        for line in normalized_szs.lines() {
+            if line == "%"
+                || line == "%%"
+                || (line.starts_with('%') && (line.contains(" <- ") || line.starts_with("%?-")))
+            {
+                removed_selected_progress = true;
+                continue;
+            }
+
+            let final_status_line = line.starts_with("% Proof found!")
+                || line.starts_with("% No proof found!")
+                || line.starts_with("% Clause set closed")
+                || line.starts_with("% Failure:")
+                || line.starts_with("% Watchlist is empty!")
+                || line.starts_with("% SZS status");
+            if removed_selected_progress
+                && final_status_line
+                && lines.last().is_some_and(|last: &&str| !last.is_empty())
+            {
+                lines.push("");
+            }
+            lines.push(line);
+            removed_selected_progress = false;
+        }
+
+        lines.join("\n") + if output.ends_with('\n') { "\n" } else { "" }
+    }
+
     fn run_config_from<I, S>(argv: I) -> Box<EProverConfig>
     where
         I: IntoIterator<Item = S>,
@@ -14062,7 +14095,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
                 default_proof_search_prefix()
@@ -14123,7 +14156,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}% SatCheck found unsatisfiable ground set\n\n% Proof found!\n% SZS status Unsatisfiable\n",
                 default_proof_search_prefix()
@@ -14319,7 +14352,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -14373,7 +14406,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -14548,7 +14581,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status Satisfiable\n",
                 default_proof_search_prefix()
@@ -15096,7 +15129,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -15679,7 +15712,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -15959,7 +15992,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16037,7 +16070,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16118,7 +16151,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16198,7 +16231,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16278,7 +16311,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16334,7 +16367,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16546,7 +16579,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16643,7 +16676,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}% SZS status Theorem\n% SZS answers Tuple [[a]|_]\n\n% Proof found!\n",
                 default_proof_search_prefix()
@@ -16698,7 +16731,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status Satisfiable\n",
                 default_proof_search_prefix()
@@ -16726,7 +16759,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
                 default_proof_search_prefix()
@@ -16749,7 +16782,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% No proof found!\n% SZS status Satisfiable\n",
                 default_proof_search_prefix()
@@ -16777,7 +16810,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
                 default_proof_search_prefix()
@@ -16805,7 +16838,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
                 default_proof_search_prefix()
@@ -16838,7 +16871,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n",
                 default_proof_search_prefix()
@@ -16871,8 +16904,9 @@ mod tests {
         .unwrap();
 
         let printed = String::from_utf8(stdout).unwrap();
+        let final_status_printed = without_selected_clause_progress(&printed);
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
-        assert!(printed.starts_with(&format!(
+        assert!(final_status_printed.starts_with(&format!(
             "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
             default_proof_search_prefix()
         )));
@@ -16940,7 +16974,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
                 default_proof_search_prefix()
@@ -16972,8 +17006,9 @@ mod tests {
         .unwrap();
 
         let printed = String::from_utf8(stdout).unwrap();
+        let final_status_printed = without_selected_clause_progress(&printed);
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.starts_with(&format!(
+        assert!(final_status_printed.starts_with(&format!(
             "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
             default_proof_search_prefix()
         )));
@@ -17007,8 +17042,9 @@ mod tests {
         .unwrap();
 
         let printed = String::from_utf8(stdout).unwrap();
+        let final_status_printed = without_selected_clause_progress(&printed);
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.starts_with(&format!(
+        assert!(final_status_printed.starts_with(&format!(
             "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
             default_proof_search_prefix()
         )));
@@ -17073,8 +17109,9 @@ mod tests {
         .unwrap();
 
         let printed = String::from_utf8(stdout).unwrap();
+        let final_status_printed = without_selected_clause_progress(&printed);
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
-        assert!(printed.starts_with(&format!(
+        assert!(final_status_printed.starts_with(&format!(
             "{}\n% No proof found!\n% SZS status Satisfiable\n",
             default_proof_search_prefix()
         )));
@@ -17353,7 +17390,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}% Presaturation interreduction done\n\n% No proof found!\n% SZS status Satisfiable\n",
                 default_proof_search_prefix()
@@ -18660,7 +18697,7 @@ mod tests {
 
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
             format!(
                 "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
                 default_proof_search_prefix()

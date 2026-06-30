@@ -12,6 +12,10 @@ Current Rust port implementation status is tracked in [`docs/rust-port-status.md
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
 
+### C Change-Later Notes
+
+When porting new code or reviewing already-ported code, document C implementation details that may make sense to change after drop-in compatibility is secured. This includes accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, confusing API boundaries, ignored parameters, counter overflows, and performance tradeoffs. Put these notes in the relevant C-source page's manual-review `Change Later` section, or in a linked status/design doc when the issue spans multiple source units.
+
 Start here:
 
 - [`docs/c_source_docs/overview.md`](docs/c_source_docs/overview.md) - subsystem map, coverage counts, porting guidance, and links to every source-unit page.

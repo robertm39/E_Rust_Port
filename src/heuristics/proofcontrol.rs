@@ -5880,6 +5880,11 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             fmt::Write::write_str(&mut **output, DEFAULT_COMCHAR_RAW)
                 .map_err(proof_control_write_error)?;
         }
+    } else if let Some((output, output_level)) = output_context.as_mut() {
+        if *output_level == 1 {
+            std::io::Write::write_all(&mut **output, DEFAULT_COMCHAR_RAW.as_bytes())
+                .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+        }
     }
     clause.remove_evaluations();
     clause.set_prop(CP_IS_PROCESSED);
@@ -5957,6 +5962,13 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             *output_level,
             state,
             packed.clause_mut(),
+        )?;
+    } else if let Some((output, output_level)) = output_context.as_mut() {
+        proof_state_document_processing_with_output(
+            &mut **output,
+            *output_level,
+            state,
+            packed.clause(),
         )?;
     }
     state.statistics_mut().proc_non_trivial_count += 1;
@@ -6188,6 +6200,28 @@ fn proof_state_document_processing_with_docs(
     }
     session.doc_clause_quote(output, state.terms(), 6, clause, Some("new_given"), None)?;
     Ok(())
+}
+
+fn proof_state_document_processing_with_output(
+    output: &mut (impl std::io::Write + ?Sized),
+    output_level: i64,
+    state: &ProofState,
+    clause: &Clause,
+) -> Result<(), Diagnostic> {
+    if output_level != 1 {
+        return Ok(());
+    }
+    std::io::Write::write_all(output, b"\n")
+        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    std::io::Write::write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())
+        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    std::io::Write::write_all(
+        output,
+        clause_print_lop_format_string(state.terms(), clause, true).as_bytes(),
+    )
+    .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))?;
+    std::io::Write::write_all(output, b"\n")
+        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))
 }
 
 fn proof_control_write_error(_error: fmt::Error) -> Diagnostic {
@@ -7745,18 +7779,19 @@ mod tests {
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
         proof_state_process_clause_with_docs, proof_state_process_clause_with_global_indices,
-        proof_state_queue_generated_clause_for_eval, proof_state_recognize_choice_axioms,
-        proof_state_replacing_inferences, proof_state_replacing_inferences_with_docs,
-        proof_state_reset_processed, proof_state_reset_processed_with_docs,
-        proof_state_reset_processed_with_global_indices, proof_state_saturate,
-        proof_state_saturate_with_global_indices, proof_state_saturate_with_output,
-        proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
-        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
-        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
-        LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
-        ProcessClauseReturnReason, ProcessedClauseClass, ProofStateWatchlistOutcome,
-        ReplacingInferenceOutcome, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_process_clause_with_output, proof_state_queue_generated_clause_for_eval,
+        proof_state_recognize_choice_axioms, proof_state_replacing_inferences,
+        proof_state_replacing_inferences_with_docs, proof_state_reset_processed,
+        proof_state_reset_processed_with_docs, proof_state_reset_processed_with_global_indices,
+        proof_state_saturate, proof_state_saturate_with_global_indices,
+        proof_state_saturate_with_output, proof_state_simplify_watchlist,
+        proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
+        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
+        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
+        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
+        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
+        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -11185,6 +11220,36 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_process_clause_with_output_prints_output_level_one_given_clause() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        let clause = unit_clause_with_id(state.terms_mut(), "pc_process_output_l1", 4_153);
+        let expected_clause = clause_print_lop_format_string(state.terms(), &clause, true);
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        let mut output = Vec::new();
+
+        let outcome =
+            proof_state_process_clause_with_output(&mut output, 1, &mut state, &mut control, 1)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+        let ProcessClauseOutcome::Processed { class, .. } = outcome else {
+            panic!("selected clause should be processed");
+        };
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("%\n%{expected_clause}\n")
+        );
+        assert!(match class {
+            ProcessedClauseClass::PositiveRule => state.processed_pos_rules().find_by_id(4_153),
+            ProcessedClauseClass::PositiveEquation => state.processed_pos_eqns().find_by_id(4_153),
+            ProcessedClauseClass::NegativeUnit => state.processed_neg_units().find_by_id(4_153),
+            ProcessedClauseClass::NonUnit => state.processed_non_units().find_by_id(4_153),
+        }
+        .is_some());
+    }
+
+    #[test]
     fn proof_state_process_clause_with_docs_emits_new_given_quote_at_level_six() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();
@@ -13335,6 +13400,7 @@ mod tests {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (clause, f_code) =
             commutativity_axiom(state.terms_mut(), "pc_saturate_dynamic_ac_f", 4_156);
+        let expected_clause = clause_print_lop_format_string(state.terms(), &clause, true);
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
         control.heuristic_parms_mut().selection_strategy = NO_GENERATION.to_owned();
@@ -13367,7 +13433,9 @@ mod tests {
         assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "% pc_saturate_dynamic_ac_f is commutative\n% AC handling enabled dynamically\n"
+            format!(
+                "%% pc_saturate_dynamic_ac_f is commutative\n% AC handling enabled dynamically\n\n%{expected_clause}\n"
+            )
         );
     }
 
@@ -13376,6 +13444,7 @@ mod tests {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (selected, watched) =
             watchlist_subsumption_pair(state.terms_mut(), "pc_saturate_watch_output", 4_157, 4_158);
+        let expected_clause = clause_print_lop_format_string(state.terms(), &selected, true);
         state.watchlist_mut().unwrap().insert(watched);
         let mut control = proof_control_alloc();
         init_process_clause_control(&mut control, &state);
@@ -13410,7 +13479,7 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "% Watchlist reduced by 1 clause\n"
+            format!("%\n%{expected_clause}\n% Watchlist reduced by 1 clause\n")
         );
         assert_eq!(state.watchlist().unwrap().members(), 0);
     }
