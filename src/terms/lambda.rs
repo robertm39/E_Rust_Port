@@ -103,6 +103,201 @@ pub fn flatten_apps(
     bank.term_top_insert(flattened)
 }
 
+/// Drops trailing application arguments, matching C `drop_args`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the shortened application cannot be inserted into
+/// the term bank.
+///
+/// # Panics
+///
+/// Panics if `args_to_drop` is larger than the term arity, if a phony
+/// application would lose its head, if required term types are missing, or if a
+/// copied argument is uninitialized.
+pub fn drop_args(
+    bank: &mut TermBank,
+    term: &Term,
+    args_to_drop: usize,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        args_to_drop <= term.arity(),
+        "cannot drop more arguments than a term has"
+    );
+    assert!(
+        !term.is_phony_app() || args_to_drop < term.arity(),
+        "cannot drop the head of a phony application"
+    );
+
+    if args_to_drop == 0 {
+        return Ok(term.clone());
+    }
+
+    if term.is_phony_app() && term.arity() == args_to_drop + 1 {
+        return Ok(term
+            .argument(0)
+            .expect("phony application head is uninitialized"));
+    }
+
+    let kept_arity = term.arity() - args_to_drop;
+    let dropped_types = (kept_arity..term.arity())
+        .map(|index| {
+            term.argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
+                .type_()
+                .unwrap_or_else(|| panic!("dropped argument {index} is untyped"))
+        })
+        .collect::<Vec<_>>();
+    let term_type = term
+        .type_()
+        .expect("term to drop arguments from must have a type");
+    let result_type = bank
+        .signature_mut()
+        .type_bank_mut()
+        .insert_type_shared(arrow_type_flattened(&dropped_types, &term_type));
+    let result = Term::top_alloc(term.f_code(), kept_arity);
+    result.set_type(Some(result_type));
+    for index in 0..kept_arity {
+        result.set_argument(
+            index,
+            term.argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized")),
+        );
+    }
+    bank.term_top_insert(result)
+}
+
+/// Finds the minimum loose De Bruijn index below `term`, matching C `find_min_db`.
+///
+/// Returns `None` for C's `DB_NOT_FOUND`.
+///
+/// # Panics
+///
+/// Panics if a lambda matrix or traversed argument is uninitialized.
+#[must_use]
+pub fn find_min_db(term: &Term, depth: FunCode) -> Option<FunCode> {
+    if term.is_db_var() {
+        return (term.f_code() >= depth).then_some(term.f_code() - depth);
+    }
+    if term.is_lambda() {
+        let matrix = term.argument(1).expect("lambda matrix is uninitialized");
+        return find_min_db(&matrix, depth + 1);
+    }
+    if !term.has_db_subterm() {
+        return None;
+    }
+
+    let mut result = None;
+    for index in 0..term.arity() {
+        let arg = term
+            .argument(index)
+            .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        if let Some(min_db) = find_min_db(&arg, depth) {
+            result = Some(result.map_or(min_db, |current: FunCode| current.min(min_db)));
+        }
+    }
+    result
+}
+
+/// Performs one top-level eta-reduction step, matching C `reduce_eta_top_level`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if dropping arguments, shifting DB indexes, or closing
+/// the retained lambda prefix fails.
+///
+/// # Panics
+///
+/// Panics if lambda/application cells are malformed or if required term types
+/// are missing.
+pub fn reduce_eta_top_level(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let mut bound_vars = Vec::new();
+    let matrix = unfold_lambda(term, &mut bound_vars);
+    let mut result = term.clone();
+
+    if term.is_lambda()
+        && matrix.arity() > 0
+        && matrix
+            .argument(matrix.arity() - 1)
+            .is_some_and(|arg| arg.is_db_var() && arg.f_code() == 0)
+    {
+        let matrix_arity =
+            i64::try_from(matrix.arity()).expect("term arity fits C-compatible long");
+        let mut last_db = matrix_arity - 1;
+        let bound_count =
+            i64::try_from(bound_vars.len()).expect("lambda prefix length fits C-compatible long");
+        let phony_limit = i64::from(matrix.is_phony_app());
+        let left_limit = (matrix_arity - bound_count).max(phony_limit);
+
+        while last_db >= left_limit {
+            let expected_db = matrix_arity - 1 - last_db;
+            let arg = matrix
+                .argument(usize::try_from(last_db).expect("non-negative argument index"))
+                .expect("term argument is uninitialized");
+            if !(arg.is_db_var() && arg.f_code() == expected_db) {
+                break;
+            }
+            last_db -= 1;
+        }
+        last_db += 1;
+
+        assert!(last_db >= 0, "eta suffix scan must leave a valid start");
+        assert!(
+            last_db < matrix_arity,
+            "eta suffix start must stay inside arity"
+        );
+        let last_db_index = usize::try_from(last_db).expect("non-negative argument index");
+
+        let mut min_db = None;
+        for index in 0..last_db_index {
+            let arg = matrix
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            if let Some(arg_min_db) = find_min_db(&arg, 0) {
+                min_db =
+                    Some(min_db.map_or(arg_min_db, |current: FunCode| current.min(arg_min_db)));
+            }
+        }
+
+        if min_db != Some(0) {
+            let suffix_db = matrix
+                .argument(last_db_index)
+                .expect("eta suffix argument is uninitialized")
+                .f_code();
+            let suffix_drop =
+                usize::try_from(suffix_db + 1).expect("eta suffix DB index is non-negative");
+            let to_drop = min_db.map_or(suffix_drop, |min_db| {
+                usize::try_from(min_db)
+                    .expect("loose DB index is non-negative")
+                    .min(suffix_drop)
+            });
+            let dropped = drop_args(bank, &matrix, to_drop)?;
+            result = shift_db(
+                bank,
+                &dropped,
+                -i64::try_from(to_drop).expect("argument count fits C-compatible long"),
+            )?;
+
+            for _ in 0..to_drop {
+                bound_vars
+                    .pop()
+                    .expect("eta reduction drops an available binder");
+            }
+            while let Some(binder) = bound_vars.pop() {
+                let binder_type = binder.type_().expect("lambda binder must have a type");
+                result = close_with_db_var(bank, &binder_type, &result)?;
+            }
+        }
+    }
+
+    assert_eq!(
+        result.type_(),
+        term.type_(),
+        "eta reduction preserves term type"
+    );
+    Ok(result)
+}
+
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
 ///
 /// # Errors
@@ -600,7 +795,7 @@ mod tests {
         unfold_lambda,
     };
     use crate::terms::signature::Signature;
-    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
+    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -617,6 +812,16 @@ mod tests {
         if bank.signature().get_type(f_code).is_none() {
             bank.signature_mut()
                 .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: Type) -> Term {
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_)
                 .unwrap();
         }
         bank.create_const_term(f_code).unwrap()
@@ -706,6 +911,38 @@ mod tests {
         let returned_matrix = unfold_lambda(&matrix, &mut vars);
         assert_eq!(returned_matrix, matrix);
         assert_eq!(vars.len(), 2);
+    }
+
+    #[test]
+    fn reduce_eta_top_level_drops_multi_binder_suffix() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let binary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "eta_reduce_f", binary_type);
+        let db1 = bank.request_db_var(&i_type, 1);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &f, &[db1, db0]).unwrap();
+        let lambda = close_with_type_prefix(&mut bank, &[i_type.clone(), i_type], &matrix).unwrap();
+
+        let reduced = super::reduce_eta_top_level(&mut bank, &lambda).unwrap();
+
+        assert_eq!(reduced, f);
+    }
+
+    #[test]
+    fn reduce_eta_top_level_keeps_prefix_when_db_occurs_earlier() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let binary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), i_type.clone()]);
+        let h = typed_const_with_type(&mut bank, "eta_keep_h", binary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &h, &[db0.clone(), db0]).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+
+        let reduced = super::reduce_eta_top_level(&mut bank, &lambda).unwrap();
+
+        assert_eq!(reduced, lambda);
     }
 
     #[test]
