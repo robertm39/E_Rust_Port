@@ -1,7 +1,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::get_usec_clock;
 #[cfg(all(target_os = "linux", not(test)))]
-use crate::basics::os_wrapper::set_soft_rlimit;
+use crate::basics::os_wrapper::set_rlimit;
 #[cfg(target_os = "linux")]
 use crate::basics::os_wrapper::{get_hard_rlimit, RLIMIT_CPU_COMPAT};
 use crate::inout::tempfile::temp_file_cleanup;
@@ -24,6 +24,14 @@ static TIME_LIMIT_DEADLINE_USEC: AtomicI64 = AtomicI64::new(i64::MAX);
 static SIG_TERM_CAUGHT: AtomicUsize = AtomicUsize::new(0);
 static FATAL_ERROR_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CpuSoftTimeoutRLimitSequence {
+    reset_current: u64,
+    reset_maximum: u64,
+    rearm_current: u64,
+    rearm_maximum: u64,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SignalOutcome {
@@ -214,15 +222,27 @@ pub fn e_sig_term_sched_handler(signal: i32) -> bool {
 fn handle_cpu_limit() -> SignalOutcome {
     if TIME_LIMIT_IS_SOFT.swap(false, Ordering::SeqCst) {
         TIME_IS_UP.store(true, Ordering::SeqCst);
-        let next_limit = HARD_TIME_LIMIT
-            .load(Ordering::SeqCst)
-            .min(SYSTEM_TIME_LIMIT.load(Ordering::SeqCst));
+        let rlimit_sequence = cpu_soft_timeout_rlimit_sequence(
+            HARD_TIME_LIMIT.load(Ordering::SeqCst),
+            SYSTEM_TIME_LIMIT.load(Ordering::SeqCst),
+        );
         #[cfg(all(target_os = "linux", not(test)))]
         {
-            let _ = set_soft_rlimit(RLIMIT_CPU_COMPAT, next_limit);
+            let _ = set_rlimit(
+                RLIMIT_CPU_COMPAT,
+                rlimit_sequence.reset_current,
+                rlimit_sequence.reset_maximum,
+            );
+            let _ = set_rlimit(
+                RLIMIT_CPU_COMPAT,
+                rlimit_sequence.rearm_current,
+                rlimit_sequence.rearm_maximum,
+            );
         }
         let _ = e_signal_setup(SIGXCPU_COMPAT);
-        return SignalOutcome::SoftTimeLimitReached { next_limit };
+        return SignalOutcome::SoftTimeLimitReached {
+            next_limit: rlimit_sequence.rearm_current,
+        };
     }
 
     if SILENT_TIME_OUT.load(Ordering::SeqCst) {
@@ -261,6 +281,23 @@ fn time_limit_deadline_usec(start_usec: i64, limit_seconds: u64) -> i64 {
     let limit_usec = limit_seconds.saturating_mul(USEC_PER_SEC);
     let limit_usec = i64::try_from(limit_usec).unwrap_or(i64::MAX);
     start_usec.saturating_add(limit_usec)
+}
+
+#[must_use]
+const fn cpu_soft_timeout_rlimit_sequence(
+    hard_limit: u64,
+    system_limit: u64,
+) -> CpuSoftTimeoutRLimitSequence {
+    CpuSoftTimeoutRLimitSequence {
+        reset_current: system_limit,
+        reset_maximum: system_limit,
+        rearm_current: if hard_limit < system_limit {
+            hard_limit
+        } else {
+            system_limit
+        },
+        rearm_maximum: system_limit,
+    }
 }
 
 #[cfg(all(target_os = "linux", not(test)))]
@@ -430,7 +467,35 @@ mod tests {
         );
         assert!(time_is_up());
         assert!(!time_limit_is_soft());
+        #[cfg(target_os = "linux")]
+        {
+            assert_ne!(system_time_limit(), 50);
+            assert!(system_time_limit() > 0);
+        }
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(system_time_limit(), RLIM_INFINITY_COMPAT);
+    }
+
+    #[test]
+    fn soft_cpu_signal_rlimit_sequence_matches_c_reset_and_rearm_shape() {
+        assert_eq!(
+            super::cpu_soft_timeout_rlimit_sequence(75, 50),
+            super::CpuSoftTimeoutRLimitSequence {
+                reset_current: 50,
+                reset_maximum: 50,
+                rearm_current: 50,
+                rearm_maximum: 50,
+            }
+        );
+        assert_eq!(
+            super::cpu_soft_timeout_rlimit_sequence(25, 50),
+            super::CpuSoftTimeoutRLimitSequence {
+                reset_current: 50,
+                reset_maximum: 50,
+                rearm_current: 25,
+                rearm_maximum: 50,
+            }
+        );
     }
 
     #[test]

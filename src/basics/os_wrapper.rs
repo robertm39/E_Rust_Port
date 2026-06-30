@@ -51,6 +51,18 @@ pub const fn set_soft_rlimit(_resource: i32, _limit: u64) -> RLimResult {
 
 #[cfg(target_os = "linux")]
 #[must_use]
+pub fn set_rlimit(resource: i32, current: u64, maximum: u64) -> RLimResult {
+    linux_rlimit::set_rlimit(resource, current, maximum)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn set_rlimit(_resource: i32, _current: u64, _maximum: u64) -> RLimResult {
+    RLimResult::Failed
+}
+
+#[cfg(target_os = "linux")]
+#[must_use]
 pub fn get_soft_rlimit(resource: i32) -> u64 {
     linux_rlimit::get_soft_rlimit(resource)
 }
@@ -666,6 +678,11 @@ mod linux_rlimit {
         result
     }
 
+    pub(super) fn set_rlimit(resource: i32, current: u64, maximum: u64) -> RLimResult {
+        let rlimit = RLimit { current, maximum };
+        set_rlimit_raw(resource, &rlimit)
+    }
+
     pub(super) fn get_soft_rlimit(resource: i32) -> u64 {
         get_rlimit(resource).map_or(0, |limit| limit.current)
     }
@@ -684,6 +701,16 @@ mod linux_rlimit {
         // SAFETY: getrlimit returned success, so the rlimit buffer is
         // initialized by the C library.
         Some(unsafe { rlimit.assume_init() })
+    }
+
+    fn set_rlimit_raw(resource: i32, rlimit: &RLimit) -> RLimResult {
+        // SAFETY: rlimit is a valid pointer to an initialized rlimit struct
+        // whose layout matches Linux's two-rlim_t struct rlimit ABI.
+        if unsafe { setrlimit(resource, rlimit) } == -1 {
+            RLimResult::Failed
+        } else {
+            RLimResult::Success
+        }
     }
 }
 
@@ -877,9 +904,10 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn unsupported_resource_limits_are_explicit() {
-        use super::{get_hard_rlimit, get_soft_rlimit, set_soft_rlimit};
+        use super::{get_hard_rlimit, get_soft_rlimit, set_rlimit, set_soft_rlimit};
 
         assert_eq!(set_soft_rlimit(0, 1), RLimResult::Failed);
+        assert_eq!(set_rlimit(0, 1, 1), RLimResult::Failed);
         assert_eq!(get_soft_rlimit(0), 0);
         assert_eq!(get_hard_rlimit(0), 0);
         assert_eq!(set_memory_limit(0), RLimResult::Success);
@@ -889,9 +917,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_rlimit_boundary_reports_invalid_resource_like_c() {
-        use super::{get_hard_rlimit, get_soft_rlimit, set_soft_rlimit};
+        use super::{get_hard_rlimit, get_soft_rlimit, set_rlimit, set_soft_rlimit};
 
         assert_eq!(set_soft_rlimit(-1, 1), RLimResult::Failed);
+        assert_eq!(set_rlimit(-1, 1, 1), RLimResult::Failed);
         assert_eq!(get_soft_rlimit(-1), 0);
         assert_eq!(get_hard_rlimit(-1), 0);
         assert_eq!(set_memory_limit(0), RLimResult::Success);
