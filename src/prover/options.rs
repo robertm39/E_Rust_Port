@@ -1885,6 +1885,7 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
 #[cfg(test)]
 mod tests {
     use super::EPROVER_OPTIONS;
+    use crate::inout::commandline::OptArgType;
 
     const C_E_OPTIONS_H: &str = include_str!("../../eprover/PROVER/e_options.h");
 
@@ -1918,6 +1919,16 @@ mod tests {
         assert_eq!(rust_short_options, c_short_options);
     }
 
+    #[test]
+    fn rust_option_table_matches_c_argument_surface() {
+        let mut rust_argument_surface = rust_argument_surface();
+        let mut c_argument_surface = c_argument_surface();
+
+        rust_argument_surface.sort_unstable();
+        c_argument_surface.sort_unstable();
+        assert_eq!(rust_argument_surface, c_argument_surface);
+    }
+
     fn assert_has_no_duplicates<T>(table_name: &str, options: &[T])
     where
         T: Clone + Ord + std::fmt::Debug,
@@ -1949,6 +1960,28 @@ mod tests {
         option_entries(table)
             .into_iter()
             .filter_map(short_option_from_entry)
+            .collect()
+    }
+
+    #[must_use]
+    fn rust_argument_surface() -> Vec<ArgumentSurface> {
+        EPROVER_OPTIONS
+            .iter()
+            .map(|option| ArgumentSurface {
+                short_option: option.shortopt,
+                long_option: option.longopt,
+                argument_type: arg_type_name(option.arg_type),
+                argument_default: option.arg_default,
+            })
+            .collect()
+    }
+
+    #[must_use]
+    fn c_argument_surface() -> Vec<ArgumentSurface> {
+        let table = c_option_table_body();
+        option_entries(table)
+            .into_iter()
+            .filter_map(argument_surface_from_entry)
             .collect()
     }
 
@@ -2041,6 +2074,49 @@ mod tests {
     }
 
     #[must_use]
+    fn argument_surface_from_entry(entry: &'static str) -> Option<ArgumentSurface> {
+        let fields = split_c_fields(entry);
+        let option_code = fields.first().expect("option entry must have a code");
+        if *option_code == "OPT_NOOPT" {
+            return None;
+        }
+
+        let short_field = fields.get(1).expect("option entry must have a short name");
+        let long_field = fields.get(2).expect("option entry must have a long name");
+        let argument_type = fields
+            .get(3)
+            .copied()
+            .expect("option entry must have an argument type");
+        let default_field = fields
+            .get(4)
+            .expect("option entry must have an argument default");
+
+        Some(ArgumentSurface {
+            short_option: c_char_literal(short_field),
+            long_option: c_string_literal(long_field),
+            argument_type,
+            argument_default: c_default_literal(default_field),
+        })
+    }
+
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    struct ArgumentSurface {
+        short_option: Option<char>,
+        long_option: Option<&'static str>,
+        argument_type: &'static str,
+        argument_default: Option<&'static str>,
+    }
+
+    #[must_use]
+    const fn arg_type_name(arg_type: OptArgType) -> &'static str {
+        match arg_type {
+            OptArgType::NoArg => "NoArg",
+            OptArgType::OptArg => "OptArg",
+            OptArgType::ReqArg => "ReqArg",
+        }
+    }
+
+    #[must_use]
     fn split_c_fields(entry: &'static str) -> Vec<&'static str> {
         let mut fields = Vec::new();
         let mut field_start = 0_usize;
@@ -2098,6 +2174,18 @@ mod tests {
             .find('"')
             .expect("long option string must be terminated");
         Some(&literal_body[..literal_end])
+    }
+
+    #[must_use]
+    fn c_default_literal(field: &'static str) -> Option<&'static str> {
+        match field.trim() {
+            "DEFAULT_OUTPUT_DESCRIPTOR" => Some("eigEIG"),
+            "DEFAULT_FILTER_DESCRIPTOR" => Some("Fc"),
+            "WATCHLIST_INLINE_QSTRING" => Some("'Use inline watchlist type'"),
+            "TFORM_RENAME_LIMIT_STR" => Some("24"),
+            "TFORM_MINISCOPE_LIMIT_STR" => Some("2147483648"),
+            _ => c_string_literal(field),
+        }
     }
 
     #[must_use]
