@@ -116,6 +116,25 @@ pub fn close_with_type_prefix(
     Ok(result)
 }
 
+/// Peels a DB-lambda prefix, matching C `UnfoldLambda`.
+///
+/// Binders are appended in descent order. The last appended binder is the top
+/// of C's `PStack`.
+///
+/// # Panics
+///
+/// Panics if a lambda cell has an uninitialized binder or matrix argument.
+#[must_use]
+pub fn unfold_lambda(lambda: &Term, var_stack: &mut Vec<Term>) -> Term {
+    let mut current = lambda.clone();
+    while current.is_lambda() {
+        let binder = current.argument(0).expect("lambda binder is uninitialized");
+        var_stack.push(binder);
+        current = current.argument(1).expect("lambda matrix is uninitialized");
+    }
+    current
+}
+
 /// Abstracts the free-variable prefix over `matrix`, matching C `AbstractVars`.
 ///
 /// Variables later in `var_prefix` are closer to the top of C's stack and
@@ -536,9 +555,9 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_terms, beta_normalize_db, close_with_type_prefix, shift_db};
+    use super::{apply_terms, beta_normalize_db, close_with_type_prefix, shift_db, unfold_lambda};
     use crate::terms::signature::Signature;
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -582,6 +601,39 @@ mod tests {
         assert!(normalized.is_applied_free_var());
         assert_eq!(normalized.argument(0).as_ref(), Some(&g));
         assert_eq!(normalized.argument(1).as_ref(), Some(&b));
+    }
+
+    #[test]
+    fn unfold_lambda_peels_prefix_in_c_push_order() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let user_sort_code = bank
+            .signature_mut()
+            .type_bank_mut()
+            .define_simple_sort("$unfold_lambda_user")
+            .unwrap();
+        let user_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_simple_sort(user_sort_code));
+        let matrix = typed_const(&mut bank, "unfold_lambda_matrix");
+        let lambda =
+            close_with_type_prefix(&mut bank, &[i_type.clone(), user_type.clone()], &matrix)
+                .unwrap();
+        let mut vars = Vec::new();
+
+        let body = unfold_lambda(&lambda, &mut vars);
+
+        assert_eq!(body, matrix);
+        assert_eq!(vars.len(), 2);
+        assert!(vars[0].is_db_var());
+        assert!(vars[1].is_db_var());
+        assert_eq!(vars[0].type_(), Some(i_type));
+        assert_eq!(vars[1].type_(), Some(user_type));
+
+        let returned_matrix = unfold_lambda(&matrix, &mut vars);
+        assert_eq!(returned_matrix, matrix);
+        assert_eq!(vars.len(), 2);
     }
 
     #[test]

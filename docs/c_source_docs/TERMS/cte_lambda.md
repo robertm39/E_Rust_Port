@@ -148,7 +148,7 @@ Source files reviewed: `TERMS/cte_lambda.h`, `TERMS/cte_lambda.c`.
 
 ### Rust Port Status Notes
 
-- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning and equality-definition unfolding: C-shaped `ApplyTerms`, `CloseWithDBVar`, `CloseWithTypePrefix`, `AbstractVars`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
+- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning and equality-definition unfolding: C-shaped `ApplyTerms`, `UnfoldLambda`, `CloseWithDBVar`, `CloseWithTypePrefix`, `AbstractVars`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
 - The staged beta normalizer handles phony applications headed by DB lambdas, consumed-argument substitution with DB-index shifting, recursive beta normalization under lambdas and ordinary top cells, and the C `BetaNormalizeDB` special case that unwraps `$eq(logical_symbol, $true)`.
 - Full `LambdaNormalizeDB` parity is not complete yet because eta expansion/reduction, named-lambda-to-DB conversion, formula CNF decode/encode helpers, general cache-backed `WHNF_deref` integration, and typed phony-application flattening remain later slices. The KBO6 LFHO ordering path has a comparison-local weak-head dereference helper for `DEREF_ALWAYS`, but it does not model the shared term-bank cache boundary.
 
