@@ -559,8 +559,63 @@ pub fn pstack_clause_print_tstp_string(
     Ok(output)
 }
 
+/// Writes the C `PStackFormulaPrintTSTP` shape.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a wrapped formula cannot be rendered, or if the
+/// output writer reports a formatting error.
+///
+/// # Panics
+///
+/// Panics if a stacked wrapper has no formula term or violates formula printing
+/// preconditions.
+pub fn pstack_formula_write_tstp(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    stack: &PStack<&WrappedFormula>,
+    problem_type: ProblemType,
+    keep_input_names: bool,
+) -> Result<(), Diagnostic> {
+    for formula in stack.as_slice() {
+        output
+            .write_str(&formula.tstp_string(bank, true, true, problem_type, keep_input_names)?)
+            .map_err(tstp_formula_stack_write_error)?;
+        output
+            .write_char('\n')
+            .map_err(tstp_formula_stack_write_error)?;
+    }
+    Ok(())
+}
+
+/// Returns the C `PStackFormulaPrintTSTP` shape.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as
+/// [`pstack_formula_write_tstp`].
+///
+/// # Panics
+///
+/// Panics if a stacked wrapper has no formula term or violates formula printing
+/// preconditions.
+pub fn pstack_formula_print_tstp_string(
+    bank: &mut TermBank,
+    stack: &PStack<&WrappedFormula>,
+    problem_type: ProblemType,
+    keep_input_names: bool,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    pstack_formula_write_tstp(&mut output, bank, stack, problem_type, keep_input_names)?;
+    Ok(output)
+}
+
 fn tstp_stack_write_error(_error: fmt::Error) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP clause stack")
+}
+
+fn tstp_formula_stack_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write TSTP formula stack")
 }
 
 fn enqueue_new_symbol_relations<'a>(
@@ -609,8 +664,8 @@ mod tests {
     use super::{
         clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
         pstack_clause_print_tstp_string, pstack_clauses_move, pstack_formula_del_prop,
-        pstack_formulas_move, select_axioms_clause_sets, select_threshold_clause_sets, AxiomType,
-        ClauseSineParams, DRel, DRelation,
+        pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_sets,
+        select_threshold_clause_sets, AxiomType, ClauseSineParams, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -621,6 +676,7 @@ mod tests {
         CP_INPUT_FORMULA, CP_IS_RELEVANT, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
         CP_TYPE_NEG_CONJECTURE,
     };
+    use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -836,6 +892,66 @@ mod tests {
 
         assert_eq!(
             pstack_clause_print_tstp_string(&bank, &stack, ProblemType::FirstOrder).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn pstack_formula_print_tstp_string_preserves_stack_order_and_newlines() {
+        let mut bank = test_bank();
+        let first_left = typed_const(&mut bank, "sine_form_a");
+        let first_right = typed_const(&mut bank, "sine_form_b");
+        let second_left = typed_const(&mut bank, "sine_form_c");
+        let second_right = typed_const(&mut bank, "sine_form_d");
+        let first_clause = clause_from(vec![literal(&mut bank, &first_left, &first_right, true)]);
+        let second_clause =
+            clause_from(vec![literal(&mut bank, &second_left, &second_right, false)]);
+        let mut first =
+            WrappedFormula::of_clause(&mut bank, &first_clause, ProblemType::FirstOrder)
+                .expect("first clause can be encoded as a formula");
+        first.set_tptp_type(CP_TYPE_AXIOM);
+        first.set_prop(CP_INPUT_FORMULA);
+        first.set_info(Some(ClauseInfo::new(
+            Some("sine_formula_first"),
+            None,
+            1,
+            1,
+        )));
+        let mut second =
+            WrappedFormula::of_clause(&mut bank, &second_clause, ProblemType::FirstOrder)
+                .expect("second clause can be encoded as a formula");
+        second.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        second.set_info(Some(ClauseInfo::new(
+            Some("sine_formula_second"),
+            None,
+            2,
+            1,
+        )));
+        let mut stack = PStack::new();
+        stack.push(&first);
+        stack.push(&second);
+
+        let rendered =
+            pstack_formula_print_tstp_string(&mut bank, &stack, ProblemType::FirstOrder, true)
+                .unwrap();
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "fof(sine_formula_first, axiom, sine_form_a=sine_form_b).\n",
+                "fof(sine_formula_second, negated_conjecture, sine_form_c!=sine_form_d).\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pstack_formula_print_tstp_string_handles_empty_stack() {
+        let mut bank = test_bank();
+        let stack = PStack::new();
+
+        assert_eq!(
+            pstack_formula_print_tstp_string(&mut bank, &stack, ProblemType::FirstOrder, true)
+                .unwrap(),
             ""
         );
     }
