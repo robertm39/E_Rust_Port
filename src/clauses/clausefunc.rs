@@ -1750,6 +1750,13 @@ pub fn tformula_tstp_parse(scanner: &mut Scanner, bank: &mut TermBank) -> Result
     bank.parse_tformula_tstp(scanner)
 }
 
+/// Parses an old-TPTP term-encoded formula.
+///
+/// This forwards to the term-bank implementation of C `TFormulaTPTPParse`.
+pub fn tformula_tptp_parse(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Term, Diagnostic> {
+    bank.parse_tformula_tptp(scanner)
+}
+
 /// Parses a TCF formula in TSTP syntax.
 ///
 /// This matches C `TcfTSTPParse` for unquantified clause bodies by folding
@@ -5429,9 +5436,9 @@ mod tests {
         tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
         tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
         tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_stack_to_form, tformula_to_cnf, tformula_tptp_string, tformula_tstp_parse,
-        tformula_unroll_fool, tformula_var_is_free, tformula_var_rename, TFormulaDefinitions,
-        TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_stack_to_form, tformula_to_cnf, tformula_tptp_parse, tformula_tptp_string,
+        tformula_tstp_parse, tformula_unroll_fool, tformula_var_is_free, tformula_var_rename,
+        TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -7466,6 +7473,27 @@ mod tests {
             bank.signature()
                 .find_name(formula.argument(1).unwrap().f_code()),
             Some("parse_wrap_right")
+        );
+    }
+
+    #[test]
+    fn tformula_tptp_parse_wrapper_uses_term_bank_formula_parser() {
+        let mut bank = test_bank();
+        let mut scanner =
+            Scanner::from_user_string("tptp_wrap_left|tptp_wrap_right", false).unwrap();
+
+        let formula = tformula_tptp_parse(&mut scanner, &mut bank).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().or_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(0).unwrap().argument(0).unwrap().f_code()),
+            Some("tptp_wrap_left")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(1).unwrap().argument(0).unwrap().f_code()),
+            Some("tptp_wrap_right")
         );
     }
 

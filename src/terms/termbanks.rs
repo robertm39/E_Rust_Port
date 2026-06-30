@@ -1377,6 +1377,14 @@ impl TermBank {
         self.parse_tformula_tstp_subset(scanner)
     }
 
+    /// Parses an old-TPTP term-encoded formula.
+    ///
+    /// This matches C `TFormulaTPTPParse`: every binary operator has the same
+    /// precedence and is parsed right-recursively.
+    pub fn parse_tformula_tptp(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        self.parse_tformula_tptp_subset(scanner)
+    }
+
     /// Parses a `$distinct(...)` pseudo-formula in TSTP syntax.
     ///
     /// This matches C `TSTPDistinctParse`: every argument is parsed as a
@@ -1720,6 +1728,59 @@ impl TermBank {
         Ok(formula)
     }
 
+    fn parse_tformula_tptp_subset(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let left = self.parse_elem_tformula_tptp(scanner)?;
+        if scanner.test_tok(TokenType::FOF_BIN_OP) {
+            let op = self.tptp_operator_parse(scanner)?;
+            let right = self.parse_tformula_tptp_subset(scanner)?;
+            self.tformula_fcode_alloc(op, left, Some(right))
+        } else {
+            Ok(left)
+        }
+    }
+
+    fn parse_elem_tformula_tptp(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        if scanner.test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR) {
+            let quantor = self.tptp_quantor_parse(scanner)?;
+            scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+            self.parse_quantified_tformula_tptp(scanner, quantor)
+        } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let formula = self.parse_tformula_tptp_subset(scanner)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            Ok(formula)
+        } else if scanner.test_tok(TokenType::TILDE_SIGN) {
+            scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            let child = self.parse_elem_tformula_tptp(scanner)?;
+            self.tformula_fcode_alloc(
+                Self::require_formula_op_code(self.sig.not_code())?,
+                child,
+                None,
+            )
+        } else {
+            self.parse_tformula_tptp_atom(scanner)
+        }
+    }
+
+    fn parse_tformula_tptp_atom(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let left = self.parse_term_real(scanner, true)?;
+        let mut positive = true;
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+            if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+                positive = false;
+            }
+            scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+            let right = self.parse_term_real(scanner, true)?;
+            self.encode_equality_term(left, right, positive)
+        } else {
+            if self.tformula_atom_can_stay_plain_term(&left) {
+                return Ok(left);
+            }
+            self.prepare_predicate_formula_atom(&left)?;
+            self.encode_predicate_as_eqn(left)
+        }
+    }
+
     fn parse_literal_tformula_tstp_subset(
         &mut self,
         scanner: &mut Scanner,
@@ -1767,6 +1828,34 @@ impl TermBank {
             self.parse_tformula_atom(scanner)?
         };
         self.encode_predicate_as_eqn(formula)
+    }
+
+    fn parse_quantified_tformula_tptp(
+        &mut self,
+        scanner: &mut Scanner,
+        quantor: FunCode,
+    ) -> Result<Term, Diagnostic> {
+        self.vars.push_env();
+        let parsed = (|| {
+            let variable = self.parse_term_real(scanner, true)?;
+            if !variable.is_free_var() {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Variable expected, non-variable term found",
+                ));
+            }
+            let rest = if scanner.test_tok(TokenType::COMMA) {
+                scanner.accept_tok(TokenType::COMMA)?;
+                self.parse_quantified_tformula_tptp(scanner, quantor)?
+            } else {
+                scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+                scanner.accept_tok(TokenType::COLON)?;
+                self.parse_elem_tformula_tptp(scanner)?
+            };
+            self.tformula_fcode_alloc(quantor, variable, Some(rest))
+        })();
+        self.vars.pop_env();
+        parsed
     }
 
     fn parse_applied_tformula_tstp_subset(
@@ -3309,6 +3398,90 @@ mod tests {
             bank.signature()
                 .find_name(right.argument(0).unwrap().f_code()),
             Some("tstp_formula_bool_right")
+        );
+    }
+
+    #[test]
+    fn tformula_tptp_parse_uses_right_recursive_binary_shape() {
+        let mut bank = formula_bank();
+        let mut scanner =
+            Scanner::from_user_string("tptp_right_p(a)|tptp_right_q(b)&tptp_right_r(c)", false)
+                .unwrap();
+
+        let formula = bank.parse_tformula_tptp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().or_code());
+        let left = formula.argument(0).unwrap();
+        let right = formula.argument(1).unwrap();
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("tptp_right_p")
+        );
+        assert_eq!(right.f_code(), bank.signature().and_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(0).unwrap().argument(0).unwrap().f_code()),
+            Some("tptp_right_q")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(1).unwrap().argument(0).unwrap().f_code()),
+            Some("tptp_right_r")
+        );
+    }
+
+    #[test]
+    fn tformula_tptp_parse_quantifier_scope_is_elementary() {
+        let mut bank = formula_bank();
+        let mut scanner =
+            Scanner::from_user_string("![X]:tptp_scope_p(X)|tptp_scope_q(X)", false).unwrap();
+
+        let formula = bank.parse_tformula_tptp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().or_code());
+        let quantified = formula.argument(0).unwrap();
+        let outside = formula.argument(1).unwrap();
+        assert_eq!(quantified.f_code(), bank.signature().qall_code());
+        assert_eq!(
+            bank.signature().find_name(
+                quantified
+                    .argument(1)
+                    .unwrap()
+                    .argument(0)
+                    .unwrap()
+                    .f_code()
+            ),
+            Some("tptp_scope_p")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(outside.argument(0).unwrap().f_code()),
+            Some("tptp_scope_q")
+        );
+    }
+
+    #[test]
+    fn tformula_tptp_parse_keeps_formula_equality_as_equality_operator() {
+        let mut bank = formula_bank();
+        declare_bool_const(&mut bank, "tptp_formula_bool_left");
+        declare_bool_const(&mut bank, "tptp_formula_bool_right");
+        let mut scanner = Scanner::from_user_string(
+            "(tptp_formula_bool_left) = (tptp_formula_bool_right)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tptp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            formula.argument(0).unwrap().f_code(),
+            bank.signature().eqn_code()
+        );
+        assert_eq!(
+            formula.argument(1).unwrap().f_code(),
+            bank.signature().eqn_code()
         );
     }
 
