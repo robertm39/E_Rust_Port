@@ -1,7 +1,9 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
-use crate::terms::simpletypes::{arrow_type_flattened, type_drop_first_arg, Type};
+use crate::terms::simpletypes::{
+    arrow_type_flattened, type_drop_first_arg, type_get_max_arity, Type,
+};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground};
 use crate::terms::termtypes::Term;
@@ -101,6 +103,31 @@ pub fn flatten_apps(
     }
     flattened.set_type(Some(result_type.clone()));
     bank.term_top_insert(flattened)
+}
+
+fn flatten_and_make_shared(bank: &mut TermBank, term: Term) -> Result<Term, Diagnostic> {
+    assert!(!term.is_shared(), "flattening expects an unshared top cell");
+    if term.is_phony_app()
+        && term
+            .argument(0)
+            .is_some_and(|head| !(head.is_any_var() || head.is_lambda()))
+    {
+        let head = term
+            .argument(0)
+            .expect("phony application head is uninitialized");
+        let args = (1..term.arity())
+            .map(|index| {
+                term.argument(index)
+                    .unwrap_or_else(|| panic!("term argument {index} is uninitialized"))
+            })
+            .collect::<Vec<_>>();
+        let result_type = term
+            .type_()
+            .expect("flattened phony application must have a type");
+        flatten_apps(bank, &head, &args, &result_type)
+    } else {
+        bank.term_top_insert(term)
+    }
 }
 
 /// Drops trailing application arguments, matching C `drop_args`.
@@ -290,6 +317,138 @@ pub fn reduce_eta_top_level(bank: &mut TermBank, term: &Term) -> Result<Term, Di
         }
     }
 
+    assert_eq!(
+        result.type_(),
+        term.type_(),
+        "eta reduction preserves term type"
+    );
+    Ok(result)
+}
+
+/// Performs one top-level eta-expansion step, matching C `LambdaEtaExpandDBTopLevel`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if applying the generated DB arguments, shifting DB
+/// indexes, or closing the lambda prefix fails.
+///
+/// # Panics
+///
+/// Panics if `term` is untyped or if generated intermediate cells violate
+/// lambda/application invariants.
+pub fn lambda_eta_expand_db_top_level(
+    bank: &mut TermBank,
+    term: &Term,
+) -> Result<Term, Diagnostic> {
+    let term_type = term.type_().expect("eta expansion requires a typed term");
+    if !term_type.is_arrow() || term.is_lambda() {
+        return Ok(term.clone());
+    }
+
+    let num_args = type_get_max_arity(&term_type);
+    let mut db_args = Vec::with_capacity(num_args);
+    for (index, arg_type) in term_type.args()[..num_args].iter().enumerate() {
+        let db_index =
+            i64::try_from(num_args - index - 1).expect("DB index fits C-compatible long");
+        let fresh_db = bank.request_db_var(arg_type, db_index);
+        if fresh_db
+            .type_()
+            .expect("fresh DB variable must have a type")
+            .is_arrow()
+        {
+            db_args.push(lambda_eta_expand_db_top_level(bank, &fresh_db)?);
+        } else {
+            db_args.push(fresh_db);
+        }
+    }
+
+    let shifted = shift_db(
+        bank,
+        term,
+        i64::try_from(num_args).expect("argument count fits C-compatible long"),
+    )?;
+    let mut result = apply_terms(bank, &shifted, &db_args)?;
+    while let Some(db_arg) = db_args.pop() {
+        let arg_type = db_arg.type_().expect("eta DB argument must have a type");
+        result = close_with_db_var(bank, &arg_type, &result)?;
+    }
+    Ok(result)
+}
+
+fn do_eta_reduce_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let mut result = if term.arity() == 0 || !term.has_lambda_subterm() {
+        term.clone()
+    } else if term.is_lambda() {
+        let mut bound_vars = Vec::new();
+        let matrix = unfold_lambda(term, &mut bound_vars);
+        let reduced = do_eta_reduce_db(bank, &matrix)?;
+        let rebuilt = if matrix == reduced {
+            term.clone()
+        } else {
+            let mut rebuilt = reduced;
+            while let Some(binder) = bound_vars.pop() {
+                let binder_type = binder.type_().expect("lambda binder must have a type");
+                rebuilt = close_with_db_var(bank, &binder_type, &rebuilt)?;
+            }
+            rebuilt
+        };
+        reduce_eta_top_level(bank, &rebuilt)?
+    } else {
+        let copy = Term::top_copy_without_args(term);
+        let mut changed = false;
+        for index in 0..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let reduced = do_eta_reduce_db(bank, &arg)?;
+            if reduced != arg {
+                changed = true;
+            }
+            copy.set_argument(index, reduced);
+        }
+        if changed {
+            flatten_and_make_shared(bank, copy)?
+        } else {
+            term.clone()
+        }
+    };
+
+    let (qall_code, qex_code) = {
+        let sig = bank.signature();
+        (sig.qall_code(), sig.qex_code())
+    };
+    if (result.f_code() == qall_code || result.f_code() == qex_code)
+        && result.arity() == 1
+        && result.argument(0).is_some_and(|arg| !arg.is_lambda())
+    {
+        let copy = Term::top_copy_without_args(&result);
+        let arg = result
+            .argument(0)
+            .expect("quantifier argument is uninitialized");
+        copy.set_argument(0, lambda_eta_expand_db_top_level(bank, &arg)?);
+        result = bank.term_top_insert(copy)?;
+    }
+
+    Ok(result)
+}
+
+/// Performs eta-reduction on DB terms, matching C `LambdaEtaReduceDB`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a rebuilt eta-reduced term cannot be inserted into
+/// the term bank.
+///
+/// # Panics
+///
+/// Panics if lambda/application cells are malformed or required term types are
+/// missing.
+pub fn lambda_eta_reduce_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let result = if term.has_lambda_subterm() {
+        do_eta_reduce_db(bank, term)?
+    } else {
+        term.clone()
+    };
     assert_eq!(
         result.type_(),
         term.type_(),
@@ -791,8 +950,8 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, shift_db,
-        unfold_lambda,
+        apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps,
+        lambda_eta_expand_db_top_level, lambda_eta_reduce_db, shift_db, unfold_lambda,
     };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
@@ -943,6 +1102,52 @@ mod tests {
         let reduced = super::reduce_eta_top_level(&mut bank, &lambda).unwrap();
 
         assert_eq!(reduced, lambda);
+    }
+
+    #[test]
+    fn lambda_eta_expand_db_top_level_wraps_arrow_term() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let f = typed_const_with_type(&mut bank, "eta_expand_f", unary_type.clone());
+
+        let expanded = lambda_eta_expand_db_top_level(&mut bank, &f).unwrap();
+
+        assert!(expanded.is_lambda());
+        assert_eq!(expanded.type_(), Some(unary_type));
+        let binder = expanded.argument(0).unwrap();
+        assert!(binder.is_db_var());
+        assert_eq!(binder.type_(), Some(i_type));
+        let matrix = expanded.argument(1).unwrap();
+        assert_eq!(matrix.f_code(), f.f_code());
+        assert_eq!(matrix.arity(), 1);
+        let arg = matrix.argument(0).unwrap();
+        assert!(arg.is_db_var());
+        assert_eq!(arg.f_code(), 0);
+    }
+
+    #[test]
+    fn lambda_eta_reduce_db_flattens_reduced_phony_head() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "eta_phony_f", unary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let a = typed_const(&mut bank, "eta_phony_a");
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&a)).unwrap();
+
+        let reduced = lambda_eta_reduce_db(&mut bank, &applied).unwrap();
+
+        assert!(!reduced.is_phony_app());
+        assert_eq!(reduced.f_code(), f.f_code());
+        assert_eq!(reduced.arity(), 1);
+        assert_eq!(reduced.argument(0).as_ref(), Some(&a));
     }
 
     #[test]
