@@ -17,9 +17,10 @@ use crate::clauses::eqn_props::{
 };
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::lambda::{
-    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
+    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix, lambda_eta_reduce_db,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::signature::{
     FP_FOF_OP, FP_IS_INJ_DEF_SKOLEM, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
     SIG_NAMED_LAMBDA_CODE, SIG_TRUE_CODE,
@@ -30,6 +31,7 @@ use crate::terms::simpletypes::{
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground, term_standard_weight};
+use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
     term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
     TP_CHECK_FLAG, TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY, TP_PRED_POS,
@@ -1128,6 +1130,184 @@ pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term
     }
 
     Ok(current)
+}
+
+/// Unrolls FOOL Boolean subterms that occur as ordinary term arguments.
+///
+/// This matches C `TFormulaUnrollFOOL` at the term-formula level: encoded
+/// literals are expanded first, then each nontrivial Boolean subterm inside a
+/// literal side is split into `$true` and `$false` cases.
+///
+/// # Errors
+///
+/// Returns a diagnostic if literal expansion, lambda eta-reduction, term
+/// replacement, or formula allocation fails.
+///
+/// # Panics
+///
+/// Panics if a located FOOL subterm is not Boolean, or if formula cells are
+/// malformed.
+pub fn tformula_unroll_fool(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let expanded = tformula_expand_literals(bank, form)?;
+    do_fool_unroll(bank, &expanded)
+}
+
+fn do_fool_unroll(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if tformula_is_literal(bank, form) {
+        let reduced = lambda_eta_reduce_db(bank, form)?;
+        let position = find_fool_subterm_in_literal(bank, &reduced);
+        if let Some(position) = position {
+            let raw_subformula = position.get_subterm(&reduced);
+            assert!(
+                raw_subformula.type_().as_ref().is_some_and(Type::is_bool),
+                "FOOL subterm must be Boolean"
+            );
+            let subformula = tformula_encode_predicate_as_eqn(bank, raw_subformula)?;
+            let true_case = tb_term_pos_replace(
+                bank,
+                &bank.true_term().clone(),
+                &position,
+                DerefType::Never,
+                0,
+                None,
+            )?;
+            let false_case = tb_term_pos_replace(
+                bank,
+                &bank.false_term().clone(),
+                &position,
+                DerefType::Never,
+                0,
+                None,
+            )?;
+            let negated_subformula = tformula_negate(bank, &subformula)?;
+            let or_code = bank.signature().or_code();
+            let and_code = bank.signature().and_code();
+            let first_implication =
+                tformula_fcode_alloc(bank, or_code, negated_subformula, Some(true_case))?;
+            let second_implication =
+                tformula_fcode_alloc(bank, or_code, subformula, Some(false_case))?;
+            let left = do_fool_unroll(bank, &first_implication)?;
+            let right = do_fool_unroll(bank, &second_implication)?;
+            return tformula_fcode_alloc(bank, and_code, left, Some(right));
+        }
+        return Ok(reduced);
+    }
+
+    if tformula_is_quantified(bank, form) && !form.is_lambda() {
+        let original_body = formula_argument(form, 1);
+        let unrolled_body = do_fool_unroll(bank, &original_body)?;
+        if unrolled_body != original_body {
+            return tformula_fcode_alloc(
+                bank,
+                form.f_code(),
+                formula_argument(form, 0),
+                Some(unrolled_body),
+            );
+        }
+        return Ok(form.clone());
+    }
+
+    if form.is_lambda() {
+        return Ok(form.clone());
+    }
+
+    let mut left = None;
+    let mut right = None;
+    let mut changed = false;
+    if tformula_has_subform1(bank, form) {
+        let original = formula_argument(form, 0);
+        let unrolled = do_fool_unroll(bank, &original)?;
+        changed = unrolled != original;
+        left = Some(unrolled);
+    }
+    if tformula_has_subform2(bank, form) {
+        let original = formula_argument(form, 1);
+        let unrolled = do_fool_unroll(bank, &original)?;
+        changed |= unrolled != original;
+        right = Some(unrolled);
+    }
+
+    if changed {
+        return tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            left.expect("changed formula must have a first subformula"),
+            right,
+        );
+    }
+
+    Ok(form.clone())
+}
+
+fn find_fool_subterm_in_literal(bank: &TermBank, form: &Term) -> Option<TermPos> {
+    let left = formula_argument(form, 0);
+    let mut left_position = TermPos::new();
+    left_position.push_component(form.clone(), 0);
+    if let Some(position) = find_fool_subterm(bank, &left, &left_position) {
+        return Some(position);
+    }
+
+    let right = formula_argument(form, 1);
+    let mut right_position = TermPos::new();
+    right_position.push_component(form.clone(), 1);
+    find_fool_subterm(bank, &right, &right_position)
+}
+
+fn find_fool_subterm(bank: &TermBank, term: &Term, prefix: &TermPos) -> Option<TermPos> {
+    if term.is_lambda() || !term.has_bool_subterm() {
+        return None;
+    }
+
+    for index in 0..term.arity() {
+        let arg = term
+            .argument(index)
+            .unwrap_or_else(|| panic!("FOOL subterm search expects initialized arguments"));
+        let mut nested = prefix.clone();
+        nested.push_component(term.clone(), index);
+        if arg.type_().as_ref().is_some_and(Type::is_bool) {
+            if !fool_should_ignore(&arg, bank)
+                && arg.f_code() != SIG_TRUE_CODE
+                && arg.f_code() != SIG_FALSE_CODE
+            {
+                return Some(nested);
+            }
+        } else if let Some(found) = find_fool_subterm(bank, &arg, &nested) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn fool_should_ignore(term: &Term, bank: &TermBank) -> bool {
+    if !term.type_().as_ref().is_some_and(Type::is_bool) {
+        return false;
+    }
+
+    let sig = bank.signature();
+    if (term.f_code() == sig.eqn_code() || term.f_code() == sig.neqn_code()) && term.arity() == 2 {
+        let left = formula_argument(term, 0);
+        let right = formula_argument(term, 1);
+        if right == *bank.true_term() {
+            return left.is_free_var() || left == *bank.true_term();
+        }
+    }
+
+    term.is_free_var()
+}
+
+fn tformula_negate(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if tformula_is_literal(bank, form) {
+        let f_code = bank.signature().get_other_eqn_code(form.f_code());
+        return tformula_fcode_alloc(
+            bank,
+            f_code,
+            formula_argument(form, 0),
+            Some(formula_argument(form, 1)),
+        );
+    }
+
+    tformula_fcode_alloc(bank, bank.signature().not_code(), form.clone(), None)
 }
 
 /// Maximally simplifies a term-encoded formula.
@@ -3854,7 +4034,7 @@ mod tests {
         tformula_find_defs, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
         tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
         tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
+        tformula_unroll_fool, tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -4000,6 +4180,25 @@ mod tests {
         let type_ = bank.signature().type_bank().bool_type();
         let term = Term::top_alloc(f_code, 2);
         term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn default_bool_arg_binary(bank: &mut TermBank, name: &str, left: &Term, right: &Term) -> Term {
+        let value_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 2, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(
+                    f_code,
+                    alloc_arrow_type(vec![value_type.clone(), bool_type, value_type.clone()]),
+                )
+                .unwrap();
+        }
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(value_type));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.term_top_insert(term).unwrap()
@@ -4784,6 +4983,70 @@ mod tests {
         let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
 
         assert_eq!(expanded, equality);
+    }
+
+    #[test]
+    fn tformula_unroll_fool_splits_boolean_term_argument_in_literal() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "fool_unroll_a");
+        let b = typed_const(&mut bank, "fool_unroll_b");
+        let c = typed_const(&mut bank, "fool_unroll_c");
+        let d = typed_const(&mut bank, "fool_unroll_d");
+        let target = typed_const(&mut bank, "fool_unroll_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let not_code = bank.signature().not_code();
+        let bool_subformula = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let applied = default_bool_arg_binary(&mut bank, "fool_unroll_f", &a, &bool_subformula);
+        assert!(applied.has_bool_subterm());
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &applied, &target);
+
+        let unrolled = tformula_unroll_fool(&mut bank, &formula).unwrap();
+
+        assert_eq!(unrolled.f_code(), and_code);
+        let true_branch = unrolled.argument(0).unwrap();
+        let false_branch = unrolled.argument(1).unwrap();
+        assert_eq!(true_branch.f_code(), or_code);
+        assert_eq!(false_branch.f_code(), or_code);
+
+        let negated_guard = true_branch.argument(0).unwrap();
+        assert_eq!(negated_guard.f_code(), not_code);
+        assert_eq!(negated_guard.argument(0).as_ref(), Some(&bool_subformula));
+        let true_case = true_branch.argument(1).unwrap();
+        assert_eq!(true_case.f_code(), eqn_code);
+        let true_case_left = true_case.argument(0).unwrap();
+        assert_eq!(true_case_left.argument(0).as_ref(), Some(&a));
+        assert_eq!(true_case_left.argument(1).as_ref(), Some(bank.true_term()));
+        assert_eq!(true_case.argument(1).as_ref(), Some(&target));
+
+        assert_eq!(false_branch.argument(0).as_ref(), Some(&bool_subformula));
+        let false_case = false_branch.argument(1).unwrap();
+        assert_eq!(false_case.f_code(), eqn_code);
+        let false_case_left = false_case.argument(0).unwrap();
+        assert_eq!(false_case_left.argument(0).as_ref(), Some(&a));
+        assert_eq!(
+            false_case_left.argument(1).as_ref(),
+            Some(bank.false_term())
+        );
+        assert_eq!(false_case.argument(1).as_ref(), Some(&target));
+    }
+
+    #[test]
+    fn tformula_unroll_fool_ignores_boolean_variable_argument() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "fool_ignore_a");
+        let target = typed_const(&mut bank, "fool_ignore_target");
+        let bool_arg = bool_var(&bank, -145);
+        let applied = default_bool_arg_binary(&mut bank, "fool_ignore_f", &a, &bool_arg);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &applied, &target);
+
+        let unrolled = tformula_unroll_fool(&mut bank, &formula).unwrap();
+
+        assert_eq!(unrolled, formula);
     }
 
     #[test]

@@ -178,10 +178,15 @@ Source files reviewed: `CLAUSES/ccl_formulafunc.h`, `CLAUSES/ccl_formulafunc.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/clauses/clausefunc.rs` now stages the term-level core of `TFormulaUnrollFOOL`, including the preliminary `TFormulaExpandLiterals` pass, C's left-side-before-right-side `find_fool_subterm` search through literal sides, ignored Boolean-variable/truth cases, predicate-to-equation encoding of the extracted Boolean subformula, `$true`/`$false` term-position replacements through `TBTermPosReplace`, recursive split generation, and lambda eta-reduction on literals.
+
 ### Change-Later Observations
 
 - `WFormulaAnnotateQuestion` mutates `question` formulas, and optionally `conjecture` formulas under `--conjectures-are-questions`, into `conjecture` before conjecture negation. `TFormulaAnnotateQuestion` only adds a `~$answer(esk(...))` literal when the formula starts with one or more leading existential quantifiers; non-leading existential variables are not included in the answer tuple. Rust now mirrors that behavior in the supported temporary formula bridge for proof/CNF/prune parsing while keeping syntax-only printing role-preserving. A later full `WFormula` port should keep this preprocessing step explicit instead of hiding role mutation in raw parsing.
 - `FormulaAndClauseSetParse` routes every parsed entry whose resulting type is `CPTypeWatchClause` into the caller-provided `wlset`, including recursively parsed includes after selector filtering, while all non-watchlist entries go to the normal formula set. Rust now mirrors this for supported TPTP/TSTP input by splitting lowered clauses into normal input and inline watchlist sets; a later parser API should make the two output channels explicit instead of coupling watchlist storage to formula-role classification.
+- `do_fool_unroll` unrolls only the first nontrivial Boolean subterm it finds in a literal side, preferring the left side before the right side, then recurses over the generated branches. It deliberately ignores `$true`, `$false`, Boolean variables, and Boolean-variable/truth encodings, while the adjacent C comments still leave term/formula `$ite` unrolling as TODOs. Rust mirrors this term-level behavior; full formula ownership should make the search order, ignored cases, and missing ITE expansion explicit compatibility choices.
 
 ### Porting Focus
 
