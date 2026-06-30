@@ -1903,14 +1903,32 @@ mod tests {
         assert_eq!(rust_long_options, c_long_options);
     }
 
-    fn assert_has_no_duplicates(table_name: &str, options: &[&str]) {
+    #[test]
+    fn rust_option_table_matches_c_short_option_surface() {
+        let mut rust_short_options = EPROVER_OPTIONS
+            .iter()
+            .filter_map(|option| option.shortopt)
+            .collect::<Vec<_>>();
+        let mut c_short_options = c_short_options();
+
+        assert_has_no_duplicates("Rust", &rust_short_options);
+        assert_has_no_duplicates("C", &c_short_options);
+        rust_short_options.sort_unstable();
+        c_short_options.sort_unstable();
+        assert_eq!(rust_short_options, c_short_options);
+    }
+
+    fn assert_has_no_duplicates<T>(table_name: &str, options: &[T])
+    where
+        T: Clone + Ord + std::fmt::Debug,
+    {
         let mut sorted_options = options.to_vec();
         sorted_options.sort_unstable();
 
         for adjacent_options in sorted_options.windows(2) {
             assert_ne!(
                 adjacent_options[0], adjacent_options[1],
-                "{table_name} option table has duplicate long option {}",
+                "{table_name} option table has duplicate option {:?}",
                 adjacent_options[0]
             );
         }
@@ -1922,6 +1940,15 @@ mod tests {
         option_entries(table)
             .into_iter()
             .filter_map(long_option_from_entry)
+            .collect()
+    }
+
+    #[must_use]
+    fn c_short_options() -> Vec<char> {
+        let table = c_option_table_body();
+        option_entries(table)
+            .into_iter()
+            .filter_map(short_option_from_entry)
             .collect()
     }
 
@@ -2003,6 +2030,17 @@ mod tests {
     }
 
     #[must_use]
+    fn short_option_from_entry(entry: &'static str) -> Option<char> {
+        let fields = split_c_fields(entry);
+        let option_code = fields.first().expect("option entry must have a code");
+        if *option_code == "OPT_NOOPT" {
+            return None;
+        }
+        let short_field = fields.get(1).expect("option entry must have a short name");
+        c_char_literal(short_field)
+    }
+
+    #[must_use]
     fn split_c_fields(entry: &'static str) -> Vec<&'static str> {
         let mut fields = Vec::new();
         let mut field_start = 0_usize;
@@ -2060,5 +2098,26 @@ mod tests {
             .find('"')
             .expect("long option string must be terminated");
         Some(&literal_body[..literal_end])
+    }
+
+    #[must_use]
+    fn c_char_literal(field: &str) -> Option<char> {
+        let trimmed = field.trim();
+        if trimmed == r"'\0'" {
+            return None;
+        }
+        let literal_body = trimmed
+            .strip_prefix('\'')
+            .and_then(|body| body.strip_suffix('\''))
+            .expect("short option field must be a C character literal");
+        let mut characters = literal_body.chars();
+        let short_option = characters
+            .next()
+            .expect("short option literal must not be empty");
+        assert!(
+            characters.next().is_none(),
+            "short option literal must contain one character"
+        );
+        Some(short_option)
     }
 }
