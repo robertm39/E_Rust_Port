@@ -1093,6 +1093,271 @@ pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term
     Ok(current)
 }
 
+/// Maximally simplifies a term-encoded formula.
+///
+/// This matches C `TFormulaSimplify`: children are simplified first, then C's
+/// root rewrite loop is applied until no more root rewrite fires. The
+/// `quopt_limit` gate controls the expensive free-variable check before
+/// removing redundant quantifiers.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding a formula or allocating a propositional
+/// constant fails.
+///
+/// # Panics
+///
+/// Panics if formula cells are malformed or if `quopt_limit` is negative.
+pub fn tformula_simplify(
+    bank: &mut TermBank,
+    form: &Term,
+    quopt_limit: i64,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        quopt_limit >= 0,
+        "TFormulaSimplify expects a nonnegative limit"
+    );
+
+    if tformula_is_literal(bank, form) || form.type_().as_ref().is_some_and(Type::is_arrow) {
+        return Ok(form.clone());
+    }
+
+    let mut arg1 = None;
+    let mut arg2 = None;
+    let mut modified = false;
+    if tformula_has_subform1(bank, form) {
+        let original = formula_argument(form, 0);
+        let simplified = tformula_simplify(bank, &original, quopt_limit)?;
+        modified = simplified != original;
+        arg1 = Some(simplified);
+    } else if tformula_is_quantified(bank, form) {
+        arg1 = Some(formula_argument(form, 0));
+    }
+
+    if tformula_has_subform2(bank, form) || tformula_is_quantified(bank, form) {
+        let original = formula_argument(form, 1);
+        let simplified = tformula_simplify(bank, &original, quopt_limit)?;
+        modified |= simplified != original;
+        arg2 = Some(simplified);
+    }
+
+    let mut current = if modified {
+        tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            arg1.expect("changed formula must have a first argument"),
+            arg2,
+        )?
+    } else {
+        form.clone()
+    };
+
+    loop {
+        let simplified = tformula_simplify_root_once(bank, &current, quopt_limit)?;
+        if simplified == current {
+            return Ok(current);
+        }
+        current = simplified;
+    }
+}
+
+fn tformula_simplify_root_once(
+    bank: &mut TermBank,
+    form: &Term,
+    quopt_limit: i64,
+) -> Result<Term, Diagnostic> {
+    let signature = bank.signature();
+    let negation_code = signature.not_code();
+    let disjunction_code = signature.or_code();
+    let conjunction_code = signature.and_code();
+    let equivalence_code = signature.equiv_code();
+    let implication_code = signature.impl_code();
+    let exclusive_or_code = signature.xor_code();
+    let reverse_implication_code = signature.bimpl_code();
+    let negated_disjunction_code = signature.nor_code();
+    let negated_conjunction_code = signature.nand_code();
+    let existential_code = signature.qex_code();
+    let universal_code = signature.qall_code();
+
+    if form.f_code() == negation_code {
+        return simplify_not_root(bank, form);
+    }
+    if form.f_code() == disjunction_code {
+        return Ok(simplify_or_root(bank, form).unwrap_or_else(|| form.clone()));
+    }
+    if form.f_code() == conjunction_code {
+        return Ok(simplify_and_root(bank, form).unwrap_or_else(|| form.clone()));
+    }
+    if form.f_code() == equivalence_code {
+        return simplify_equivalence_root(bank, form);
+    }
+    if form.f_code() == implication_code {
+        return simplify_implication_root(bank, form);
+    }
+    if form.f_code() == exclusive_or_code {
+        return simplify_negated_binary_root(bank, form, equivalence_code, quopt_limit);
+    }
+    if form.f_code() == reverse_implication_code {
+        let implication = tformula_fcode_alloc(
+            bank,
+            implication_code,
+            formula_argument(form, 1),
+            Some(formula_argument(form, 0)),
+        )?;
+        return tformula_simplify(bank, &implication, quopt_limit);
+    }
+    if form.f_code() == negated_disjunction_code {
+        return simplify_negated_binary_root(bank, form, disjunction_code, quopt_limit);
+    }
+    if form.f_code() == negated_conjunction_code {
+        return simplify_negated_binary_root(bank, form, conjunction_code, quopt_limit);
+    }
+    if form.f_code() == existential_code || form.f_code() == universal_code {
+        return Ok(
+            simplify_quantifier_root(bank, form, quopt_limit).unwrap_or_else(|| form.clone())
+        );
+    }
+
+    Ok(form.clone())
+}
+
+fn simplify_not_root(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let child = formula_argument(form, 0);
+    if tformula_is_literal(bank, &child) {
+        return tformula_fcode_alloc(
+            bank,
+            bank.signature().get_other_eqn_code(child.f_code()),
+            formula_argument(&child, 0),
+            Some(formula_argument(&child, 1)),
+        );
+    }
+    Ok(form.clone())
+}
+
+fn simplify_or_root(bank: &TermBank, form: &Term) -> Option<Term> {
+    let left = formula_argument(form, 0);
+    let right = formula_argument(form, 1);
+    tprop_arg_return_other(bank, &left, &right, false)
+        .or_else(|| tprop_arg_return(bank, &left, &right, true))
+        .or_else(|| (left == right).then_some(left))
+}
+
+fn simplify_and_root(bank: &TermBank, form: &Term) -> Option<Term> {
+    let left = formula_argument(form, 0);
+    let right = formula_argument(form, 1);
+    tprop_arg_return_other(bank, &left, &right, true)
+        .or_else(|| tprop_arg_return(bank, &left, &right, false))
+        .or_else(|| (left == right).then_some(left))
+}
+
+fn simplify_equivalence_root(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let left = formula_argument(form, 0);
+    let right = formula_argument(form, 1);
+    if let Some(handle) = tprop_arg_return_other(bank, &left, &right, true) {
+        return Ok(handle);
+    }
+    if let Some(handle) = tprop_arg_return_other(bank, &left, &right, false) {
+        return tformula_neg_alloc(bank, &handle);
+    }
+    if left == right {
+        return tformula_prop_constant_alloc(bank, true);
+    }
+    Ok(form.clone())
+}
+
+fn simplify_implication_root(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let left = formula_argument(form, 0);
+    let right = formula_argument(form, 1);
+    if tformula_is_prop_true(bank, &left) {
+        return Ok(right);
+    }
+    if tformula_is_prop_false(bank, &left) {
+        return tformula_prop_constant_alloc(bank, true);
+    }
+    if tformula_is_prop_false(bank, &right) {
+        return tformula_neg_alloc(bank, &left);
+    }
+    if tformula_is_prop_true(bank, &right) || left == right {
+        return tformula_prop_constant_alloc(bank, true);
+    }
+    Ok(form.clone())
+}
+
+fn simplify_negated_binary_root(
+    bank: &mut TermBank,
+    form: &Term,
+    inner_code: i64,
+    quopt_limit: i64,
+) -> Result<Term, Diagnostic> {
+    let inner = tformula_fcode_alloc(
+        bank,
+        inner_code,
+        formula_argument(form, 0),
+        Some(formula_argument(form, 1)),
+    )?;
+    let negated = tformula_fcode_alloc(bank, bank.signature().not_code(), inner, None)?;
+    tformula_simplify(bank, &negated, quopt_limit)
+}
+
+fn simplify_quantifier_root(bank: &TermBank, form: &Term, quopt_limit: i64) -> Option<Term> {
+    let body = formula_argument(form, 1);
+    let variable = formula_argument(form, 0);
+    (form.v_count() == 0
+        || (form.weight() <= quopt_limit && !tformula_var_is_free(bank, &body, &variable)))
+    .then_some(body)
+}
+
+fn tprop_arg_return_other(
+    bank: &TermBank,
+    left: &Term,
+    right: &Term,
+    positive: bool,
+) -> Option<Term> {
+    if tformula_is_prop_const(bank, left, positive) {
+        Some(right.clone())
+    } else if tformula_is_prop_const(bank, right, positive) {
+        Some(left.clone())
+    } else {
+        None
+    }
+}
+
+fn tprop_arg_return(bank: &TermBank, left: &Term, right: &Term, positive: bool) -> Option<Term> {
+    if tformula_is_prop_const(bank, left, positive) {
+        Some(left.clone())
+    } else if tformula_is_prop_const(bank, right, positive) {
+        Some(right.clone())
+    } else {
+        None
+    }
+}
+
+fn tformula_is_prop_true(bank: &TermBank, form: &Term) -> bool {
+    tformula_is_prop_const(bank, form, true)
+}
+
+fn tformula_is_prop_false(bank: &TermBank, form: &Term) -> bool {
+    tformula_is_prop_const(bank, form, false)
+}
+
+fn tformula_is_prop_const(bank: &TermBank, form: &Term, positive: bool) -> bool {
+    let expected_code = if positive {
+        bank.signature().eqn_code()
+    } else {
+        bank.signature().neqn_code()
+    };
+    form.f_code() == expected_code
+        && form.arity() == 2
+        && form.argument(0).as_ref() == Some(bank.true_term())
+        && form.argument(1).as_ref() == Some(bank.true_term())
+}
+
+fn tformula_prop_constant_alloc(bank: &mut TermBank, positive: bool) -> Result<Term, Diagnostic> {
+    let f_code = bank.signature_mut().get_eqn_code(positive);
+    let true_term = bank.true_term().clone();
+    tformula_fcode_alloc(bank, f_code, true_term.clone(), Some(true_term))
+}
+
 /// Estimates the number of clauses produced by clausifying a formula.
 ///
 /// This matches C `TFormulaEstimateClauses` for a single term-encoded formula:
@@ -2905,8 +3170,8 @@ mod tests {
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
         tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
         tformula_mini_scope, tformula_neg_alloc, tformula_nnf, tformula_shift_quantors,
-        tformula_shift_quantors2, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_var_rename, TFORM_MANY_CLAUSES,
+        tformula_shift_quantors2, tformula_simplify, tformula_simplify_decoded,
+        tformula_skolemize_outermost, tformula_var_rename, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -3834,6 +4099,155 @@ mod tests {
         let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
 
         assert_eq!(expanded, equality);
+    }
+
+    #[test]
+    fn tformula_simplify_reduces_or_and_constants_and_duplicates() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "simplify_const_a");
+        let b = typed_const(&mut bank, "simplify_const_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let truth = bank.true_term().clone();
+        let true_prop = bool_binary_with_code(&mut bank, eqn_code, &truth, &truth);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_prop = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let false_or_atom = bool_binary_with_code(&mut bank, or_code, &false_prop, &atom);
+        let true_and_atom = bool_binary_with_code(&mut bank, and_code, &true_prop, &atom);
+        let duplicate_or = bool_binary_with_code(&mut bank, or_code, &atom, &atom);
+
+        assert_eq!(
+            tformula_simplify(&mut bank, &false_or_atom, 1000).unwrap(),
+            atom
+        );
+        assert_eq!(
+            tformula_simplify(&mut bank, &true_and_atom, 1000).unwrap(),
+            atom
+        );
+        assert_eq!(
+            tformula_simplify(&mut bank, &duplicate_or, 1000).unwrap(),
+            atom
+        );
+    }
+
+    #[test]
+    fn tformula_simplify_recurses_then_applies_root_loop() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "simplify_recurse_a");
+        let b = typed_const(&mut bank, "simplify_recurse_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let truth = bank.true_term().clone();
+        let true_prop = bool_binary_with_code(&mut bank, eqn_code, &truth, &truth);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_prop = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let simplified_child = bool_binary_with_code(&mut bank, or_code, &false_prop, &atom);
+        let formula = bool_binary_with_code(&mut bank, and_code, &simplified_child, &true_prop);
+
+        let simplified = tformula_simplify(&mut bank, &formula, 1000).unwrap();
+
+        assert_eq!(simplified, atom);
+    }
+
+    #[test]
+    fn tformula_simplify_rewrites_equivalence_and_implication_rules() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "simplify_equiv_a");
+        let b = typed_const(&mut bank, "simplify_equiv_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let truth = bank.true_term().clone();
+        let true_prop = bool_binary_with_code(&mut bank, eqn_code, &truth, &truth);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_prop = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let equiv_code = bank.signature().equiv_code();
+        let impl_code = bank.signature().impl_code();
+        let equiv_false = bool_binary_with_code(&mut bank, equiv_code, &atom, &false_prop);
+        let impl_false = bool_binary_with_code(&mut bank, impl_code, &atom, &false_prop);
+        let false_impl = bool_binary_with_code(&mut bank, impl_code, &false_prop, &atom);
+
+        let simplified_equiv = tformula_simplify(&mut bank, &equiv_false, 1000).unwrap();
+        let simplified_impl = tformula_simplify(&mut bank, &impl_false, 1000).unwrap();
+        let simplified_false_impl = tformula_simplify(&mut bank, &false_impl, 1000).unwrap();
+
+        assert_eq!(simplified_equiv.f_code(), neqn_code);
+        assert_eq!(simplified_equiv.argument(0).as_ref(), Some(&a));
+        assert_eq!(simplified_equiv.argument(1).as_ref(), Some(&b));
+        assert_eq!(simplified_impl, simplified_equiv);
+        assert_eq!(simplified_false_impl, true_prop);
+    }
+
+    #[test]
+    fn tformula_simplify_rewrites_xor_bimpl_nand_and_nor() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "simplify_alt_a");
+        let b = typed_const(&mut bank, "simplify_alt_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let truth = bank.true_term().clone();
+        let true_prop = bool_binary_with_code(&mut bank, eqn_code, &truth, &truth);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_prop = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let xor_code = bank.signature().xor_code();
+        let bimpl_code = bank.signature().bimpl_code();
+        let nand_code = bank.signature().nand_code();
+        let nor_code = bank.signature().nor_code();
+        let xor_same = bool_binary_with_code(&mut bank, xor_code, &atom, &atom);
+        let bimpl_false = bool_binary_with_code(&mut bank, bimpl_code, &false_prop, &atom);
+        let nand_true = bool_binary_with_code(&mut bank, nand_code, &true_prop, &true_prop);
+        let nor_false = bool_binary_with_code(&mut bank, nor_code, &false_prop, &false_prop);
+
+        assert_eq!(
+            tformula_simplify(&mut bank, &xor_same, 1000).unwrap(),
+            false_prop
+        );
+        let simplified_bimpl = tformula_simplify(&mut bank, &bimpl_false, 1000).unwrap();
+        assert_eq!(simplified_bimpl.f_code(), neqn_code);
+        assert_eq!(simplified_bimpl.argument(0).as_ref(), Some(&a));
+        assert_eq!(simplified_bimpl.argument(1).as_ref(), Some(&b));
+        assert_eq!(
+            tformula_simplify(&mut bank, &nand_true, 1000).unwrap(),
+            false_prop
+        );
+        assert_eq!(
+            tformula_simplify(&mut bank, &nor_false, 1000).unwrap(),
+            true_prop
+        );
+    }
+
+    #[test]
+    fn tformula_simplify_removes_redundant_small_quantifier() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -194);
+        let a = typed_const(&mut bank, "simplify_quant_a");
+        let b = typed_const(&mut bank, "simplify_quant_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let qall_code = bank.signature().qall_code();
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+
+        let simplified = tformula_simplify(&mut bank, &quantified, 1000).unwrap();
+
+        assert_eq!(simplified, body);
+    }
+
+    #[test]
+    fn tformula_simplify_keeps_quantifier_when_variable_is_free() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -196);
+        let a = typed_const(&mut bank, "simplify_quant_keep_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let qex_code = bank.signature().qex_code();
+        let quantified = bool_binary_with_code(&mut bank, qex_code, &x, &body);
+
+        let simplified = tformula_simplify(&mut bank, &quantified, 1000).unwrap();
+
+        assert_eq!(simplified, quantified);
     }
 
     #[test]
