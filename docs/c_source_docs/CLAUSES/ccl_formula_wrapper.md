@@ -140,8 +140,8 @@ Source files reviewed: `CLAUSES/ccl_formula_wrapper.h`, `CLAUSES/ccl_formula_wra
 
 ### Rust Port Status
 
-- `src/clauses/formulasets.rs` stages `DefaultWFormulaAlloc`, `WTFormulaAlloc`, generated id rendering, input-name preservation policy, formula property/type helpers, formula-term ownership, `WFormulaFlatCopy`, `WFormulaReturnFCodes`, `WFormulaSymbolDiversity`, `WFormulaGetLambdaDefinedSym`, `WFormulaGCMarkCells`, and `WFormulaMarkPolarity`.
-- Parser, printer, app encoding, clause/formula conversion, full source-info ownership, exact free/delete side effects, and process-global output/input policy remain pending.
+- `src/clauses/formulasets.rs` stages `DefaultWFormulaAlloc`, `WTFormulaAlloc`, generated id rendering, input-name preservation policy, formula property/type helpers, formula-term ownership, `WFormulaFlatCopy`, `WFormulaReturnFCodes`, `WFormulaSymbolDiversity`, `WFormulaGetLambdaDefinedSym`, `WFormulaAppEncode`, `WFormulaGCMarkCells`, and `WFormulaMarkPolarity`.
+- Parser, non-app-encode printers, clause/formula conversion, full source-info ownership, exact free/delete side effects, and process-global output/input policy remain pending.
 
 ### Change Later
 

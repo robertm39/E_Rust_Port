@@ -1,8 +1,15 @@
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause_props::{
-    FormulaProperties, CP_IGNORE_PROPS, CP_IS_LAMBDA_DEF, CP_TYPE_CONJECTURE, CP_TYPE_QUESTION,
+    FormulaProperties, CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM,
+    CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE,
+    CP_TYPE_QUESTION,
 };
-use crate::clauses::clausefunc::{tformula_is_literal, tformula_mark_polarity};
+use crate::clauses::clausefunc::{
+    tformula_app_encode_string, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
+    tformula_preload_types,
+};
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -271,6 +278,29 @@ impl WrappedFormula {
         (left.f_code() > signature.internal_symbols()).then_some(left.f_code())
     }
 
+    /// Renders C's `WFormulaAppEncode` shape for this wrapped formula.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if term application encoding fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or is marked as a clause.
+    pub fn app_encode_string(
+        &self,
+        bank: &mut TermBank,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        assert!(!self.is_clause, "WFormulaAppEncode expects a formula");
+        let encoded = tformula_app_encode_string(bank, self.formula())?;
+        Ok(format!(
+            "tff({}, {}, {encoded}).",
+            self.get_id(keep_input_names),
+            self.app_encode_role_name()
+        ))
+    }
+
     /// Counts lambda cells that occur below a non-logical/non-lambda formula node.
     ///
     /// # Panics
@@ -317,6 +347,18 @@ impl WrappedFormula {
             return None;
         }
         equivalence_left.argument(0)
+    }
+
+    fn app_encode_role_name(&self) -> &'static str {
+        match self.query_tptp_type() {
+            CP_TYPE_AXIOM if self.query_prop(CP_INPUT_FORMULA) => "axiom",
+            CP_TYPE_HYPOTHESIS => "hypothesis",
+            CP_TYPE_CONJECTURE => "conjecture",
+            CP_TYPE_QUESTION => "question",
+            CP_TYPE_LEMMA => "lemma",
+            CP_TYPE_NEG_CONJECTURE => "negated_conjecture",
+            _ => "plain",
+        }
     }
 }
 
@@ -490,6 +532,59 @@ impl FormulaSet {
             formula.mark_polarity(bank);
         }
     }
+
+    /// Renders C's `FormulaSetAppEncode` output for this formula set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if type preloading, declaration printing, or
+    /// formula application encoding fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same malformed-formula conditions as the underlying
+    /// term-formula app-encoding helpers.
+    pub fn app_encode_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        if self.formulas.is_empty() {
+            return Ok(String::new());
+        }
+
+        for formula in &self.formulas {
+            tformula_preload_types(bank, formula.formula())?;
+        }
+
+        let mut output = Vec::new();
+        bank.signature()
+            .type_bank()
+            .app_encode_types(&mut output, problem_type, true)
+            .map_err(|_| {
+                formula_set_write_error("failed to write app-encoded type declarations")
+            })?;
+        bank.signature()
+            .print_app_encoded_decls(&mut output)
+            .map_err(|_| {
+                formula_set_write_error("failed to write app-encoded symbol declarations")
+            })?;
+        let mut output = String::from_utf8(output).map_err(|_| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "app-encoded declarations are not valid UTF-8",
+            )
+        })?;
+
+        for formula in &self.formulas {
+            if !tformula_is_prop_true(bank, formula.formula()) {
+                output.push_str(&formula.app_encode_string(bank, keep_input_names)?);
+                output.push('\n');
+            }
+        }
+        Ok(output)
+    }
 }
 
 #[must_use]
@@ -619,12 +714,17 @@ fn tformula_has_app_var_literal(bank: &TermBank, formula: &Term) -> bool {
     false
 }
 
+fn formula_set_write_error(message: &'static str) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         formula_set_definition_statistics, formula_set_stack_cardinality,
         formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaSet, WrappedFormula,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause_props::{
         CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
@@ -988,6 +1088,78 @@ mod tests {
         let mut untagged = equivalence_definition.flat_copy();
         untagged.del_prop(CP_IS_LAMBDA_DEF);
         assert_eq!(untagged.get_lambda_defined_symbol(bank.signature()), None);
+    }
+
+    #[test]
+    fn wrapped_formula_app_encode_renders_c_role_and_id_shape() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_app_a");
+        let f_a = typed_unary(&mut bank, "wf_app_f", &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &f_a, &a);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        wrapped.set_info(Some(ClauseInfo::new(Some("wf_app_named"), None, 1, 1)));
+
+        let rendered = wrapped.app_encode_string(&mut bank, true).unwrap();
+
+        assert!(rendered.starts_with("tff(wf_app_named, axiom, "));
+        assert!(rendered.ends_with(")."));
+        assert!(rendered.contains("wf_app_a"));
+    }
+
+    #[test]
+    fn formula_set_app_encode_preloads_declarations_and_skips_true_formula() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_app_a");
+        let b = typed_const(&mut bank, "set_app_b");
+        let f_a = typed_unary(&mut bank, "set_app_f", &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &f_a, &b);
+        let mut axiom = WrappedFormula::wt_formula_alloc(formula);
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        axiom.set_prop(CP_INPUT_FORMULA);
+        axiom.set_info(Some(ClauseInfo::new(Some("set_app_axiom"), None, 1, 1)));
+
+        let conjecture_formula = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let mut conjecture = WrappedFormula::wt_formula_alloc(conjecture_formula);
+        conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        conjecture.set_info(Some(ClauseInfo::new(Some("set_app_neg_conj"), None, 2, 1)));
+
+        let true_term = bank.true_term().clone();
+        let true_formula = bool_binary_with_code(&mut bank, eqn_code, &true_term, &true_term);
+        let mut skipped = WrappedFormula::wt_formula_alloc(true_formula);
+        skipped.set_info(Some(ClauseInfo::new(Some("set_app_true"), None, 3, 1)));
+
+        let mut set = FormulaSet::new();
+        set.insert(axiom);
+        set.insert(skipped);
+        set.insert(conjecture);
+
+        let rendered = set
+            .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
+            .unwrap();
+
+        let type_decl = rendered
+            .find("tff(typedecl")
+            .expect("type declarations are printed before formulas");
+        let symbol_decl = rendered
+            .find("tff(symboltypedecl")
+            .expect("symbol declarations are printed before formulas");
+        let axiom_line = rendered
+            .find("tff(set_app_axiom, axiom, ")
+            .expect("input axiom formula is rendered");
+        assert!(type_decl < symbol_decl);
+        assert!(symbol_decl < axiom_line);
+        assert!(rendered.contains("tff(set_app_neg_conj, negated_conjecture, "));
+        assert!(!rendered.contains("set_app_true"));
+        assert_eq!(
+            FormulaSet::new()
+                .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
+                .unwrap(),
+            ""
+        );
     }
 
     #[test]
