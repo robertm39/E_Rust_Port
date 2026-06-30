@@ -1467,6 +1467,83 @@ fn tformula_encode_predicate_as_eqn(
     tformula_fcode_alloc(bank, eqn_code, left, Some(right))
 }
 
+/// Moves quantifiers inward where possible.
+///
+/// This matches C `TFormulaMiniScope` for a single term-encoded formula after
+/// earlier CNF preprocessing has produced suitable NNF-shaped input.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding a moved quantifier or changed connective
+/// fails.
+///
+/// # Panics
+///
+/// Panics if formula cells are malformed or if the input violates C's
+/// precondition that miniscope sees formulas with the expected binary shape.
+pub fn tformula_mini_scope(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let (and_code, or_code, qex_code, qall_code) = {
+        let sig = bank.signature();
+        (
+            sig.and_code(),
+            sig.or_code(),
+            sig.qex_code(),
+            sig.qall_code(),
+        )
+    };
+
+    let mut current = form.clone();
+    if tformula_is_quantified(bank, &current) {
+        let var = formula_argument(&current, 0);
+        let body = formula_argument(&current, 1);
+        let op = body.f_code();
+        let quantifier = current.f_code();
+
+        if op == and_code || op == or_code {
+            let left = formula_argument(&body, 0);
+            let right = formula_argument(&body, 1);
+            if !tformula_var_is_free(bank, &left, &var) {
+                let scoped_right =
+                    tformula_fcode_alloc(bank, quantifier, var, Some(right.clone()))?;
+                current = tformula_fcode_alloc(bank, op, left, Some(scoped_right))?;
+            } else if !tformula_var_is_free(bank, &right, &var) {
+                let scoped_left = tformula_fcode_alloc(bank, quantifier, var, Some(left.clone()))?;
+                current = tformula_fcode_alloc(bank, op, scoped_left, Some(right))?;
+            } else if op == and_code && quantifier == qall_code {
+                let scoped_left =
+                    tformula_fcode_alloc(bank, qall_code, var.clone(), Some(left.clone()))?;
+                let scoped_right = tformula_fcode_alloc(bank, qall_code, var, Some(right))?;
+                current = tformula_fcode_alloc(bank, and_code, scoped_left, Some(scoped_right))?;
+            } else if op == or_code && quantifier == qex_code {
+                let scoped_left =
+                    tformula_fcode_alloc(bank, qex_code, var.clone(), Some(left.clone()))?;
+                let scoped_right = tformula_fcode_alloc(bank, qex_code, var, Some(right))?;
+                current = tformula_fcode_alloc(bank, or_code, scoped_left, Some(scoped_right))?;
+            }
+        }
+    }
+
+    let mut left = formula_argument(&current, 0);
+    let mut right = formula_argument(&current, 1);
+    let mut modified = false;
+    if tformula_has_subform1(bank, &current) {
+        let scoped = tformula_mini_scope(bank, &left)?;
+        modified = scoped != left;
+        left = scoped;
+    }
+    if tformula_has_subform2(bank, &current) || tformula_is_quantified(bank, &current) {
+        let scoped = tformula_mini_scope(bank, &right)?;
+        modified |= scoped != right;
+        right = scoped;
+    }
+    if modified {
+        let rebuilt = tformula_fcode_alloc(bank, current.f_code(), left, Some(right))?;
+        return tformula_mini_scope(bank, &rebuilt);
+    }
+
+    Ok(current)
+}
+
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
 ///
 /// This matches C `TFormulaShiftQuantors` for a single formula. The input is
@@ -1693,6 +1770,28 @@ fn tformula_is_literal(bank: &TermBank, form: &Term) -> bool {
     matches!(form.f_code(), code if code == bank.signature().eqn_code()
         || code == bank.signature().neqn_code())
         && form.arity() == 2
+}
+
+fn tformula_var_is_free(bank: &TermBank, form: &Term, var: &Term) -> bool {
+    if form.v_count() == 0 {
+        return false;
+    }
+    if form == var {
+        return true;
+    }
+    if form.f_code() == bank.signature().qex_code() || form.f_code() == bank.signature().qall_code()
+    {
+        if formula_argument(form, 0) == *var {
+            false
+        } else {
+            tformula_var_is_free(bank, &formula_argument(form, 1), var)
+        }
+    } else {
+        form.argument_clones()
+            .into_iter()
+            .flatten()
+            .any(|arg| tformula_var_is_free(bank, &arg, var))
+    }
 }
 
 fn extract_formula_core2(
@@ -2514,8 +2613,8 @@ mod tests {
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
         tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
-        tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
-        tformula_simplify_decoded, TFORM_MANY_CLAUSES,
+        tformula_mini_scope, tformula_neg_alloc, tformula_nnf, tformula_shift_quantors,
+        tformula_shift_quantors2, tformula_simplify_decoded, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -3652,6 +3751,108 @@ mod tests {
         assert_eq!(nnf.f_code(), bank.signature().eqn_code());
         assert_eq!(nnf.argument(0).as_ref(), Some(&applied));
         assert_eq!(nnf.argument(1).as_ref(), Some(bank.true_term()));
+    }
+
+    #[test]
+    fn tformula_mini_scope_moves_quantifier_to_branch_containing_variable() {
+        let mut bank = test_bank();
+        let var_x = typed_var(&bank, -136);
+        let const_a = typed_const(&mut bank, "miniscope_move_a");
+        let const_b = typed_const(&mut bank, "miniscope_move_b");
+        let const_c = typed_const(&mut bank, "miniscope_move_c");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &const_a, &const_b);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_c);
+        let and_code = bank.signature().and_code();
+        let qall_code = bank.signature().qall_code();
+        let body = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &var_x, &body);
+
+        let scoped = tformula_mini_scope(&mut bank, &quantified).unwrap();
+
+        assert_eq!(scoped.f_code(), and_code);
+        assert_eq!(scoped.argument(0).as_ref(), Some(&left));
+        let scoped_right = scoped.argument(1).unwrap();
+        assert_eq!(scoped_right.f_code(), qall_code);
+        assert_eq!(scoped_right.argument(0).as_ref(), Some(&var_x));
+        assert_eq!(scoped_right.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn tformula_mini_scope_splits_universal_over_conjunction() {
+        let mut bank = test_bank();
+        let var_x = typed_var(&bank, -138);
+        let const_a = typed_const(&mut bank, "miniscope_split_all_a");
+        let const_b = typed_const(&mut bank, "miniscope_split_all_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_a);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_b);
+        let and_code = bank.signature().and_code();
+        let qall_code = bank.signature().qall_code();
+        let body = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &var_x, &body);
+
+        let scoped = tformula_mini_scope(&mut bank, &quantified).unwrap();
+
+        assert_eq!(scoped.f_code(), and_code);
+        let scoped_left = scoped.argument(0).unwrap();
+        let scoped_right = scoped.argument(1).unwrap();
+        assert_eq!(scoped_left.f_code(), qall_code);
+        assert_eq!(scoped_left.argument(0).as_ref(), Some(&var_x));
+        assert_eq!(scoped_left.argument(1).as_ref(), Some(&left));
+        assert_eq!(scoped_right.f_code(), qall_code);
+        assert_eq!(scoped_right.argument(0).as_ref(), Some(&var_x));
+        assert_eq!(scoped_right.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn tformula_mini_scope_splits_existential_over_disjunction() {
+        let mut bank = test_bank();
+        let var_x = typed_var(&bank, -140);
+        let const_a = typed_const(&mut bank, "miniscope_split_ex_a");
+        let const_b = typed_const(&mut bank, "miniscope_split_ex_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_a);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_b);
+        let or_code = bank.signature().or_code();
+        let qex_code = bank.signature().qex_code();
+        let body = bool_binary_with_code(&mut bank, or_code, &left, &right);
+        let quantified = bool_binary_with_code(&mut bank, qex_code, &var_x, &body);
+
+        let scoped = tformula_mini_scope(&mut bank, &quantified).unwrap();
+
+        assert_eq!(scoped.f_code(), or_code);
+        let scoped_left = scoped.argument(0).unwrap();
+        let scoped_right = scoped.argument(1).unwrap();
+        assert_eq!(scoped_left.f_code(), qex_code);
+        assert_eq!(scoped_left.argument(1).as_ref(), Some(&left));
+        assert_eq!(scoped_right.f_code(), qex_code);
+        assert_eq!(scoped_right.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn tformula_mini_scope_respects_nested_quantifier_shadowing() {
+        let mut bank = test_bank();
+        let var_x = typed_var(&bank, -148);
+        let const_a = typed_const(&mut bank, "miniscope_shadow_a");
+        let const_b = typed_const(&mut bank, "miniscope_shadow_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let shadowed_atom = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_a);
+        let free_atom = bool_binary_with_code(&mut bank, eqn_code, &var_x, &const_b);
+        let qall_code = bank.signature().qall_code();
+        let and_code = bank.signature().and_code();
+        let shadowing_quantifier =
+            bool_binary_with_code(&mut bank, qall_code, &var_x, &shadowed_atom);
+        let body = bool_binary_with_code(&mut bank, and_code, &shadowing_quantifier, &free_atom);
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &var_x, &body);
+
+        let scoped = tformula_mini_scope(&mut bank, &quantified).unwrap();
+
+        assert_eq!(scoped.f_code(), and_code);
+        assert_eq!(scoped.argument(0).as_ref(), Some(&shadowing_quantifier));
+        let scoped_right = scoped.argument(1).unwrap();
+        assert_eq!(scoped_right.f_code(), qall_code);
+        assert_eq!(scoped_right.argument(1).as_ref(), Some(&free_atom));
     }
 
     #[test]
