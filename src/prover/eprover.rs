@@ -19,7 +19,7 @@ use crate::basics::os_wrapper::{
 };
 #[cfg(all(target_os = "linux", not(test)))]
 use crate::basics::os_wrapper::{
-    set_soft_rlimit, set_soft_rlimit_with_error, RLIMIT_CORE_COMPAT, RLIMIT_CPU_COMPAT,
+    set_soft_rlimit_with_error, RLIMIT_CORE_COMPAT, RLIMIT_CPU_COMPAT,
 };
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::pstacks::PStack;
@@ -2337,7 +2337,7 @@ fn native_hard_cpu_limit_to_apply(config: &EProverConfig) -> Option<u64> {
     (hard_limit != RLIM_INFINITY_COMPAT).then_some(hard_limit)
 }
 
-fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
+fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<ResourceSetupMessage> {
     #[cfg(test)]
     {
         let _ = config;
@@ -2346,7 +2346,7 @@ fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
 
     #[cfg(not(test))]
     {
-        let mut warnings = Vec::new();
+        let mut messages = Vec::new();
         #[cfg(target_os = "linux")]
         {
             if let Some(cpu_limit) = cpu_rlimit_to_apply(config) {
@@ -2356,14 +2356,12 @@ fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
                     cpu_limit,
                     cpu_rlimit_desc(config),
                 ) {
-                    warnings.push(warning);
+                    messages.push(ResourceSetupMessage::Warning(warning));
                 }
-                if set_soft_rlimit(RLIMIT_CORE_COMPAT, 0) != RLimResult::Success {
-                    warnings.push(Diagnostic::new(
-                        ErrorCode::SYSTEM_ERROR,
-                        "Cannot prevent core dumps!",
-                    ));
-                }
+                messages.extend(core_limit_failure_messages(set_soft_rlimit_with_error(
+                    RLIMIT_CORE_COMPAT,
+                    0,
+                )));
             }
         }
 
@@ -2375,7 +2373,7 @@ fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
                     cpu_limit,
                     "JOB_OBJECT_LIMIT_PROCESS_TIME",
                 ) {
-                    warnings.push(warning);
+                    messages.push(ResourceSetupMessage::Warning(warning));
                 }
             }
         }
@@ -2384,14 +2382,14 @@ fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
         #[cfg(target_os = "linux")]
         {
             if memory_limit_result == RLimResult::Reduced {
-                warnings.push(
+                messages.push(ResourceSetupMessage::Warning(
                     resource_limit_warning_from_result(
                         memory_limit_result,
                         config.memory_limit,
                         "memory limit",
                     )
                     .expect("reduced resource limits produce warnings"),
-                );
+                ));
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -2401,11 +2399,53 @@ fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
                 config.memory_limit,
                 "memory limit",
             ) {
-                warnings.push(warning);
+                messages.push(ResourceSetupMessage::Warning(warning));
             }
         }
-        warnings
+        messages
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResourceSetupMessage {
+    Warning(Diagnostic),
+    #[cfg(any(test, target_os = "linux"))]
+    Perror {
+        os_error: i32,
+    },
+}
+
+impl ResourceSetupMessage {
+    #[must_use]
+    fn render(&self, program_name: &str) -> String {
+        match self {
+            Self::Warning(warning) => warning.render_warning(program_name),
+            #[cfg(any(test, target_os = "linux"))]
+            Self::Perror { os_error } => {
+                format!(
+                    "{program_name}: {}\n",
+                    resource_limit_error_message(*os_error)
+                )
+            }
+        }
+    }
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn core_limit_failure_messages(outcome: RLimitOutcome) -> Vec<ResourceSetupMessage> {
+    if outcome.result() == RLimResult::Success {
+        return Vec::new();
+    }
+
+    let mut messages = Vec::new();
+    if let Some(os_error) = outcome.os_error() {
+        messages.push(ResourceSetupMessage::Perror { os_error });
+    }
+    messages.push(ResourceSetupMessage::Warning(Diagnostic::new(
+        ErrorCode::SYSTEM_ERROR,
+        "Cannot prevent core dumps!",
+    )));
+    messages
 }
 
 #[cfg(all(target_os = "linux", not(test)))]
@@ -2534,7 +2574,7 @@ where
         }
         EProverAction::Run(config) => {
             write_config_warnings(stderr, &config)?;
-            write_warnings(stderr, &apply_os_resource_limit_state(&config))?;
+            write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
             run_config(stdout, &config)
         }
     }
@@ -2550,6 +2590,16 @@ fn write_config_warnings(
 fn write_warnings(stderr: &mut impl Write, warnings: &[Diagnostic]) -> Result<(), EProverError> {
     for warning in warnings {
         stderr.write_all(warning.render_warning(PROGRAM_NAME).as_bytes())?;
+    }
+    Ok(())
+}
+
+fn write_resource_setup_messages(
+    stderr: &mut impl Write,
+    messages: &[ResourceSetupMessage],
+) -> Result<(), EProverError> {
+    for message in messages {
+        stderr.write_all(message.render(PROGRAM_NAME).as_bytes())?;
     }
     Ok(())
 }
@@ -9646,11 +9696,12 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, cpu_rlimit_to_apply, fv_index_params_from_config,
-        heuristic_parms_from_config, native_hard_cpu_limit_to_apply, order_parms_from_config,
-        preprocessing_config_debug_line, process_options, proof_control_from_config,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, temporary_executable_term_bank,
+        auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
+        fv_index_params_from_config, heuristic_parms_from_config, native_hard_cpu_limit_to_apply,
+        order_parms_from_config, preprocessing_config_debug_line, process_options,
+        proof_control_from_config, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        temporary_executable_term_bank, write_resource_setup_messages,
         write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
         DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
         ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
@@ -9860,6 +9911,31 @@ mod tests {
         assert_eq!(
             resource_limit_warning_from_result(RLimResult::Success, 100, "RLIMIT_CPU"),
             None
+        );
+    }
+
+    #[test]
+    fn core_limit_failure_renders_c_perror_before_warning() {
+        let os_error = 22;
+        let messages =
+            core_limit_failure_messages(RLimitOutcome::new(RLimResult::Failed, Some(os_error)));
+        let mut stderr = Vec::new();
+
+        write_resource_setup_messages(&mut stderr, &messages).unwrap();
+
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!(
+                "eprover: {}\neprover: Warning: Cannot prevent core dumps!\n",
+                resource_limit_error_message(os_error)
+            )
+        );
+    }
+
+    #[test]
+    fn core_limit_success_has_no_setup_messages() {
+        assert!(
+            core_limit_failure_messages(RLimitOutcome::new(RLimResult::Success, None)).is_empty()
         );
     }
 
