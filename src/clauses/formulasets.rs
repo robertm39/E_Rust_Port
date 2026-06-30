@@ -1,6 +1,7 @@
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_IS_LAMBDA_DEF, CP_TYPE_CONJECTURE, CP_TYPE_QUESTION,
 };
+use crate::clauses::clausefunc::tformula_mark_polarity;
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -141,6 +142,12 @@ impl WrappedFormula {
     pub fn gc_mark_cells(&self, bank: &TermBank) {
         if let Some(formula) = &self.formula {
             bank.gc_mark_term(formula);
+        }
+    }
+
+    pub fn mark_polarity(&self, bank: &TermBank) {
+        if let Some(formula) = &self.formula {
+            tformula_mark_polarity(bank, formula, 1);
         }
     }
 
@@ -353,6 +360,12 @@ impl FormulaSet {
             formula.gc_mark_cells(bank);
         }
     }
+
+    pub fn mark_polarity(&self, bank: &TermBank) {
+        for formula in &self.formulas {
+            formula.mark_polarity(bank);
+        }
+    }
 }
 
 #[must_use]
@@ -400,6 +413,7 @@ mod tests {
         CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
     };
+    use crate::clauses::clausefunc::tformula_decode_polarity;
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, ST_INTEGER};
@@ -437,6 +451,15 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     #[test]
@@ -602,5 +625,36 @@ mod tests {
         set.insert(WrappedFormula::wt_formula_alloc(int_term));
         assert!(set.has_interpreted_symbol());
         assert!(!set.is_untyped());
+    }
+
+    #[test]
+    fn formula_set_mark_polarity_marks_each_wrapped_formula_like_c() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "pol_first");
+        let second = typed_const(&mut bank, "pol_second");
+        let third = typed_const(&mut bank, "pol_third");
+        let fourth = typed_const(&mut bank, "pol_fourth");
+        let fifth = typed_const(&mut bank, "pol_fifth");
+        let sixth = typed_const(&mut bank, "pol_sixth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let impl_code = bank.signature().impl_code();
+        let or_code = bank.signature().or_code();
+        let first_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let second_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let third_atom = bool_binary_with_code(&mut bank, eqn_code, &fifth, &sixth);
+        let left_disjunction = bool_binary_with_code(&mut bank, or_code, &first_atom, &second_atom);
+        let implication =
+            bool_binary_with_code(&mut bank, impl_code, &left_disjunction, &third_atom);
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &second_atom, &third_atom);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::default_alloc());
+        set.insert(WrappedFormula::wt_formula_alloc(implication.clone()));
+        set.insert(WrappedFormula::wt_formula_alloc(disjunction.clone()));
+
+        set.mark_polarity(&bank);
+
+        assert_eq!(tformula_decode_polarity(&implication), 1);
+        assert_eq!(tformula_decode_polarity(&left_disjunction), -1);
+        assert_eq!(tformula_decode_polarity(&disjunction), 1);
     }
 }
