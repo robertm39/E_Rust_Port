@@ -114,6 +114,7 @@ Source files reviewed: `HEURISTICS/che_specsigfeatures.h`, `HEURISTICS/che_specs
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- The file-level comment says this unit handles clause and "later" formula sets, but this checkout exports only term, clause, and `ClauseSetCollectSigFeatures` collectors. Change later: add formula-set signature-vector collection only as a cleaned extension or if a C reference version with formula support is introduced; do not infer it from the comment alone.
 
 ### Porting Focus
 

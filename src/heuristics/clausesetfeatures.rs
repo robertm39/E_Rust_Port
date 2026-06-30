@@ -5,6 +5,7 @@ use crate::clauses::clause::{clause_print_lop_format_string_with_options, Clause
 use crate::clauses::clausesets::{eq_axioms_print_string, ClauseSet};
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
+use crate::clauses::formulasets::FormulaSet;
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausefeatures::{
     clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
@@ -1349,6 +1350,63 @@ pub fn spec_features_compute_clause_set_without_choice(
     spec_features_compute_clause_set(features, set, bank, |_| false);
 }
 
+/// Computes C `SpecFeaturesCompute`, including optional active/archive formula
+/// order scans.
+///
+/// C leaves formula-definition statistics at their sentinel values here: it
+/// sets `num_of_definitions = -1`, does not assign `perc_of_form_defs`, and
+/// only lets formula sets raise `order`/`goal_order` after clause HO order was
+/// computed and reset. `None` mirrors C's null formula-set arguments.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`spec_features_compute_clause_set`], or
+/// if a formula term order cannot fit C's `int` result type.
+pub fn spec_features_compute<F>(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    fset: Option<&FormulaSet>,
+    farch: Option<&FormulaSet>,
+    bank: &TermBank,
+    recognize_choice: F,
+) where
+    F: FnMut(&Clause) -> bool,
+{
+    spec_features_compute_clause_set(features, set, bank, recognize_choice);
+    for formulas in [farch, fset].into_iter().flatten() {
+        spec_features_scan_formula_order(features, bank.signature(), formulas);
+    }
+}
+
+/// Computes C `SpecFeaturesCompute` with no defined-choice recognizer.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`spec_features_compute`].
+pub fn spec_features_compute_without_choice(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    fset: Option<&FormulaSet>,
+    farch: Option<&FormulaSet>,
+    bank: &TermBank,
+) {
+    spec_features_compute(features, set, fset, farch, bank, |_| false);
+}
+
+fn spec_features_scan_formula_order(
+    features: &mut SpecFeatureCell,
+    signature: &Signature,
+    formulas: &FormulaSet,
+) {
+    for formula in formulas.iter() {
+        let order = usize_to_i32(formula.conjecture_order(signature));
+        features.order = features.order.max(order);
+        if formula.is_conjecture() || formula.is_hypothesis() {
+            features.goal_order = features.goal_order.max(order);
+        }
+    }
+}
+
 #[must_use]
 pub fn clause_set_count_maximal_terms(set: &ClauseSet) -> i64 {
     set.iter().map(clause_count_maximal_terms).sum()
@@ -1624,6 +1682,10 @@ fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+fn usize_to_i32(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or_else(|_| panic!("value must fit C int"))
+}
+
 fn parse_i32(scanner: &mut Scanner) -> Result<i32, Diagnostic> {
     parse_int(scanner).map(i64_to_i32)
 }
@@ -1663,17 +1725,19 @@ mod tests {
         clause_set_print_non_units_string, clause_set_print_pos_units_default_string,
         clause_set_print_pos_units_string, clause_set_term_cells, clause_set_tptp_depth_info_add,
         create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
-        spec_features_compute_clause_set, spec_features_parse, spec_features_print_string,
-        spec_limits_print_string, spec_type_print_string, spec_type_string_for_problem,
-        ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK,
-        DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
+        spec_features_compute, spec_features_compute_clause_set, spec_features_parse,
+        spec_features_print_string, spec_limits_print_string, spec_type_print_string,
+        spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass,
+        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clause_props::CP_TYPE_HYPOTHESIS;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::heuristics::clausefeatures::{
         clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
         clause_count_unorientable_literals, clause_count_variable_set, clause_tptp_depth_info_add,
@@ -1700,6 +1764,10 @@ mod tests {
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = individual(bank);
+        typed_const_with_type(bank, name, &type_)
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: &Type) -> Term {
         let f_code = bank.signature_mut().insert_id(name, 0, false);
         bank.signature_mut()
             .declare_final_type(f_code, type_.clone())
@@ -2389,6 +2457,74 @@ mod tests {
         assert_eq!(features.num_of_definitions, -1);
         assert!((features.perc_of_appvar_lits - 0.5).abs() < f64::EPSILON);
         assert!((features.perc_of_form_defs - 0.875).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn spec_features_compute_scans_formula_archive_and_active_orders_after_clause_reset() {
+        let mut bank = term_bank();
+        let individual = individual(&bank);
+        let unary_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let higher_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![unary_type.clone(), individual]));
+        let archived_axiom = WrappedFormula::wt_formula_alloc(typed_const_with_type(
+            &mut bank,
+            "arch_ho",
+            &unary_type,
+        ));
+        let mut active_goal = WrappedFormula::wt_formula_alloc(typed_const_with_type(
+            &mut bank,
+            "active_ho",
+            &higher_type,
+        ));
+        active_goal.set_tptp_type(CP_TYPE_HYPOTHESIS);
+        let mut farch = FormulaSet::new();
+        farch.insert(archived_axiom);
+        let mut fset = FormulaSet::new();
+        fset.insert(active_goal);
+        let empty_clauses = ClauseSet::new();
+        let mut features = SpecFeatureCell {
+            order: 99,
+            goal_order: 99,
+            num_of_definitions: 42,
+            perc_of_form_defs: 0.875,
+            ..SpecFeatureCell::default()
+        };
+
+        spec_features_compute(
+            &mut features,
+            &empty_clauses,
+            Some(&fset),
+            Some(&farch),
+            &bank,
+            |_| false,
+        );
+
+        assert_eq!(features.clauses, 0);
+        assert_eq!(features.order, 3);
+        assert_eq!(features.goal_order, 3);
+        assert_eq!(features.num_of_definitions, -1);
+        assert!((features.perc_of_form_defs - 0.875).abs() < f64::EPSILON);
+
+        let mut no_formula_features = SpecFeatureCell::default();
+        spec_features_compute(
+            &mut no_formula_features,
+            &empty_clauses,
+            None,
+            None,
+            &bank,
+            |_| false,
+        );
+
+        assert_eq!(no_formula_features.order, 1);
+        assert_eq!(no_formula_features.goal_order, 1);
     }
 
     #[test]
