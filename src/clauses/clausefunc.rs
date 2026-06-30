@@ -1263,6 +1263,203 @@ pub fn tformula_unroll_fool(bank: &mut TermBank, form: &Term) -> Result<Term, Di
     Ok(tformula_unroll_fool_result(bank, form)?.into_formula())
 }
 
+struct TFormulaIteExpansion {
+    condition: Term,
+    if_true: Term,
+    if_false: Term,
+}
+
+/// Applies C `do_ite_unroll` to a term-encoded formula.
+///
+/// Formula-position `$ite(C,T,F)` becomes `(~C|T)&(C|F)`. Literal-side
+/// term-position `$ite` uses the first occurrence on the left side, then the
+/// first occurrence on the right side, and replaces the enclosing literal by
+/// the two conditional literal cases. The recursive traversal skips nested
+/// lambda terms for term-position searches, matching C `TermFindIteSubterm`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if an implication/conjunction or copied term cannot be
+/// inserted into the term bank.
+///
+/// # Panics
+///
+/// Panics if an `$ite`, literal, or formula cell is malformed.
+pub fn tformula_lift_ite(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    do_ite_unroll(bank, form)
+}
+
+fn do_ite_unroll(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if form.f_code() == SIG_ITE_CODE {
+        assert_eq!(form.arity(), 3, "$ite formula must have three arguments");
+        let condition = formula_argument(form, 0);
+        let not_condition = tformula_negate(bank, &condition)?;
+        let true_part = tformula_fcode_alloc(
+            bank,
+            bank.signature().or_code(),
+            not_condition,
+            Some(formula_argument(form, 1)),
+        )?;
+        let false_part = tformula_fcode_alloc(
+            bank,
+            bank.signature().or_code(),
+            condition,
+            Some(formula_argument(form, 2)),
+        )?;
+        let unrolled = tformula_fcode_alloc(
+            bank,
+            bank.signature().and_code(),
+            true_part,
+            Some(false_part),
+        )?;
+        return do_ite_unroll(bank, &unrolled);
+    }
+
+    if tformula_is_literal(bank, form) {
+        if let Some(unrolled) = do_ite_unroll_literal(bank, form)? {
+            return Ok(unrolled);
+        }
+        return Ok(form.clone());
+    }
+
+    if tformula_is_quantified(bank, form) && !form.is_lambda() {
+        let original_body = formula_argument(form, 1);
+        let unrolled_body = do_ite_unroll(bank, &original_body)?;
+        if unrolled_body != original_body {
+            return tformula_fcode_alloc(
+                bank,
+                form.f_code(),
+                formula_argument(form, 0),
+                Some(unrolled_body),
+            );
+        }
+        return Ok(form.clone());
+    }
+
+    let copy = Term::top_copy_without_args(form);
+    let mut changed = false;
+    for (index, arg) in form.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+        let unrolled = do_ite_unroll(bank, &arg)?;
+        changed |= unrolled != arg;
+        copy.set_argument(index, unrolled);
+    }
+
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(form.clone())
+    }
+}
+
+fn do_ite_unroll_literal(bank: &mut TermBank, form: &Term) -> Result<Option<Term>, Diagnostic> {
+    if let Some(expansion) = tformula_first_ite_expansion(&formula_argument(form, 0), bank)? {
+        let if_true = tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            expansion.if_true,
+            Some(formula_argument(form, 1)),
+        )?;
+        let if_false = tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            expansion.if_false,
+            Some(formula_argument(form, 1)),
+        )?;
+        return tformula_ite_expansion_to_formula(bank, expansion.condition, if_true, if_false)
+            .map(Some);
+    }
+
+    if let Some(expansion) = tformula_first_ite_expansion(&formula_argument(form, 1), bank)? {
+        let if_true = tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            formula_argument(form, 0),
+            Some(expansion.if_true),
+        )?;
+        let if_false = tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            formula_argument(form, 0),
+            Some(expansion.if_false),
+        )?;
+        return tformula_ite_expansion_to_formula(bank, expansion.condition, if_true, if_false)
+            .map(Some);
+    }
+
+    Ok(None)
+}
+
+fn tformula_ite_expansion_to_formula(
+    bank: &mut TermBank,
+    condition: Term,
+    if_true: Term,
+    if_false: Term,
+) -> Result<Term, Diagnostic> {
+    let negated_condition = tformula_negate(bank, &condition)?;
+    let if_true_impl = tformula_fcode_alloc(
+        bank,
+        bank.signature().or_code(),
+        negated_condition,
+        Some(if_true),
+    )?;
+    let if_false_impl =
+        tformula_fcode_alloc(bank, bank.signature().or_code(), condition, Some(if_false))?;
+    let left = do_ite_unroll(bank, &if_true_impl)?;
+    let right = do_ite_unroll(bank, &if_false_impl)?;
+    tformula_fcode_alloc(bank, bank.signature().and_code(), left, Some(right))
+}
+
+fn tformula_first_ite_expansion(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Option<TFormulaIteExpansion>, Diagnostic> {
+    if term.f_code() == SIG_ITE_CODE {
+        return Ok(Some(TFormulaIteExpansion {
+            condition: formula_argument(term, 0),
+            if_true: formula_argument(term, 1),
+            if_false: formula_argument(term, 2),
+        }));
+    }
+    if term.is_lambda() {
+        return Ok(None);
+    }
+
+    for index in 0..term.arity() {
+        let argument = term
+            .argument(index)
+            .unwrap_or_else(|| panic!("term-position $ite argument {index} is uninitialized"));
+        if let Some(expansion) = tformula_first_ite_expansion(&argument, bank)? {
+            return Ok(Some(TFormulaIteExpansion {
+                condition: expansion.condition,
+                if_true: tformula_term_replace_argument(term, index, &expansion.if_true, bank)?,
+                if_false: tformula_term_replace_argument(term, index, &expansion.if_false, bank)?,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+fn tformula_term_replace_argument(
+    term: &Term,
+    target_index: usize,
+    replacement: &Term,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    let replaced = Term::top_copy_without_args(term);
+    for index in 0..term.arity() {
+        let argument = if index == target_index {
+            replacement.clone()
+        } else {
+            term.argument(index)
+                .unwrap_or_else(|| panic!("term-position $ite argument {index} is uninitialized"))
+        };
+        replaced.set_argument(index, argument);
+    }
+    bank.term_top_insert(replaced)
+}
+
 /// Applies C `TFormulaUnrollFOOL` and preserves its change flag.
 ///
 /// The C helper first expands literals unconditionally, then calls the
@@ -5551,14 +5748,14 @@ mod tests {
         tformula_has_free_vars, tformula_has_subform1, tformula_has_subform2, tformula_is_binary,
         tformula_is_closed, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_const,
         tformula_is_prop_false, tformula_is_prop_true, tformula_is_quantified,
-        tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped, tformula_lit_alloc,
-        tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
-        tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
-        tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
-        tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_stack_to_form, tformula_to_cnf, tformula_tptp_parse, tformula_tptp_string,
-        tformula_tstp_parse, tformula_unroll_fool, tformula_var_is_free, tformula_var_rename,
-        TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped, tformula_lift_ite,
+        tformula_lit_alloc, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
+        tformula_neg_alloc, tformula_negate, tformula_nnf, tformula_preload_types,
+        tformula_prop_constant_alloc, tformula_quantor_alloc, tformula_shift_quantors,
+        tformula_shift_quantors2, tformula_simplify, tformula_simplify_decoded,
+        tformula_skolemize_outermost, tformula_stack_to_form, tformula_to_cnf, tformula_tptp_parse,
+        tformula_tptp_string, tformula_tstp_parse, tformula_unroll_fool, tformula_var_is_free,
+        tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -5760,6 +5957,31 @@ mod tests {
         term.set_type(Some(bool_type));
         term.set_argument(0, arg.clone());
         bank.term_top_insert(term).unwrap()
+    }
+
+    fn ite_with_type(
+        bank: &mut TermBank,
+        condition: &Term,
+        if_true: &Term,
+        if_false: &Term,
+        type_: &crate::terms::simpletypes::Type,
+    ) -> Term {
+        let term = Term::top_alloc(SIG_ITE_CODE, 3);
+        term.set_type(Some(type_.clone()));
+        term.set_argument(0, condition.clone());
+        term.set_argument(1, if_true.clone());
+        term.set_argument(2, if_false.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn bool_ite(bank: &mut TermBank, condition: &Term, if_true: &Term, if_false: &Term) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        ite_with_type(bank, condition, if_true, if_false, &bool_type)
+    }
+
+    fn typed_ite(bank: &mut TermBank, condition: &Term, if_true: &Term, if_false: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        ite_with_type(bank, condition, if_true, if_false, &type_)
     }
 
     fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -6521,6 +6743,134 @@ mod tests {
         let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
 
         assert_eq!(expanded, equality);
+    }
+
+    #[test]
+    fn tformula_lift_ite_unrolls_formula_position_ite() {
+        let mut bank = test_bank();
+        let condition_left = typed_const(&mut bank, "lift_ite_formula_condition_left");
+        let condition_right = typed_const(&mut bank, "lift_ite_formula_condition_right");
+        let then_left = typed_const(&mut bank, "lift_ite_formula_then_left");
+        let then_right = typed_const(&mut bank, "lift_ite_formula_then_right");
+        let else_left = typed_const(&mut bank, "lift_ite_formula_else_left");
+        let else_right = typed_const(&mut bank, "lift_ite_formula_else_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let condition =
+            bool_binary_with_code(&mut bank, eqn_code, &condition_left, &condition_right);
+        let then_atom = bool_binary_with_code(&mut bank, eqn_code, &then_left, &then_right);
+        let else_atom = bool_binary_with_code(&mut bank, eqn_code, &else_left, &else_right);
+        let ite = bool_ite(&mut bank, &condition, &then_atom, &else_atom);
+
+        let lifted = tformula_lift_ite(&mut bank, &ite).unwrap();
+
+        assert_eq!(lifted.f_code(), and_code);
+        let true_branch = lifted.argument(0).unwrap();
+        let false_branch = lifted.argument(1).unwrap();
+        assert_eq!(true_branch.f_code(), or_code);
+        assert_eq!(false_branch.f_code(), or_code);
+
+        let negated_condition = true_branch.argument(0).unwrap();
+        assert_eq!(negated_condition.f_code(), neqn_code);
+        assert_eq!(negated_condition.argument(0), condition.argument(0));
+        assert_eq!(negated_condition.argument(1), condition.argument(1));
+        assert_eq!(true_branch.argument(1).as_ref(), Some(&then_atom));
+        assert_eq!(false_branch.argument(0).as_ref(), Some(&condition));
+        assert_eq!(false_branch.argument(1).as_ref(), Some(&else_atom));
+    }
+
+    #[test]
+    fn tformula_lift_ite_unrolls_literal_left_side_term_ite() {
+        let mut bank = test_bank();
+        let cond_left = typed_const(&mut bank, "lift_ite_left_cond_l");
+        let cond_right = typed_const(&mut bank, "lift_ite_left_cond_r");
+        let then_value = typed_const(&mut bank, "lift_ite_left_then");
+        let else_value = typed_const(&mut bank, "lift_ite_left_else");
+        let target = typed_const(&mut bank, "lift_ite_left_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let condition = bool_binary_with_code(&mut bank, eqn_code, &cond_left, &cond_right);
+        let ite = typed_ite(&mut bank, &condition, &then_value, &else_value);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &ite, &target);
+
+        let lifted = tformula_lift_ite(&mut bank, &formula).unwrap();
+
+        assert_eq!(lifted.f_code(), and_code);
+        let true_branch = lifted.argument(0).unwrap();
+        let false_branch = lifted.argument(1).unwrap();
+        assert_eq!(true_branch.f_code(), or_code);
+        assert_eq!(false_branch.f_code(), or_code);
+
+        let negated_condition = true_branch.argument(0).unwrap();
+        assert_eq!(negated_condition.f_code(), neqn_code);
+        assert_eq!(negated_condition.argument(0), condition.argument(0));
+        assert_eq!(negated_condition.argument(1), condition.argument(1));
+
+        let true_case = true_branch.argument(1).unwrap();
+        assert_eq!(true_case.f_code(), eqn_code);
+        assert_eq!(true_case.argument(0).as_ref(), Some(&then_value));
+        assert_eq!(true_case.argument(1).as_ref(), Some(&target));
+
+        assert_eq!(false_branch.argument(0).as_ref(), Some(&condition));
+        let false_case = false_branch.argument(1).unwrap();
+        assert_eq!(false_case.f_code(), eqn_code);
+        assert_eq!(false_case.argument(0).as_ref(), Some(&else_value));
+        assert_eq!(false_case.argument(1).as_ref(), Some(&target));
+    }
+
+    #[test]
+    fn tformula_lift_ite_prefers_literal_left_side_before_right_side() {
+        let mut bank = test_bank();
+        let left_cond_l = typed_const(&mut bank, "lift_ite_prefer_left_cond_l");
+        let left_cond_r = typed_const(&mut bank, "lift_ite_prefer_left_cond_r");
+        let right_cond_l = typed_const(&mut bank, "lift_ite_prefer_right_cond_l");
+        let right_cond_r = typed_const(&mut bank, "lift_ite_prefer_right_cond_r");
+        let left_then = typed_const(&mut bank, "lift_ite_prefer_left_then");
+        let left_else = typed_const(&mut bank, "lift_ite_prefer_left_else");
+        let right_then = typed_const(&mut bank, "lift_ite_prefer_right_then");
+        let right_else = typed_const(&mut bank, "lift_ite_prefer_right_else");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let left_condition = bool_binary_with_code(&mut bank, eqn_code, &left_cond_l, &left_cond_r);
+        let right_condition =
+            bool_binary_with_code(&mut bank, eqn_code, &right_cond_l, &right_cond_r);
+        let left_ite = typed_ite(&mut bank, &left_condition, &left_then, &left_else);
+        let right_ite = typed_ite(&mut bank, &right_condition, &right_then, &right_else);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &left_ite, &right_ite);
+
+        let lifted = tformula_lift_ite(&mut bank, &formula).unwrap();
+
+        assert_eq!(lifted.f_code(), and_code);
+        let true_branch = lifted.argument(0).unwrap();
+        let false_branch = lifted.argument(1).unwrap();
+        assert_eq!(true_branch.f_code(), or_code);
+        assert_eq!(false_branch.f_code(), or_code);
+
+        let negated_left_condition = true_branch.argument(0).unwrap();
+        assert_eq!(negated_left_condition.f_code(), neqn_code);
+        assert_eq!(
+            negated_left_condition.argument(0),
+            left_condition.argument(0)
+        );
+        assert_eq!(
+            negated_left_condition.argument(1),
+            left_condition.argument(1)
+        );
+        assert_eq!(false_branch.argument(0).as_ref(), Some(&left_condition));
+
+        let true_case_after_right_unroll = true_branch.argument(1).unwrap();
+        assert_eq!(true_case_after_right_unroll.f_code(), and_code);
+        let true_case_first_branch = true_case_after_right_unroll.argument(0).unwrap();
+        assert_eq!(true_case_first_branch.f_code(), or_code);
+        let true_case_literal = true_case_first_branch.argument(1).unwrap();
+        assert_eq!(true_case_literal.f_code(), eqn_code);
+        assert_eq!(true_case_literal.argument(0).as_ref(), Some(&left_then));
     }
 
     #[test]

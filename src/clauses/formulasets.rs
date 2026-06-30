@@ -14,16 +14,17 @@ use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
     tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_copy_def,
     tformula_create_def, tformula_decode_polarity, tformula_fcode_alloc, tformula_find_defs,
-    tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
-    tformula_preload_types, tformula_simplify, tformula_to_cnf, tformula_tptp_string,
-    tformula_unroll_fool_result, TFormulaDefinitions, TFormulaTptpPrintOptions,
+    tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true, tformula_lift_ite,
+    tformula_mark_polarity, tformula_preload_types, tformula_simplify, tformula_to_cnf,
+    tformula_tptp_string, tformula_unroll_fool_result, TFormulaDefinitions,
+    TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
-    DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_NEGATE_CONJECTURE,
-    DC_SPLIT_EQUIV,
+    DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE,
+    DC_NEGATE_CONJECTURE, DC_SPLIT_EQUIV,
 };
 use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::clauses::inferencedoc::{
@@ -122,6 +123,7 @@ pub struct FormulaSetCnfResult {
     pub term_garbage_collections: i64,
     pub terms_recovered_by_gc: i64,
     pub formulas_named_to_db: i64,
+    pub formulas_ites_lifted: i64,
     pub formulas_lambda_normalized: i64,
     pub formulas_simplified: i64,
     pub boolean_equalities_replaced: i64,
@@ -240,6 +242,7 @@ pub struct FormulaSetIntroduceDefsResult {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FormulaSetHigherOrderPreprocessResult {
     pub formulas_named_to_db: i64,
+    pub formulas_ites_lifted: i64,
     pub formulas_lambda_normalized: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
@@ -546,6 +549,26 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(converted);
+        Ok(true)
+    }
+
+    /// Applies C `do_ite_unroll` as used by `TFormulaSetLiftItes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if ITE expansion or copied term insertion fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if an `$ite`, literal, or
+    /// formula cell is malformed.
+    pub fn lift_ites(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let original = self.formula().clone();
+        let lifted = tformula_lift_ite(bank, &original)?;
+        if lifted == original {
+            return Ok(false);
+        }
+        self.set_formula(lifted);
         Ok(true)
     }
 
@@ -1558,6 +1581,39 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `TFormulaSetLiftItes` in insertion order.
+    ///
+    /// This is gated to higher-order problems, matching the `FormulaSetCNF2`
+    /// `ENABLE_LFHO` branch. Formula-level derivation storage and proof output
+    /// are deferred, so this returns the `DCLiftIte` opcodes that should be
+    /// attached by a future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if ITE expansion or copied term insertion fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or if an `$ite`,
+    /// literal, or formula cell is malformed.
+    pub fn lift_ites(
+        &mut self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+        for formula in &mut self.formulas {
+            if formula.lift_ites(bank)? {
+                result.formulas_ites_lifted += 1;
+                result.formula_derivation_ops.push(DC_LIFT_ITE);
+            }
+        }
+        Ok(result)
+    }
+
     /// Applies C `TFormulaSetLambdaNormalize` in insertion order.
     ///
     /// This is gated to higher-order problems and mirrors C's
@@ -1727,6 +1783,12 @@ impl FormulaSet {
         result
             .formula_derivation_ops
             .extend(named_result.formula_derivation_ops);
+
+        let lift_ite_result = self.lift_ites(bank, options.problem_type)?;
+        result.formulas_ites_lifted = lift_ite_result.formulas_ites_lifted;
+        result
+            .formula_derivation_ops
+            .extend(lift_ite_result.formula_derivation_ops);
 
         if options.lambda_to_forall {
             let normalize_result = self.lambda_normalize_forall(bank, options.problem_type)?;
@@ -2172,7 +2234,7 @@ mod tests {
     use crate::clauses::derivation::{
         DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
         DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
-        DC_INTRO_DEF, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV,
+        DC_INTRO_DEF, DC_LIFT_ITE, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -2181,7 +2243,8 @@ mod tests {
     };
     use crate::terms::lambda::{apply_terms as lambda_apply_terms, close_with_db_var};
     use crate::terms::signature::{
-        Signature, SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+        Signature, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
+        SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
@@ -2258,6 +2321,16 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn bool_ite(bank: &mut TermBank, condition: &Term, if_true: &Term, if_false: &Term) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(SIG_ITE_CODE, 3);
+        term.set_type(Some(type_));
+        term.set_argument(0, condition.clone());
+        term.set_argument(1, if_true.clone());
+        term.set_argument(2, if_false.clone());
         bank.term_top_insert(term).unwrap()
     }
 
@@ -3404,6 +3477,48 @@ mod tests {
     }
 
     #[test]
+    fn formula_set_lift_ites_is_higher_order_gated() {
+        let mut bank = test_bank();
+        let condition_left = typed_const(&mut bank, "set_lift_ite_condition_left");
+        let condition_right = typed_const(&mut bank, "set_lift_ite_condition_right");
+        let then_left = typed_const(&mut bank, "set_lift_ite_then_left");
+        let then_right = typed_const(&mut bank, "set_lift_ite_then_right");
+        let else_left = typed_const(&mut bank, "set_lift_ite_else_left");
+        let else_right = typed_const(&mut bank, "set_lift_ite_else_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let and_code = bank.signature().and_code();
+        let condition =
+            bool_binary_with_code(&mut bank, eqn_code, &condition_left, &condition_right);
+        let then_atom = bool_binary_with_code(&mut bank, eqn_code, &then_left, &then_right);
+        let else_atom = bool_binary_with_code(&mut bank, eqn_code, &else_left, &else_right);
+        let ite = bool_ite(&mut bank, &condition, &then_atom, &else_atom);
+        let mut first_order = FormulaSet::new();
+        first_order.insert(WrappedFormula::wt_formula_alloc(ite.clone()));
+
+        let first_order_result = first_order
+            .lift_ites(&mut bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(first_order_result.formulas_ites_lifted, 0);
+        assert!(first_order_result.formula_derivation_ops.is_empty());
+        assert_eq!(first_order.iter().next().unwrap().formula(), &ite);
+
+        let mut higher_order = FormulaSet::new();
+        higher_order.insert(WrappedFormula::wt_formula_alloc(ite));
+
+        let result = higher_order
+            .lift_ites(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_ites_lifted, 1);
+        assert_eq!(result.formula_derivation_ops, vec![DC_LIFT_ITE]);
+        assert_eq!(
+            higher_order.iter().next().unwrap().formula().f_code(),
+            and_code
+        );
+    }
+
+    #[test]
     fn formula_set_lambda_normalize_forall_is_higher_order_gated() {
         let mut bank = test_bank();
         let formula = db_lambda_equality(&mut bank, "set_lambda_norm");
@@ -3585,6 +3700,47 @@ mod tests {
             archive.iter().next().unwrap().formula().f_code(),
             bank.signature().qall_code()
         );
+    }
+
+    #[test]
+    fn formula_set_cnf2_lifts_ites_before_archive_drain() {
+        let mut bank = test_bank();
+        let condition_left = typed_const(&mut bank, "set_cnf_lift_ite_condition_left");
+        let condition_right = typed_const(&mut bank, "set_cnf_lift_ite_condition_right");
+        let then_left = typed_const(&mut bank, "set_cnf_lift_ite_then_left");
+        let then_right = typed_const(&mut bank, "set_cnf_lift_ite_then_right");
+        let else_left = typed_const(&mut bank, "set_cnf_lift_ite_else_left");
+        let else_right = typed_const(&mut bank, "set_cnf_lift_ite_else_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let and_code = bank.signature().and_code();
+        let condition =
+            bool_binary_with_code(&mut bank, eqn_code, &condition_left, &condition_right);
+        let then_atom = bool_binary_with_code(&mut bank, eqn_code, &then_left, &then_right);
+        let else_atom = bool_binary_with_code(&mut bank, eqn_code, &else_left, &else_right);
+        let ite = bool_ite(&mut bank, &condition, &then_atom, &else_atom);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(ite));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.formulas_ites_lifted, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_LIFT_ITE));
+        assert_eq!(result.original_formulas_archived, 1);
+        assert_eq!(archive.iter().next().unwrap().formula().f_code(), and_code);
+        assert_eq!(clauses.members(), result.clauses_generated);
+        assert!(result.clauses_generated > 0);
     }
 
     #[test]
