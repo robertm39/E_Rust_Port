@@ -1,12 +1,15 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::terms::functypes::FunCode;
-use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE};
+use crate::terms::signature::{
+    SIG_DB_LAMBDA_CODE, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE,
+    SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+};
 use crate::terms::simpletypes::{
-    arrow_type_flattened, type_drop_first_arg, type_get_max_arity, Type,
+    arrow_type_flattened, type_drop_first_arg, type_get_max_arity, type_is_predicate, Type,
 };
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground};
-use crate::terms::termtypes::{term_deref, DerefType, Term};
+use crate::terms::termtypes::{term_deref, DerefType, Term, TP_PRED_POS};
 use std::collections::BTreeMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -852,6 +855,133 @@ pub fn post_cnf_encode_formulas(bank: &mut TermBank, term: &Term) -> Result<Term
     lambda_normalize_db(bank, &encoded)
 }
 
+fn encode_predicate_as_eqn(bank: &mut TermBank, formula: Term) -> Result<Term, Diagnostic> {
+    let f_code = formula.f_code();
+    let is_encodable = (formula.is_any_var()
+        || !bank.signature().is_logical_symbol(f_code)
+        || f_code == bank.signature().answer_code()
+        || matches!(
+            f_code,
+            SIG_TRUE_CODE | SIG_FALSE_CODE | SIG_ITE_CODE | SIG_LET_CODE
+        )
+        || formula.is_phony_app())
+        && formula.type_().as_ref().is_some_and(Type::is_bool);
+    if !is_encodable {
+        return Ok(formula);
+    }
+
+    let positive = formula.is_any_var() || f_code != SIG_FALSE_CODE;
+    let left = if f_code == SIG_FALSE_CODE && !formula.is_any_var() {
+        bank.true_term().clone()
+    } else {
+        formula
+    };
+    let right = bank.true_term().clone();
+    let eqn_code = bank.signature_mut().get_eqn_code(positive);
+    let encoded = Term::top_alloc(eqn_code, 2);
+    encoded.set_type(Some(bank.signature().type_bank().bool_type()));
+    encoded.set_argument(0, left);
+    encoded.set_argument(1, right);
+    bank.term_top_insert(encoded)
+}
+
+fn tformula_quantor_alloc(
+    bank: &mut TermBank,
+    quantifier: FunCode,
+    var: Term,
+    body: Term,
+) -> Result<Term, Diagnostic> {
+    let formula = Term::top_alloc(quantifier, 2);
+    formula.set_type(Some(bank.signature().type_bank().bool_type()));
+    if bank.signature().is_predicate(quantifier) {
+        formula.set_prop(TP_PRED_POS);
+    }
+    formula.set_argument(0, var);
+    formula.set_argument(1, body);
+    bank.term_top_insert(formula)
+}
+
+/// Decodes formula terms into the CNF-facing representation and encodes atoms.
+///
+/// This matches C `DecodeFormulasForCNF`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if application, weak-head reduction, predicate
+/// encoding, or term-bank insertion fails.
+///
+/// # Panics
+///
+/// Panics if lambda-encoded quantifier arguments or lambda cells are malformed.
+pub fn decode_formulas_for_cnf(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let (qall_code, qex_code) = {
+        let sig = bank.signature();
+        (sig.qall_code(), sig.qex_code())
+    };
+
+    let result = if (term.f_code() == qall_code || term.f_code() == qex_code) && term.arity() == 1 {
+        let quantifier_arg = term
+            .argument(0)
+            .expect("lambda-encoded quantifier argument is uninitialized");
+        let quantifier_type = quantifier_arg
+            .type_()
+            .expect("lambda-encoded quantifier argument must have a type");
+        assert!(
+            quantifier_type.is_arrow(),
+            "lambda-encoded quantifier argument must have an arrow type"
+        );
+        assert_eq!(
+            quantifier_type.arity(),
+            2,
+            "lambda-encoded quantifier argument must be unary"
+        );
+        assert!(
+            type_is_predicate(&quantifier_type),
+            "lambda-encoded quantifier argument must be predicate-typed"
+        );
+        let fresh_var = bank.vars().get_fresh_var(&quantifier_type.args()[0]);
+        let applied = bank.term_apply_arg(&quantifier_arg, &fresh_var);
+        let applied = bank.term_top_insert(applied)?;
+        let matrix = whnf_step(bank, &applied)?;
+        let decoded_matrix = decode_formulas_for_cnf(bank, &matrix)?;
+        tformula_quantor_alloc(bank, term.f_code(), fresh_var, decoded_matrix)?
+    } else if term.is_any_var() || term.arity() == 0 {
+        term.clone()
+    } else if term.is_lambda() {
+        let binder = term
+            .argument(0)
+            .unwrap_or_else(|| panic!("lambda binder is uninitialized"));
+        let matrix = term
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+        let decoded_matrix = decode_formulas_for_cnf(bank, &matrix)?;
+        if decoded_matrix == matrix {
+            term.clone()
+        } else {
+            let binder_type = binder.type_().expect("lambda binder must have a type");
+            close_with_db_var(bank, &binder_type, &decoded_matrix)?
+        }
+    } else {
+        let copy = Term::top_copy_without_args(term);
+        let mut changed = false;
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let decoded = decode_formulas_for_cnf(bank, &arg)?;
+            if decoded != arg {
+                changed = true;
+            }
+            copy.set_argument(index, decoded);
+        }
+        if changed {
+            bank.term_top_insert(copy)?
+        } else {
+            term.clone()
+        }
+    };
+
+    encode_predicate_as_eqn(bank, result)
+}
+
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
 ///
 /// # Errors
@@ -1387,9 +1517,10 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, lambda_eta_expand_db,
-        lambda_eta_expand_db_top_level, lambda_eta_reduce_db, lambda_normalize_db, named_to_db,
-        post_cnf_encode_formulas, shift_db, unfold_lambda, whnf_deref,
+        apply_terms, beta_normalize_db, close_with_type_prefix, decode_formulas_for_cnf,
+        flatten_apps, lambda_eta_expand_db, lambda_eta_expand_db_top_level, lambda_eta_reduce_db,
+        lambda_normalize_db, named_to_db, post_cnf_encode_formulas, shift_db, unfold_lambda,
+        whnf_deref,
     };
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE};
@@ -1451,6 +1582,13 @@ mod tests {
         formula.set_type(Some(bank.signature().type_bank().bool_type()));
         formula.set_argument(0, var.clone());
         formula.set_argument(1, body.clone());
+        bank.term_top_insert(formula).unwrap()
+    }
+
+    fn quantified_lambda_formula(bank: &mut TermBank, quantifier: FunCode, body: &Term) -> Term {
+        let formula = Term::top_alloc(quantifier, 1);
+        formula.set_type(Some(bank.signature().type_bank().bool_type()));
+        formula.set_argument(0, body.clone());
         bank.term_top_insert(formula).unwrap()
     }
 
@@ -1802,6 +1940,47 @@ mod tests {
         assert_eq!(body.f_code(), p.f_code());
         assert_eq!(body.argument(0).unwrap().f_code(), 0);
         assert_eq!(body.argument(1).unwrap().f_code(), 1);
+    }
+
+    #[test]
+    fn decode_formulas_for_cnf_turns_lambda_quantifier_into_var_quantifier() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = alloc_arrow_type(vec![i_type.clone(), bool_type]);
+        let p = typed_const_with_type(&mut bank, "decode_cnf_p", predicate_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let atom = apply_terms(&mut bank, &p, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &atom).unwrap();
+        let qall_code = bank.signature().qall_code();
+        let quantified = quantified_lambda_formula(&mut bank, qall_code, &lambda);
+
+        let decoded = decode_formulas_for_cnf(&mut bank, &quantified).unwrap();
+
+        assert_eq!(decoded.f_code(), qall_code);
+        assert_eq!(decoded.arity(), 2);
+        let binder = decoded.argument(0).unwrap();
+        assert!(binder.is_free_var());
+        assert_eq!(binder.type_(), Some(i_type));
+        let matrix = decoded.argument(1).unwrap();
+        assert_eq!(matrix.f_code(), bank.signature().eqn_code());
+        assert_eq!(matrix.argument(1).as_ref(), Some(bank.true_term()));
+        let predicate = matrix.argument(0).unwrap();
+        assert_eq!(predicate.f_code(), p.f_code());
+        assert_eq!(predicate.argument(0).as_ref(), Some(&binder));
+    }
+
+    #[test]
+    fn decode_formulas_for_cnf_encodes_false_as_negative_truth_equality() {
+        let mut bank = test_bank();
+        let false_term = bank.false_term().clone();
+
+        let decoded = decode_formulas_for_cnf(&mut bank, &false_term).unwrap();
+
+        assert_eq!(decoded.f_code(), bank.signature().neqn_code());
+        assert_eq!(decoded.argument(0).as_ref(), Some(bank.true_term()));
+        assert_eq!(decoded.argument(1).as_ref(), Some(bank.true_term()));
     }
 
     #[test]
