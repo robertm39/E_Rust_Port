@@ -63,6 +63,46 @@ pub fn apply_terms(bank: &mut TermBank, head: &Term, args: &[Term]) -> Result<Te
     bank.term_top_insert(applied)
 }
 
+/// Flattens additional arguments onto an already-applied head, matching C `FlattenApps`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term-bank insertion or type inference fails.
+///
+/// # Panics
+///
+/// Panics if `head` is a variable or lambda, if a copied head argument is
+/// uninitialized, or if the rebuilt top cell violates term-bank insertion
+/// invariants.
+pub fn flatten_apps(
+    bank: &mut TermBank,
+    head: &Term,
+    args: &[Term],
+    result_type: &Type,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        !head.is_any_var(),
+        "FlattenApps expects an already-applied top-cell head"
+    );
+    assert!(
+        !head.is_lambda(),
+        "FlattenApps cannot flatten a lambda top cell"
+    );
+
+    let flattened = Term::top_alloc(head.f_code(), head.arity() + args.len());
+    for (index, arg) in head.argument_clones().into_iter().enumerate() {
+        flattened.set_argument(
+            index,
+            arg.unwrap_or_else(|| panic!("head argument {index} is uninitialized")),
+        );
+    }
+    for (index, arg) in args.iter().enumerate() {
+        flattened.set_argument(head.arity() + index, arg.clone());
+    }
+    flattened.set_type(Some(result_type.clone()));
+    bank.term_top_insert(flattened)
+}
+
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
 ///
 /// # Errors
@@ -555,7 +595,10 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_terms, beta_normalize_db, close_with_type_prefix, shift_db, unfold_lambda};
+    use super::{
+        apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, shift_db,
+        unfold_lambda,
+    };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort};
     use crate::terms::termbanks::TermBank;
@@ -601,6 +644,35 @@ mod tests {
         assert!(normalized.is_applied_free_var());
         assert_eq!(normalized.argument(0).as_ref(), Some(&g));
         assert_eq!(normalized.argument(1).as_ref(), Some(&b));
+    }
+
+    #[test]
+    fn flatten_apps_appends_arguments_to_regular_head() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let full_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), i_type.clone()]);
+        let partial_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let f_code = bank.signature_mut().insert_id("lambda_flatten_f", 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, full_type)
+            .unwrap();
+        let a = typed_const(&mut bank, "lambda_flatten_a");
+        let b = typed_const(&mut bank, "lambda_flatten_b");
+        let head = Term::top_alloc(f_code, 1);
+        head.set_type(Some(partial_type));
+        head.set_argument(0, a.clone());
+        let head = bank.term_top_insert(head).unwrap();
+
+        let flattened = flatten_apps(&mut bank, &head, std::slice::from_ref(&b), &i_type).unwrap();
+
+        assert_eq!(flattened.f_code(), f_code);
+        assert_eq!(flattened.arity(), 2);
+        assert_eq!(flattened.argument(0).as_ref(), Some(&a));
+        assert_eq!(flattened.argument(1).as_ref(), Some(&b));
+        assert_eq!(flattened.type_(), Some(i_type));
     }
 
     #[test]
