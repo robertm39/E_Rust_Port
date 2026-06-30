@@ -20,8 +20,13 @@ use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
-use crate::terms::signature::{FP_FOF_OP, FP_IS_INJ_DEF_SKOLEM, SIG_NAMED_LAMBDA_CODE};
-use crate::terms::simpletypes::{arrow_type_flattened, type_get_max_arity, type_is_predicate};
+use crate::terms::signature::{
+    FP_FOF_OP, FP_IS_INJ_DEF_SKOLEM, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
+    SIG_NAMED_LAMBDA_CODE, SIG_TRUE_CODE,
+};
+use crate::terms::simpletypes::{
+    arrow_type_flattened, type_get_max_arity, type_is_predicate, Type,
+};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground, term_standard_weight};
@@ -1085,6 +1090,241 @@ pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term
     Ok(current)
 }
 
+/// Transforms a simplified term-encoded formula into negation normal form.
+///
+/// This matches C `TFormulaNNF` for a single formula. `polarity` must be `-1`,
+/// `0`, or `1`; equivalence expansion requires a nonzero polarity just like C.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding or predicate-as-equality encoding fails.
+///
+/// # Panics
+///
+/// Panics if `polarity` is outside C's accepted range, if equivalence is
+/// expanded with zero polarity, or if formula cells are malformed.
+pub fn tformula_nnf(bank: &mut TermBank, form: &Term, polarity: i32) -> Result<Term, Diagnostic> {
+    assert!(
+        (-1..=1).contains(&polarity),
+        "TFormulaNNF polarity must be -1, 0, or 1"
+    );
+
+    let mut current = form.clone();
+    let mut normal_form = false;
+    while !normal_form {
+        normal_form = true;
+        current = troot_nnf(bank, &current, polarity)?;
+        let not_code = bank.signature().not_code();
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+
+        if current.f_code() == not_code {
+            let child = formula_argument(&current, 0);
+            let rewritten = tformula_nnf(bank, &child, -polarity)?;
+            if rewritten != child {
+                normal_form = false;
+                current = tformula_fcode_alloc(bank, not_code, rewritten, None)?;
+            }
+        } else if current.f_code() == qex_code || current.f_code() == qall_code {
+            let body = formula_argument(&current, 1);
+            let rewritten = tformula_nnf(bank, &body, polarity)?;
+            if rewritten != body {
+                normal_form = false;
+                current = tformula_fcode_alloc(
+                    bank,
+                    current.f_code(),
+                    formula_argument(&current, 0),
+                    Some(rewritten),
+                )?;
+            }
+        } else if current.f_code() == and_code || current.f_code() == or_code {
+            let left = formula_argument(&current, 0);
+            let right = formula_argument(&current, 1);
+            let rewritten_left = tformula_nnf(bank, &left, polarity)?;
+            let rewritten_right = tformula_nnf(bank, &right, polarity)?;
+            if rewritten_left != left || rewritten_right != right {
+                normal_form = false;
+                current = tformula_fcode_alloc(
+                    bank,
+                    current.f_code(),
+                    rewritten_left,
+                    Some(rewritten_right),
+                )?;
+            }
+        } else if current == *bank.true_term() {
+            current = tformula_fcode_alloc(
+                bank,
+                bank.signature().eqn_code(),
+                current.clone(),
+                Some(current.clone()),
+            )?;
+        } else if current == *bank.false_term() {
+            current = tformula_fcode_alloc(
+                bank,
+                bank.signature().neqn_code(),
+                current.clone(),
+                Some(current.clone()),
+            )?;
+        } else if current.is_applied_free_var() {
+            current = tformula_fcode_alloc(
+                bank,
+                bank.signature().eqn_code(),
+                current,
+                Some(bank.true_term().clone()),
+            )?;
+        } else {
+            current = tformula_encode_predicate_as_eqn(bank, current)?;
+        }
+    }
+
+    Ok(current)
+}
+
+fn troot_nnf(bank: &mut TermBank, form: &Term, polarity: i32) -> Result<Term, Diagnostic> {
+    assert!(
+        (-1..=1).contains(&polarity),
+        "troot_nnf polarity must be -1, 0, or 1"
+    );
+
+    let mut current = form.clone();
+    loop {
+        let rewritten = troot_nnf_once(bank, &current, polarity)?;
+        if rewritten == current {
+            return Ok(current);
+        }
+        current = rewritten;
+    }
+}
+
+fn troot_nnf_once(bank: &mut TermBank, form: &Term, polarity: i32) -> Result<Term, Diagnostic> {
+    let not_code = bank.signature().not_code();
+    let eqn_code = bank.signature().eqn_code();
+    let neqn_code = bank.signature().neqn_code();
+    let and_code = bank.signature().and_code();
+    let or_code = bank.signature().or_code();
+    let impl_code = bank.signature().impl_code();
+    let equiv_code = bank.signature().equiv_code();
+    let qex_code = bank.signature().qex_code();
+    let qall_code = bank.signature().qall_code();
+
+    if form.f_code() == not_code {
+        let child = formula_argument(form, 0);
+        if tformula_is_literal(bank, &child) {
+            return tformula_fcode_alloc(
+                bank,
+                bank.signature().get_other_eqn_code(child.f_code()),
+                formula_argument(&child, 0),
+                Some(formula_argument(&child, 1)),
+            );
+        }
+        if child == *bank.true_term() {
+            return tformula_fcode_alloc(bank, neqn_code, child.clone(), Some(child));
+        }
+        if child == *bank.false_term() {
+            return tformula_fcode_alloc(bank, eqn_code, child.clone(), Some(child));
+        }
+        if child.f_code() == not_code {
+            return Ok(formula_argument(&child, 0));
+        }
+        if child.f_code() == or_code {
+            let left = tformula_fcode_alloc(bank, not_code, formula_argument(&child, 0), None)?;
+            let right = tformula_fcode_alloc(bank, not_code, formula_argument(&child, 1), None)?;
+            return tformula_fcode_alloc(bank, and_code, left, Some(right));
+        }
+        if child.f_code() == and_code {
+            let left = tformula_fcode_alloc(bank, not_code, formula_argument(&child, 0), None)?;
+            let right = tformula_fcode_alloc(bank, not_code, formula_argument(&child, 1), None)?;
+            return tformula_fcode_alloc(bank, or_code, left, Some(right));
+        }
+        if child.f_code() == qall_code {
+            let negated_body =
+                tformula_fcode_alloc(bank, not_code, formula_argument(&child, 1), None)?;
+            return tformula_fcode_alloc(
+                bank,
+                qex_code,
+                formula_argument(&child, 0),
+                Some(negated_body),
+            );
+        }
+        if child.f_code() == qex_code {
+            let negated_body =
+                tformula_fcode_alloc(bank, not_code, formula_argument(&child, 1), None)?;
+            return tformula_fcode_alloc(
+                bank,
+                qall_code,
+                formula_argument(&child, 0),
+                Some(negated_body),
+            );
+        }
+    } else if form.f_code() == impl_code {
+        let negated_left = tformula_fcode_alloc(bank, not_code, formula_argument(form, 0), None)?;
+        return tformula_fcode_alloc(bank, or_code, negated_left, Some(formula_argument(form, 1)));
+    } else if form.f_code() == equiv_code {
+        assert!(
+            polarity == 1 || polarity == -1,
+            "TFormulaNNF equivalence expansion requires nonzero polarity"
+        );
+        if polarity == 1 {
+            let left_impl = tformula_fcode_alloc(
+                bank,
+                impl_code,
+                formula_argument(form, 0),
+                Some(formula_argument(form, 1)),
+            )?;
+            let right_impl = tformula_fcode_alloc(
+                bank,
+                impl_code,
+                formula_argument(form, 1),
+                Some(formula_argument(form, 0)),
+            )?;
+            return tformula_fcode_alloc(bank, and_code, left_impl, Some(right_impl));
+        }
+        let not_left = tformula_fcode_alloc(bank, not_code, formula_argument(form, 0), None)?;
+        let not_right = tformula_fcode_alloc(bank, not_code, formula_argument(form, 1), None)?;
+        let negative_pair = tformula_fcode_alloc(bank, and_code, not_left, Some(not_right))?;
+        let positive_pair = tformula_fcode_alloc(
+            bank,
+            and_code,
+            formula_argument(form, 0),
+            Some(formula_argument(form, 1)),
+        )?;
+        return tformula_fcode_alloc(bank, or_code, positive_pair, Some(negative_pair));
+    }
+
+    Ok(form.clone())
+}
+
+fn tformula_encode_predicate_as_eqn(
+    bank: &mut TermBank,
+    formula: Term,
+) -> Result<Term, Diagnostic> {
+    let f_code = formula.f_code();
+    let is_encodable = (formula.is_any_var()
+        || !bank.signature().is_logical_symbol(f_code)
+        || f_code == bank.signature().answer_code()
+        || matches!(
+            f_code,
+            SIG_TRUE_CODE | SIG_FALSE_CODE | SIG_ITE_CODE | SIG_LET_CODE
+        )
+        || formula.is_phony_app())
+        && formula.type_().as_ref().is_some_and(Type::is_bool);
+    if !is_encodable {
+        return Ok(formula);
+    }
+
+    let positive = formula.is_any_var() || f_code != SIG_FALSE_CODE;
+    let left = if f_code == SIG_FALSE_CODE && !formula.is_any_var() {
+        bank.true_term().clone()
+    } else {
+        formula
+    };
+    let right = bank.true_term().clone();
+    let eqn_code = bank.signature_mut().get_eqn_code(positive);
+    tformula_fcode_alloc(bank, eqn_code, left, Some(right))
+}
+
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
 ///
 /// This matches C `TFormulaShiftQuantors` for a single formula. The input is
@@ -2132,7 +2372,7 @@ mod tests {
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
         tformula_distribute_disjunctions, tformula_expand_literals, tformula_neg_alloc,
-        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify_decoded,
+        tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -3054,6 +3294,127 @@ mod tests {
         let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
 
         assert_eq!(expanded, equality);
+    }
+
+    #[test]
+    fn tformula_nnf_pushes_negation_through_disjunction_to_literals() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "nnf_demorgan_a");
+        let b = typed_const(&mut bank, "nnf_demorgan_b");
+        let c = typed_const(&mut bank, "nnf_demorgan_c");
+        let d = typed_const(&mut bank, "nnf_demorgan_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let or_code = bank.signature().or_code();
+        let not_code = bank.signature().not_code();
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &left, &right);
+        let negated = bool_result_unary_with_code(&mut bank, not_code, &disjunction);
+
+        let nnf = tformula_nnf(&mut bank, &negated, 1).unwrap();
+
+        assert_eq!(nnf.f_code(), bank.signature().and_code());
+        let left_neg = nnf.argument(0).unwrap();
+        let right_neg = nnf.argument(1).unwrap();
+        assert_eq!(left_neg.f_code(), neqn_code);
+        assert_eq!(right_neg.f_code(), neqn_code);
+        assert_eq!(left_neg.argument(0).as_ref(), Some(&a));
+        assert_eq!(left_neg.argument(1).as_ref(), Some(&b));
+        assert_eq!(right_neg.argument(0).as_ref(), Some(&c));
+        assert_eq!(right_neg.argument(1).as_ref(), Some(&d));
+    }
+
+    #[test]
+    fn tformula_nnf_pushes_negation_through_universal_quantifier() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -37);
+        let a = typed_const(&mut bank, "nnf_quant_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let qall_code = bank.signature().qall_code();
+        let qex_code = bank.signature().qex_code();
+        let not_code = bank.signature().not_code();
+        let universal = bool_binary_with_code(&mut bank, qall_code, &x, &atom);
+        let negated = bool_result_unary_with_code(&mut bank, not_code, &universal);
+
+        let nnf = tformula_nnf(&mut bank, &negated, 1).unwrap();
+
+        assert_eq!(nnf.f_code(), qex_code);
+        assert_eq!(nnf.argument(0).as_ref(), Some(&x));
+        let body = nnf.argument(1).unwrap();
+        assert_eq!(body.f_code(), neqn_code);
+        assert_eq!(body.argument(0).as_ref(), Some(&x));
+        assert_eq!(body.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn tformula_nnf_expands_positive_equivalence_by_polarity() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "nnf_equiv_pos_a");
+        let b = typed_const(&mut bank, "nnf_equiv_pos_b");
+        let c = typed_const(&mut bank, "nnf_equiv_pos_c");
+        let d = typed_const(&mut bank, "nnf_equiv_pos_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let equiv_code = bank.signature().equiv_code();
+        let equiv = bool_binary_with_code(&mut bank, equiv_code, &left, &right);
+
+        let nnf = tformula_nnf(&mut bank, &equiv, 1).unwrap();
+
+        assert_eq!(nnf.f_code(), bank.signature().and_code());
+        let first_direction = nnf.argument(0).unwrap();
+        let second_direction = nnf.argument(1).unwrap();
+        assert_eq!(first_direction.f_code(), bank.signature().or_code());
+        assert_eq!(second_direction.f_code(), bank.signature().or_code());
+        assert_eq!(first_direction.argument(0).unwrap().f_code(), neqn_code);
+        assert_eq!(first_direction.argument(1).as_ref(), Some(&right));
+        assert_eq!(second_direction.argument(0).unwrap().f_code(), neqn_code);
+        assert_eq!(second_direction.argument(1).as_ref(), Some(&left));
+    }
+
+    #[test]
+    fn tformula_nnf_expands_negative_equivalence_by_polarity() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "nnf_equiv_neg_a");
+        let b = typed_const(&mut bank, "nnf_equiv_neg_b");
+        let c = typed_const(&mut bank, "nnf_equiv_neg_c");
+        let d = typed_const(&mut bank, "nnf_equiv_neg_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let equiv_code = bank.signature().equiv_code();
+        let equiv = bool_binary_with_code(&mut bank, equiv_code, &left, &right);
+
+        let nnf = tformula_nnf(&mut bank, &equiv, -1).unwrap();
+
+        assert_eq!(nnf.f_code(), bank.signature().or_code());
+        let positive_pair = nnf.argument(0).unwrap();
+        let negative_pair = nnf.argument(1).unwrap();
+        assert_eq!(positive_pair.f_code(), bank.signature().and_code());
+        assert_eq!(positive_pair.argument(0).as_ref(), Some(&left));
+        assert_eq!(positive_pair.argument(1).as_ref(), Some(&right));
+        assert_eq!(negative_pair.f_code(), bank.signature().and_code());
+        assert_eq!(negative_pair.argument(0).unwrap().f_code(), neqn_code);
+        assert_eq!(negative_pair.argument(1).unwrap().f_code(), neqn_code);
+    }
+
+    #[test]
+    fn tformula_nnf_encodes_applied_free_variable_as_truth_equality() {
+        let mut bank = test_bank();
+        let predicate = predicate_var(&mut bank, -146);
+        let arg = typed_const(&mut bank, "nnf_pred_arg");
+        let applied = apply_many(&mut bank, &predicate, std::slice::from_ref(&arg));
+
+        let nnf = tformula_nnf(&mut bank, &applied, 1).unwrap();
+
+        assert_eq!(nnf.f_code(), bank.signature().eqn_code());
+        assert_eq!(nnf.argument(0).as_ref(), Some(&applied));
+        assert_eq!(nnf.argument(1).as_ref(), Some(bank.true_term()));
     }
 
     #[test]
