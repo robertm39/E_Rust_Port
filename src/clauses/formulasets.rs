@@ -12,16 +12,18 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
-    tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_fcode_alloc,
+    tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_copy_def,
+    tformula_create_def, tformula_decode_polarity, tformula_fcode_alloc, tformula_find_defs,
     tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
     tformula_preload_types, tformula_simplify, tformula_to_cnf, tformula_tptp_string,
-    tformula_unroll_fool_result, TFormulaTptpPrintOptions,
+    tformula_unroll_fool_result, TFormulaDefinitions, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_EQ_TO_EQ,
-    DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_NEGATE_CONJECTURE,
+    clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
+    DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_NEGATE_CONJECTURE,
+    DC_SPLIT_EQUIV,
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::lambda_normalize_db;
@@ -32,7 +34,10 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
-use crate::terms::termtypes::{term_has_interpreted_symbol, Term, TP_OP_FLAG};
+use crate::terms::termtypes::{
+    term_del_prop, term_has_interpreted_symbol, DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY,
+    TP_OP_FLAG, TP_POS_POLARITY,
+};
 use crate::terms::termvars::VarBank;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -145,6 +150,16 @@ pub struct FormulaSetPreprocessConjecturesResult {
 pub struct FormulaSetFoolUnrollResult {
     pub boolean_equalities_replaced: i64,
     pub formulas_unrolled: i64,
+    pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetIntroduceDefsResult {
+    pub definitions_introduced: i64,
+    pub archived_definitions: i64,
+    pub active_definitions_inserted: i64,
+    pub formulas_rewritten: i64,
+    pub definition_applications: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
 
@@ -414,6 +429,32 @@ impl WrappedFormula {
             self.set_formula(result.formula().clone());
         }
         Ok(result.fool_unrolled())
+    }
+
+    /// Applies C `TFormulaApplyDefs` to this wrapper.
+    ///
+    /// Definition parents are reported as the archived neutral-definition terms
+    /// until full formula-derivation ownership can store stable formula handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if rebuilding the formula fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term, a marked subformula has no
+    /// definition entry, or definition metadata has not been populated.
+    pub fn apply_defs(
+        &mut self,
+        bank: &mut TermBank,
+        defs: &TFormulaDefinitions,
+    ) -> Result<Vec<Term>, Diagnostic> {
+        let mut defs_used = Vec::new();
+        let reduced = tformula_copy_def(bank, self.formula(), self.ident, defs, &mut defs_used)?;
+        if !defs_used.is_empty() {
+            self.set_formula(reduced);
+        }
+        Ok(defs_used)
     }
 
     #[must_use]
@@ -1079,6 +1120,14 @@ impl FormulaSet {
         }
     }
 
+    fn del_term_props(&self, props: crate::terms::termtypes::TermProperties) {
+        for formula in &self.formulas {
+            if let Some(term) = &formula.formula {
+                term_del_prop(term, DerefType::Never, props);
+            }
+        }
+    }
+
     /// Applies C `FormulaSetSimplify` to each formula in insertion order.
     ///
     /// This stages the mutating simplification and changed-count behavior. The
@@ -1173,6 +1222,105 @@ impl FormulaSet {
                 result.formula_derivation_ops.push(DC_FOOL_UNROLL);
             }
         }
+        Ok(result)
+    }
+
+    /// Applies C `TFormulaSetIntroduceDefs`.
+    ///
+    /// This stages the set-level definition introduction pipeline: clear the
+    /// definition/polarity term flags, mark formula polarities, find expensive
+    /// subformulas in non-clause wrappers, archive neutral definitions, insert
+    /// active definitions into the set, and apply the definitions across the
+    /// resulting set in insertion order.
+    ///
+    /// Formula-level derivation stacks and proof-document output are deferred,
+    /// so this returns the C derivation opcodes that should be attached by a
+    /// future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if a definition atom, definition formula, or copied
+    /// formula cannot be allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term, if formula cells are
+    /// malformed, or if definition metadata invariants are violated.
+    pub fn introduce_defs(
+        &mut self,
+        archive: &mut Self,
+        bank: &mut TermBank,
+        limit: i64,
+    ) -> Result<FormulaSetIntroduceDefsResult, Diagnostic> {
+        let mut result = FormulaSetIntroduceDefsResult::default();
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+
+        self.del_term_props(TP_CHECK_FLAG | TP_POS_POLARITY | TP_NEG_POLARITY);
+        self.mark_polarity(bank);
+        for formula in &self.formulas {
+            if limit != 0 && !formula.is_clause {
+                tformula_find_defs(
+                    bank,
+                    formula.formula(),
+                    1,
+                    limit,
+                    &mut defs,
+                    &mut renamed_forms,
+                )?;
+            }
+        }
+
+        result.definitions_introduced = usize_to_i64(renamed_forms.len());
+        for form in renamed_forms {
+            let entry_no = form.entry_no();
+            let polarity = tformula_decode_polarity(&form);
+            let def_atom = defs
+                .get(&entry_no)
+                .unwrap_or_else(|| panic!("renamed formula {entry_no} must have a definition"))
+                .rename_atom()
+                .clone();
+            let neutral_def = tformula_create_def(bank, &def_atom, &form, 0)?;
+            let neutral_wrapper = WrappedFormula::wt_formula_alloc(neutral_def);
+            let archived_wrapper = neutral_wrapper.flat_copy();
+            let archived_formula = archived_wrapper.formula().clone();
+            archive.insert(archived_wrapper);
+            result.archived_definitions += 1;
+            result.formula_derivation_ops.push(DC_INTRO_DEF);
+
+            if polarity == 0 {
+                let real_definition_id = neutral_wrapper.ident();
+                defs.get_mut(&entry_no)
+                    .unwrap_or_else(|| panic!("definition {entry_no} disappeared"))
+                    .set_definition_metadata(real_definition_id, archived_formula);
+                self.insert(neutral_wrapper);
+                result.active_definitions_inserted += 1;
+                result.formula_derivation_ops.push(DC_FOF_QUOTE);
+            } else {
+                let active_def = tformula_create_def(bank, &def_atom, &form, polarity)?;
+                let active_wrapper = WrappedFormula::wt_formula_alloc(active_def);
+                let real_definition_id = active_wrapper.ident();
+                defs.get_mut(&entry_no)
+                    .unwrap_or_else(|| panic!("definition {entry_no} disappeared"))
+                    .set_definition_metadata(real_definition_id, archived_formula);
+                self.insert(active_wrapper);
+                result.active_definitions_inserted += 1;
+                result.formula_derivation_ops.push(DC_SPLIT_EQUIV);
+            }
+        }
+
+        for formula in &mut self.formulas {
+            let defs_used = formula.apply_defs(bank, &defs)?;
+            if !defs_used.is_empty() {
+                result.formulas_rewritten += 1;
+                let used_count = usize_to_i64(defs_used.len());
+                result.definition_applications += used_count;
+                result
+                    .formula_derivation_ops
+                    .extend(std::iter::repeat_n(DC_APPLY_DEF, defs_used.len()));
+            }
+        }
+
         Ok(result)
     }
 
@@ -1603,8 +1751,9 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ,
-        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT,
+        DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
+        DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
+        DC_INTRO_DEF, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -2445,6 +2594,96 @@ mod tests {
         );
         assert_eq!(formulas[1].formula().f_code(), bank.signature().and_code());
         assert_eq!(formulas[2].formula(), &stable_formula);
+    }
+
+    #[test]
+    fn formula_set_introduce_defs_archives_split_def_and_applies_definition() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "set_intro_def_first");
+        let second = typed_const(&mut bank, "set_intro_def_second");
+        let third = typed_const(&mut bank, "set_intro_def_third");
+        let fourth = typed_const(&mut bank, "set_intro_def_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let expensive = bool_binary_with_code(&mut bank, equiv_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+
+        let result = set.introduce_defs(&mut archive, &mut bank, 1).unwrap();
+
+        assert_eq!(result.definitions_introduced, 1);
+        assert_eq!(result.archived_definitions, 1);
+        assert_eq!(result.active_definitions_inserted, 1);
+        assert_eq!(result.formulas_rewritten, 1);
+        assert_eq!(result.definition_applications, 1);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_SPLIT_EQUIV, DC_APPLY_DEF]
+        );
+
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas.len(), 2);
+        assert_eq!(archive.cardinality(), 1);
+
+        let rewritten = formulas[0].formula();
+        assert_eq!(rewritten.f_code(), bank.signature().or_code());
+        let rename_atom = rewritten.argument(0).unwrap();
+        assert_eq!(rename_atom.f_code(), bank.signature().eqn_code());
+        assert_eq!(rewritten.argument(1).as_ref(), Some(&tail));
+
+        let active_definition = formulas[1].formula();
+        assert_eq!(active_definition.f_code(), bank.signature().impl_code());
+        assert_eq!(active_definition.argument(0).as_ref(), Some(&rename_atom));
+        assert_eq!(active_definition.argument(1).as_ref(), Some(&expensive));
+
+        let archived_definition = archive.iter().next().unwrap().formula();
+        assert_eq!(archived_definition.f_code(), bank.signature().equiv_code());
+        assert_eq!(archived_definition.argument(0).as_ref(), Some(&rename_atom));
+        assert_eq!(archived_definition.argument(1).as_ref(), Some(&expensive));
+    }
+
+    #[test]
+    fn formula_set_introduce_defs_keeps_zero_polarity_definition_as_equivalence() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "set_intro_zero_first");
+        let second = typed_const(&mut bank, "set_intro_zero_second");
+        let third = typed_const(&mut bank, "set_intro_zero_third");
+        let fourth = typed_const(&mut bank, "set_intro_zero_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let or_code = bank.signature().or_code();
+        let expensive = bool_binary_with_code(&mut bank, or_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let formula = bool_binary_with_code(&mut bank, equiv_code, &expensive, &tail);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+
+        let result = set.introduce_defs(&mut archive, &mut bank, 1).unwrap();
+
+        assert_eq!(result.definitions_introduced, 1);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_FOF_QUOTE, DC_APPLY_DEF]
+        );
+
+        let formulas = set.iter().collect::<Vec<_>>();
+        let rewritten = formulas[0].formula();
+        let rename_atom = rewritten.argument(0).unwrap();
+        assert_eq!(rename_atom.f_code(), bank.signature().eqn_code());
+        let active_definition = formulas[1].formula();
+        assert_eq!(active_definition.f_code(), bank.signature().equiv_code());
+        assert_eq!(active_definition.argument(0).as_ref(), Some(&rename_atom));
+        assert_eq!(active_definition.argument(1).as_ref(), Some(&expensive));
+        assert_eq!(archive.cardinality(), 1);
     }
 
     #[test]
