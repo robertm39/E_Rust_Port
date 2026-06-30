@@ -26,6 +26,10 @@ use crate::clauses::derivation::{
     DC_SPLIT_EQUIV,
 };
 use crate::clauses::garbage_coll::tb_gc_collect;
+use crate::clauses::inferencedoc::{
+    FormulaCreationInference, FormulaCreationParents, FormulaDocView, ProofDocSession,
+    ProofDocWriteResult,
+};
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::lambda_normalize_db;
 use crate::terms::signature::Signature;
@@ -41,6 +45,7 @@ use crate::terms::termtypes::{
 };
 use crate::terms::termvars::VarBank;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 static WRAPPED_FORMULA_ENTRY_ID: AtomicU64 = AtomicU64::new(1);
@@ -218,6 +223,12 @@ pub struct FormulaSetArchiveResult {
     pub formulas_archived: i64,
     pub quoted_formula_sources: Vec<FormulaDerivationRef>,
     pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetDocInitialResult {
+    pub formulas_seen: i64,
+    pub write_results: Vec<ProofDocWriteResult>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -671,6 +682,50 @@ impl WrappedFormula {
         Ok(clause)
     }
 
+    /// Renders the formula body used by C formula proof documentation.
+    ///
+    /// This is the unwrapped `TFormulaTPTPPrint`/`TFormulaTSTPPrint` payload,
+    /// not a complete `fof(...)`/`tff(...)` record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if clause-backed closure construction or formula
+    /// rendering fails.
+    pub fn proof_doc_formula_body_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        if self.is_clause {
+            let closure = tformula_closure(bank, self.formula(), true)?;
+            tformula_tptp_string(
+                bank,
+                &closure,
+                full_terms,
+                TFormulaTptpPrintOptions::tstp(problem_type),
+            )
+        } else {
+            tformula_tptp_string(
+                bank,
+                self.formula(),
+                full_terms,
+                TFormulaTptpPrintOptions::tstp(problem_type),
+            )
+        }
+    }
+
+    #[must_use]
+    pub fn proof_doc_view<'a>(&'a self, rendered_formula: &'a str) -> FormulaDocView<'a> {
+        let view = FormulaDocView::new(self.ident(), self.properties(), rendered_formula)
+            .with_untyped(self.is_untyped());
+        if let Some(info) = self.info() {
+            view.with_info(info)
+        } else {
+            view
+        }
+    }
+
     /// Universally closes a clause encoding as C `WFormulaOfClause` does.
     ///
     /// C allocates a fresh formula wrapper and intentionally does not copy
@@ -1119,6 +1174,46 @@ impl FormulaSet {
 
         self.insert_set(&mut tmpset);
         result
+    }
+
+    /// Applies C `FormulaSetDocInital`.
+    ///
+    /// The misspelled C helper documents each formula as an initial formula
+    /// when proof-document output level is at least two. The session owns that
+    /// level gate and id assignment; this wrapper preserves insertion-order
+    /// traversal and uses each formula's rendered proof-document body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if rendering a wrapped formula body or writing
+    /// proof documentation fails.
+    pub fn doc_initial<W: fmt::Write>(
+        &mut self,
+        output: &mut W,
+        bank: &mut TermBank,
+        session: &mut ProofDocSession,
+        full_terms: bool,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetDocInitialResult, Diagnostic> {
+        let mut result = FormulaSetDocInitialResult::default();
+        for formula in &mut self.formulas {
+            let rendered = formula.proof_doc_formula_body_string(bank, full_terms, problem_type)?;
+            let (write_result, new_ident) = {
+                let mut view = formula.proof_doc_view(&rendered);
+                let write_result = session.doc_formula_creation(
+                    output,
+                    &mut view,
+                    FormulaCreationInference::Initial,
+                    FormulaCreationParents::none(),
+                    None,
+                )?;
+                (write_result, view.ident())
+            };
+            formula.ident = new_ident;
+            result.formulas_seen += 1;
+            result.write_results.push(write_result);
+        }
+        Ok(result)
     }
 
     #[must_use]
@@ -1916,6 +2011,9 @@ mod tests {
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{
+        ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
+    };
     use crate::terms::lambda::close_with_db_var;
     use crate::terms::signature::{
         Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
@@ -2172,6 +2270,146 @@ mod tests {
         assert_eq!(copied[0].info(), None);
         assert_eq!(copied[0].formula(), &first_term);
         assert_eq!(copied[1].formula(), &second_term);
+    }
+
+    #[test]
+    fn formula_set_doc_initial_suppresses_below_level_two_without_reidentifying() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "doc_suppress_left");
+        let right = typed_const(&mut bank, "doc_suppress_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let wrapped = WrappedFormula::wt_formula_alloc(formula);
+        let original_ident = wrapped.ident();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 1, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .doc_initial(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                true,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.formulas_seen, 1);
+        assert_eq!(
+            result.write_results,
+            vec![ProofDocWriteResult::suppressed()]
+        );
+        assert!(rendered.is_empty());
+        assert_eq!(set.iter().next().unwrap().ident(), original_ident);
+        assert_eq!(session.id_source.current_ident(), 0);
+    }
+
+    #[test]
+    fn formula_set_doc_initial_prints_pcl_initials_and_assigns_ids_in_order() {
+        let mut bank = test_bank();
+        let first_left = typed_const(&mut bank, "doc_first_left");
+        let first_right = typed_const(&mut bank, "doc_first_right");
+        let second_left = typed_const(&mut bank, "doc_second_left");
+        let second_right = typed_const(&mut bank, "doc_second_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let first_formula = bool_binary_with_code(&mut bank, eqn_code, &first_left, &first_right);
+        let second_formula =
+            bool_binary_with_code(&mut bank, eqn_code, &second_left, &second_right);
+        let mut first = WrappedFormula::wt_formula_alloc(first_formula);
+        first.set_tptp_type(CP_TYPE_AXIOM);
+        first.set_info(Some(ClauseInfo::new(
+            Some("doc_first"),
+            Some("doc.p"),
+            2,
+            3,
+        )));
+        let first_body = first
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let mut second = WrappedFormula::wt_formula_alloc(second_formula);
+        second.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        second.set_info(Some(ClauseInfo::new(Some("doc_second"), None, 4, 5)));
+        let second_body = second
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let mut set = FormulaSet::new();
+        set.insert(first);
+        set.insert(second);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .doc_initial(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                true,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.formulas_seen, 2);
+        assert_eq!(
+            result.write_results,
+            vec![
+                ProofDocWriteResult::printed(),
+                ProofDocWriteResult::printed()
+            ]
+        );
+        assert_eq!(
+            rendered,
+            format!(
+                "     1 : :{first_body} : initial(\"doc.p\", doc_first)\n     2 : neg:{second_body} : initial(unknown, doc_second)\n"
+            )
+        );
+        assert_eq!(
+            set.iter().map(WrappedFormula::ident).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(session.id_source.current_ident(), 2);
+    }
+
+    #[test]
+    fn formula_set_doc_initial_prints_tstp_initials() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "doc_tstp_left");
+        let right = typed_const(&mut bank, "doc_tstp_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        wrapped.set_info(Some(ClauseInfo::new(Some("doc_tstp"), Some("doc.p"), 8, 9)));
+        let body = wrapped
+            .proof_doc_formula_body_string(&mut bank, true, ProblemType::FirstOrder)
+            .unwrap();
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Tstp, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        let result = set
+            .doc_initial(
+                &mut rendered,
+                &mut bank,
+                &mut session,
+                true,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+
+        assert_eq!(result.formulas_seen, 1);
+        assert_eq!(result.write_results, vec![ProofDocWriteResult::printed()]);
+        assert_eq!(
+            rendered,
+            format!("fof(c_0_1, axiom, {body}, file('doc.p', doc_tstp)).\n")
+        );
+        assert_eq!(set.iter().next().unwrap().ident(), 1);
     }
 
     #[test]
