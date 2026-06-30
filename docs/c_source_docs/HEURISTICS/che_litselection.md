@@ -409,7 +409,7 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 
 ### Rust Port Status Notes
 
-- `src/heuristics/litselection.rs` ports the C-order literal-selection name table, table-index lookup, known-name checks, and `LitSelAppendNames`-style comma-separated rendering in addition to the currently ported selector bodies.
+- `src/heuristics/litselection.rs` ports the C-order literal-selection name table, table-index lookup, known-name checks, and `LitSelAppendNames`-style comma-separated rendering plus the C table-visible selector bodies currently exercised by selector-family tests.
 - The Rust selector table keeps `NoSelection` and `NoGeneration` as distinct names even though their bodies are both no-ops, preserving the C distinction used by proof-control generation gates.
 - Tests cover selector table order, uniqueness, lookup misses, and rendered comma-separated output alongside selector-family behavior tests.
 

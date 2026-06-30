@@ -1881,3 +1881,184 @@ pub const EPROVER_OPTIONS: &[OptCell<EProverOption>] = &[
         "Sort newly generated and backward simplified clauses using a total syntactic ordering.",
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::EPROVER_OPTIONS;
+
+    const C_E_OPTIONS_H: &str = include_str!("../../eprover/PROVER/e_options.h");
+
+    #[test]
+    fn rust_option_table_matches_c_long_option_surface() {
+        let mut rust_long_options = EPROVER_OPTIONS
+            .iter()
+            .filter_map(|option| option.longopt)
+            .collect::<Vec<_>>();
+        let mut c_long_options = c_long_options();
+
+        assert_has_no_duplicates("Rust", &rust_long_options);
+        assert_has_no_duplicates("C", &c_long_options);
+        rust_long_options.sort_unstable();
+        c_long_options.sort_unstable();
+        assert_eq!(rust_long_options, c_long_options);
+    }
+
+    fn assert_has_no_duplicates(table_name: &str, options: &[&str]) {
+        let mut sorted_options = options.to_vec();
+        sorted_options.sort_unstable();
+
+        for adjacent_options in sorted_options.windows(2) {
+            assert_ne!(
+                adjacent_options[0], adjacent_options[1],
+                "{table_name} option table has duplicate long option {}",
+                adjacent_options[0]
+            );
+        }
+    }
+
+    #[must_use]
+    fn c_long_options() -> Vec<&'static str> {
+        let table = c_option_table_body();
+        option_entries(table)
+            .into_iter()
+            .filter_map(long_option_from_entry)
+            .collect()
+    }
+
+    #[must_use]
+    fn c_option_table_body() -> &'static str {
+        let table_start = C_E_OPTIONS_H
+            .find("OptCell opts[]")
+            .expect("C options table must be present");
+        let table = &C_E_OPTIONS_H[table_start..];
+        let body_start = table.find('{').expect("C options table must have a body") + 1;
+        let body_end = table.find("\n};").expect("C options table must be closed");
+        &table[body_start..body_end]
+    }
+
+    #[must_use]
+    fn option_entries(table: &'static str) -> Vec<&'static str> {
+        let mut entries = Vec::new();
+        let mut entry_start = None;
+        let mut brace_depth = 0_usize;
+        let mut in_string = false;
+        let mut in_char = false;
+        let mut escaped = false;
+
+        for (index, character) in table.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if in_string {
+                match character {
+                    '\\' => escaped = true,
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            if in_char {
+                match character {
+                    '\\' => escaped = true,
+                    '\'' => in_char = false,
+                    _ => {}
+                }
+                continue;
+            }
+
+            match character {
+                '"' => in_string = true,
+                '\'' => in_char = true,
+                '{' => {
+                    if brace_depth == 0 {
+                        entry_start = Some(index + 1);
+                    }
+                    brace_depth += 1;
+                }
+                '}' => {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        let start = entry_start.expect("entry start must be set");
+                        entries.push(&table[start..index]);
+                        entry_start = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        entries
+    }
+
+    #[must_use]
+    fn long_option_from_entry(entry: &'static str) -> Option<&'static str> {
+        let fields = split_c_fields(entry);
+        let option_code = fields.first().expect("option entry must have a code");
+        if *option_code == "OPT_NOOPT" {
+            return None;
+        }
+        let long_field = fields.get(2).expect("option entry must have a long name");
+        c_string_literal(long_field)
+    }
+
+    #[must_use]
+    fn split_c_fields(entry: &'static str) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        let mut field_start = 0_usize;
+        let mut in_string = false;
+        let mut in_char = false;
+        let mut escaped = false;
+
+        for (index, character) in entry.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if in_string {
+                match character {
+                    '\\' => escaped = true,
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            if in_char {
+                match character {
+                    '\\' => escaped = true,
+                    '\'' => in_char = false,
+                    _ => {}
+                }
+                continue;
+            }
+
+            match character {
+                '"' => in_string = true,
+                '\'' => in_char = true,
+                ',' => {
+                    fields.push(entry[field_start..index].trim());
+                    field_start = index + 1;
+                }
+                _ => {}
+            }
+        }
+
+        fields.push(entry[field_start..].trim());
+        fields
+    }
+
+    #[must_use]
+    fn c_string_literal(field: &'static str) -> Option<&'static str> {
+        let trimmed = field.trim();
+        if trimmed == "NULL" {
+            return None;
+        }
+        let literal_body = trimmed
+            .strip_prefix('"')
+            .expect("long option field must be a C string or NULL");
+        let literal_end = literal_body
+            .find('"')
+            .expect("long option string must be terminated");
+        Some(&literal_body[..literal_end])
+    }
+}
