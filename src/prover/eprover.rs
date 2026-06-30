@@ -9619,6 +9619,12 @@ struct SimpleFofTermIteExpansion {
     if_false: Term,
 }
 
+struct SimpleFofTermBoolExpansion {
+    condition: Term,
+    if_true: Term,
+    if_false: Term,
+}
+
 fn simple_fof_literal_formula_to_clause_literal_lists(
     literal: Eqn,
     negate_as_conjecture: bool,
@@ -9641,6 +9647,15 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
     }
 
     if let Some(formulas) = simple_fof_literal_term_ite_to_formulas(&literal, bank)? {
+        return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
+            formulas,
+            negate_as_conjecture,
+            universal_dependencies,
+            bank,
+        );
+    }
+
+    if let Some(formulas) = simple_fof_literal_bool_subterm_to_formulas(&literal, bank)? {
         return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
             negate_as_conjecture,
@@ -9729,6 +9744,160 @@ fn simple_fof_literal_term_ite_to_formulas(
     }
 
     Ok(None)
+}
+
+fn simple_fof_literal_bool_subterm_to_formulas(
+    literal: &Eqn,
+    bank: &mut TermBank,
+) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
+    if let Some(expansion) = simple_fof_term_first_bool_expansion(literal.left(), bank)? {
+        let if_true = Eqn::alloc(
+            expansion.if_true,
+            literal.right().clone(),
+            bank,
+            literal.is_positive(),
+        )?;
+        let if_false = Eqn::alloc(
+            expansion.if_false,
+            literal.right().clone(),
+            bank,
+            literal.is_positive(),
+        )?;
+        return simple_fof_term_bool_expansion_to_formulas(
+            &expansion.condition,
+            if_true,
+            if_false,
+            bank,
+        )
+        .map(Some);
+    }
+
+    if let Some(expansion) = simple_fof_term_first_bool_expansion(literal.right(), bank)? {
+        let if_true = Eqn::alloc(
+            literal.left().clone(),
+            expansion.if_true,
+            bank,
+            literal.is_positive(),
+        )?;
+        let if_false = Eqn::alloc(
+            literal.left().clone(),
+            expansion.if_false,
+            bank,
+            literal.is_positive(),
+        )?;
+        return simple_fof_term_bool_expansion_to_formulas(
+            &expansion.condition,
+            if_true,
+            if_false,
+            bank,
+        )
+        .map(Some);
+    }
+
+    Ok(None)
+}
+
+fn simple_fof_term_bool_expansion_to_formulas(
+    condition: &Term,
+    if_true: Eqn,
+    if_false: Eqn,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let condition = simple_fof_bool_term_to_formulas(condition, bank)?;
+    Ok(vec![
+        SimpleFofFormula::Implication {
+            antecedents: condition.clone(),
+            consequents: simple_fof_literal_formulas(vec![if_true]),
+        },
+        SimpleFofFormula::Implication {
+            antecedents: vec![SimpleFofFormula::Negation(condition)],
+            consequents: simple_fof_literal_formulas(vec![if_false]),
+        },
+    ])
+}
+
+fn simple_fof_term_first_bool_expansion(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Option<SimpleFofTermBoolExpansion>, Diagnostic> {
+    if term.is_lambda() || term.f_code() == SIG_LET_CODE || !term.has_bool_subterm() {
+        return Ok(None);
+    }
+
+    for index in 0..term.arity() {
+        let argument = simple_fof_formula_term_argument(term, index, "term-position FOOL")?;
+        if argument.type_().as_ref().is_some_and(Type::is_bool) {
+            if !simple_fof_bool_subterm_should_ignore(&argument, bank)
+                && argument.f_code() != SIG_TRUE_CODE
+                && argument.f_code() != SIG_FALSE_CODE
+            {
+                let true_term = bank.true_term().clone();
+                let false_term = bank.false_term().clone();
+                return Ok(Some(SimpleFofTermBoolExpansion {
+                    condition: argument,
+                    if_true: simple_fof_term_replace_argument_with_context(
+                        term,
+                        index,
+                        &true_term,
+                        "term-position FOOL",
+                        bank,
+                    )?,
+                    if_false: simple_fof_term_replace_argument_with_context(
+                        term,
+                        index,
+                        &false_term,
+                        "term-position FOOL",
+                        bank,
+                    )?,
+                }));
+            }
+        } else if let Some(expansion) = simple_fof_term_first_bool_expansion(&argument, bank)? {
+            return Ok(Some(SimpleFofTermBoolExpansion {
+                condition: expansion.condition,
+                if_true: simple_fof_term_replace_argument_with_context(
+                    term,
+                    index,
+                    &expansion.if_true,
+                    "term-position FOOL",
+                    bank,
+                )?,
+                if_false: simple_fof_term_replace_argument_with_context(
+                    term,
+                    index,
+                    &expansion.if_false,
+                    "term-position FOOL",
+                    bank,
+                )?,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+fn simple_fof_bool_subterm_should_ignore(term: &Term, bank: &TermBank) -> bool {
+    if !term.type_().as_ref().is_some_and(Type::is_bool) {
+        return false;
+    }
+
+    if term.f_code() == SIG_LET_CODE {
+        return true;
+    }
+
+    let signature = bank.signature();
+    if (term.f_code() == signature.eqn_code() || term.f_code() == signature.neqn_code())
+        && term.arity() == 2
+    {
+        let left = simple_fof_formula_term_argument(term, 0, "term-position FOOL")
+            .unwrap_or_else(|_| panic!("encoded FOOL literal left argument must exist"));
+        let right = simple_fof_formula_term_argument(term, 1, "term-position FOOL")
+            .unwrap_or_else(|_| panic!("encoded FOOL literal right argument must exist"));
+        if right == *bank.true_term() {
+            return left.is_free_var() || left == *bank.true_term();
+        }
+    }
+
+    term.is_free_var()
 }
 
 fn simple_fof_term_ite_expansion_to_formulas(
@@ -18413,6 +18582,42 @@ mod tests {
         assert!(printed.contains("?- q(a).\n"));
         assert!(printed.contains("q(a) <- p(a).\n"));
         assert!(!printed.contains("% Proof found!"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_unrolls_term_position_boolean_formula_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-term-position-bool");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(f_type, type, f: $o > $i).\n\
+             fof(bool_arg, axiom, (f((p(a)&q(a))) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("f($true)=c <- p(a), q(a).\n"));
+        assert!(printed.contains("f($false)=c; p(a) <- .\n"));
+        assert!(printed.contains("f($false)=c; q(a) <- .\n"));
+        assert!(!printed.contains("$and"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
