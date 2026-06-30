@@ -1,3 +1,4 @@
+use crate::basics::pstacks::PStack;
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_IS_LAMBDA_DEF, CP_TYPE_CONJECTURE, CP_TYPE_QUESTION,
 };
@@ -5,11 +6,13 @@ use crate::clauses::clausefunc::tformula_mark_polarity;
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::tb_term_collect_subterms;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
-use crate::terms::termtypes::{term_has_interpreted_symbol, Term};
+use crate::terms::termtypes::{term_has_interpreted_symbol, Term, TP_OP_FLAG};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 static WRAPPED_FORMULA_ENTRY_ID: AtomicU64 = AtomicU64::new(1);
@@ -201,6 +204,70 @@ impl WrappedFormula {
     #[must_use]
     pub fn contains_f_code(&self, f_code: FunCode) -> bool {
         term_has_f_code(self.formula(), f_code)
+    }
+
+    /// Pushes each distinct non-variable, non-phony-app f-code in traversal order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if the formula is not
+    /// shared by its term bank.
+    pub fn return_f_codes(&self, f_codes: &mut Vec<FunCode>) -> i64 {
+        let start = f_codes.len();
+        let mut subterms = PStack::new();
+        let _ = tb_term_collect_subterms(self.formula(), &mut subterms);
+        let mut seen = BTreeSet::new();
+        for term in subterms.as_slice() {
+            term.del_prop(TP_OP_FLAG);
+            if !term.is_any_var() && !term.is_phony_app() && seen.insert(term.f_code()) {
+                f_codes.push(term.f_code());
+            }
+        }
+        usize_to_i64(f_codes.len() - start)
+    }
+
+    /// Returns the count of distinct non-variable, non-phony-app f-codes.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::return_f_codes`].
+    #[must_use]
+    pub fn symbol_diversity(&self) -> i64 {
+        let mut f_codes = Vec::new();
+        self.return_f_codes(&mut f_codes)
+    }
+
+    /// Extracts the defined symbol from C's lambda-definition formula shapes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper is tagged as a lambda definition but has no
+    /// formula term.
+    #[must_use]
+    pub fn get_lambda_defined_symbol(&self, signature: &Signature) -> Option<FunCode> {
+        if !self.query_prop(CP_IS_LAMBDA_DEF) {
+            return None;
+        }
+
+        let mut formula = self.formula().clone();
+        while formula.f_code() == signature.qall_code() && formula.arity() == 2 {
+            formula = formula.argument(1)?;
+        }
+
+        let left = if formula.f_code() == signature.eqn_code() {
+            formula.argument(0)
+        } else if formula.f_code() == signature.equiv_code() {
+            let equivalence_left = formula.argument(0)?;
+            if equivalence_left.f_code() == signature.eqn_code() {
+                equivalence_left.argument(0)
+            } else {
+                None
+            }
+        } else {
+            None
+        }?;
+
+        (left.f_code() > signature.internal_symbols()).then_some(left.f_code())
     }
 }
 
@@ -415,7 +482,7 @@ mod tests {
     };
     use crate::clauses::clausefunc::tformula_decode_polarity;
     use crate::clauses::clauseinfo::ClauseInfo;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
@@ -435,6 +502,11 @@ mod tests {
             .declare_final_type(f_code, type_)
             .unwrap();
         bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_var(bank: &TermBank, code: i64) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(code, &type_)
     }
 
     fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
@@ -459,6 +531,29 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn quantified_with_code(
+        bank: &mut TermBank,
+        f_code: i64,
+        variable: &Term,
+        body: &Term,
+    ) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, variable.clone());
+        term.set_argument(1, body.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn phony_app(bank: &mut TermBank, head: &Term, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let term = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, head.clone());
+        term.set_argument(1, arg.clone());
         bank.term_top_insert(term).unwrap()
     }
 
@@ -656,5 +751,72 @@ mod tests {
         assert_eq!(tformula_decode_polarity(&implication), 1);
         assert_eq!(tformula_decode_polarity(&left_disjunction), -1);
         assert_eq!(tformula_decode_polarity(&disjunction), 1);
+    }
+
+    #[test]
+    fn wrapped_formula_return_f_codes_preserves_order_and_skips_phony_apps() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fc_first");
+        let second = typed_const(&mut bank, "fc_second");
+        let third = typed_const(&mut bank, "fc_third");
+        let var = typed_var(&bank, -41);
+        let applied = phony_app(&mut bank, &var, &third);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let pair = bool_binary_with_code(&mut bank, and_code, &first, &applied);
+        let formula = bool_binary_with_code(&mut bank, or_code, &pair, &second);
+        let wrapped = WrappedFormula::wt_formula_alloc(formula);
+        let mut f_codes = vec![999_999];
+
+        assert_eq!(wrapped.return_f_codes(&mut f_codes), 5);
+        assert_eq!(
+            f_codes,
+            vec![
+                999_999,
+                or_code,
+                and_code,
+                first.f_code(),
+                third.f_code(),
+                second.f_code(),
+            ]
+        );
+        assert_eq!(wrapped.symbol_diversity(), 5);
+        assert!(!f_codes.contains(&SIG_PHONY_APP_CODE));
+    }
+
+    #[test]
+    fn wrapped_formula_get_lambda_defined_symbol_matches_c_shapes() {
+        let mut bank = test_bank();
+        let head = typed_const(&mut bank, "lambda_defined_head");
+        let rhs = typed_const(&mut bank, "lambda_defined_rhs");
+        let quantified_var = typed_var(&bank, -42);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let qall_code = bank.signature().qall_code();
+        let equiv_code = bank.signature().equiv_code();
+        let equation = bool_binary_with_code(&mut bank, eqn_code, &head, &rhs);
+        let quantified = quantified_with_code(&mut bank, qall_code, &quantified_var, &equation);
+        let mut equation_definition = WrappedFormula::wt_formula_alloc(quantified);
+        equation_definition.set_prop(CP_IS_LAMBDA_DEF);
+
+        assert_eq!(
+            equation_definition.get_lambda_defined_symbol(bank.signature()),
+            Some(head.f_code())
+        );
+
+        let true_term = bank.true_term().clone();
+        let predicate_equation = bool_binary_with_code(&mut bank, eqn_code, &head, &true_term);
+        let true_formula = bank.true_term().clone();
+        let equivalence =
+            bool_binary_with_code(&mut bank, equiv_code, &predicate_equation, &true_formula);
+        let mut equivalence_definition = WrappedFormula::wt_formula_alloc(equivalence);
+        equivalence_definition.set_prop(CP_IS_LAMBDA_DEF);
+        assert_eq!(
+            equivalence_definition.get_lambda_defined_symbol(bank.signature()),
+            Some(head.f_code())
+        );
+
+        let mut untagged = equivalence_definition.flat_copy();
+        untagged.del_prop(CP_IS_LAMBDA_DEF);
+        assert_eq!(untagged.get_lambda_defined_symbol(bank.signature()), None);
     }
 }
