@@ -355,6 +355,14 @@ pub fn pqueue_store_clause<'a>(axioms: &mut PQueue<IntOrP<&'a Clause>>, clause: 
     axioms.store_pointer(clause);
 }
 
+pub fn pqueue_store_formula<'a>(
+    axioms: &mut PQueue<IntOrP<&'a WrappedFormula>>,
+    formula: &'a WrappedFormula,
+) {
+    axioms.store_int(AxiomType::Formula.queue_tag());
+    axioms.store_pointer(formula);
+}
+
 pub fn clause_set_find_ax_selection_seeds<'a>(
     set: &'a ClauseSet,
     res: &mut PQueue<IntOrP<&'a Clause>>,
@@ -364,6 +372,21 @@ pub fn clause_set_find_ax_selection_seeds<'a>(
     for clause in set.iter() {
         if clause.is_conjecture() || (inc_hypos && clause.is_hypothesis()) {
             pqueue_store_clause(res, clause);
+            found += 1;
+        }
+    }
+    found
+}
+
+pub fn formula_set_find_ax_selection_seeds<'a>(
+    set: &'a FormulaSet,
+    res: &mut PQueue<IntOrP<&'a WrappedFormula>>,
+    inc_hypos: bool,
+) -> i64 {
+    let mut found = 0;
+    for formula in set.iter() {
+        if formula.is_conjecture() || (inc_hypos && formula.is_hypothesis()) {
+            pqueue_store_formula(res, formula);
             found += 1;
         }
     }
@@ -662,7 +685,8 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
+        clause_set_find_ax_selection_seeds, formula_set_find_ax_selection_seeds,
+        pqueue_store_clause, pqueue_store_formula, pstack_clause_del_prop,
         pstack_clause_print_tstp_string, pstack_clauses_move, pstack_formula_del_prop,
         pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_sets,
         select_threshold_clause_sets, AxiomType, ClauseSineParams, DRel, DRelation,
@@ -674,7 +698,7 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
         CP_INPUT_FORMULA, CP_IS_RELEVANT, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
-        CP_TYPE_NEG_CONJECTURE,
+        CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
@@ -1068,6 +1092,20 @@ mod tests {
     }
 
     #[test]
+    fn pqueue_store_formula_writes_c_tag_pointer_tuple() {
+        let mut bank = test_bank();
+        let formula = WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "formula_queue"));
+        let mut queue = PQueue::<IntOrP<&WrappedFormula>>::new();
+
+        pqueue_store_formula(&mut queue, &formula);
+
+        assert_eq!(queue.get_next_int(), Some(AxiomType::Formula.queue_tag()));
+        let stored = queue.get_next_pointer().expect("stored formula pointer");
+        assert_eq!(std::ptr::from_ref(stored), std::ptr::from_ref(&formula));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
     fn clause_set_find_ax_selection_seeds_keeps_set_order_and_optional_hypotheses() {
         let mut axiom = Clause::empty();
         axiom.set_ident(1);
@@ -1127,6 +1165,69 @@ mod tests {
             Some(4)
         );
         assert!(with_hypotheses.is_empty());
+    }
+
+    #[test]
+    fn formula_set_find_ax_selection_seeds_keeps_set_order_and_optional_hypotheses() {
+        let mut bank = test_bank();
+        let mut axiom = WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "seed_axiom"));
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut conjecture =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "seed_conjecture"));
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let conjecture_id = conjecture.entry_id();
+        let mut hypothesis =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "seed_hypothesis"));
+        hypothesis.set_tptp_type(CP_TYPE_HYPOTHESIS);
+        let hypothesis_id = hypothesis.entry_id();
+        let mut neg_conjecture =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "seed_neg_conjecture"));
+        neg_conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let neg_conjecture_id = neg_conjecture.entry_id();
+        let mut question =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "seed_question"));
+        question.set_tptp_type(CP_TYPE_QUESTION);
+        let question_id = question.entry_id();
+        let mut set = FormulaSet::new();
+        set.insert(axiom);
+        set.insert(conjecture);
+        set.insert(hypothesis);
+        set.insert(neg_conjecture);
+        set.insert(question);
+
+        let mut without_hypotheses = PQueue::<IntOrP<&WrappedFormula>>::new();
+        assert_eq!(
+            formula_set_find_ax_selection_seeds(&set, &mut without_hypotheses, false),
+            3
+        );
+        assert_eq!(
+            drain_formula_seed_queue(&mut without_hypotheses),
+            vec![conjecture_id, neg_conjecture_id, question_id]
+        );
+
+        let mut with_hypotheses = PQueue::<IntOrP<&WrappedFormula>>::new();
+        assert_eq!(
+            formula_set_find_ax_selection_seeds(&set, &mut with_hypotheses, true),
+            4
+        );
+        assert_eq!(
+            drain_formula_seed_queue(&mut with_hypotheses),
+            vec![conjecture_id, hypothesis_id, neg_conjecture_id, question_id]
+        );
+    }
+
+    fn drain_formula_seed_queue(queue: &mut PQueue<IntOrP<&WrappedFormula>>) -> Vec<u64> {
+        let mut entries = Vec::new();
+        while !queue.is_empty() {
+            assert_eq!(queue.get_next_int(), Some(AxiomType::Formula.queue_tag()));
+            entries.push(
+                queue
+                    .get_next_pointer()
+                    .expect("formula seed pointer")
+                    .entry_id(),
+            );
+        }
+        entries
     }
 
     #[test]
