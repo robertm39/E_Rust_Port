@@ -111,6 +111,14 @@ pub struct FormulaSetCnfResult {
     pub clauses_generated: i64,
     pub original_formulas_archived: i64,
     pub cnf_formulas_archived: i64,
+    pub formulas_simplified: i64,
+    pub boolean_equalities_replaced: i64,
+    pub formulas_fool_unrolled: i64,
+    pub definitions_introduced: i64,
+    pub definition_applications: i64,
+    pub definition_formulas_archived: i64,
+    pub active_definition_formulas_inserted: i64,
+    pub formulas_rewritten_by_defs: i64,
     pub quoted_formula_sources: Vec<FormulaDerivationRef>,
     pub formula_derivation_ops: Vec<i64>,
 }
@@ -118,6 +126,7 @@ pub struct FormulaSetCnfResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormulaSetCnfOptions {
     pub miniscope_limit: i64,
+    pub def_limit: i64,
     pub fool_unroll: bool,
     pub problem_type: ProblemType,
 }
@@ -127,9 +136,16 @@ impl FormulaSetCnfOptions {
     pub const fn new(miniscope_limit: i64, fool_unroll: bool, problem_type: ProblemType) -> Self {
         Self {
             miniscope_limit,
+            def_limit: 0,
             fool_unroll,
             problem_type,
         }
+    }
+
+    #[must_use]
+    pub const fn with_def_limit(mut self, def_limit: i64) -> Self {
+        self.def_limit = def_limit;
+        self
     }
 }
 
@@ -1327,15 +1343,11 @@ impl FormulaSet {
     /// Drains this set into CNF clauses using the staged core of C
     /// `FormulaSetCNF2`.
     ///
-    /// This preserves the C archive/copy loop for the currently ported phases:
-    /// each input formula is extracted in set order, the original is inserted
-    /// into `archive`, a flat copy is clausified through [`WrappedFormula::cnf2_into`],
-    /// and the mutated copy is inserted into `archive`.
-    ///
-    /// The higher-order set preprocessing, set-level FOOL unrolling,
-    /// simplification, definition introduction, post-CNF clause lambda lifting,
-    /// and term-bank GC side effects from full `FormulaSetCNF2` are not part of
-    /// this staged helper yet.
+    /// This preserves the supported C phase order: optional set-level FOOL
+    /// unrolling, formula simplification, definition introduction, then the
+    /// archive/copy/CNF drain loop. Higher-order set preprocessing, post-CNF
+    /// clause lambda lifting, proof-document output, and term-bank GC side
+    /// effects from full `FormulaSetCNF2` are still deferred.
     ///
     /// # Errors
     ///
@@ -1355,6 +1367,31 @@ impl FormulaSet {
         options: FormulaSetCnfOptions,
     ) -> Result<FormulaSetCnfResult, Diagnostic> {
         let mut result = FormulaSetCnfResult::default();
+
+        if options.fool_unroll {
+            let unroll_result = self.unroll_fool(bank)?;
+            result.boolean_equalities_replaced = unroll_result.boolean_equalities_replaced;
+            result.formulas_fool_unrolled = unroll_result.formulas_unrolled;
+            result
+                .formula_derivation_ops
+                .extend(unroll_result.formula_derivation_ops);
+        }
+
+        let simplify_result = self.simplify(bank)?;
+        result.formulas_simplified = simplify_result.formulas_changed;
+        result
+            .formula_derivation_ops
+            .extend(simplify_result.formula_derivation_ops);
+
+        let intro_result = self.introduce_defs(archive, bank, options.def_limit)?;
+        result.definitions_introduced = intro_result.definitions_introduced;
+        result.definition_applications = intro_result.definition_applications;
+        result.definition_formulas_archived = intro_result.archived_definitions;
+        result.active_definition_formulas_inserted = intro_result.active_definitions_inserted;
+        result.formulas_rewritten_by_defs = intro_result.formulas_rewritten;
+        result
+            .formula_derivation_ops
+            .extend(intro_result.formula_derivation_ops);
 
         while let Some(handle) = self.extract_first() {
             let source = FormulaDerivationRef::new(handle.ident());
@@ -2897,6 +2934,146 @@ mod tests {
             count_formula_set_cnf_derivations(&clauses, first_source, second_source),
             (2, 1)
         );
+    }
+
+    #[test]
+    fn formula_set_cnf2_simplifies_before_archiving_inputs() {
+        let mut bank = test_bank();
+        let atom_left = typed_const(&mut bank, "set_cnf_simpl_left");
+        let atom_right = typed_const(&mut bank, "set_cnf_simpl_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &atom_left, &atom_right);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_formula = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let unsimplified = bool_binary_with_code(&mut bank, or_code, &false_formula, &atom);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(unsimplified.clone()));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.formulas_simplified, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_FOF_SIMPLIFY));
+        assert_eq!(result.clauses_generated, 1);
+        assert_eq!(clauses.members(), 1);
+        let archived = archive.iter().collect::<Vec<_>>();
+        assert_eq!(archived[0].formula(), &atom);
+        assert_ne!(archived[0].formula(), &unsimplified);
+    }
+
+    #[test]
+    fn formula_set_cnf2_unrolls_fool_before_archive_drain() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_cnf_fool_a");
+        let b = typed_const(&mut bank, "set_cnf_fool_b");
+        let c = typed_const(&mut bank, "set_cnf_fool_c");
+        let d = typed_const(&mut bank, "set_cnf_fool_d");
+        let target = typed_const(&mut bank, "set_cnf_fool_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let bool_arg = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let bool_type = bank.signature().type_bank().bool_type();
+        let default_type = bank.signature().type_bank().default_type();
+        let applied = typed_unary_with_types(
+            &mut bank,
+            "set_cnf_fool_fun",
+            &bool_arg,
+            &bool_type,
+            &default_type,
+        );
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &applied, &target);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, true, ProblemType::FirstOrder),
+            )
+            .unwrap();
+
+        assert_eq!(result.formulas_fool_unrolled, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_FOOL_UNROLL));
+        assert_eq!(archive.iter().next().unwrap().formula().f_code(), and_code);
+        assert_eq!(clauses.members(), result.clauses_generated);
+        assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
+    fn formula_set_cnf2_introduces_defs_before_archive_drain() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "set_cnf_intro_first");
+        let second = typed_const(&mut bank, "set_cnf_intro_second");
+        let third = typed_const(&mut bank, "set_cnf_intro_third");
+        let fourth = typed_const(&mut bank, "set_cnf_intro_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let expensive = bool_binary_with_code(&mut bank, equiv_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder).with_def_limit(1),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.definitions_introduced, 1);
+        assert_eq!(result.definition_formulas_archived, 1);
+        assert_eq!(result.active_definition_formulas_inserted, 1);
+        assert_eq!(result.formulas_rewritten_by_defs, 1);
+        assert_eq!(result.definition_applications, 1);
+        assert_eq!(result.original_formulas_archived, 2);
+        assert_eq!(result.cnf_formulas_archived, 2);
+        assert!(result.formula_derivation_ops.contains(&DC_INTRO_DEF));
+        assert!(result.formula_derivation_ops.contains(&DC_SPLIT_EQUIV));
+        assert!(result.formula_derivation_ops.contains(&DC_APPLY_DEF));
+        assert_eq!(archive.cardinality(), 5);
+
+        let archived = archive.iter().collect::<Vec<_>>();
+        let neutral_definition = archived[0].formula();
+        assert_eq!(neutral_definition.f_code(), bank.signature().equiv_code());
+        let rename_atom = neutral_definition.argument(0).unwrap();
+        let rewritten_original = archived[1].formula();
+        assert_eq!(rewritten_original.f_code(), bank.signature().or_code());
+        assert_eq!(rewritten_original.argument(0).as_ref(), Some(&rename_atom));
+        assert_eq!(rewritten_original.argument(1).as_ref(), Some(&tail));
+        assert_eq!(clauses.members(), result.clauses_generated);
+        assert!(result.clauses_generated > 0);
     }
 
     #[test]
