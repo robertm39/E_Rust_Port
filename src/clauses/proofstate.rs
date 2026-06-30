@@ -5,17 +5,19 @@ use crate::clauses::clause::{clause_answer_output_string, Clause};
 use crate::clauses::clause_props::{
     CP_IS_DEAD, CP_IS_PROOF_CLAUSE, CP_TYPE_WATCH_CLAUSE, CP_WATCH_ONLY,
 };
+use crate::clauses::clausefunc::tformula_expand_distinct;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_is_dummy_quote, clause_is_eval_gc, demodulator_clause_refs,
     deriv_stack_count_search_inferences, deriv_stack_extract_parents,
     deriv_stack_indicates_initial_clause, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_QUOTE,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
+    FormulaDerivationRef, DC_CNF_QUOTE, DC_EXPAND_DISTINCT,
 };
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
-use crate::clauses::formulasets::FormulaSet;
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::freqvectors::FvCollect;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -139,6 +141,13 @@ pub struct ProofStateGcAnalysis {
     pub clause_count: u64,
     pub given_count: u64,
     pub used_given_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProofStateProcessDistinctResult {
+    pub distinct_formulas_processed: i64,
+    pub expanded_formula_sources: Vec<FormulaDerivationRef>,
+    pub formula_derivation_ops: Vec<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -540,6 +549,50 @@ impl ProofState {
 
     pub fn f_archive_mut(&mut self) -> &mut FormulaSet {
         &mut self.f_archive
+    }
+
+    /// Processes `$distinct(...)` formula axioms like C
+    /// `ProofStateProcessDistinct`.
+    ///
+    /// Matching formulas are discovered in current `f_axioms` order and then
+    /// processed in stack-pop order, so later matching formulas are expanded
+    /// first. The original wrappers move to `f_ax_archive`, and fresh expanded
+    /// disequality wrappers are appended to `f_axioms`. Formula derivation
+    /// stacks are still staged, so the returned metadata records the
+    /// `DCExpandDistinct` source/op pairs that the final owner should attach.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if expanding a `$distinct` formula fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a matching wrapper has no formula term.
+    pub fn process_distinct(&mut self) -> Result<ProofStateProcessDistinctResult, Diagnostic> {
+        let distinct_code = self.terms.signature().distinct_code();
+        let mut pending = self
+            .f_axioms
+            .iter()
+            .filter(|formula| formula.formula().f_code() == distinct_code)
+            .map(WrappedFormula::entry_id)
+            .collect::<Vec<_>>();
+        let mut result = ProofStateProcessDistinctResult::default();
+
+        while let Some(entry_id) = pending.pop() {
+            let Some(distinct) = self.f_axioms.extract_entry(entry_id) else {
+                continue;
+            };
+            let source = FormulaDerivationRef::new(distinct.ident());
+            let diseq_form = tformula_expand_distinct(&mut self.terms, distinct.formula())?;
+            self.f_ax_archive.insert(distinct);
+            self.f_axioms
+                .insert(WrappedFormula::wt_formula_alloc(diseq_form));
+            result.distinct_formulas_processed += 1;
+            result.expanded_formula_sources.push(source);
+            result.formula_derivation_ops.push(DC_EXPAND_DISTINCT);
+        }
+
+        Ok(result)
     }
 
     #[must_use]
@@ -1791,8 +1844,8 @@ mod tests {
         CP_WATCH_ONLY,
     };
     use crate::clauses::derivation::{
-        clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_CNF_EVAL_GC,
-        DC_CNF_QUOTE, DC_EQ_RES,
+        clause_push_derivation, ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef,
+        DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EQ_RES, DC_EXPAND_DISTINCT,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
@@ -1875,6 +1928,14 @@ mod tests {
     fn wrapped_formula(state: &mut ProofState, name: &str) -> WrappedFormula {
         let formula = typed_const(state.terms_mut(), name);
         WrappedFormula::wt_formula_alloc(formula)
+    }
+
+    fn distinct_formula(bank: &mut TermBank, args: &[Term]) -> Term {
+        let term = Term::top_alloc(bank.signature().distinct_code(), args.len());
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index, arg.clone());
+        }
+        bank.term_top_insert(term).unwrap()
     }
 
     fn temp_path(stem: &str) -> PathBuf {
@@ -2265,6 +2326,67 @@ mod tests {
         assert!(state
             .statistics_string(false)
             .contains("Current number of archived formulas  : 1"));
+    }
+
+    #[test]
+    fn proof_state_process_distinct_archives_and_expands_in_c_stack_order() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let first = {
+            let bank = state.terms_mut();
+            let a = typed_const(bank, "distinct_first_a");
+            let b = typed_const(bank, "distinct_first_b");
+            WrappedFormula::wt_formula_alloc(distinct_formula(bank, &[a, b]))
+        };
+        let first_ident = first.ident();
+        let middle = wrapped_formula(&mut state, "distinct_middle");
+        let middle_ident = middle.ident();
+        let second = {
+            let bank = state.terms_mut();
+            let a = typed_const(bank, "distinct_second_a");
+            let b = typed_const(bank, "distinct_second_b");
+            let c = typed_const(bank, "distinct_second_c");
+            WrappedFormula::wt_formula_alloc(distinct_formula(bank, &[a, b, c]))
+        };
+        let second_ident = second.ident();
+
+        state.f_axioms_mut().insert(first);
+        state.f_axioms_mut().insert(middle);
+        state.f_axioms_mut().insert(second);
+
+        let result = state.process_distinct().unwrap();
+
+        assert_eq!(result.distinct_formulas_processed, 2);
+        assert_eq!(
+            result.expanded_formula_sources,
+            vec![
+                FormulaDerivationRef::new(second_ident),
+                FormulaDerivationRef::new(first_ident),
+            ]
+        );
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_EXPAND_DISTINCT, DC_EXPAND_DISTINCT]
+        );
+        assert_eq!(
+            state
+                .f_ax_archive()
+                .iter()
+                .map(WrappedFormula::ident)
+                .collect::<Vec<_>>(),
+            vec![second_ident, first_ident]
+        );
+
+        let active = state.f_axioms().iter().collect::<Vec<_>>();
+        assert_eq!(active.len(), 3);
+        assert_eq!(active[0].ident(), middle_ident);
+        assert_eq!(
+            active[1].formula().f_code(),
+            state.terms().signature().and_code()
+        );
+        assert_eq!(
+            active[2].formula().f_code(),
+            state.terms().signature().neqn_code()
+        );
     }
 
     #[test]
