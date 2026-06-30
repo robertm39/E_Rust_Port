@@ -8763,6 +8763,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
     if !negate_as_conjecture {
         formulas = simple_fof_lift_direct_let_formulas(formulas, bank)?;
     }
+    formulas = simple_fof_simplify_formulas(formulas);
     let universal_dependencies = simple_fof_global_free_variables(&formulas);
     simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         formulas,
@@ -8896,6 +8897,221 @@ fn simple_fof_formula_from_conjunction(formulas: Vec<SimpleFofFormula>) -> Simpl
         0 => SimpleFofFormula::Truth(true),
         1 => formulas.into_iter().next().expect("formula length checked"),
         _ => SimpleFofFormula::Conjunction(formulas),
+    }
+}
+
+fn simple_fof_formula_from_disjunction(formulas: Vec<SimpleFofFormula>) -> SimpleFofFormula {
+    match formulas.len() {
+        0 => SimpleFofFormula::Truth(false),
+        1 => formulas.into_iter().next().expect("formula length checked"),
+        _ => SimpleFofFormula::Disjunction(formulas),
+    }
+}
+
+fn simple_fof_simplify_formulas(formulas: Vec<SimpleFofFormula>) -> Vec<SimpleFofFormula> {
+    simple_fof_simplify_conjunction_formulas(formulas)
+}
+
+fn simple_fof_simplify_formula_vec(formulas: Vec<SimpleFofFormula>) -> Vec<SimpleFofFormula> {
+    formulas
+        .into_iter()
+        .map(simple_fof_simplify_formula)
+        .collect()
+}
+
+fn simple_fof_simplify_conjunction_formulas(
+    formulas: Vec<SimpleFofFormula>,
+) -> Vec<SimpleFofFormula> {
+    let mut simplified = Vec::with_capacity(formulas.len());
+    for formula in simple_fof_simplify_formula_vec(formulas) {
+        match formula {
+            SimpleFofFormula::Truth(false) => return simple_fof_truth_formula(false),
+            SimpleFofFormula::Truth(true) => {}
+            formula => simplified.push(formula),
+        }
+    }
+    if simplified.is_empty() {
+        simple_fof_truth_formula(true)
+    } else {
+        simplified
+    }
+}
+
+fn simple_fof_simplify_disjunction_formulas(
+    formulas: Vec<SimpleFofFormula>,
+) -> Vec<SimpleFofFormula> {
+    let mut simplified = Vec::with_capacity(formulas.len());
+    for formula in simple_fof_simplify_formula_vec(formulas) {
+        match formula {
+            SimpleFofFormula::Truth(true) => return simple_fof_truth_formula(true),
+            SimpleFofFormula::Truth(false) => {}
+            formula => simplified.push(formula),
+        }
+    }
+    if simplified.is_empty() {
+        simple_fof_truth_formula(false)
+    } else {
+        simplified
+    }
+}
+
+fn simple_fof_formulas_truth_value(formulas: &[SimpleFofFormula]) -> Option<bool> {
+    match formulas {
+        [SimpleFofFormula::Truth(value)] => Some(*value),
+        _ => None,
+    }
+}
+
+fn simple_fof_negate_simplified_formulas(formulas: Vec<SimpleFofFormula>) -> SimpleFofFormula {
+    if let Some(value) = simple_fof_formulas_truth_value(&formulas) {
+        return SimpleFofFormula::Truth(!value);
+    }
+    if let [SimpleFofFormula::Negation(inner)] = formulas.as_slice() {
+        return simple_fof_formula_from_conjunction(inner.clone());
+    }
+    SimpleFofFormula::Negation(formulas)
+}
+
+fn simple_fof_simplify_formula(formula: SimpleFofFormula) -> SimpleFofFormula {
+    match formula {
+        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => formula,
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => simple_fof_simplify_implication_formula(antecedents, consequents),
+        SimpleFofFormula::Equivalence { left, right } => {
+            simple_fof_simplify_equivalence_formula(left, right)
+        }
+        SimpleFofFormula::Xor { left, right } => simple_fof_simplify_xor_formula(left, right),
+        SimpleFofFormula::Nand { left, right } => simple_fof_simplify_nand_formula(left, right),
+        SimpleFofFormula::Nor { left, right } => simple_fof_simplify_nor_formula(left, right),
+        SimpleFofFormula::Conjunction(formulas) => {
+            simple_fof_formula_from_conjunction(simple_fof_simplify_conjunction_formulas(formulas))
+        }
+        SimpleFofFormula::Disjunction(formulas) => {
+            simple_fof_formula_from_disjunction(simple_fof_simplify_disjunction_formulas(formulas))
+        }
+        SimpleFofFormula::Negation(formulas) => simple_fof_negate_simplified_formulas(
+            simple_fof_simplify_conjunction_formulas(formulas),
+        ),
+        SimpleFofFormula::Universal { bound, formulas } => {
+            simple_fof_simplify_quantified_formula(bound, formulas, true)
+        }
+        SimpleFofFormula::Existential { bound, formulas } => {
+            simple_fof_simplify_quantified_formula(bound, formulas, false)
+        }
+    }
+}
+
+fn simple_fof_simplify_implication_formula(
+    antecedents: Vec<SimpleFofFormula>,
+    consequents: Vec<SimpleFofFormula>,
+) -> SimpleFofFormula {
+    let antecedents = simple_fof_simplify_conjunction_formulas(antecedents);
+    let consequents = simple_fof_simplify_conjunction_formulas(consequents);
+    match (
+        simple_fof_formulas_truth_value(&antecedents),
+        simple_fof_formulas_truth_value(&consequents),
+    ) {
+        (Some(false), _) | (_, Some(true)) => SimpleFofFormula::Truth(true),
+        (Some(true), _) => simple_fof_formula_from_conjunction(consequents),
+        (_, Some(false)) => simple_fof_negate_simplified_formulas(antecedents),
+        (None, None) => SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        },
+    }
+}
+
+fn simple_fof_simplify_equivalence_formula(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+) -> SimpleFofFormula {
+    let left = simple_fof_simplify_conjunction_formulas(left);
+    let right = simple_fof_simplify_conjunction_formulas(right);
+    match (
+        simple_fof_formulas_truth_value(&left),
+        simple_fof_formulas_truth_value(&right),
+    ) {
+        (Some(left), Some(right)) => SimpleFofFormula::Truth(left == right),
+        (Some(true), _) => simple_fof_formula_from_conjunction(right),
+        (_, Some(true)) => simple_fof_formula_from_conjunction(left),
+        (Some(false), _) => simple_fof_negate_simplified_formulas(right),
+        (_, Some(false)) => simple_fof_negate_simplified_formulas(left),
+        (None, None) => SimpleFofFormula::Equivalence { left, right },
+    }
+}
+
+fn simple_fof_simplify_xor_formula(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+) -> SimpleFofFormula {
+    let left = simple_fof_simplify_conjunction_formulas(left);
+    let right = simple_fof_simplify_conjunction_formulas(right);
+    match (
+        simple_fof_formulas_truth_value(&left),
+        simple_fof_formulas_truth_value(&right),
+    ) {
+        (Some(left), Some(right)) => SimpleFofFormula::Truth(left != right),
+        (Some(false), _) => simple_fof_formula_from_conjunction(right),
+        (_, Some(false)) => simple_fof_formula_from_conjunction(left),
+        (Some(true), _) => simple_fof_negate_simplified_formulas(right),
+        (_, Some(true)) => simple_fof_negate_simplified_formulas(left),
+        (None, None) => SimpleFofFormula::Xor { left, right },
+    }
+}
+
+fn simple_fof_simplify_nand_formula(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+) -> SimpleFofFormula {
+    let left = simple_fof_simplify_conjunction_formulas(left);
+    let right = simple_fof_simplify_conjunction_formulas(right);
+    match (
+        simple_fof_formulas_truth_value(&left),
+        simple_fof_formulas_truth_value(&right),
+    ) {
+        (Some(false), _) | (_, Some(false)) => SimpleFofFormula::Truth(true),
+        (Some(true), _) => simple_fof_negate_simplified_formulas(right),
+        (_, Some(true)) => simple_fof_negate_simplified_formulas(left),
+        (None, None) => SimpleFofFormula::Nand { left, right },
+    }
+}
+
+fn simple_fof_simplify_nor_formula(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+) -> SimpleFofFormula {
+    let left = simple_fof_simplify_conjunction_formulas(left);
+    let right = simple_fof_simplify_conjunction_formulas(right);
+    match (
+        simple_fof_formulas_truth_value(&left),
+        simple_fof_formulas_truth_value(&right),
+    ) {
+        (Some(true), _) | (_, Some(true)) => SimpleFofFormula::Truth(false),
+        (Some(false), _) => simple_fof_negate_simplified_formulas(right),
+        (_, Some(false)) => simple_fof_negate_simplified_formulas(left),
+        (None, None) => SimpleFofFormula::Nor { left, right },
+    }
+}
+
+fn simple_fof_simplify_quantified_formula(
+    bound: Vec<Term>,
+    formulas: Vec<SimpleFofFormula>,
+    is_universal: bool,
+) -> SimpleFofFormula {
+    let formulas = simple_fof_simplify_conjunction_formulas(formulas);
+    if simple_fof_formulas_truth_value(&formulas).is_some() {
+        return simple_fof_formula_from_conjunction(formulas);
+    }
+    if is_universal {
+        SimpleFofFormula::Universal { bound, formulas }
+    } else {
+        SimpleFofFormula::Existential { bound, formulas }
     }
 }
 
@@ -19964,6 +20180,9 @@ mod tests {
              fof(false_axiom, axiom, $false).\n\
              fof(false_disjunction, axiom, ($false|p(a))).\n\
              fof(true_conjunction, axiom, ($true&p(a))).\n\
+             fof(true_disjunction, axiom, ($true|skip(a))).\n\
+             fof(false_conjunction, axiom, ($false&q(a))).\n\
+             fof(negated_true_disjunction, axiom, ~($true|s(a))).\n\
              fof(goal, conjecture, $true).\n",
         )
         .unwrap();
@@ -19981,10 +20200,13 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
         assert!(!printed.contains("$true"));
-        assert!(printed.contains(", axiom, ($false)).\n"));
+        assert_eq!(printed.matches(", axiom, ($false)).\n").count(), 3);
         assert_eq!(printed.matches(", axiom, (p(a))).\n").count(), 2);
+        assert!(!printed.contains("skip(a)"));
+        assert!(!printed.contains("q(a)"));
+        assert!(!printed.contains("s(a)"));
         assert!(printed.contains(", negated_conjecture, ($false)).\n"));
-        assert_eq!(printed.matches("cnf(i_0_").count(), 4);
+        assert_eq!(printed.matches("cnf(i_0_").count(), 6);
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
