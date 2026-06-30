@@ -13,7 +13,7 @@ use crate::clauses::derivation::{
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
-    EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
+    PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::lambda::{
@@ -39,6 +39,43 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const TFORM_MANY_CLAUSES: i64 = i64::MAX;
 const TFORM_MANY_LIMIT: i64 = 1024;
+
+pub type TFormulaDefinitions = BTreeMap<i64, TFormulaDefEntry>;
+
+#[derive(Clone)]
+pub struct TFormulaDefEntry {
+    polarity: i32,
+    rename_atom: Term,
+    real_definition_id: Option<i64>,
+    archived_definition: Option<Term>,
+}
+
+impl TFormulaDefEntry {
+    #[must_use]
+    pub const fn polarity(&self) -> i32 {
+        self.polarity
+    }
+
+    #[must_use]
+    pub fn rename_atom(&self) -> &Term {
+        &self.rename_atom
+    }
+
+    #[must_use]
+    pub const fn real_definition_id(&self) -> Option<i64> {
+        self.real_definition_id
+    }
+
+    #[must_use]
+    pub fn archived_definition(&self) -> Option<&Term> {
+        self.archived_definition.as_ref()
+    }
+
+    pub fn set_definition_metadata(&mut self, real_definition_id: i64, archived_definition: Term) {
+        self.real_definition_id = Some(real_definition_id);
+        self.archived_definition = Some(archived_definition);
+    }
+}
 
 #[must_use]
 pub fn pstack_clause_print_lop_string(
@@ -1394,6 +1431,324 @@ pub fn tformula_estimate_clauses(bank: &TermBank, form: &Term, pos: bool) -> i64
         TFORM_MANY_CLAUSES
     } else {
         result
+    }
+}
+
+/// Returns or creates the definition atom for a formula.
+///
+/// This matches C `TFormulaDefRename`: definitions are keyed by the formula
+/// cell's `entry_no`, repeated requests with different polarities generalize
+/// the stored polarity to `0`, and a new definition atom is a fresh Boolean
+/// Skolem/predicate equated to `$true`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if allocating or encoding the fresh definition atom
+/// fails.
+///
+/// # Panics
+///
+/// Panics if `polarity` is outside C's `-1..=1` range.
+pub fn tformula_def_rename(
+    bank: &mut TermBank,
+    form: &Term,
+    polarity: i32,
+    defs: &mut TFormulaDefinitions,
+    renamed_forms: &mut Vec<Term>,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        (-1..=1).contains(&polarity),
+        "TFormulaDefRename polarity must be -1, 0, or 1"
+    );
+
+    if let Some(definition) = defs.get_mut(&form.entry_no()) {
+        if polarity != definition.polarity {
+            definition.polarity = 0;
+        }
+        return Ok(definition.rename_atom.clone());
+    }
+
+    let free_vars = tformula_collect_free_vars(bank, form);
+    let bool_type = bank.signature().type_bank().bool_type();
+    let skolem = bank.alloc_new_skolem(&free_vars, Some(&bool_type))?;
+    let true_term = bank.true_term().clone();
+    let rename_atom =
+        Eqn::terms_tb_term_encode(bank, &skolem, &true_term, true, PatEqnDirection::Normal)?;
+
+    defs.insert(
+        form.entry_no(),
+        TFormulaDefEntry {
+            polarity,
+            rename_atom: rename_atom.clone(),
+            real_definition_id: None,
+            archived_definition: None,
+        },
+    );
+    form.set_prop(TP_CHECK_FLAG);
+    renamed_forms.push(form.clone());
+
+    Ok(rename_atom)
+}
+
+/// Finds subformulas that should receive definitional CNF atoms.
+///
+/// This matches C `TFormulaFindDefs` for a single term-encoded formula. The
+/// traversal is depth-first, preserves C polarity propagation, and deliberately
+/// continues below an already marked formula because C may need to generalize
+/// subformula polarities after re-adding the marked root.
+///
+/// # Errors
+///
+/// Returns a diagnostic if creating a definition atom fails.
+///
+/// # Panics
+///
+/// Panics if `polarity` is outside C's `-1..=1` range.
+pub fn tformula_find_defs(
+    bank: &mut TermBank,
+    form: &Term,
+    polarity: i32,
+    def_limit: i64,
+    defs: &mut TFormulaDefinitions,
+    renamed_forms: &mut Vec<Term>,
+) -> Result<(), Diagnostic> {
+    assert!(
+        (-1..=1).contains(&polarity),
+        "TFormulaFindDefs polarity must be -1, 0, or 1"
+    );
+
+    if tformula_is_literal(bank, form) || form.type_().as_ref().is_some_and(Type::is_arrow) {
+        return Ok(());
+    }
+
+    if form.query_prop(TP_CHECK_FLAG) {
+        tformula_def_rename(bank, form, polarity, defs, renamed_forms)?;
+    }
+
+    let (and_code, or_code, not_code, implication_code, equivalence_code, qex_code, qall_code) = {
+        let sig = bank.signature();
+        (
+            sig.and_code(),
+            sig.or_code(),
+            sig.not_code(),
+            sig.impl_code(),
+            sig.equiv_code(),
+            sig.qex_code(),
+            sig.qall_code(),
+        )
+    };
+
+    let f_code = form.f_code();
+    if f_code == and_code || f_code == or_code {
+        let left = formula_argument(form, 0);
+        tformula_find_defs(bank, &left, polarity, def_limit, defs, renamed_forms)?;
+        if tformula_rename_test(bank, form, 0, polarity, def_limit) {
+            tformula_def_rename(bank, &left, polarity, defs, renamed_forms)?;
+        }
+    } else if f_code == not_code || f_code == implication_code {
+        let left = formula_argument(form, 0);
+        let child_polarity = -polarity;
+        tformula_find_defs(bank, &left, child_polarity, def_limit, defs, renamed_forms)?;
+        if tformula_rename_test(bank, form, 0, child_polarity, def_limit) {
+            tformula_def_rename(bank, &left, child_polarity, defs, renamed_forms)?;
+        }
+    } else if f_code == equivalence_code {
+        let left = formula_argument(form, 0);
+        tformula_find_defs(bank, &left, 0, def_limit, defs, renamed_forms)?;
+        if tformula_rename_test(bank, form, 0, polarity, def_limit) {
+            tformula_def_rename(bank, &left, 0, defs, renamed_forms)?;
+        }
+    }
+
+    if f_code == and_code
+        || f_code == or_code
+        || f_code == implication_code
+        || f_code == qex_code
+        || f_code == qall_code
+    {
+        let right = formula_argument(form, 1);
+        tformula_find_defs(bank, &right, polarity, def_limit, defs, renamed_forms)?;
+        if tformula_rename_test(bank, form, 1, polarity, def_limit) {
+            tformula_def_rename(bank, &right, polarity, defs, renamed_forms)?;
+        }
+    } else if f_code == equivalence_code {
+        let right = formula_argument(form, 1);
+        tformula_find_defs(bank, &right, 0, def_limit, defs, renamed_forms)?;
+        if tformula_rename_test(bank, form, 1, polarity, def_limit) {
+            tformula_def_rename(bank, &right, 0, defs, renamed_forms)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Copies a formula while replacing marked definition subformulas.
+///
+/// This matches C `TFormulaCopyDef`: marked subformulas are replaced by their
+/// definition atom unless the caller is currently building the corresponding
+/// real definition. Used definitions are recorded through their archived
+/// polarity-zero definition formula term, mirroring C's `vals[3]` pointer until
+/// full `WFormula` ownership exists.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding a changed formula fails.
+///
+/// # Panics
+///
+/// Panics if a marked formula has no definition entry, or if a used definition
+/// entry has not yet been populated with the metadata produced by definition
+/// introduction.
+pub fn tformula_copy_def(
+    bank: &mut TermBank,
+    form: &Term,
+    blocked: i64,
+    defs: &TFormulaDefinitions,
+    defs_used: &mut Vec<Term>,
+) -> Result<Term, Diagnostic> {
+    if tformula_is_literal(bank, form)
+        || form.is_applied_free_var()
+        || form.type_().as_ref().is_some_and(Type::is_arrow)
+        || form == bank.true_term()
+        || form == bank.false_term()
+        || form.is_any_var()
+        || form.f_code() <= 0
+        || !bank.signature().is_logical_symbol(form.f_code())
+    {
+        return Ok(form.clone());
+    }
+
+    if form.query_prop(TP_CHECK_FLAG) {
+        let definition = defs
+            .get(&form.entry_no())
+            .unwrap_or_else(|| panic!("marked formula {} must have a definition", form.entry_no()));
+        let real_definition_id = definition
+            .real_definition_id
+            .unwrap_or_else(|| panic!("definition {} must have a real id", form.entry_no()));
+        if real_definition_id != blocked {
+            let archived_definition = definition.archived_definition.clone().unwrap_or_else(|| {
+                panic!(
+                    "definition {} must have an archived polarity-zero formula",
+                    form.entry_no()
+                )
+            });
+            defs_used.push(archived_definition);
+            return Ok(definition.rename_atom.clone());
+        }
+    }
+
+    let (
+        and_code,
+        or_code,
+        implication_code,
+        equivalence_code,
+        negated_conjunction_code,
+        negated_disjunction_code,
+        reverse_implication_code,
+        exclusive_or_code,
+        negation_code,
+        qex_code,
+        qall_code,
+    ) = {
+        let sig = bank.signature();
+        (
+            sig.and_code(),
+            sig.or_code(),
+            sig.impl_code(),
+            sig.equiv_code(),
+            sig.nand_code(),
+            sig.nor_code(),
+            sig.bimpl_code(),
+            sig.xor_code(),
+            sig.not_code(),
+            sig.qex_code(),
+            sig.qall_code(),
+        )
+    };
+
+    let f_code = form.f_code();
+    let left = if matches!(
+        f_code,
+        code if code == and_code
+            || code == or_code
+            || code == implication_code
+            || code == equivalence_code
+            || code == negated_conjunction_code
+            || code == negated_disjunction_code
+            || code == reverse_implication_code
+            || code == exclusive_or_code
+            || code == negation_code
+    ) {
+        tformula_copy_def(bank, &formula_argument(form, 0), blocked, defs, defs_used)?
+    } else {
+        assert!(
+            f_code == qex_code || f_code == qall_code,
+            "TFormulaCopyDef expects a connective or quantifier"
+        );
+        formula_argument(form, 0)
+    };
+
+    let right = if f_code == negation_code {
+        None
+    } else {
+        Some(tformula_copy_def(
+            bank,
+            &formula_argument(form, 1),
+            blocked,
+            defs,
+            defs_used,
+        )?)
+    };
+
+    tformula_fcode_alloc(bank, f_code, left, right)
+}
+
+fn tformula_rename_test(
+    bank: &TermBank,
+    root: &Term,
+    position: usize,
+    polarity: i32,
+    def_limit: i64,
+) -> bool {
+    assert!(
+        (-1..=1).contains(&polarity),
+        "tformula_rename_test polarity must be -1, 0, or 1"
+    );
+
+    let sig = bank.signature();
+    if root.f_code() == sig.qex_code() || root.f_code() == sig.qall_code() {
+        return false;
+    }
+
+    let child = formula_argument(root, position);
+    if root.f_code() == sig.equiv_code() {
+        return tformula_estimate_clauses(bank, &child, true) > def_limit
+            || tformula_estimate_clauses(bank, &child, false) > def_limit;
+    }
+
+    match polarity {
+        1 => {
+            if root.f_code() == sig.or_code()
+                && tformula_estimate_clauses(bank, &child, true) > def_limit
+            {
+                return true;
+            }
+            let subform_sign = position == 2;
+            root.f_code() == sig.impl_code()
+                && tformula_estimate_clauses(bank, &child, subform_sign) > def_limit
+        }
+        -1 => {
+            root.f_code() == sig.and_code()
+                && tformula_estimate_clauses(bank, &child, false) > def_limit
+        }
+        0 => {
+            (root.f_code() == sig.and_code()
+                || root.f_code() == sig.or_code()
+                || root.f_code() == sig.impl_code())
+                && (tformula_estimate_clauses(bank, &child, true) > def_limit
+                    || tformula_estimate_clauses(bank, &child, false) > def_limit)
+        }
+        _ => unreachable!("polarity assertion above covers all cases"),
     }
 }
 
@@ -3344,11 +3699,12 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
+        tformula_copy_def, tformula_def_rename, tformula_distribute_disjunctions,
+        tformula_estimate_clauses, tformula_expand_literals, tformula_find_defs,
         tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_nnf,
         tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
         tformula_simplify_decoded, tformula_skolemize_outermost, tformula_var_rename,
-        TFORM_MANY_CLAUSES,
+        TFormulaDefinitions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -4519,6 +4875,130 @@ mod tests {
             tformula_estimate_clauses(&bank, &disjunction, true),
             TFORM_MANY_CLAUSES
         );
+    }
+
+    #[test]
+    fn tformula_def_rename_allocates_bool_definition_atom_and_generalizes_polarity() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -35);
+        let left_const = typed_const(&mut bank, "def_rename_left");
+        let right_const = typed_const(&mut bank, "def_rename_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom_with_var = bool_binary_with_code(&mut bank, eqn_code, &variable, &left_const);
+        let ground_atom = bool_binary_with_code(&mut bank, eqn_code, &left_const, &right_const);
+        let and_code = bank.signature().and_code();
+        let formula = bool_binary_with_code(&mut bank, and_code, &atom_with_var, &ground_atom);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+
+        let rename_atom =
+            tformula_def_rename(&mut bank, &formula, 1, &mut defs, &mut renamed_forms).unwrap();
+
+        assert!(formula.query_prop(TP_CHECK_FLAG));
+        assert_eq!(renamed_forms, vec![formula.clone()]);
+        let definition = defs.get(&formula.entry_no()).unwrap();
+        assert_eq!(definition.polarity(), 1);
+        assert_eq!(definition.rename_atom(), &rename_atom);
+        assert_eq!(rename_atom.f_code(), bank.signature().eqn_code());
+        assert_eq!(rename_atom.argument(1).as_ref(), Some(bank.true_term()));
+        let def_predicate = rename_atom.argument(0).unwrap();
+        assert_eq!(def_predicate.arity(), 1);
+        assert_eq!(def_predicate.argument(0).as_ref(), Some(&variable));
+
+        let repeated =
+            tformula_def_rename(&mut bank, &formula, -1, &mut defs, &mut renamed_forms).unwrap();
+
+        assert_eq!(repeated, rename_atom);
+        assert_eq!(renamed_forms, vec![formula.clone()]);
+        assert_eq!(defs.get(&formula.entry_no()).unwrap().polarity(), 0);
+    }
+
+    #[test]
+    fn tformula_find_defs_renames_expensive_disjunct_depth_first() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "find_defs_first");
+        let second = typed_const(&mut bank, "find_defs_second");
+        let third = typed_const(&mut bank, "find_defs_third");
+        let fourth = typed_const(&mut bank, "find_defs_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equivalence_code = bank.signature().equiv_code();
+        let or_code = bank.signature().or_code();
+        let expensive = bool_binary_with_code(&mut bank, equivalence_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+
+        tformula_find_defs(&mut bank, &formula, 1, 1, &mut defs, &mut renamed_forms).unwrap();
+
+        assert_eq!(renamed_forms, vec![expensive.clone()]);
+        assert!(expensive.query_prop(TP_CHECK_FLAG));
+        assert_eq!(defs.get(&expensive.entry_no()).unwrap().polarity(), 1);
+    }
+
+    #[test]
+    fn tformula_find_defs_preserves_implication_consequent_polarity_artifact() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "find_defs_impl_first");
+        let second = typed_const(&mut bank, "find_defs_impl_second");
+        let third = typed_const(&mut bank, "find_defs_impl_third");
+        let fourth = typed_const(&mut bank, "find_defs_impl_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let antecedent = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let left_consequent = bool_binary_with_code(&mut bank, eqn_code, &first, &third);
+        let right_consequent = bool_binary_with_code(&mut bank, eqn_code, &second, &fourth);
+        let and_code = bank.signature().and_code();
+        let implication_code = bank.signature().impl_code();
+        let consequent =
+            bool_binary_with_code(&mut bank, and_code, &left_consequent, &right_consequent);
+        let formula = bool_binary_with_code(&mut bank, implication_code, &antecedent, &consequent);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+
+        tformula_find_defs(&mut bank, &formula, 1, 1, &mut defs, &mut renamed_forms).unwrap();
+
+        assert!(renamed_forms.is_empty());
+        assert!(defs.is_empty());
+        assert!(!consequent.query_prop(TP_CHECK_FLAG));
+    }
+
+    #[test]
+    fn tformula_copy_def_replaces_unblocked_marked_subform_and_records_definition() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "copy_def_first");
+        let second = typed_const(&mut bank, "copy_def_second");
+        let third = typed_const(&mut bank, "copy_def_third");
+        let fourth = typed_const(&mut bank, "copy_def_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let marked = bool_binary_with_code(&mut bank, or_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let formula = bool_binary_with_code(&mut bank, and_code, &marked, &tail);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+        let rename_atom =
+            tformula_def_rename(&mut bank, &marked, 1, &mut defs, &mut renamed_forms).unwrap();
+        defs.get_mut(&marked.entry_no())
+            .unwrap()
+            .set_definition_metadata(77, marked.clone());
+        let mut defs_used = Vec::new();
+
+        let copied = tformula_copy_def(&mut bank, &formula, 99, &defs, &mut defs_used).unwrap();
+
+        assert_eq!(copied.f_code(), bank.signature().and_code());
+        assert_eq!(copied.argument(0).as_ref(), Some(&rename_atom));
+        assert_eq!(copied.argument(1).as_ref(), Some(&tail));
+        assert_eq!(defs_used, vec![marked.clone()]);
+
+        let mut blocked_used = Vec::new();
+        let blocked = tformula_copy_def(&mut bank, &formula, 77, &defs, &mut blocked_used).unwrap();
+        assert_eq!(blocked.argument(0).as_ref(), Some(&marked));
+        assert!(blocked_used.is_empty());
     }
 
     #[test]
