@@ -154,7 +154,7 @@ impl FormulaSetCnfOptions {
     }
 }
 
-const fn formula_set_cnf_gc_threshold(old_nodes: i64) -> i64 {
+const fn formula_set_gc_threshold(old_nodes: i64) -> i64 {
     old_nodes.saturating_mul(TFORMULA_GC_LIMIT_NUMERATOR) / TFORMULA_GC_LIMIT_DENOMINATOR
 }
 
@@ -170,9 +170,22 @@ fn collect_formula_set_cnf_garbage(
     result.terms_recovered_by_gc += recovered;
 }
 
+fn collect_formula_set_simplify_garbage(
+    bank: &mut TermBank,
+    set: &FormulaSet,
+    result: &mut FormulaSetSimplifyResult,
+) {
+    let clause_sets: [&ClauseSet; 0] = [];
+    let recovered = tb_gc_collect(bank, &clause_sets, &[set]);
+    result.term_garbage_collections += 1;
+    result.terms_recovered_by_gc += recovered;
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FormulaSetSimplifyResult {
     pub formulas_changed: i64,
+    pub term_garbage_collections: i64,
+    pub terms_recovered_by_gc: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
 
@@ -1165,12 +1178,13 @@ impl FormulaSet {
         }
     }
 
-    /// Applies C `FormulaSetSimplify` to each formula in insertion order.
+    /// Applies C `FormulaSetSimplify` to each formula in insertion order
+    /// without the optional term-bank garbage collection side effect.
     ///
-    /// This stages the mutating simplification and changed-count behavior. The
-    /// optional C term-bank garbage collections and formula derivation stack are
-    /// deferred until those owners are ported; changed formulas are represented
-    /// by `DCFofSimplify` opcodes in the result metadata.
+    /// This stages the mutating simplification and changed-count behavior.
+    /// Changed formulas are represented by `DCFofSimplify` opcodes in the
+    /// result metadata; the formula derivation stack remains deferred until
+    /// formula owners are ported.
     ///
     /// # Errors
     ///
@@ -1183,12 +1197,53 @@ impl FormulaSet {
         &mut self,
         bank: &mut TermBank,
     ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
+        self.simplify_with_garbage_collection(bank, false)
+    }
+
+    /// Applies C `FormulaSetSimplify` to each formula in insertion order.
+    ///
+    /// When `do_garbage_collect` is true, this mirrors C's thresholded
+    /// `TBGCCollect` checks using this set as the formula root set. Formula
+    /// derivation stacks and proof-document output remain deferred; changed
+    /// formulas are represented by `DCFofSimplify` opcodes in the result
+    /// metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any wrapped formula cannot be simplified.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term or if a formula is malformed.
+    pub fn simplify_with_garbage_collection(
+        &mut self,
+        bank: &mut TermBank,
+        do_garbage_collect: bool,
+    ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
         let mut result = FormulaSetSimplifyResult::default();
-        for formula in &mut self.formulas {
-            if formula.simplify(bank)? {
+        let mut old_nodes = bank.non_var_term_nodes();
+        let mut gc_threshold = formula_set_gc_threshold(old_nodes);
+        let mut index = 0;
+
+        while index < self.formulas.len() {
+            let changed = {
+                let formula = &mut self.formulas[index];
+                formula.simplify(bank)?
+            };
+            if changed {
                 result.formulas_changed += 1;
                 result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
+                if do_garbage_collect && bank.non_var_term_nodes() > gc_threshold {
+                    collect_formula_set_simplify_garbage(bank, self, &mut result);
+                    old_nodes = bank.non_var_term_nodes();
+                    gc_threshold = formula_set_gc_threshold(old_nodes);
+                }
             }
+            index += 1;
+        }
+
+        if do_garbage_collect && bank.non_var_term_nodes() != old_nodes {
+            collect_formula_set_simplify_garbage(bank, self, &mut result);
         }
         Ok(result)
     }
@@ -1389,7 +1444,7 @@ impl FormulaSet {
     ) -> Result<FormulaSetCnfResult, Diagnostic> {
         let mut result = FormulaSetCnfResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
-        let mut gc_threshold = formula_set_cnf_gc_threshold(old_nodes);
+        let mut gc_threshold = formula_set_gc_threshold(old_nodes);
 
         if options.fool_unroll {
             let unroll_result = self.unroll_fool(bank)?;
@@ -1400,8 +1455,10 @@ impl FormulaSet {
                 .extend(unroll_result.formula_derivation_ops);
         }
 
-        let simplify_result = self.simplify(bank)?;
+        let simplify_result = self.simplify_with_garbage_collection(bank, true)?;
         result.formulas_simplified = simplify_result.formulas_changed;
+        result.term_garbage_collections += simplify_result.term_garbage_collections;
+        result.terms_recovered_by_gc += simplify_result.terms_recovered_by_gc;
         result
             .formula_derivation_ops
             .extend(simplify_result.formula_derivation_ops);
@@ -1442,7 +1499,7 @@ impl FormulaSet {
             if cnf_copy_has_formula && bank.non_var_term_nodes() > gc_threshold {
                 collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result);
                 old_nodes = bank.non_var_term_nodes();
-                gc_threshold = formula_set_cnf_gc_threshold(old_nodes);
+                gc_threshold = formula_set_gc_threshold(old_nodes);
             }
         }
 
@@ -2470,6 +2527,8 @@ mod tests {
         let result = set.simplify(&mut bank).unwrap();
 
         assert_eq!(result.formulas_changed, 1);
+        assert_eq!(result.term_garbage_collections, 0);
+        assert_eq!(result.terms_recovered_by_gc, 0);
         assert_eq!(result.formula_derivation_ops, vec![DC_FOF_SIMPLIFY]);
         let formulas = set.iter().collect::<Vec<_>>();
         assert_eq!(formulas[0].entry_id(), changed_entry);
@@ -2477,6 +2536,35 @@ mod tests {
         assert_eq!(formulas[0].formula(), &changed_atom);
         assert_eq!(formulas[1].entry_id(), stable_entry);
         assert_eq!(formulas[1].formula(), &stable_atom);
+    }
+
+    #[test]
+    fn formula_set_simplify_with_gc_collects_after_node_growth() {
+        let mut bank = test_bank();
+        let dropped = typed_const(&mut bank, "set_simpl_gc_dropped");
+        let a = typed_const(&mut bank, "set_simpl_gc_a");
+        let b = typed_const(&mut bank, "set_simpl_gc_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_prop = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let equiv_code = bank.signature().equiv_code();
+        let equiv_false = bool_binary_with_code(&mut bank, equiv_code, &atom, &false_prop);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(equiv_false));
+
+        let result = set
+            .simplify_with_garbage_collection(&mut bank, true)
+            .unwrap();
+
+        assert_eq!(result.formulas_changed, 1);
+        assert!(result.term_garbage_collections >= 1);
+        assert!(result.terms_recovered_by_gc >= 1);
+        assert!(bank.find(&dropped).is_none());
+        let simplified = set.iter().next().unwrap().formula().clone();
+        assert_eq!(simplified.f_code(), neqn_code);
+        assert!(bank.find(&simplified).is_some());
     }
 
     fn assert_answer_annotation_shape(bank: &TermBank, annotated: &Term, expected_body: &Term) {
