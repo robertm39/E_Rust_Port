@@ -9,7 +9,8 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_derivation, op_has_cnf_arg1, op_has_cnf_arg2, op_is_generating,
     ClauseDerivationRef, DerivationEntry, DerivationParentRef, DC_CNF_ADD_ARG, DC_CNF_QUOTE,
-    DC_FLEX_RESOLVE, DC_INV_REC, DC_NORMALIZE, DC_PRUNE_ARG,
+    DC_DIST_DISJUNCTIONS, DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC,
+    DC_NORMALIZE, DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_VAR_RENAME,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{
@@ -41,6 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const TFORM_MANY_CLAUSES: i64 = i64::MAX;
 const TFORM_MANY_LIMIT: i64 = 1024;
+const TFORM_CNF_SIMPLIFY_LIMIT: i64 = 1000;
 
 pub type TFormulaDefinitions = BTreeMap<i64, TFormulaDefEntry>;
 
@@ -76,6 +78,35 @@ impl TFormulaDefEntry {
     pub fn set_definition_metadata(&mut self, real_definition_id: i64, archived_definition: Term) {
         self.real_definition_id = Some(real_definition_id);
         self.archived_definition = Some(archived_definition);
+    }
+}
+
+/// Term-level result of a staged formula CNF pipeline.
+///
+/// The term is the transformed formula. `derivation_ops` records the C
+/// derivation opcodes that `WTFormulaConjunctiveNF*` would push when a phase
+/// changes the wrapped formula. The full `WFormula` proof object still belongs
+/// to the later formula-owner integration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TFormulaCnfResult {
+    formula: Term,
+    derivation_ops: Vec<i64>,
+}
+
+impl TFormulaCnfResult {
+    #[must_use]
+    pub fn formula(&self) -> &Term {
+        &self.formula
+    }
+
+    #[must_use]
+    pub fn into_formula(self) -> Term {
+        self.formula
+    }
+
+    #[must_use]
+    pub fn derivation_ops(&self) -> &[i64] {
+        &self.derivation_ops
     }
 }
 
@@ -3093,6 +3124,219 @@ pub fn tformula_distribute_disjunctions(
     Ok(current)
 }
 
+/// Transforms a term-encoded formula into CNF using C `WTFormulaConjunctiveNF`
+/// phase order.
+///
+/// This is the term-level staged wrapper: it returns the transformed formula
+/// and the derivation opcodes that a future `WFormula` owner should attach when
+/// the corresponding phase changed the formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic if any composed formula transform fails.
+///
+/// # Panics
+///
+/// Panics if the input violates the C preconditions of a composed transform.
+pub fn tformula_conjunctive_nf(
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<TFormulaCnfResult, Diagnostic> {
+    let mut current = form.clone();
+    let mut derivation_ops = Vec::new();
+
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_FOF_SIMPLIFY,
+        |bank, form| tformula_simplify(bank, form, TFORM_CNF_SIMPLIFY_LIMIT),
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_FNNF,
+        tformula_nnf_positive,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_SHIFT_QUANTORS,
+        tformula_mini_scope,
+    )?;
+    seed_formula_cnf_fresh_vars(bank);
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_VAR_RENAME,
+        tformula_var_rename,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_SKOLEMIZE,
+        tformula_skolemize_outermost,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_SHIFT_QUANTORS,
+        tformula_shift_quantors,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_DIST_DISJUNCTIONS,
+        tformula_distribute_disjunctions,
+    )?;
+
+    Ok(TFormulaCnfResult {
+        formula: current,
+        derivation_ops,
+    })
+}
+
+/// Transforms a term-encoded formula into CNF using C
+/// `WTFormulaConjunctiveNF3` phase order.
+///
+/// This variant uses conditional miniscoping and optionally performs the C
+/// FOOL-unrolling step before the final NNF/distribution phases.
+///
+/// # Errors
+///
+/// Returns a diagnostic if any composed formula transform fails.
+///
+/// # Panics
+///
+/// Panics if `miniscope_limit` is negative, or if the input violates the C
+/// preconditions of a composed transform.
+pub fn tformula_conjunctive_nf3(
+    bank: &mut TermBank,
+    form: &Term,
+    miniscope_limit: i64,
+    fool_unroll: bool,
+) -> Result<TFormulaCnfResult, Diagnostic> {
+    assert!(
+        miniscope_limit >= 0,
+        "WTFormulaConjunctiveNF3 expects a nonnegative miniscope limit"
+    );
+
+    let mut current = form.clone();
+    let mut derivation_ops = Vec::new();
+
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_FOF_SIMPLIFY,
+        |bank, form| tformula_simplify(bank, form, TFORM_CNF_SIMPLIFY_LIMIT),
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_FNNF,
+        tformula_nnf_positive,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_SHIFT_QUANTORS,
+        |bank, form| tformula_mini_scope3(bank, form, miniscope_limit),
+    )?;
+    seed_formula_cnf_fresh_vars(bank);
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_VAR_RENAME,
+        tformula_var_rename,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_SKOLEMIZE,
+        tformula_skolemize_outermost,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_SHIFT_QUANTORS,
+        tformula_shift_quantors,
+    )?;
+
+    if fool_unroll {
+        apply_cnf_fool_unroll(bank, &mut current, &mut derivation_ops)?;
+    }
+
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_FNNF,
+        tformula_nnf_positive,
+    )?;
+    apply_cnf_phase(
+        bank,
+        &mut current,
+        &mut derivation_ops,
+        DC_DIST_DISJUNCTIONS,
+        tformula_distribute_disjunctions,
+    )?;
+
+    Ok(TFormulaCnfResult {
+        formula: current,
+        derivation_ops,
+    })
+}
+
+fn apply_cnf_phase(
+    bank: &mut TermBank,
+    current: &mut Term,
+    derivation_ops: &mut Vec<i64>,
+    op: i64,
+    transform: impl FnOnce(&mut TermBank, &Term) -> Result<Term, Diagnostic>,
+) -> Result<(), Diagnostic> {
+    let transformed = transform(bank, current)?;
+    if transformed != *current {
+        *current = transformed;
+        derivation_ops.push(op);
+    }
+    Ok(())
+}
+
+fn tformula_nnf_positive(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    tformula_nnf(bank, form, 1)
+}
+
+fn seed_formula_cnf_fresh_vars(bank: &TermBank) {
+    bank.vars().set_v_counts_to_used();
+    bank.vars().set_fresh_count_to_used();
+}
+
+fn apply_cnf_fool_unroll(
+    bank: &mut TermBank,
+    current: &mut Term,
+    derivation_ops: &mut Vec<i64>,
+) -> Result<(), Diagnostic> {
+    let expanded = tformula_expand_literals(bank, current)?;
+    let unrolled = do_fool_unroll(bank, &expanded)?;
+    if unrolled != expanded {
+        derivation_ops.push(DC_FOOL_UNROLL);
+    }
+    *current = unrolled;
+    Ok(())
+}
+
 fn extract_formula_core(
     bank: &mut TermBank,
     form: &Term,
@@ -4029,12 +4273,13 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_copy_def, tformula_create_def, tformula_decode_polarity, tformula_def_rename,
-        tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
-        tformula_find_defs, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
-        tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
-        tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_unroll_fool, tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
+        tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
+        tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
+        tformula_estimate_clauses, tformula_expand_literals, tformula_find_defs,
+        tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
+        tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
+        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_unroll_fool,
+        tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -4046,8 +4291,9 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
-        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_FLEX_RESOLVE, DC_INV_REC, DC_NORMALIZE,
-        DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE,
+        DC_CNF_ADD_ARG, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DIST_DISJUNCTIONS, DC_FLEX_RESOLVE,
+        DC_FNNF, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_PARAMOD,
+        DC_PRUNE_ARG, DC_REWRITE, DC_VAR_RENAME,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
@@ -5910,6 +6156,113 @@ mod tests {
         assert_eq!(body.f_code(), and_code);
         assert_eq!(body.argument(0).unwrap().f_code(), or_code);
         assert_eq!(body.argument(1).unwrap().f_code(), or_code);
+    }
+
+    #[test]
+    fn tformula_conjunctive_nf_records_nnf_and_distribution_phases() {
+        let mut bank = test_bank();
+        let antecedent_left = typed_const(&mut bank, "cnf_phase_a");
+        let antecedent_right = typed_const(&mut bank, "cnf_phase_b");
+        let left_consequent_left = typed_const(&mut bank, "cnf_phase_c");
+        let left_consequent_right = typed_const(&mut bank, "cnf_phase_d");
+        let right_consequent_left = typed_const(&mut bank, "cnf_phase_e");
+        let right_consequent_right = typed_const(&mut bank, "cnf_phase_f");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let antecedent =
+            bool_binary_with_code(&mut bank, eqn_code, &antecedent_left, &antecedent_right);
+        let consequent_left = bool_binary_with_code(
+            &mut bank,
+            eqn_code,
+            &left_consequent_left,
+            &left_consequent_right,
+        );
+        let consequent_right = bool_binary_with_code(
+            &mut bank,
+            eqn_code,
+            &right_consequent_left,
+            &right_consequent_right,
+        );
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let implication_code = bank.signature().impl_code();
+        let consequent =
+            bool_binary_with_code(&mut bank, and_code, &consequent_left, &consequent_right);
+        let formula = bool_binary_with_code(&mut bank, implication_code, &antecedent, &consequent);
+
+        let result = tformula_conjunctive_nf(&mut bank, &formula).unwrap();
+
+        assert_eq!(result.derivation_ops(), &[DC_FNNF, DC_DIST_DISJUNCTIONS]);
+        let cnf = result.formula();
+        assert_eq!(cnf.f_code(), and_code);
+        let left_clause = cnf.argument(0).unwrap();
+        let right_clause = cnf.argument(1).unwrap();
+        assert_eq!(left_clause.f_code(), or_code);
+        assert_eq!(right_clause.f_code(), or_code);
+        assert_eq!(left_clause.argument(0).as_ref(), Some(&consequent_left));
+        assert_eq!(right_clause.argument(0).as_ref(), Some(&consequent_right));
+    }
+
+    #[test]
+    fn tformula_conjunctive_nf3_seeds_fresh_vars_before_var_rename() {
+        let mut bank = test_bank();
+        let y = typed_var(&bank, -2);
+        let x = typed_var(&bank, -8);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &x, &y);
+        let qall_code = bank.signature().qall_code();
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &atom);
+
+        let result = tformula_conjunctive_nf3(&mut bank, &formula, 100, false).unwrap();
+
+        assert_eq!(result.derivation_ops(), &[DC_VAR_RENAME]);
+        let renamed = result.formula();
+        assert_eq!(renamed.f_code(), qall_code);
+        let fresh = renamed.argument(0).unwrap();
+        assert_ne!(fresh, x);
+        assert_ne!(fresh, y);
+        assert!(fresh.f_code() < y.f_code());
+        let body = renamed.argument(1).unwrap();
+        assert_eq!(body.argument(0).as_ref(), Some(&fresh));
+        assert_eq!(body.argument(1).as_ref(), Some(&y));
+    }
+
+    #[test]
+    fn tformula_conjunctive_nf3_records_fool_unroll_and_followup_nnf() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "cnf_fool_a");
+        let b = typed_const(&mut bank, "cnf_fool_b");
+        let c = typed_const(&mut bank, "cnf_fool_c");
+        let d = typed_const(&mut bank, "cnf_fool_d");
+        let target = typed_const(&mut bank, "cnf_fool_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let bool_subformula = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let applied = default_bool_arg_binary(&mut bank, "cnf_fool_fun", &a, &bool_subformula);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &applied, &target);
+
+        let result = tformula_conjunctive_nf3(&mut bank, &formula, 100, true).unwrap();
+
+        assert_eq!(
+            result.derivation_ops(),
+            &[DC_FOOL_UNROLL, DC_FNNF, DC_DIST_DISJUNCTIONS]
+        );
+        assert_eq!(result.formula().f_code(), and_code);
+    }
+
+    #[test]
+    fn tformula_conjunctive_nf3_does_not_record_fool_op_for_literal_expansion_only() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "cnf_expand_only_a");
+        let b = typed_const(&mut bank, "cnf_expand_only_b");
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let disequality = bool_binary_with_code(&mut bank, neqn_code, &a, &b);
+
+        let result = tformula_conjunctive_nf3(&mut bank, &disequality, 100, true).unwrap();
+
+        assert_eq!(result.formula(), &disequality);
+        assert_eq!(result.derivation_ops(), &[DC_FNNF]);
     }
 
     #[test]
