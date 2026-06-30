@@ -16,7 +16,7 @@ use crate::terms::termtypes::{
 };
 use crate::terms::termvars::VarBank;
 use crate::terms::typebanks::TypeBank;
-use crate::terms::typecheck::type_infer_sort;
+use crate::terms::typecheck::{type_infer_sort_with_options, TypeInferOptions};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -1468,7 +1468,14 @@ pub fn term_app_encode(orig: &Term, sig: &mut Signature) -> Result<Term, Diagnos
         orig_prefix.is_free_var() || orig_prefix.type_().is_none(),
         "non-variable prefixes are inferred during app-encoding"
     );
-    type_infer_sort(sig, &orig_prefix)?;
+    type_infer_sort_with_options(
+        sig,
+        &orig_prefix,
+        TypeInferOptions {
+            app_encode: true,
+            ..TypeInferOptions::default()
+        },
+    )?;
     let prefix_type = orig_prefix
         .type_()
         .expect("prefix type is inferred during app-encoding");

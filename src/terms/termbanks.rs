@@ -2168,6 +2168,11 @@ impl TermBank {
                 "Individual variable used at predicate position",
             ));
         }
+        if (term.f_code() == SIG_ITE_CODE || term.f_code() == SIG_LET_CODE)
+            && term.type_().as_ref().is_some_and(Type::is_bool)
+        {
+            return Ok(());
+        }
         type_declare_is_predicate(&mut self.sig, term)
     }
 

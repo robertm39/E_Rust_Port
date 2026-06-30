@@ -128,6 +128,18 @@ pub fn type_declare_is_predicate(sig: &mut Signature, term: &Term) -> Result<(),
         !term.is_free_var(),
         "free variables cannot be declared as predicates"
     );
+    if term.arity() != 0 && sig.get_type(term.f_code()).is_some_and(Type::is_bool) {
+        let bool_type = sig.type_bank().bool_type();
+        let mut args = Vec::with_capacity(term.arity() + 1);
+        for index in 0..term.arity() {
+            args.push(required_type(&required_arg(term, index)?)?);
+        }
+        args.push(bool_type);
+        let predicate_type = sig
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(args));
+        sig.declare_type(term.f_code(), predicate_type)?;
+    }
     sig.declare_is_predicate(term.f_code())?;
     term.set_type(Some(sig.type_bank().bool_type()));
     Ok(())
