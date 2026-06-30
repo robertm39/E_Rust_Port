@@ -14,7 +14,7 @@ use crate::clauses::derivation::{
     DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
     DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
-use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn::{eqn_write_app_encode, Eqn};
 use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
@@ -30,12 +30,12 @@ use crate::terms::signature::{
     SIG_NAMED_LAMBDA_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::{
-    arrow_type_flattened, type_get_max_arity, type_is_predicate, Type,
+    arrow_type_flattened, type_app_encoded_name, type_get_max_arity, type_is_predicate, Type,
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
-    term_is_db_closed, term_is_ground, term_is_untyped, term_standard_weight,
+    term_app_encode, term_is_db_closed, term_is_ground, term_is_untyped, term_standard_weight,
 };
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
@@ -45,6 +45,7 @@ use crate::terms::termtypes::{
 use crate::terms::termvars::VarBank;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 pub const TFORM_MANY_CLAUSES: i64 = i64::MAX;
 const TFORM_MANY_LIMIT: i64 = 1024;
@@ -1931,6 +1932,202 @@ pub fn tformula_expand_distinct(bank: &mut TermBank, distinct: &Term) -> Result<
 #[must_use]
 pub fn tformula_is_untyped(form: &Term) -> bool {
     term_is_untyped(form)
+}
+
+/// Writes the C `TFormulaAppEncode` rendering for a term-encoded formula.
+///
+/// This uses the same temporary term application encoding as `EqnAppEncode`.
+/// The source formula is not mutated, but the term bank signature may gain
+/// typed-application symbols and intermediate app-encoded types.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term app-encoding, type-name rendering, equation
+/// allocation, or output formatting fails.
+///
+/// # Panics
+///
+/// Panics if a formula cell violates the C shape preconditions: literals and
+/// binary nodes must have initialized arguments, quantified variables must be
+/// free variables, unary formula nodes must be negations, and binary formula
+/// nodes must use one of the known logical connectives.
+pub fn tformula_write_app_encode(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(), Diagnostic> {
+    if tformula_is_literal(bank, form) {
+        let literal = Eqn::alloc(
+            formula_argument(form, 0),
+            formula_argument(form, 1),
+            bank,
+            true,
+        )?;
+        return eqn_write_app_encode(
+            output,
+            bank,
+            &literal,
+            form.f_code() == bank.signature().neqn_code(),
+        );
+    }
+
+    if tformula_is_quantified(bank, form) {
+        return tformula_write_app_encoded_quantifier(output, bank, form);
+    }
+
+    if form.arity() == 1 {
+        assert_eq!(
+            form.f_code(),
+            bank.signature().not_code(),
+            "TFormulaAppEncode unary formula must be negation"
+        );
+        output.write_str("~(").map_err(tformula_write_error)?;
+        tformula_write_app_encode(output, bank, &formula_argument(form, 0))?;
+        output.write_char(')').map_err(tformula_write_error)?;
+        return Ok(());
+    }
+
+    assert_eq!(
+        form.arity(),
+        2,
+        "TFormulaAppEncode expects a binary formula"
+    );
+    output.write_char('(').map_err(tformula_write_error)?;
+    if form.f_code() == bank.signature().or_code() {
+        tformula_write_app_encoded_or_chain(output, bank, form)?;
+    } else {
+        tformula_write_app_encode(output, bank, &formula_argument(form, 0))?;
+        let operator = tformula_app_encoded_binary_operator(bank, form.f_code())
+            .unwrap_or_else(|| panic!("TFormulaAppEncode binary formula has the wrong operator"));
+        output.write_str(operator).map_err(tformula_write_error)?;
+        tformula_write_app_encode(output, bank, &formula_argument(form, 1))?;
+    }
+    output.write_char(')').map_err(tformula_write_error)?;
+    Ok(())
+}
+
+/// Returns the C `TFormulaAppEncode` rendering for a term-encoded formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as
+/// [`tformula_write_app_encode`].
+pub fn tformula_app_encode_string(bank: &mut TermBank, form: &Term) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    tformula_write_app_encode(&mut output, bank, form)?;
+    Ok(output)
+}
+
+/// Preloads the intermediate types needed by app-encoding a term formula.
+///
+/// This matches C `PreloadTypes`: literal sides are app-encoded and immediately
+/// discarded so that typed-application symbols and suffix arrow types have
+/// already been inserted before declaration printing.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term app-encoding fails.
+///
+/// # Panics
+///
+/// Panics if a formula node has an unexpected arity or uninitialized
+/// arguments, matching the C assertions and direct argument access.
+pub fn tformula_preload_types(bank: &mut TermBank, form: &Term) -> Result<(), Diagnostic> {
+    if tformula_is_literal(bank, form) {
+        let _left = term_app_encode(&formula_argument(form, 0), bank.signature_mut())?;
+        let _right = term_app_encode(&formula_argument(form, 1), bank.signature_mut())?;
+    } else if tformula_is_quantified(bank, form) {
+        tformula_preload_types(bank, &formula_argument(form, 1))?;
+    } else if form.arity() == 1 {
+        tformula_preload_types(bank, &formula_argument(form, 0))?;
+    } else {
+        assert_eq!(form.arity(), 2, "PreloadTypes expects a binary formula");
+        tformula_preload_types(bank, &formula_argument(form, 0))?;
+        tformula_preload_types(bank, &formula_argument(form, 1))?;
+    }
+    Ok(())
+}
+
+fn tformula_write_app_encoded_quantifier(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(), Diagnostic> {
+    let quantifier = form.f_code();
+    output
+        .write_str(if quantifier == bank.signature().qex_code() {
+            "?["
+        } else {
+            "!["
+        })
+        .map_err(tformula_write_error)?;
+
+    let mut current = form.clone();
+    loop {
+        let variable = formula_argument(&current, 0);
+        assert!(
+            variable.is_free_var(),
+            "TFormulaAppEncode quantified variable must be free"
+        );
+        let type_ = variable.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "app-encoded quantified variable has no type",
+            )
+        })?;
+        let type_name = type_app_encoded_name(&type_)?;
+        write!(output, "{}:{type_name}", bank.term_string(&variable, true))
+            .map_err(tformula_write_error)?;
+
+        let body = formula_argument(&current, 1);
+        if body.f_code() != quantifier {
+            output.write_str("]:").map_err(tformula_write_error)?;
+            return tformula_write_app_encode(output, bank, &body);
+        }
+
+        output.write_str(", ").map_err(tformula_write_error)?;
+        current = body;
+    }
+}
+
+fn tformula_write_app_encoded_or_chain(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(), Diagnostic> {
+    if form.f_code() != bank.signature().or_code() {
+        return tformula_write_app_encode(output, bank, form);
+    }
+
+    tformula_write_app_encoded_or_chain(output, bank, &formula_argument(form, 0))?;
+    output.write_char('|').map_err(tformula_write_error)?;
+    tformula_write_app_encode(output, bank, &formula_argument(form, 1))
+}
+
+fn tformula_app_encoded_binary_operator(bank: &TermBank, f_code: i64) -> Option<&'static str> {
+    if f_code == bank.signature().and_code() {
+        Some("&")
+    } else if f_code == bank.signature().or_code() {
+        Some("|")
+    } else if f_code == bank.signature().impl_code() {
+        Some("=>")
+    } else if f_code == bank.signature().equiv_code() {
+        Some("<=>")
+    } else if f_code == bank.signature().nand_code() {
+        Some("~&")
+    } else if f_code == bank.signature().nor_code() {
+        Some("~|")
+    } else if f_code == bank.signature().bimpl_code() {
+        Some("<=")
+    } else if f_code == bank.signature().xor_code() {
+        Some("<~>")
+    } else {
+        None
+    }
+}
+
+fn tformula_write_error(_error: fmt::Error) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula")
 }
 
 /// Estimates the number of clauses produced by clausifying a formula.
@@ -4755,15 +4952,16 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_add_quantor, tformula_clause_closed_encode, tformula_clause_encode,
-        tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
-        tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
-        tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
-        tformula_encode_predicate_as_eqn, tformula_estimate_clauses, tformula_expand_distinct,
-        tformula_expand_literals, tformula_find_defs, tformula_has_free_vars, tformula_is_closed,
-        tformula_is_prop_const, tformula_is_prop_false, tformula_is_prop_true, tformula_is_untyped,
-        tformula_lit_alloc, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
-        tformula_neg_alloc, tformula_negate, tformula_nnf, tformula_prop_constant_alloc,
+        tformula_add_quantor, tformula_app_encode_string, tformula_clause_closed_encode,
+        tformula_clause_encode, tformula_closure, tformula_collect_clause,
+        tformula_collect_free_vars, tformula_conjunctive_nf, tformula_conjunctive_nf3,
+        tformula_copy_def, tformula_create_def, tformula_decode_polarity, tformula_def_rename,
+        tformula_distribute_disjunctions, tformula_encode_predicate_as_eqn,
+        tformula_estimate_clauses, tformula_expand_distinct, tformula_expand_literals,
+        tformula_find_defs, tformula_has_free_vars, tformula_is_closed, tformula_is_prop_const,
+        tformula_is_prop_false, tformula_is_prop_true, tformula_is_untyped, tformula_lit_alloc,
+        tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
+        tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
         tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
         tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
         tformula_stack_to_form, tformula_to_cnf, tformula_unroll_fool, tformula_var_rename,
@@ -4784,7 +4982,7 @@ mod tests {
         DC_ELIMINATE_BVAR, DC_FLEX_RESOLVE, DC_FNNF, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
         DC_ORDERED_FACTOR, DC_PARAMOD, DC_PRUNE_ARG, DC_REWRITE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
     };
-    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn::{eqn_app_encode_string, Eqn};
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::lambda::apply_terms as lambda_apply_terms;
@@ -7031,6 +7229,110 @@ mod tests {
         let singleton = distinct_formula(&mut bank, &[a]);
         let expanded_singleton = tformula_expand_distinct(&mut bank, &singleton).unwrap();
         assert_eq!(&expanded_singleton, bank.true_term());
+    }
+
+    #[test]
+    fn tformula_app_encode_renders_literals_and_left_or_chain_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "app_form_a");
+        let b = typed_const(&mut bank, "app_form_b");
+        let c = typed_const(&mut bank, "app_form_c");
+        let f_code = typed_binary_code(&mut bank, "app_form_f");
+        let f_ab = typed_binary_with_code(&mut bank, f_code, &a, &b);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let first = bool_binary_with_code(&mut bank, eqn_code, &f_ab, &a);
+        let second = bool_binary_with_code(&mut bank, neqn_code, &a, &b);
+        let third = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let or_code = bank.signature().or_code();
+        let left = bool_binary_with_code(&mut bank, or_code, &first, &second);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &third);
+
+        let rendered = tformula_app_encode_string(&mut bank, &formula).unwrap();
+
+        let first_lit = literal(&mut bank, &f_ab, &a, true);
+        let first_expected = eqn_app_encode_string(&mut bank, &first_lit, false).unwrap();
+        let second_lit = literal(&mut bank, &a, &b, true);
+        let second_expected = eqn_app_encode_string(&mut bank, &second_lit, true).unwrap();
+        let third_lit = literal(&mut bank, &b, &c, true);
+        let third_expected = eqn_app_encode_string(&mut bank, &third_lit, false).unwrap();
+        assert_eq!(
+            rendered,
+            format!("({first_expected}|{second_expected}|{third_expected})")
+        );
+        assert_eq!(
+            bank.term_string(&f_ab, true),
+            "app_form_f(app_form_a,app_form_b)"
+        );
+    }
+
+    #[test]
+    fn tformula_app_encode_coalesces_repeated_quantifiers() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let a = typed_const(&mut bank, "app_quant_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let qall_code = bank.signature().qall_code();
+        let inner = tformula_quantor_alloc(&mut bank, qall_code, &y, &body).unwrap();
+        let outer = tformula_quantor_alloc(&mut bank, qall_code, &x, &inner).unwrap();
+
+        let rendered = tformula_app_encode_string(&mut bank, &outer).unwrap();
+
+        let x_name = bank.term_string(&x, true);
+        let y_name = bank.term_string(&y, true);
+        assert_eq!(
+            rendered,
+            format!("![{x_name}:$i, {y_name}:$i]:{x_name}=app_quant_a")
+        );
+    }
+
+    #[test]
+    fn tformula_preload_types_creates_typed_application_symbols() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "preload_a");
+        let b = typed_const(&mut bank, "preload_b");
+        let f_code = typed_binary_code(&mut bank, "preload_f");
+        let declared_f_type = bank
+            .signature()
+            .get_type(f_code)
+            .expect("fixture declares function type")
+            .clone();
+        let f_ab = typed_binary_with_code(&mut bank, f_code, &a, &b);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &f_ab, &a);
+        let before_types = bank.signature().type_bank().types_count();
+
+        tformula_preload_types(&mut bank, &formula).unwrap();
+
+        assert!(bank.signature().type_bank().types_count() > before_types);
+        let individual = bank.signature().type_bank().default_type();
+        let f_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(declared_f_type);
+        let prefix_type =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                ]));
+        let inner_app = format!(
+            "app_{}_{}_{}",
+            f_type.type_uid(),
+            individual.type_uid(),
+            prefix_type.type_uid()
+        );
+        let outer_app = format!(
+            "app_{}_{}_{}",
+            prefix_type.type_uid(),
+            individual.type_uid(),
+            individual.type_uid()
+        );
+        assert_ne!(bank.signature().find_f_code(&inner_app), 0);
+        assert_ne!(bank.signature().find_f_code(&outer_app), 0);
     }
 
     #[test]
