@@ -32,7 +32,7 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground, term_standard_weight};
 use crate::terms::termtypes::{
     term_del_prop, term_identity_id, DerefType, Term, DEFAULT_FWEIGHT, DEFAULT_VWEIGHT,
-    TP_CHECK_FLAG, TP_OP_FLAG, TP_PRED_POS,
+    TP_CHECK_FLAG, TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY, TP_PRED_POS,
 };
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1750,6 +1750,156 @@ fn tformula_rename_test(
         }
         _ => unreachable!("polarity assertion above covers all cases"),
     }
+}
+
+/// Builds a definition formula for a definition atom and a defined formula.
+///
+/// This matches C `TFormulaCreateDef`: negative polarity creates
+/// `defined -> def_atom`, positive polarity creates `def_atom -> defined`,
+/// polarity `0` creates `def_atom <=> defined`, and the result is universally
+/// closed over the variables occurring in `def_atom`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if allocating a connective or quantifier fails.
+///
+/// # Panics
+///
+/// Panics if `polarity` is outside C's `-1..=1` range, or if the C polarity
+/// marker assertions fail.
+pub fn tformula_create_def(
+    bank: &mut TermBank,
+    def_atom: &Term,
+    defined: &Term,
+    polarity: i32,
+) -> Result<Term, Diagnostic> {
+    let (implication_code, equivalence_code, universal_code) = {
+        let sig = bank.signature();
+        (sig.impl_code(), sig.equiv_code(), sig.qall_code())
+    };
+
+    let mut result = match polarity {
+        -1 => {
+            assert!(
+                !defined.query_prop(TP_POS_POLARITY),
+                "negative definition must not be marked positive"
+            );
+            tformula_fcode_alloc(
+                bank,
+                implication_code,
+                defined.clone(),
+                Some(def_atom.clone()),
+            )?
+        }
+        0 => tformula_fcode_alloc(
+            bank,
+            equivalence_code,
+            def_atom.clone(),
+            Some(defined.clone()),
+        )?,
+        1 => {
+            assert!(
+                !defined.query_prop(TP_NEG_POLARITY),
+                "positive definition must not be marked negative"
+            );
+            tformula_fcode_alloc(
+                bank,
+                implication_code,
+                def_atom.clone(),
+                Some(defined.clone()),
+            )?
+        }
+        _ => panic!("TFormulaCreateDef polarity must be -1, 0, or 1"),
+    };
+
+    for variable in tformula_collect_free_vars(bank, def_atom) {
+        result = tformula_fcode_alloc(bank, universal_code, variable, Some(result))?;
+    }
+
+    Ok(result)
+}
+
+/// Marks formula polarity flags on a term-encoded formula tree.
+///
+/// This matches C `TFormulaMarkPolarity`: literals are not marked; `not` and
+/// the left side of implication invert polarity; equivalence children are
+/// marked with both polarities; and quantifier bodies inherit root polarity.
+///
+/// # Panics
+///
+/// Panics if `polarity` is outside C's `-1..=1` range or if a traversed formula
+/// cell is malformed.
+pub fn tformula_mark_polarity(bank: &TermBank, form: &Term, polarity: i32) {
+    assert!(
+        (-1..=1).contains(&polarity),
+        "TFormulaMarkPolarity polarity must be -1, 0, or 1"
+    );
+
+    if tformula_is_literal(bank, form) {
+        return;
+    }
+
+    match polarity {
+        -1 => form.set_prop(TP_NEG_POLARITY),
+        0 => form.set_prop(TP_POS_POLARITY | TP_NEG_POLARITY),
+        1 => form.set_prop(TP_POS_POLARITY),
+        _ => unreachable!("polarity assertion above covers all cases"),
+    }
+
+    let (and_code, or_code, not_code, implication_code, equivalence_code, qex_code, qall_code) = {
+        let sig = bank.signature();
+        (
+            sig.and_code(),
+            sig.or_code(),
+            sig.not_code(),
+            sig.impl_code(),
+            sig.equiv_code(),
+            sig.qex_code(),
+            sig.qall_code(),
+        )
+    };
+
+    let f_code = form.f_code();
+    if f_code == and_code || f_code == or_code {
+        tformula_mark_polarity(bank, &formula_argument(form, 0), polarity);
+    } else if f_code == not_code || f_code == implication_code {
+        tformula_mark_polarity(bank, &formula_argument(form, 0), -polarity);
+    } else if f_code == equivalence_code {
+        tformula_mark_polarity(bank, &formula_argument(form, 0), 0);
+    }
+
+    if f_code == and_code
+        || f_code == or_code
+        || f_code == implication_code
+        || f_code == qex_code
+        || f_code == qall_code
+    {
+        tformula_mark_polarity(bank, &formula_argument(form, 1), polarity);
+    } else if f_code == equivalence_code {
+        tformula_mark_polarity(bank, &formula_argument(form, 1), 0);
+    }
+}
+
+/// Decodes the polarity flags on a formula.
+///
+/// This matches C `TFormulaDecodePolarity`: both flags mean `0`, only positive
+/// means `1`, only negative means `-1`.
+///
+/// # Panics
+///
+/// Panics if neither polarity flag is set.
+#[must_use]
+pub fn tformula_decode_polarity(form: &Term) -> i32 {
+    if form.query_prop(TP_POS_POLARITY | TP_NEG_POLARITY) {
+        return 0;
+    }
+    if form.query_prop(TP_POS_POLARITY) {
+        return 1;
+    }
+    if form.query_prop(TP_NEG_POLARITY) {
+        return -1;
+    }
+    panic!("formula has no polarity marker")
 }
 
 fn estimate_positive_clauses(bank: &TermBank, form: &Term) -> i64 {
@@ -3699,12 +3849,12 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_copy_def, tformula_def_rename, tformula_distribute_disjunctions,
-        tformula_estimate_clauses, tformula_expand_literals, tformula_find_defs,
-        tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_nnf,
-        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
-        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_var_rename,
-        TFormulaDefinitions, TFORM_MANY_CLAUSES,
+        tformula_copy_def, tformula_create_def, tformula_decode_polarity, tformula_def_rename,
+        tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
+        tformula_find_defs, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
+        tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
+        tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
+        tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -3729,7 +3879,9 @@ mod tests {
     };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG};
+    use crate::terms::termtypes::{
+        DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY, TP_POS_POLARITY,
+    };
     use crate::terms::typebanks::TypeBank;
     use std::collections::BTreeMap;
 
@@ -4999,6 +5151,126 @@ mod tests {
         let blocked = tformula_copy_def(&mut bank, &formula, 77, &defs, &mut blocked_used).unwrap();
         assert_eq!(blocked.argument(0).as_ref(), Some(&marked));
         assert!(blocked_used.is_empty());
+    }
+
+    #[test]
+    fn tformula_create_def_builds_quantified_equivalence_over_definition_vars() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -36);
+        let left_const = typed_const(&mut bank, "create_def_quant_left");
+        let right_const = typed_const(&mut bank, "create_def_quant_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let variable_atom = bool_binary_with_code(&mut bank, eqn_code, &variable, &left_const);
+        let ground_atom = bool_binary_with_code(&mut bank, eqn_code, &left_const, &right_const);
+        let and_code = bank.signature().and_code();
+        let formula = bool_binary_with_code(&mut bank, and_code, &variable_atom, &ground_atom);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+        let def_atom =
+            tformula_def_rename(&mut bank, &formula, 0, &mut defs, &mut renamed_forms).unwrap();
+
+        let definition = tformula_create_def(&mut bank, &def_atom, &formula, 0).unwrap();
+
+        assert_eq!(definition.f_code(), bank.signature().qall_code());
+        assert_eq!(definition.argument(0).as_ref(), Some(&variable));
+        let body = definition.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().equiv_code());
+        assert_eq!(body.argument(0).as_ref(), Some(&def_atom));
+        assert_eq!(body.argument(1).as_ref(), Some(&formula));
+    }
+
+    #[test]
+    fn tformula_create_def_uses_polarity_direction() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "create_def_dir_first");
+        let second = typed_const(&mut bank, "create_def_dir_second");
+        let third = typed_const(&mut bank, "create_def_dir_third");
+        let fourth = typed_const(&mut bank, "create_def_dir_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let and_code = bank.signature().and_code();
+        let formula = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let mut defs = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+        let def_atom =
+            tformula_def_rename(&mut bank, &formula, 1, &mut defs, &mut renamed_forms).unwrap();
+
+        let positive_definition = tformula_create_def(&mut bank, &def_atom, &formula, 1).unwrap();
+        assert_eq!(positive_definition.f_code(), bank.signature().impl_code());
+        assert_eq!(positive_definition.argument(0).as_ref(), Some(&def_atom));
+        assert_eq!(positive_definition.argument(1).as_ref(), Some(&formula));
+
+        let negative_definition = tformula_create_def(&mut bank, &def_atom, &formula, -1).unwrap();
+        assert_eq!(negative_definition.f_code(), bank.signature().impl_code());
+        assert_eq!(negative_definition.argument(0).as_ref(), Some(&formula));
+        assert_eq!(negative_definition.argument(1).as_ref(), Some(&def_atom));
+    }
+
+    #[test]
+    fn tformula_mark_polarity_marks_connective_children_like_c() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -37);
+        let first = typed_const(&mut bank, "mark_pol_first");
+        let second = typed_const(&mut bank, "mark_pol_second");
+        let third = typed_const(&mut bank, "mark_pol_third");
+        let fourth = typed_const(&mut bank, "mark_pol_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let first_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let second_atom = bool_binary_with_code(&mut bank, eqn_code, &second, &third);
+        let third_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let fourth_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &fourth);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let not_code = bank.signature().not_code();
+        let implication_code = bank.signature().impl_code();
+        let existential_code = bank.signature().qex_code();
+        let left_inner = bool_binary_with_code(&mut bank, or_code, &first_atom, &second_atom);
+        let left = bool_result_unary_with_code(&mut bank, not_code, &left_inner);
+        let right_body = bool_binary_with_code(&mut bank, and_code, &third_atom, &fourth_atom);
+        let right = bool_binary_with_code(&mut bank, existential_code, &x, &right_body);
+        let formula = bool_binary_with_code(&mut bank, implication_code, &left, &right);
+
+        tformula_mark_polarity(&bank, &formula, 1);
+
+        assert_eq!(tformula_decode_polarity(&formula), 1);
+        assert_eq!(tformula_decode_polarity(&left), -1);
+        assert_eq!(tformula_decode_polarity(&left_inner), 1);
+        assert_eq!(tformula_decode_polarity(&right), 1);
+        assert_eq!(tformula_decode_polarity(&right_body), 1);
+        for literal in [first_atom, second_atom, third_atom, fourth_atom] {
+            assert!(!literal.query_prop(TP_POS_POLARITY));
+            assert!(!literal.query_prop(TP_NEG_POLARITY));
+        }
+    }
+
+    #[test]
+    fn tformula_decode_polarity_decodes_all_marker_states() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "decode_pol_first");
+        let second = typed_const(&mut bank, "decode_pol_second");
+        let third = typed_const(&mut bank, "decode_pol_third");
+        let fourth = typed_const(&mut bank, "decode_pol_fourth");
+        let fifth = typed_const(&mut bank, "decode_pol_fifth");
+        let sixth = typed_const(&mut bank, "decode_pol_sixth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let first_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let second_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let third_atom = bool_binary_with_code(&mut bank, eqn_code, &fifth, &sixth);
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let implication_code = bank.signature().impl_code();
+        let positive = bool_binary_with_code(&mut bank, or_code, &first_atom, &second_atom);
+        let negative = bool_binary_with_code(&mut bank, and_code, &second_atom, &third_atom);
+        let both = bool_binary_with_code(&mut bank, implication_code, &first_atom, &third_atom);
+
+        positive.set_prop(TP_POS_POLARITY);
+        negative.set_prop(TP_NEG_POLARITY);
+        both.set_prop(TP_POS_POLARITY | TP_NEG_POLARITY);
+
+        assert_eq!(tformula_decode_polarity(&positive), 1);
+        assert_eq!(tformula_decode_polarity(&negative), -1);
+        assert_eq!(tformula_decode_polarity(&both), 0);
     }
 
     #[test]
