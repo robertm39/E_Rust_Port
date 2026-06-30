@@ -688,6 +688,170 @@ pub fn named_to_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic>
     beta_normalize_db(bank, &converted)
 }
 
+fn do_post_cnf_encode(
+    bank: &mut TermBank,
+    term: &Term,
+    bindings: &mut BTreeMap<FunCode, (FunCode, Type)>,
+    depth: FunCode,
+) -> Result<Term, Diagnostic> {
+    if term.is_db_var() {
+        return Ok(term.clone());
+    }
+
+    if term.is_free_var() {
+        if let Some((binding_depth, type_)) = bindings.get(&term.f_code()) {
+            assert_eq!(
+                term.type_(),
+                Some(type_.clone()),
+                "post-CNF variable binding type must match variable type"
+            );
+            let db_index = depth - binding_depth - 1;
+            return Ok(bank.request_db_var(type_, db_index));
+        }
+        return Ok(term.clone());
+    }
+
+    if !term.has_bool_subterm() && term_is_ground(term) {
+        return Ok(term.clone());
+    }
+
+    if term.is_lambda() {
+        assert_eq!(
+            term.f_code(),
+            SIG_DB_LAMBDA_CODE,
+            "post-CNF encoding expects DB lambdas"
+        );
+        let binder = term
+            .argument(0)
+            .unwrap_or_else(|| panic!("lambda binder is uninitialized"));
+        assert!(binder.is_db_var(), "DB lambda binder must be a DB variable");
+        let matrix = term
+            .argument(1)
+            .unwrap_or_else(|| panic!("lambda matrix is uninitialized"));
+        let encoded_matrix = do_post_cnf_encode(bank, &matrix, bindings, depth + 1)?;
+        if encoded_matrix == matrix {
+            return Ok(term.clone());
+        }
+        let binder_type = binder.type_().expect("DB lambda binder must have a type");
+        return close_with_db_var(bank, &binder_type, &encoded_matrix);
+    }
+
+    let (qall_code, qex_code, eqn_code) = {
+        let sig = bank.signature();
+        (sig.qall_code(), sig.qex_code(), sig.eqn_code())
+    };
+    if (term.f_code() == qall_code || term.f_code() == qex_code) && term.arity() == 2 {
+        return post_cnf_encode_quantifier_prefix(bank, term, term.f_code(), bindings, depth);
+    }
+
+    if term.f_code() == eqn_code
+        && term.arity() == 2
+        && term.argument(1).as_ref() == Some(bank.true_term())
+    {
+        let left = term
+            .argument(0)
+            .expect("encoded predicate left argument is uninitialized");
+        return do_post_cnf_encode(bank, &left, bindings, depth);
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let encoded = do_post_cnf_encode(bank, &arg, bindings, depth)?;
+        if encoded != arg {
+            changed = true;
+        }
+        copy.set_argument(index, encoded);
+    }
+
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(term.clone())
+    }
+}
+
+fn post_cnf_encode_quantifier_prefix(
+    bank: &mut TermBank,
+    term: &Term,
+    quantifier_code: FunCode,
+    bindings: &mut BTreeMap<FunCode, (FunCode, Type)>,
+    depth: FunCode,
+) -> Result<Term, Diagnostic> {
+    let mut current = term.clone();
+    let mut vars = Vec::new();
+    let mut saved = Vec::new();
+    let mut next_depth = depth;
+    while current.f_code() == quantifier_code {
+        assert_eq!(
+            current.arity(),
+            2,
+            "post-CNF quantifier prefix must use binary variable form"
+        );
+        let var = current
+            .argument(0)
+            .expect("quantifier variable is uninitialized");
+        assert!(
+            var.is_free_var(),
+            "quantifier binder must be a free variable"
+        );
+        let var_type = var.type_().expect("quantifier binder must have a type");
+        saved.push((
+            var.f_code(),
+            bindings.insert(var.f_code(), (next_depth, var_type)),
+        ));
+        vars.push(var);
+        next_depth += 1;
+        current = current
+            .argument(1)
+            .expect("quantifier matrix is uninitialized");
+    }
+
+    let shift = FunCode::try_from(vars.len()).expect("quantifier prefix length fits FunCode");
+    let shifted_matrix = shift_db(bank, &current, shift)?;
+    let mut result = do_post_cnf_encode(bank, &shifted_matrix, bindings, next_depth)?;
+
+    for var in vars.into_iter().rev() {
+        let (f_code, previous) = saved
+            .pop()
+            .expect("saved quantifier binding stack is balanced");
+        assert_eq!(f_code, var.f_code());
+        if let Some(previous) = previous {
+            bindings.insert(f_code, previous);
+        } else {
+            bindings.remove(&f_code);
+        }
+
+        let var_type = var.type_().expect("quantifier binder must have a type");
+        let lambda = close_with_db_var(bank, &var_type, &result)?;
+        let unary_formula = Term::top_alloc(quantifier_code, 1);
+        unary_formula.set_type(Some(bank.signature().type_bank().bool_type()));
+        unary_formula.set_argument(0, lambda);
+        result = bank.term_top_insert(unary_formula)?;
+    }
+
+    Ok(result)
+}
+
+/// Encodes post-CNF variable quantifiers as DB-lambda quantifiers and normalizes.
+///
+/// This matches C `PostCNFEncodeFormulas`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if conversion or lambda normalization rebuilds a term
+/// that cannot be inserted into the term bank.
+///
+/// # Panics
+///
+/// Panics if quantifier, lambda, or encoded-predicate cells are malformed, or
+/// if a quantified variable is not typed.
+pub fn post_cnf_encode_formulas(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let encoded = do_post_cnf_encode(bank, term, &mut BTreeMap::new(), 0)?;
+    lambda_normalize_db(bank, &encoded)
+}
+
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
 ///
 /// # Errors
@@ -1225,8 +1389,9 @@ mod tests {
     use super::{
         apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, lambda_eta_expand_db,
         lambda_eta_expand_db_top_level, lambda_eta_reduce_db, lambda_normalize_db, named_to_db,
-        shift_db, unfold_lambda, whnf_deref,
+        post_cnf_encode_formulas, shift_db, unfold_lambda, whnf_deref,
     };
+    use crate::terms::functypes::FunCode;
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
     use crate::terms::termbanks::TermBank;
@@ -1265,6 +1430,28 @@ mod tests {
         lambda.set_argument(0, binder.clone());
         lambda.set_argument(1, body.clone());
         bank.term_top_insert(lambda).unwrap()
+    }
+
+    fn encoded_predicate(bank: &mut TermBank, predicate: &Term) -> Term {
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let encoded = Term::top_alloc(eqn_code, 2);
+        encoded.set_type(Some(bank.signature().type_bank().bool_type()));
+        encoded.set_argument(0, predicate.clone());
+        encoded.set_argument(1, bank.true_term().clone());
+        bank.term_top_insert(encoded).unwrap()
+    }
+
+    fn quantified_var_formula(
+        bank: &mut TermBank,
+        quantifier: FunCode,
+        var: &Term,
+        body: &Term,
+    ) -> Term {
+        let formula = Term::top_alloc(quantifier, 2);
+        formula.set_type(Some(bank.signature().type_bank().bool_type()));
+        formula.set_argument(0, var.clone());
+        formula.set_argument(1, body.clone());
+        bank.term_top_insert(formula).unwrap()
     }
 
     #[test]
@@ -1557,6 +1744,64 @@ mod tests {
         let converted = named_to_db(&mut bank, &applied).unwrap();
 
         assert_eq!(converted, a);
+    }
+
+    #[test]
+    fn post_cnf_encode_formulas_turns_variable_quantifiers_into_db_lambdas() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), bool_type]);
+        let p = typed_const_with_type(&mut bank, "post_cnf_p", predicate_type);
+        let x = bank.vars().get_fresh_var(&i_type);
+        let y = bank.vars().get_fresh_var(&i_type);
+        let atom = apply_terms(&mut bank, &p, &[x.clone(), y.clone()]).unwrap();
+        let encoded_atom = encoded_predicate(&mut bank, &atom);
+        let qall_code = bank.signature().qall_code();
+        let inner = quantified_var_formula(&mut bank, qall_code, &y, &encoded_atom);
+        let quantified = quantified_var_formula(&mut bank, qall_code, &x, &inner);
+
+        let converted = post_cnf_encode_formulas(&mut bank, &quantified).unwrap();
+
+        assert_eq!(converted.f_code(), qall_code);
+        assert_eq!(converted.arity(), 1);
+        let outer_lambda = converted.argument(0).unwrap();
+        assert_eq!(outer_lambda.f_code(), SIG_DB_LAMBDA_CODE);
+        let inner_quantifier = outer_lambda.argument(1).unwrap();
+        assert_eq!(inner_quantifier.f_code(), qall_code);
+        assert_eq!(inner_quantifier.arity(), 1);
+        let inner_lambda = inner_quantifier.argument(0).unwrap();
+        assert_eq!(inner_lambda.f_code(), SIG_DB_LAMBDA_CODE);
+        let body = inner_lambda.argument(1).unwrap();
+        assert_eq!(body.f_code(), p.f_code());
+        assert_eq!(body.argument(0).unwrap().f_code(), 1);
+        assert_eq!(body.argument(1).unwrap().f_code(), 0);
+    }
+
+    #[test]
+    fn post_cnf_encode_formulas_shifts_existing_loose_db_indices() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), bool_type]);
+        let p = typed_const_with_type(&mut bank, "post_cnf_shift_p", predicate_type);
+        let x = bank.vars().get_fresh_var(&i_type);
+        let loose_db = bank.request_db_var(&i_type, 0);
+        let atom = apply_terms(&mut bank, &p, &[x.clone(), loose_db]).unwrap();
+        let encoded_atom = encoded_predicate(&mut bank, &atom);
+        let qex_code = bank.signature().qex_code();
+        let quantified = quantified_var_formula(&mut bank, qex_code, &x, &encoded_atom);
+
+        let converted = post_cnf_encode_formulas(&mut bank, &quantified).unwrap();
+
+        assert_eq!(converted.f_code(), qex_code);
+        assert_eq!(converted.arity(), 1);
+        let lambda = converted.argument(0).unwrap();
+        assert_eq!(lambda.f_code(), SIG_DB_LAMBDA_CODE);
+        let body = lambda.argument(1).unwrap();
+        assert_eq!(body.f_code(), p.f_code());
+        assert_eq!(body.argument(0).unwrap().f_code(), 0);
+        assert_eq!(body.argument(1).unwrap().f_code(), 1);
     }
 
     #[test]
