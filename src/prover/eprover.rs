@@ -106,7 +106,7 @@ use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
 use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db, set_eta_normalizer};
 use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
-    FP_IS_RATIONAL, SIG_ITE_CODE, SIG_LET_CODE,
+    FP_IS_RATIONAL, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::{type_app_encoded_name, Type};
 use crate::terms::subst::Substitution;
@@ -9042,6 +9042,144 @@ fn simple_fof_literal_to_clause_literal_lists(
     vec![literals]
 }
 
+fn simple_fof_literal_formula_to_clause_literal_lists(
+    literal: Eqn,
+    negate_as_conjecture: bool,
+    universal_dependencies: &[Term],
+    bank: &mut TermBank,
+) -> Result<Vec<EqnList>, Diagnostic> {
+    let expands_to_formula_ite = literal.is_positive()
+        && literal.right() == bank.true_term()
+        && literal.left().f_code() == SIG_ITE_CODE
+        && literal.left().type_().as_ref().is_some_and(Type::is_bool);
+    if expands_to_formula_ite {
+        let ite = literal.left().clone();
+        let formulas = simple_fof_bool_ite_term_to_formulas(&ite, bank)?;
+        return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
+            formulas,
+            negate_as_conjecture,
+            universal_dependencies,
+            bank,
+        );
+    }
+
+    Ok(simple_fof_literal_to_clause_literal_lists(
+        literal,
+        negate_as_conjecture,
+    ))
+}
+
+fn simple_fof_bool_ite_term_to_formulas(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    debug_assert_eq!(term.f_code(), SIG_ITE_CODE);
+    let condition = simple_fof_formula_term_argument(term, 0, "$ite")?;
+    let if_true = simple_fof_formula_term_argument(term, 1, "$ite")?;
+    let if_false = simple_fof_formula_term_argument(term, 2, "$ite")?;
+
+    let condition = simple_fof_bool_term_to_formulas(&condition, bank)?;
+    let if_true = simple_fof_bool_term_to_formulas(&if_true, bank)?;
+    let if_false = simple_fof_bool_term_to_formulas(&if_false, bank)?;
+
+    Ok(vec![
+        SimpleFofFormula::Implication {
+            antecedents: condition.clone(),
+            consequents: if_true,
+        },
+        SimpleFofFormula::Implication {
+            antecedents: vec![SimpleFofFormula::Negation(condition)],
+            consequents: if_false,
+        },
+    ])
+}
+
+fn simple_fof_bool_term_to_formulas(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if !term.type_().as_ref().is_some_and(Type::is_bool) {
+        return Err(Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            "$ite formula branch must have Boolean type",
+        ));
+    }
+
+    if term.f_code() == SIG_TRUE_CODE {
+        return Ok(simple_fof_truth_formula(true));
+    }
+    if term.f_code() == SIG_FALSE_CODE {
+        return Ok(simple_fof_truth_formula(false));
+    }
+    if term.f_code() == SIG_ITE_CODE {
+        return simple_fof_bool_ite_term_to_formulas(term, bank);
+    }
+    if term.f_code() == bank.signature().eqn_code() || term.f_code() == bank.signature().neqn_code()
+    {
+        let literal = Eqn::tb_term_decode(bank, term)?;
+        return Ok(simple_fof_literal_formulas(vec![literal]));
+    }
+    if term.f_code() == bank.signature().not_code() {
+        let child = simple_fof_formula_term_argument(term, 0, "$not")?;
+        return Ok(vec![SimpleFofFormula::Negation(
+            simple_fof_bool_term_to_formulas(&child, bank)?,
+        )]);
+    }
+
+    if let Some(operator) = simple_fof_app_encoded_formula_binary_operator(bank, term.f_code()) {
+        let left = simple_fof_formula_term_argument(term, 0, "binary formula")?;
+        let right = simple_fof_formula_term_argument(term, 1, "binary formula")?;
+        let left = simple_fof_bool_term_to_formulas(&left, bank)?;
+        let right = simple_fof_bool_term_to_formulas(&right, bank)?;
+        return Ok(match operator {
+            "&" => {
+                let mut formulas = left;
+                formulas.extend(right);
+                formulas
+            }
+            "|" => {
+                let mut disjuncts = simple_fof_formulas_to_disjuncts(left);
+                disjuncts.extend(simple_fof_formulas_to_disjuncts(right));
+                vec![SimpleFofFormula::Disjunction(disjuncts)]
+            }
+            "=>" => vec![SimpleFofFormula::Implication {
+                antecedents: left,
+                consequents: right,
+            }],
+            "<=" => vec![SimpleFofFormula::ReverseImplication {
+                antecedents: right,
+                consequents: left,
+            }],
+            "<=>" => vec![SimpleFofFormula::Equivalence { left, right }],
+            "<~>" => vec![SimpleFofFormula::Xor { left, right }],
+            "~&" => vec![SimpleFofFormula::Nand { left, right }],
+            "~|" => vec![SimpleFofFormula::Nor { left, right }],
+            _ => unreachable!("binary operator was selected from known values"),
+        });
+    }
+
+    if term.f_code() == bank.signature().qall_code() || term.f_code() == bank.signature().qex_code()
+    {
+        let variable = simple_fof_formula_term_argument(term, 0, "quantified formula")?;
+        let body = simple_fof_formula_term_argument(term, 1, "quantified formula")?;
+        let body = simple_fof_bool_term_to_formulas(&body, bank)?;
+        let bound = vec![variable];
+        if term.f_code() == bank.signature().qall_code() {
+            return Ok(vec![SimpleFofFormula::Universal {
+                bound,
+                formulas: body,
+            }]);
+        }
+        return Ok(vec![SimpleFofFormula::Existential {
+            bound,
+            formulas: body,
+        }]);
+    }
+
+    let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
+    Ok(simple_fof_literal_formulas(vec![literal]))
+}
+
 fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
     formula: SimpleFofFormula,
     negate_as_conjecture: bool,
@@ -9053,10 +9191,12 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             value,
             negate_as_conjecture,
         )),
-        SimpleFofFormula::Literal(literal) => Ok(simple_fof_literal_to_clause_literal_lists(
+        SimpleFofFormula::Literal(literal) => simple_fof_literal_formula_to_clause_literal_lists(
             literal,
             negate_as_conjecture,
-        )),
+            universal_dependencies,
+            bank,
+        ),
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
@@ -19214,6 +19354,40 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_unrolls_formula_position_boolean_ite() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-fof-boolean-ite");
+        std::fs::write(&path, "fof(ite_bool, axiom, $ite(p(a), q(a), ~r(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 2, "{printed}");
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("~p(a)") && line.contains("q(a)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
+            && !line.contains("~p(a)")
+            && line.contains("~r(a)")));
+        assert!(!printed.contains("$ite"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_uses_old_tptp_output_when_requested() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tptp-out");
@@ -19311,8 +19485,18 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed
-            .contains("$ite($eq(p(esk1_0),$true),$eq(q(esk1_0),$true),$eq(r(esk1_0),$true))"));
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 3, "{printed}");
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("q(esk1_0)") && line.contains("~p(esk1_0)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")
+            && !line.contains("~p(esk1_0)")
+            && line.contains("r(esk1_0)")));
+        assert!(!printed.contains("$ite("));
         assert!(printed.contains("$let($eq(f,$eq(a,$true)),f)=esk2_0"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -19420,8 +19604,18 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed
-            .contains("$ite($eq(p(esk1_0),$true),$eq(q(esk1_0),$true),$eq(r(esk1_0),$true))"));
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 3, "{printed}");
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("q(esk1_0)") && line.contains("~p(esk1_0)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")
+            && !line.contains("~p(esk1_0)")
+            && line.contains("r(esk1_0)")));
+        assert!(!printed.contains("$ite("));
         assert!(printed.contains("$let($eq(f,a),f)=esk2_0"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
