@@ -10038,6 +10038,9 @@ fn simple_fof_bool_term_to_formulas(
     if term.f_code() == SIG_ITE_CODE {
         return simple_fof_bool_ite_term_to_formulas(term, bank);
     }
+    if let Some(formulas) = simple_fof_bool_eqn_term_to_formulas(term, bank)? {
+        return Ok(formulas);
+    }
     if term.f_code() == bank.signature().eqn_code() || term.f_code() == bank.signature().neqn_code()
     {
         let literal = Eqn::tb_term_decode(bank, term)?;
@@ -10102,6 +10105,53 @@ fn simple_fof_bool_term_to_formulas(
 
     let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
     Ok(simple_fof_literal_formulas(vec![literal]))
+}
+
+fn simple_fof_bool_eqn_term_to_formulas(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
+    let is_equality = term.f_code() == bank.signature().eqn_code();
+    let is_disequality = term.f_code() == bank.signature().neqn_code();
+    if !(is_equality || is_disequality) || term.arity() != 2 {
+        return Ok(None);
+    }
+
+    let left = simple_fof_formula_term_argument(term, 0, "Boolean equality")?;
+    let right = simple_fof_formula_term_argument(term, 1, "Boolean equality")?;
+    if !simple_fof_term_is_complex_bool(&left, bank)
+        || !simple_fof_term_is_complex_bool(&right, bank)
+    {
+        return Ok(None);
+    }
+
+    if right != *bank.true_term() {
+        let left = simple_fof_bool_term_to_formulas(&left, bank)?;
+        let right = simple_fof_bool_term_to_formulas(&right, bank)?;
+        return Ok(Some(vec![if is_equality {
+            SimpleFofFormula::Equivalence { left, right }
+        } else {
+            SimpleFofFormula::Xor { left, right }
+        }]));
+    }
+
+    if left != *bank.true_term() {
+        let left = simple_fof_bool_term_to_formulas(&left, bank)?;
+        return Ok(Some(if is_equality {
+            left
+        } else {
+            vec![SimpleFofFormula::Negation(left)]
+        }));
+    }
+
+    Ok(None)
+}
+
+fn simple_fof_term_is_complex_bool(term: &Term, bank: &TermBank) -> bool {
+    !term.is_any_var()
+        && term.type_().as_ref().is_some_and(Type::is_bool)
+        && term.f_code() > 0
+        && bank.signature().is_logical_symbol(term.f_code())
 }
 
 #[allow(
@@ -18723,6 +18773,46 @@ mod tests {
         assert!(printed.contains("f($false)=c; p(a) <- .\n"));
         assert!(printed.contains("f($false)=c; q(a) <- .\n"));
         assert!(!printed.contains("$and"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_replaces_boolean_formula_equality_argument_with_equivalence() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-term-position-bool-equality");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             tff(s_type, type, s: $i > $o).\n\
+             tff(f_type, type, f: $o > $i).\n\
+             fof(bool_eq_arg, axiom, (f(((p(a)&q(a)) = (r(a)|s(a)))) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("f($false)=c; p(a) <- r(a).\n"));
+        assert!(printed.contains("f($true)=c <- p(a), q(a), r(a).\n"));
+        assert!(printed.contains("f($true)=c <- p(a), q(a), s(a).\n"));
+        assert!(printed.contains("f($false)=c; r(a); s(a) <- p(a), q(a).\n"));
+        assert!(!printed.contains("$eq($and"));
+        assert!(!printed.contains("$neq($and"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
