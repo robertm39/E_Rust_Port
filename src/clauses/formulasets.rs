@@ -12,14 +12,15 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
-    tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_is_literal,
-    tformula_is_prop_true, tformula_mark_polarity, tformula_preload_types, tformula_simplify,
-    tformula_to_cnf, tformula_tptp_string, TFormulaTptpPrintOptions,
+    tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_fcode_alloc,
+    tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity, tformula_preload_types,
+    tformula_simplify, tformula_to_cnf, tformula_tptp_string, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, FormulaDerivationRef, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
+    clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_FOF_QUOTE,
+    DC_FOF_SIMPLIFY, DC_NEGATE_CONJECTURE,
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::lambda_normalize_db;
@@ -129,6 +130,13 @@ impl FormulaSetCnfOptions {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FormulaSetSimplifyResult {
     pub formulas_changed: i64,
+    pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetPreprocessConjecturesResult {
+    pub conjectures_negated: i64,
+    pub questions_annotated: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
 
@@ -290,6 +298,66 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(simplified);
+        Ok(true)
+    }
+
+    /// Applies C `WFormulaConjectureNegate`.
+    ///
+    /// If the wrapper role is `conjecture`, this wraps the formula in a root
+    /// negation and changes the role to `negated_conjecture`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the negation term cannot be allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term.
+    pub fn conjecture_negate(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        if self.query_tptp_type() != CP_TYPE_CONJECTURE {
+            return Ok(false);
+        }
+        let negated = tformula_fcode_alloc(
+            bank,
+            bank.signature().not_code(),
+            self.formula().clone(),
+            None,
+        )?;
+        self.set_formula(negated);
+        self.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        Ok(true)
+    }
+
+    /// Applies C `WFormulaAnnotateQuestion`.
+    ///
+    /// Questions, and optionally conjectures, become conjectures. When
+    /// `add_answer_lits` is true, leading existential quantifiers receive the
+    /// C-shaped `~$answer(esk(...))` conjunct.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if an answer literal or rebuilt formula cannot be
+    /// allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if a leading existential
+    /// has uninitialized arguments.
+    pub fn annotate_question(
+        &mut self,
+        bank: &mut TermBank,
+        add_answer_lits: bool,
+        conjectures_are_questions: bool,
+    ) -> Result<bool, Diagnostic> {
+        let role = self.query_tptp_type();
+        if role != CP_TYPE_QUESTION && !(role == CP_TYPE_CONJECTURE && conjectures_are_questions) {
+            return Ok(false);
+        }
+        if add_answer_lits {
+            let annotated = tformula_annotate_question(bank, self.formula())?;
+            self.set_formula(annotated);
+        }
+        self.set_tptp_type(CP_TYPE_CONJECTURE);
         Ok(true)
     }
 
@@ -984,6 +1052,41 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `FormulaSetPreprocConjectures` in insertion order.
+    ///
+    /// Each formula is first annotated as a question when applicable, then
+    /// conjectures are negated. Formula-level derivation storage is deferred, so
+    /// this returns the C derivation opcodes that should be attached by a future
+    /// owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if answer-literal allocation or conjecture negation
+    /// fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any preprocessed wrapper has no formula term.
+    pub fn preproc_conjectures(
+        &mut self,
+        bank: &mut TermBank,
+        add_answer_lits: bool,
+        conjectures_are_questions: bool,
+    ) -> Result<FormulaSetPreprocessConjecturesResult, Diagnostic> {
+        let mut result = FormulaSetPreprocessConjecturesResult::default();
+        for formula in &mut self.formulas {
+            if formula.annotate_question(bank, add_answer_lits, conjectures_are_questions)? {
+                result.questions_annotated += 1;
+                result.formula_derivation_ops.push(DC_ANNO_QUESTION);
+            }
+            if formula.conjecture_negate(bank)? {
+                result.conjectures_negated += 1;
+                result.formula_derivation_ops.push(DC_NEGATE_CONJECTURE);
+            }
+        }
+        Ok(result)
+    }
+
     /// Drains this set into CNF clauses using the staged core of C
     /// `FormulaSetCNF2`.
     ///
@@ -1298,6 +1401,43 @@ fn tformula_has_app_var_literal(bank: &TermBank, formula: &Term) -> bool {
     false
 }
 
+fn tformula_annotate_question(bank: &mut TermBank, formula: &Term) -> Result<Term, Diagnostic> {
+    let qex_code = bank.signature().qex_code();
+    let mut variables = Vec::new();
+    let mut handle = formula.clone();
+    while handle.f_code() == qex_code && handle.arity() == 2 {
+        variables.push(
+            handle
+                .argument(0)
+                .unwrap_or_else(|| panic!("existential quantifier variable is uninitialized")),
+        );
+        handle = handle
+            .argument(1)
+            .unwrap_or_else(|| panic!("existential quantifier body is uninitialized"));
+    }
+    if variables.is_empty() {
+        return Ok(formula.clone());
+    }
+
+    let answer = answer_lit_alloc(bank, &variables)?;
+    let mut result = tformula_fcode_alloc(bank, bank.signature().and_code(), handle, Some(answer))?;
+    while let Some(variable) = variables.pop() {
+        result = tformula_fcode_alloc(bank, qex_code, variable, Some(result))?;
+    }
+    Ok(result)
+}
+
+fn answer_lit_alloc(bank: &mut TermBank, variables: &[Term]) -> Result<Term, Diagnostic> {
+    let answer_payload = bank.alloc_new_skolem(variables, None)?;
+    let answer = Term::top_alloc(bank.signature().answer_code(), 1);
+    answer.set_type(Some(bank.signature().type_bank().bool_type()));
+    answer.set_argument(0, answer_payload);
+    let answer = bank.term_top_insert(answer)?;
+    let true_term = bank.true_term().clone();
+    let neqn_code = bank.signature_mut().get_eqn_code(false);
+    tformula_fcode_alloc(bank, neqn_code, answer, Some(true_term))
+}
+
 fn formula_set_write_error(message: &'static str) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, message)
 }
@@ -1319,8 +1459,8 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        DerivationEntry, FormulaDerivationRef, DC_DIST_DISJUNCTIONS, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
-        DC_SPLIT_CONJUNCT,
+        DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_DIST_DISJUNCTIONS,
+        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -1963,6 +2103,101 @@ mod tests {
         assert_eq!(formulas[0].formula(), &changed_atom);
         assert_eq!(formulas[1].entry_id(), stable_entry);
         assert_eq!(formulas[1].formula(), &stable_atom);
+    }
+
+    fn assert_answer_annotation_shape(bank: &TermBank, annotated: &Term, expected_body: &Term) {
+        let qex_code = bank.signature().qex_code();
+        assert_eq!(annotated.f_code(), qex_code);
+        let first_var = annotated.argument(0).unwrap();
+        let second_quantifier = annotated.argument(1).unwrap();
+        assert_eq!(second_quantifier.f_code(), qex_code);
+        let second_var = second_quantifier.argument(0).unwrap();
+        let conjunction = second_quantifier.argument(1).unwrap();
+        assert_eq!(conjunction.f_code(), bank.signature().and_code());
+        assert_eq!(conjunction.argument(0).as_ref(), Some(expected_body));
+        let answer_literal = conjunction.argument(1).unwrap();
+        assert_eq!(answer_literal.f_code(), bank.signature().neqn_code());
+        assert_eq!(answer_literal.argument(1).as_ref(), Some(bank.true_term()));
+        let answer = answer_literal.argument(0).unwrap();
+        assert_eq!(answer.f_code(), bank.signature().answer_code());
+        let answer_payload = answer.argument(0).unwrap();
+        assert_eq!(answer_payload.arity(), 2);
+        assert_eq!(answer_payload.argument(0).as_ref(), Some(&first_var));
+        assert_eq!(answer_payload.argument(1).as_ref(), Some(&second_var));
+    }
+
+    #[test]
+    fn wrapped_formula_annotate_question_adds_answer_literal_to_leading_existentials() {
+        let mut bank = test_bank();
+        let first_var = typed_var(&bank, -401);
+        let second_var = typed_var(&bank, -402);
+        let left = typed_const(&mut bank, "wf_question_left");
+        let right = typed_const(&mut bank, "wf_question_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let qex_code = bank.signature().qex_code();
+        let inner = bool_binary_with_code(&mut bank, qex_code, &second_var, &body);
+        let formula = bool_binary_with_code(&mut bank, qex_code, &first_var, &inner);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_QUESTION);
+
+        assert!(wrapped.annotate_question(&mut bank, true, false).unwrap());
+
+        assert_eq!(wrapped.query_tptp_type(), CP_TYPE_CONJECTURE);
+        assert_answer_annotation_shape(&bank, wrapped.formula(), &body);
+    }
+
+    #[test]
+    fn formula_set_preproc_conjectures_annotates_then_negates_in_order() {
+        let mut bank = test_bank();
+        let q_left = typed_const(&mut bank, "set_preproc_question_left");
+        let q_right = typed_const(&mut bank, "set_preproc_question_right");
+        let c_left = typed_const(&mut bank, "set_preproc_conj_left");
+        let c_right = typed_const(&mut bank, "set_preproc_conj_right");
+        let a_left = typed_const(&mut bank, "set_preproc_axiom_left");
+        let a_right = typed_const(&mut bank, "set_preproc_axiom_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let question_formula = bool_binary_with_code(&mut bank, eqn_code, &q_left, &q_right);
+        let conjecture_formula = bool_binary_with_code(&mut bank, eqn_code, &c_left, &c_right);
+        let axiom_formula = bool_binary_with_code(&mut bank, eqn_code, &a_left, &a_right);
+        let mut question = WrappedFormula::wt_formula_alloc(question_formula.clone());
+        question.set_tptp_type(CP_TYPE_QUESTION);
+        let mut conjecture = WrappedFormula::wt_formula_alloc(conjecture_formula.clone());
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut axiom = WrappedFormula::wt_formula_alloc(axiom_formula.clone());
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut set = FormulaSet::new();
+        set.insert(question);
+        set.insert(conjecture);
+        set.insert(axiom);
+
+        let result = set.preproc_conjectures(&mut bank, false, true).unwrap();
+
+        assert_eq!(result.questions_annotated, 2);
+        assert_eq!(result.conjectures_negated, 2);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![
+                DC_ANNO_QUESTION,
+                DC_NEGATE_CONJECTURE,
+                DC_ANNO_QUESTION,
+                DC_NEGATE_CONJECTURE,
+            ]
+        );
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas[0].query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(formulas[0].formula().f_code(), bank.signature().not_code());
+        assert_eq!(
+            formulas[0].formula().argument(0).as_ref(),
+            Some(&question_formula)
+        );
+        assert_eq!(formulas[1].query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            formulas[1].formula().argument(0).as_ref(),
+            Some(&conjecture_formula)
+        );
+        assert_eq!(formulas[2].query_tptp_type(), CP_TYPE_AXIOM);
+        assert_eq!(formulas[2].formula(), &axiom_formula);
     }
 
     #[test]
