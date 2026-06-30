@@ -258,6 +258,7 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 - `TermCheckConsistency` applies the LFHO applied-variable `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule while walking a single branch for repeated term cells. Rust mirrors this with pointer-identity branch tracking and no-cache, no-WHNF applied-variable expansion.
 - `TermCopy` and `TermCopyKeepVars` use the LFHO applied-variable `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule when copying through one-step dereferenced applied variables. Rust mirrors this for no-cache, no-WHNF copied terms; global owner-bank/cache-backed `TermDeref`, beta normalization, and WHNF branches remain separate termtypes/lambda slices.
 - `TermStructEqualDeref`, `TermStructPrefixEqual`, and `TermIsSubterm` use the LFHO applied-variable `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule when descending through one-step dereferenced applied variables. Rust mirrors this for no-cache, no-WHNF read-only expansion; global owner-bank/cache-backed `TermDeref`, beta normalization, and WHNF branches remain separate termtypes/lambda slices.
+- `TermTrimImplications` skips leading quantified formula wrappers, follows only the right-hand side of a `$impl` chain, and returns the consequent only after at least 10 implications; otherwise it returns the original formula pointer. Rust mirrors this threshold and right-spine-only behavior with shared `Term` handles for SInE symbol collection.
 
 ### Change Later Candidates
 
@@ -269,6 +270,7 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 - `TermIsSubtermDeref` comments say the deref is not changed because the function is not used; unlike `TermIsSubterm`, it does not apply `DEREF_LIMIT`/`CONVERT_DEREF` while descending. Keep this compatibility shape for now, but a cleaned helper should either use the same prefix rule as `TermIsSubterm` or be removed if no real caller needs it.
 - `TermPrintDbgHO` reaches LFHO `applied_var_deref` through `TermDeref`, so C debug printing may refresh `binding_cache` and mark `TPIsDerefedAppVar` on cached terms. Rust's deref-aware debug writer is intentionally no-cache for now; when global applied-variable dereferencing is ported, audit whether debug printing should share that cache for performance and GC compatibility.
 - `do_ho_print` routes logical Boolean terms and lambdas through `do_fool_print`, whose output depends on formula/operator recognition, type printing, binder-depth handling, and higher-order parenthesis macros. Rust's current HO term writer intentionally stops before that branch; when full formula printing is integrated, preserve C's order of checks around `$ite` and Boolean logical symbols before considering a cleaner printer split.
+- `TermTrimImplications` uses a hard-coded threshold of 10 and only trims right-nested implication chains after leading quantifiers. Preserve this for SInE compatibility; after reference axiom-selection traces are stable, consider replacing the magic threshold with an explicit formula-normalization policy.
 
 ### Porting Focus
 

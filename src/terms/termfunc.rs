@@ -21,6 +21,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+const TRIM_IMPL_THRESHOLD: usize = 10;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum VarNormStyle {
@@ -1194,6 +1196,37 @@ pub fn term_add_symbol_dist_exist(term: &Term, dist_array: &mut [i64], exists: &
     }
 }
 
+/// Returns the C `TermTrimImplications` view used by `SInE` symbol collection.
+///
+/// # Panics
+///
+/// Panics if a binary quantified formula has no body argument or a binary
+/// implication has no consequent argument, matching C's expectation that these
+/// formula nodes are fully initialized.
+#[must_use]
+pub fn term_trim_implications(signature: &Signature, formula: &Term) -> Term {
+    let mut current = formula.clone();
+    while is_quantified_formula(signature, &current) && current.arity() == 2 {
+        current = current
+            .argument(1)
+            .expect("quantified formula body is uninitialized");
+    }
+
+    let mut implication_count = 0;
+    while current.f_code() == signature.impl_code() && current.arity() == 2 {
+        implication_count += 1;
+        current = current
+            .argument(1)
+            .expect("implication consequent is uninitialized");
+    }
+
+    if implication_count >= TRIM_IMPL_THRESHOLD {
+        current
+    } else {
+        formula.clone()
+    }
+}
+
 fn term_head_type(sig: &mut Signature, term: &Term) -> Option<crate::terms::simpletypes::Type> {
     if term.f_code() == SIG_ITE_CODE {
         debug_assert_eq!(term.arity(), 3);
@@ -1220,6 +1253,10 @@ fn term_head_type(sig: &mut Signature, term: &Term) -> Option<crate::terms::simp
     } else {
         sig.get_type(term.f_code()).cloned()
     }
+}
+
+fn is_quantified_formula(signature: &Signature, term: &Term) -> bool {
+    term.f_code() == signature.qex_code() || term.f_code() == signature.qall_code()
 }
 
 /// Adds symbol frequencies and maximum depths, with out-of-limit symbols in slot 0.
@@ -1739,14 +1776,14 @@ mod tests {
         term_s_expr_string, term_sig_insert, term_simple_string, term_standard_weight,
         term_struct_equal, term_struct_equal_deref, term_struct_equal_no_deref,
         term_struct_prefix_equal, term_struct_weight_compare, term_sym_type_weight,
-        term_weight_compute, var_print_string, VarNormStyle,
+        term_trim_implications, term_weight_compute, var_print_string, VarNormStyle,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::inout::scanner::Scanner;
     use crate::terms::dbvars::{mk_db, DbVarBank};
-    use crate::terms::functypes::FuncSymbType;
+    use crate::terms::functypes::{FunCode, FuncSymbType};
     use crate::terms::signature::{
         Signature, FP_INTERPRETED, FP_IS_INTEGER, FP_IS_OBJECT, FP_TYPED_APPLICATION,
         SIG_CONS_CODE, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE, SIG_NIL_CODE,
@@ -1789,6 +1826,32 @@ mod tests {
         (sig, vars, term)
     }
 
+    fn internal_signature() -> Signature {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        sig
+    }
+
+    fn formula_node(f_code: FunCode, left: Term, right: Term) -> Term {
+        let term = Term::top_alloc(f_code, 2);
+        term.set_argument(0, left);
+        term.set_argument(1, right);
+        term
+    }
+
+    fn implication_chain(sig: &Signature, count: usize, conclusion: &Term) -> Term {
+        let mut current = conclusion.clone();
+        for index in 0..count {
+            let premise = Term::const_cell_alloc(usize_to_i64_for_test(index + 1000));
+            current = formula_node(sig.impl_code(), premise, current);
+        }
+        current
+    }
+
+    fn usize_to_i64_for_test(value: usize) -> i64 {
+        i64::try_from(value).unwrap()
+    }
+
     struct AppliedPrefixFixture {
         app: Term,
         y: Term,
@@ -1798,6 +1861,52 @@ mod tests {
         fully_derefed: Term,
         prefix_expected: Term,
         prefix_fully_derefed: Term,
+    }
+
+    #[test]
+    fn term_trim_implications_keeps_original_below_c_threshold() {
+        let sig = internal_signature();
+        let conclusion = Term::const_cell_alloc(2000);
+        let formula = implication_chain(&sig, 9, &conclusion);
+
+        let trimmed = term_trim_implications(&sig, &formula);
+
+        assert_eq!(trimmed, formula);
+    }
+
+    #[test]
+    fn term_trim_implications_returns_right_spine_conclusion_at_c_threshold() {
+        let sig = internal_signature();
+        let conclusion = Term::const_cell_alloc(2001);
+        let formula = implication_chain(&sig, 10, &conclusion);
+
+        let trimmed = term_trim_implications(&sig, &formula);
+
+        assert_eq!(trimmed, conclusion);
+    }
+
+    #[test]
+    fn term_trim_implications_skips_leading_binary_quantifiers_before_counting() {
+        let sig = internal_signature();
+        let conclusion = Term::const_cell_alloc(2002);
+        let chain = implication_chain(&sig, 10, &conclusion);
+        let quantified = formula_node(sig.qall_code(), Term::const_cell_alloc(-2), chain);
+
+        let trimmed = term_trim_implications(&sig, &quantified);
+
+        assert_eq!(trimmed, conclusion);
+    }
+
+    #[test]
+    fn term_trim_implications_requires_right_nested_implications() {
+        let sig = internal_signature();
+        let conclusion = Term::const_cell_alloc(2003);
+        let left_nested = implication_chain(&sig, 10, &conclusion);
+        let formula = formula_node(sig.impl_code(), left_nested, Term::const_cell_alloc(2004));
+
+        let trimmed = term_trim_implications(&sig, &formula);
+
+        assert_eq!(trimmed, formula);
     }
 
     fn applied_prefix_fixture() -> AppliedPrefixFixture {

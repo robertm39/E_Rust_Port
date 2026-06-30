@@ -4,7 +4,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
-use crate::terms::termfunc::term_add_symbol_dist_exist;
+use crate::terms::termfunc::{term_add_symbol_dist_exist, term_trim_implications};
 use crate::terms::termtypes::Term;
 use std::cmp::Ordering;
 use std::fmt;
@@ -66,6 +66,13 @@ pub enum GeneralityMeasure {
     NegativeFormula = 7,
     NegativeLiteral = 8,
     NegativeTerms = 9,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DRelSelectionParams {
+    pub gen_measure: GeneralityMeasure,
+    pub benevolence: f64,
+    pub generosity: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,9 +154,16 @@ impl GenDistrib {
         self.add_clause_set_stack(stack, start, -1);
     }
 
-    pub fn add_formula(&mut self, formula: &WrappedFormula, trim_implications: bool, factor: i16) {
+    pub fn add_formula(
+        &mut self,
+        signature: &Signature,
+        formula: &WrappedFormula,
+        trim_implications: bool,
+        factor: i16,
+    ) {
         let mut symbol_stack = Vec::new();
         formula_add_symbol_dist_exist(
+            signature,
             formula,
             trim_implications,
             &mut self.f_distrib,
@@ -159,30 +173,47 @@ impl GenDistrib {
         self.clear_scratch_symbols(symbol_stack);
     }
 
-    pub fn add_formula_set(&mut self, set: &FormulaSet, trim_implications: bool, factor: i16) {
+    pub fn add_formula_set(
+        &mut self,
+        signature: &Signature,
+        set: &FormulaSet,
+        trim_implications: bool,
+        factor: i16,
+    ) {
         for formula in set.iter() {
-            self.add_formula(formula, trim_implications, factor);
+            self.add_formula(signature, formula, trim_implications, factor);
         }
     }
 
     pub fn add_formula_set_stack(
         &mut self,
+        signature: &Signature,
         stack: &PStack<&FormulaSet>,
         start: usize,
         trim_implications: bool,
         factor: i16,
     ) {
         for set in stack.as_slice().iter().skip(start) {
-            self.add_formula_set(set, trim_implications, factor);
+            self.add_formula_set(signature, set, trim_implications, factor);
         }
     }
 
-    pub fn add_formula_sets(&mut self, stack: &PStack<&FormulaSet>, trim_implications: bool) {
-        self.add_formula_set_stack(stack, 0, trim_implications, 1);
+    pub fn add_formula_sets(
+        &mut self,
+        signature: &Signature,
+        stack: &PStack<&FormulaSet>,
+        trim_implications: bool,
+    ) {
+        self.add_formula_set_stack(signature, stack, 0, trim_implications, 1);
     }
 
-    pub fn backtrack_formula_sets(&mut self, stack: &PStack<&FormulaSet>, start: usize) {
-        self.add_formula_set_stack(stack, start, false, -1);
+    pub fn backtrack_formula_sets(
+        &mut self,
+        signature: &Signature,
+        stack: &PStack<&FormulaSet>,
+        start: usize,
+    ) {
+        self.add_formula_set_stack(signature, stack, start, false, -1);
     }
 
     pub fn write_debug(
@@ -308,35 +339,39 @@ pub fn clause_compute_d_rel(
 
 pub fn formula_compute_d_rel(
     generality: &mut GenDistrib,
-    gentype: GeneralityMeasure,
-    benevolence: f64,
-    generosity: i64,
+    params: DRelSelectionParams,
+    signature: &Signature,
     formula: &WrappedFormula,
     res: &mut PStack<FunCode>,
     trim_implications: bool,
 ) {
     let mut symbol_stack = Vec::new();
     formula_add_symbol_dist_exist(
+        signature,
         formula,
         trim_implications,
         &mut generality.f_distrib,
         &mut symbol_stack,
     );
-    generality.compute_d_rel(gentype, benevolence, generosity, &symbol_stack, res);
+    generality.compute_d_rel(
+        params.gen_measure,
+        params.benevolence,
+        params.generosity,
+        &symbol_stack,
+        res,
+    );
     generality.clear_scratch_symbols(symbol_stack);
 }
 
 pub fn formula_add_symbol_dist_exist(
+    signature: &Signature,
     formula: &WrappedFormula,
     trim_implications: bool,
     dist_array: &mut [i64],
     exists: &mut Vec<FunCode>,
 ) {
-    term_add_symbol_dist_exist(
-        formula_d_rel_term(formula, trim_implications),
-        dist_array,
-        exists,
-    );
+    let term = formula_d_rel_term(signature, formula, trim_implications);
+    term_add_symbol_dist_exist(&term, dist_array, exists);
 }
 
 #[must_use]
@@ -388,12 +423,16 @@ fn generosity_index(generosity: i64, len: usize) -> usize {
     )
 }
 
-fn formula_d_rel_term(formula: &WrappedFormula, trim_implications: bool) -> &Term {
-    assert!(
-        !(trim_implications && formula.is_conjecture()),
-        "SInE implication trimming is deferred until TermTrimImplications is ported"
-    );
-    formula.formula()
+fn formula_d_rel_term(
+    signature: &Signature,
+    formula: &WrappedFormula,
+    trim_implications: bool,
+) -> Term {
+    if trim_implications && formula.is_conjecture() {
+        term_trim_implications(signature, formula.formula())
+    } else {
+        formula.formula().clone()
+    }
 }
 
 fn cmp_order(ordering: Ordering) -> i32 {
@@ -441,8 +480,8 @@ fn usize_to_i64(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_compute_d_rel, formula_compute_d_rel, fun_gen_cg_cmp, fun_gen_tg_cmp, FunGen,
-        GenDistrib, GeneralityMeasure,
+        clause_compute_d_rel, formula_compute_d_rel, fun_gen_cg_cmp, fun_gen_tg_cmp,
+        DRelSelectionParams, FunGen, GenDistrib, GeneralityMeasure,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -502,6 +541,21 @@ mod tests {
 
     fn wrapped_formula(term: Term) -> WrappedFormula {
         WrappedFormula::wt_formula_alloc(term)
+    }
+
+    fn formula_node(f_code: FunCode, left: Term, right: Term) -> Term {
+        let term = Term::top_alloc(f_code, 2);
+        term.set_argument(0, left);
+        term.set_argument(1, right);
+        term
+    }
+
+    fn implication_chain(signature: &Signature, premises: &[Term], conclusion: &Term) -> Term {
+        let mut current = conclusion.clone();
+        for premise in premises.iter().rev() {
+            current = formula_node(signature.impl_code(), premise.clone(), current);
+        }
+        current
     }
 
     fn entry_counts(dist: &GenDistrib, f_code: FunCode) -> (i64, i64) {
@@ -598,8 +652,8 @@ mod tests {
         let second = wrapped_formula(g_of_b);
         let mut dist = GenDistrib::new(bank.signature());
 
-        dist.add_formula(&formula, false, 1);
-        dist.add_formula(&second, false, 1);
+        dist.add_formula(bank.signature(), &formula, false, 1);
+        dist.add_formula(bank.signature(), &second, false, 1);
 
         assert_eq!(entry_counts(&dist, a.f_code()), (1, 1));
         assert_eq!(entry_counts(&dist, f_of_a.f_code()), (1, 1));
@@ -610,7 +664,7 @@ mod tests {
         assert_eq!(dist.scratch_value(b.f_code()), Some(0));
         assert_eq!(dist.scratch_value(second.formula().f_code()), Some(0));
 
-        dist.add_formula(&formula, false, -1);
+        dist.add_formula(bank.signature(), &formula, false, -1);
         assert_eq!(entry_counts(&dist, a.f_code()), (0, 0));
         assert_eq!(entry_counts(&dist, f_of_a.f_code()), (0, 0));
     }
@@ -631,13 +685,13 @@ mod tests {
         stack.push(&second);
         let mut dist = GenDistrib::new(bank.signature());
 
-        dist.add_formula_sets(&stack, false);
+        dist.add_formula_sets(bank.signature(), &stack, false);
         assert_eq!(entry_counts(&dist, a.f_code()), (1, 1));
         assert_eq!(entry_counts(&dist, f_of_a.f_code()), (1, 1));
         assert_eq!(entry_counts(&dist, b.f_code()), (1, 1));
         assert_eq!(entry_counts(&dist, g_of_b.f_code()), (1, 1));
 
-        dist.backtrack_formula_sets(&stack, 1);
+        dist.backtrack_formula_sets(bank.signature(), &stack, 1);
         assert_eq!(entry_counts(&dist, a.f_code()), (1, 1));
         assert_eq!(entry_counts(&dist, f_of_a.f_code()), (1, 1));
         assert_eq!(entry_counts(&dist, b.f_code()), (0, 0));
@@ -693,21 +747,24 @@ mod tests {
         let form_c = wrapped_formula(c.clone());
         let current = wrapped_formula(typed_unary(&mut bank, "form_drel_f", &c));
         let mut dist = GenDistrib::new(bank.signature());
-        dist.add_formula(&form_a, false, 1);
+        dist.add_formula(bank.signature(), &form_a, false, 1);
         for _ in 0..2 {
-            dist.add_formula(&form_b, false, 1);
+            dist.add_formula(bank.signature(), &form_b, false, 1);
         }
         for _ in 0..3 {
-            dist.add_formula(&form_c, false, 1);
+            dist.add_formula(bank.signature(), &form_c, false, 1);
         }
-        dist.add_formula(&current, false, 1);
+        dist.add_formula(bank.signature(), &current, false, 1);
 
         let mut res = PStack::new();
         formula_compute_d_rel(
             &mut dist,
-            GeneralityMeasure::Terms,
-            10.0,
-            1,
+            DRelSelectionParams {
+                gen_measure: GeneralityMeasure::Terms,
+                benevolence: 10.0,
+                generosity: 1,
+            },
+            bank.signature(),
             &current,
             &mut res,
             false,
@@ -746,14 +803,17 @@ mod tests {
         let true_term = bank.create_const_term(SIG_TRUE_CODE).unwrap();
         let formula = wrapped_formula(true_term);
         let mut dist = GenDistrib::new(bank.signature());
-        dist.add_formula(&formula, false, 1);
+        dist.add_formula(bank.signature(), &formula, false, 1);
         let mut res = PStack::new();
 
         formula_compute_d_rel(
             &mut dist,
-            GeneralityMeasure::Terms,
-            10.0,
-            0,
+            DRelSelectionParams {
+                gen_measure: GeneralityMeasure::Terms,
+                benevolence: 10.0,
+                generosity: 0,
+            },
+            bank.signature(),
             &formula,
             &mut res,
             false,
@@ -763,24 +823,37 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "SInE implication trimming is deferred")]
-    fn formula_compute_d_rel_rejects_trimmed_conjectures_until_term_trim_is_ported() {
+    fn formula_compute_d_rel_trims_deep_conjecture_implication_consequents_like_c() {
         let mut bank = test_bank();
-        let a = typed_const(&mut bank, "form_trim_a");
-        let mut formula = wrapped_formula(a);
+        let conclusion = typed_const(&mut bank, "form_trim_conclusion");
+        let premises = (0..10)
+            .map(|index| typed_const(&mut bank, &format!("form_trim_premise_{index}")))
+            .collect::<Vec<_>>();
+        let formula_term = implication_chain(bank.signature(), &premises, &conclusion);
+        let mut formula = wrapped_formula(formula_term);
         formula.set_tptp_type(CP_TYPE_CONJECTURE);
         let mut dist = GenDistrib::new(bank.signature());
+        dist.add_formula(bank.signature(), &formula, true, 1);
         let mut res = PStack::new();
 
         formula_compute_d_rel(
             &mut dist,
-            GeneralityMeasure::Terms,
-            10.0,
-            0,
+            DRelSelectionParams {
+                gen_measure: GeneralityMeasure::Terms,
+                benevolence: 10.0,
+                generosity: 0,
+            },
+            bank.signature(),
             &formula,
             &mut res,
             true,
         );
+
+        assert_eq!(entry_counts(&dist, conclusion.f_code()), (1, 1));
+        for premise in premises {
+            assert_eq!(entry_counts(&dist, premise.f_code()), (0, 0));
+        }
+        assert_eq!(res.as_slice(), &[conclusion.f_code()]);
     }
 
     #[test]

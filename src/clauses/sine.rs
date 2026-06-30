@@ -7,8 +7,8 @@ use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::{FormulaProperties, CP_IS_LAMBDA_DEF};
 use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
 use crate::clauses::f_generality::{
-    clause_compute_d_rel, formula_add_symbol_dist_exist, formula_compute_d_rel, GenDistrib,
-    GeneralityMeasure,
+    clause_compute_d_rel, formula_add_symbol_dist_exist, formula_compute_d_rel,
+    DRelSelectionParams, GenDistrib, GeneralityMeasure,
 };
 use crate::clauses::formulasets::{formula_set_stack_cardinality, FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
@@ -225,9 +225,12 @@ impl<'a> DRelation<'a> {
         let mut symbols = PStack::new();
         formula_compute_d_rel(
             generality,
-            params.gen_measure,
-            params.benevolence,
-            params.generosity,
+            DRelSelectionParams {
+                gen_measure: params.gen_measure,
+                benevolence: params.benevolence,
+                generosity: params.generosity,
+            },
+            signature,
             formula,
             &mut symbols,
             params.trim_implications,
@@ -721,6 +724,7 @@ pub fn select_defining_axioms_clause_sets<'a>(
 /// `signature_size`.
 pub fn select_defining_axioms_clause_formula_sets<'a>(
     drel: &mut DRelation<'a>,
+    signature: &Signature,
     params: DefiningSineParams,
     axioms: &mut PQueue<IntOrP<AxiomRef<'a>>>,
     res_clauses: &mut PStack<&'a Clause>,
@@ -776,6 +780,7 @@ pub fn select_defining_axioms_clause_formula_sets<'a>(
                 }
                 res_formulas.push(formula);
                 formula_add_symbol_dist_exist(
+                    signature,
                     formula,
                     params.trim_implications,
                     &mut dist_array,
@@ -934,6 +939,7 @@ pub fn select_axioms_clause_formula_sets<'a>(
     selected_count
         + select_defining_axioms_clause_formula_sets(
             &mut drel,
+            signature,
             DefiningSineParams {
                 internal_symbols: generality.internal_symbols(),
                 signature_size: generality.size(),
@@ -1294,7 +1300,7 @@ mod tests {
         sets.push(&set);
         let mut generality = GenDistrib::new(bank.signature());
         for formula in set.iter() {
-            generality.add_formula(formula, false, 1);
+            generality.add_formula(bank.signature(), formula, false, 1);
         }
         let mut relation = DRelation::new();
         let mut params = FormulaDRelationParams::new(GeneralityMeasure::Terms);
@@ -2162,7 +2168,7 @@ mod tests {
         formula_sets.push(&formulas);
         let mut generality = GenDistrib::new(bank.signature());
         generality.add_clause_sets(&clause_sets);
-        generality.add_formula_sets(&formula_sets, false);
+        generality.add_formula_sets(bank.signature(), &formula_sets, false);
         let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
         params.benevolence = 10.0;
         params.max_recursion_depth = 3;
@@ -2220,7 +2226,7 @@ mod tests {
         formula_sets.push(&formulas);
         let mut generality = GenDistrib::new(bank.signature());
         generality.add_clause_sets(&clause_sets);
-        generality.add_formula_sets(&formula_sets, false);
+        generality.add_formula_sets(bank.signature(), &formula_sets, false);
         let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
         params.add_no_symbol_axioms = true;
         let mut selected_clauses = PStack::new();
