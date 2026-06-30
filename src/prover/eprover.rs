@@ -7,10 +7,13 @@ use std::path::Path;
 
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
+#[cfg(not(test))]
+use crate::basics::os_wrapper::set_memory_limit;
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_core_number, get_system_phys_memory,
-    set_memory_limit,
 };
+#[cfg(all(target_os = "linux", not(test)))]
+use crate::basics::os_wrapper::{set_soft_rlimit, RLIMIT_CORE_COMPAT, RLIMIT_CPU_COMPAT};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{
@@ -2292,6 +2295,45 @@ fn apply_time_limit_state(config: &EProverConfig) {
     configure_time_limits(hard_limit, soft_limit, schedule_limit);
 }
 
+#[cfg(any(test, target_os = "linux"))]
+fn cpu_rlimit_to_apply(config: &EProverConfig) -> Option<u64> {
+    let hard_limit = config
+        .cpu_limit
+        .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
+    let soft_limit = config
+        .soft_cpu_limit
+        .map_or(RLIM_INFINITY_COMPAT, c_rlimit_from_arg);
+
+    if hard_limit == RLIM_INFINITY_COMPAT && soft_limit == RLIM_INFINITY_COMPAT {
+        return None;
+    }
+    if soft_limit == RLIM_INFINITY_COMPAT {
+        Some(hard_limit)
+    } else {
+        Some(soft_limit)
+    }
+}
+
+fn apply_os_resource_limit_state(config: &EProverConfig) {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        if let Some(cpu_limit) = cpu_rlimit_to_apply(config) {
+            let _ = set_soft_rlimit(RLIMIT_CPU_COMPAT, cpu_limit);
+            let _ = set_soft_rlimit(RLIMIT_CORE_COMPAT, 0);
+        }
+    }
+
+    #[cfg(not(test))]
+    {
+        let _ = set_memory_limit(config.memory_limit);
+    }
+
+    #[cfg(test)]
+    {
+        let _ = config;
+    }
+}
+
 fn apply_ordering_state(config: &EProverConfig) {
     if config.search.ordering.lpo_recursion_limit_changed {
         set_lpo_recursion_depth_limit(config.search.ordering.lpo_recursion_limit);
@@ -4143,7 +4185,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     let _ = set_output_level(config.output_level);
     apply_time_limit_state(config);
     apply_ordering_state(config);
-    let _ = set_memory_limit(config.memory_limit);
+    apply_os_resource_limit_state(config);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -9457,15 +9499,15 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, fv_index_params_from_config, heuristic_parms_from_config,
-        order_parms_from_config, preprocessing_config_debug_line, process_options,
-        proof_control_from_config, run, run_config, temporary_executable_term_bank,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
-        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        auto_memory_limit_from_system_mb, cpu_rlimit_to_apply, fv_index_params_from_config,
+        heuristic_parms_from_config, order_parms_from_config, preprocessing_config_debug_line,
+        process_options, proof_control_from_config, run, run_config,
+        temporary_executable_term_bank, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
+        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
+        PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING,
+        MEGA, THF_REQUIRES_HOL_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -9597,6 +9639,7 @@ mod tests {
         assert_eq!(config.cpu_limit, Some(300));
         assert_eq!(config.soft_cpu_limit, None);
         assert_eq!(config.schedule_time_limit, Some(300));
+        assert_eq!(cpu_rlimit_to_apply(&config), Some(300));
 
         let action =
             process_options(["eprover", "--soft-cpu-limit=25", "--cpu-limit=100"]).unwrap();
@@ -9606,6 +9649,7 @@ mod tests {
         assert_eq!(config.cpu_limit, Some(100));
         assert_eq!(config.soft_cpu_limit, Some(25));
         assert_eq!(config.schedule_time_limit, Some(100));
+        assert_eq!(cpu_rlimit_to_apply(&config), Some(25));
 
         let action =
             process_options(["eprover", "--cpu-limit=100", "--soft-cpu-limit=25"]).unwrap();
@@ -9613,6 +9657,13 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(config.schedule_time_limit, Some(25));
+        assert_eq!(cpu_rlimit_to_apply(&config), Some(25));
+
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+        assert_eq!(cpu_rlimit_to_apply(&config), None);
     }
 
     #[test]

@@ -31,6 +31,13 @@ impl RLimResult {
 }
 
 #[cfg(target_os = "linux")]
+pub const RLIMIT_CPU_COMPAT: i32 = linux_rlimit::RLIMIT_CPU;
+#[cfg(target_os = "linux")]
+pub const RLIMIT_CORE_COMPAT: i32 = linux_rlimit::RLIMIT_CORE;
+#[cfg(target_os = "linux")]
+pub const RLIMIT_DATA_COMPAT: i32 = linux_rlimit::RLIMIT_DATA;
+
+#[cfg(target_os = "linux")]
 #[must_use]
 pub fn set_soft_rlimit(resource: i32, limit: u64) -> RLimResult {
     linux_rlimit::set_soft_rlimit(resource, limit)
@@ -61,10 +68,10 @@ pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
         return RLimResult::Success;
     }
 
-    let data_result = set_soft_rlimit(linux_rlimit::RLIMIT_DATA, mem_limit);
+    let data_result = set_soft_rlimit(RLIMIT_DATA_COMPAT, mem_limit);
     // Preserve the C implementation's RLIMIT_AS branch bug: when RLIMIT_AS is
     // available, it labels the warning as RLIMIT_AS but still passes RLIMIT_DATA.
-    let as_result = set_soft_rlimit(linux_rlimit::RLIMIT_DATA, mem_limit);
+    let as_result = set_soft_rlimit(RLIMIT_DATA_COMPAT, mem_limit);
     combine_rlimit_results(data_result, as_result)
 }
 
@@ -554,7 +561,9 @@ mod linux_rlimit {
     use super::RLimResult;
     use std::mem::MaybeUninit;
 
+    pub(super) const RLIMIT_CPU: i32 = 0;
     pub(super) const RLIMIT_DATA: i32 = 2;
+    pub(super) const RLIMIT_CORE: i32 = 4;
 
     #[repr(C)]
     struct RLimit {
