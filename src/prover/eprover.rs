@@ -9042,6 +9042,12 @@ fn simple_fof_literal_to_clause_literal_lists(
     vec![literals]
 }
 
+struct SimpleFofTermIteExpansion {
+    condition: Term,
+    if_true: Term,
+    if_false: Term,
+}
+
 fn simple_fof_literal_formula_to_clause_literal_lists(
     literal: Eqn,
     negate_as_conjecture: bool,
@@ -9055,6 +9061,15 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
     if expands_to_formula_ite {
         let ite = literal.left().clone();
         let formulas = simple_fof_bool_ite_term_to_formulas(&ite, bank)?;
+        return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
+            formulas,
+            negate_as_conjecture,
+            universal_dependencies,
+            bank,
+        );
+    }
+
+    if let Some(formulas) = simple_fof_literal_term_ite_to_formulas(&literal, bank)? {
         return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
             negate_as_conjecture,
@@ -9092,6 +9107,123 @@ fn simple_fof_bool_ite_term_to_formulas(
             consequents: if_false,
         },
     ])
+}
+
+fn simple_fof_literal_term_ite_to_formulas(
+    literal: &Eqn,
+    bank: &mut TermBank,
+) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
+    if let Some(expansion) = simple_fof_term_first_ite_expansion(literal.left(), bank)? {
+        let if_true = Eqn::alloc(
+            expansion.if_true,
+            literal.right().clone(),
+            bank,
+            literal.is_positive(),
+        )?;
+        let if_false = Eqn::alloc(
+            expansion.if_false,
+            literal.right().clone(),
+            bank,
+            literal.is_positive(),
+        )?;
+        return simple_fof_term_ite_expansion_to_formulas(
+            &expansion.condition,
+            if_true,
+            if_false,
+            bank,
+        )
+        .map(Some);
+    }
+
+    if let Some(expansion) = simple_fof_term_first_ite_expansion(literal.right(), bank)? {
+        let if_true = Eqn::alloc(
+            literal.left().clone(),
+            expansion.if_true,
+            bank,
+            literal.is_positive(),
+        )?;
+        let if_false = Eqn::alloc(
+            literal.left().clone(),
+            expansion.if_false,
+            bank,
+            literal.is_positive(),
+        )?;
+        return simple_fof_term_ite_expansion_to_formulas(
+            &expansion.condition,
+            if_true,
+            if_false,
+            bank,
+        )
+        .map(Some);
+    }
+
+    Ok(None)
+}
+
+fn simple_fof_term_ite_expansion_to_formulas(
+    condition: &Term,
+    if_true: Eqn,
+    if_false: Eqn,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let condition = simple_fof_bool_term_to_formulas(condition, bank)?;
+    Ok(vec![
+        SimpleFofFormula::Implication {
+            antecedents: condition.clone(),
+            consequents: simple_fof_literal_formulas(vec![if_true]),
+        },
+        SimpleFofFormula::Implication {
+            antecedents: vec![SimpleFofFormula::Negation(condition)],
+            consequents: simple_fof_literal_formulas(vec![if_false]),
+        },
+    ])
+}
+
+fn simple_fof_term_first_ite_expansion(
+    term: &Term,
+    bank: &mut TermBank,
+) -> Result<Option<SimpleFofTermIteExpansion>, Diagnostic> {
+    if term.f_code() == SIG_ITE_CODE {
+        return Ok(Some(SimpleFofTermIteExpansion {
+            condition: simple_fof_formula_term_argument(term, 0, "$ite")?,
+            if_true: simple_fof_formula_term_argument(term, 1, "$ite")?,
+            if_false: simple_fof_formula_term_argument(term, 2, "$ite")?,
+        }));
+    }
+    if term.is_lambda() {
+        return Ok(None);
+    }
+
+    for index in 0..term.arity() {
+        let argument = simple_fof_formula_term_argument(term, index, "term-position $ite")?;
+        if let Some(expansion) = simple_fof_term_first_ite_expansion(&argument, bank)? {
+            return Ok(Some(SimpleFofTermIteExpansion {
+                condition: expansion.condition,
+                if_true: simple_fof_term_replace_argument(term, index, &expansion.if_true, bank)?,
+                if_false: simple_fof_term_replace_argument(term, index, &expansion.if_false, bank)?,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+fn simple_fof_term_replace_argument(
+    term: &Term,
+    target_index: usize,
+    replacement: &Term,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    let replaced = Term::top_copy_without_args(term);
+    for index in 0..term.arity() {
+        let argument = if index == target_index {
+            replacement.clone()
+        } else {
+            simple_fof_formula_term_argument(term, index, "term-position $ite")?
+        };
+        replaced.set_argument(index, argument);
+    }
+    bank.term_top_insert(replaced)
 }
 
 fn simple_fof_bool_term_to_formulas(
@@ -19382,6 +19514,56 @@ mod tests {
         assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
             && !line.contains("~p(a)")
             && line.contains("~r(a)")));
+        assert!(!printed.contains("$ite"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_unrolls_term_position_ite_in_literal() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-fof-term-ite");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(ite_arg, axiom, q($ite(p(a), a, b))).\n\
+             fof(ite_eq, axiom, ($ite(p(a), a, b) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 4, "{printed}");
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("q(a)") && line.contains("~p(a)")));
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("q(b)") && line.contains("p(a)") && !line.contains("~p(a)")));
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("a=c") && line.contains("~p(a)")));
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("b=c") && line.contains("p(a)") && !line.contains("~p(a)")));
         assert!(!printed.contains("$ite"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
