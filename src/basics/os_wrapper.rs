@@ -188,6 +188,13 @@ pub fn current_resource_usage() -> ResourceUsage {
 
 #[must_use]
 pub fn get_core_number() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(core_number) = linux_resource::online_processor_count() {
+            return core_number;
+        }
+    }
+
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
 }
 
@@ -196,6 +203,13 @@ pub fn get_system_page_size() -> isize {
     #[cfg(windows)]
     {
         if let Some(page_size) = windows_system_page_size() {
+            return page_size;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(page_size) = linux_resource::system_page_size() {
             return page_size;
         }
     }
@@ -212,6 +226,10 @@ pub fn get_system_phys_memory() -> i64 {
 #[cfg(target_os = "linux")]
 #[must_use]
 pub fn get_system_phys_memory() -> i64 {
+    if let Some(memory_mb) = linux_resource::physical_memory_mb() {
+        return memory_mb;
+    }
+
     let Ok(contents) = std::fs::read_to_string("/proc/meminfo") else {
         return -1;
     };
@@ -669,6 +687,12 @@ mod linux_resource {
     pub(super) const RUSAGE_CHILDREN: i32 = -1;
     #[cfg(target_os = "linux")]
     const CLOCKS_PER_SEC_COMPAT: c_long = 1_000_000;
+    #[cfg(target_os = "linux")]
+    const SC_PAGESIZE_COMPAT: i32 = 30;
+    #[cfg(target_os = "linux")]
+    const SC_NPROCESSORS_ONLN_COMPAT: i32 = 84;
+    #[cfg(target_os = "linux")]
+    const SC_PHYS_PAGES_COMPAT: i32 = 85;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     #[repr(C)]
@@ -701,7 +725,9 @@ mod linux_resource {
     #[cfg(target_os = "linux")]
     extern "C" {
         fn clock() -> c_long;
-        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+        #[link_name = "getrusage"]
+        fn libc_getrusage(who: i32, usage: *mut RUsage) -> i32;
+        fn sysconf(name: i32) -> c_long;
     }
 
     #[cfg(target_os = "linux")]
@@ -710,6 +736,23 @@ mod linux_resource {
         // for the current process, matching C GetUSecClock's use.
         let ticks = unsafe { clock() };
         clock_ticks_to_usec(ticks, CLOCKS_PER_SEC_COMPAT)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn online_processor_count() -> Option<usize> {
+        positive_c_long_to_usize(sysconf_positive(SC_NPROCESSORS_ONLN_COMPAT)?)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn system_page_size() -> Option<isize> {
+        positive_c_long_to_isize(sysconf_positive(SC_PAGESIZE_COMPAT)?)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn physical_memory_mb() -> Option<i64> {
+        let page_size = sysconf_positive(SC_PAGESIZE_COMPAT)?;
+        let page_count = sysconf_positive(SC_PHYS_PAGES_COMPAT)?;
+        physical_memory_mb_from_sysconf(page_size, page_count)
     }
 
     #[cfg(any(test, target_os = "linux"))]
@@ -721,13 +764,49 @@ mod linux_resource {
         i64::try_from(usec).ok()
     }
 
+    #[cfg(any(test, target_os = "linux"))]
+    pub(super) fn physical_memory_mb_from_sysconf(
+        page_size: c_long,
+        page_count: c_long,
+    ) -> Option<i64> {
+        if page_size <= 0 || page_count <= 0 {
+            return None;
+        }
+        let bytes = i128::from(page_size) * i128::from(page_count);
+        i64::try_from(bytes / 1_048_576_i128).ok()
+    }
+
+    #[cfg(any(test, target_os = "linux"))]
+    pub(super) fn positive_c_long_to_usize(value: c_long) -> Option<usize> {
+        if value <= 0 {
+            return None;
+        }
+        usize::try_from(value).ok()
+    }
+
+    #[cfg(any(test, target_os = "linux"))]
+    pub(super) fn positive_c_long_to_isize(value: c_long) -> Option<isize> {
+        if value <= 0 {
+            return None;
+        }
+        isize::try_from(value).ok()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn sysconf_positive(name: i32) -> Option<c_long> {
+        // SAFETY: sysconf has no pointer arguments. The selector constants are
+        // the Linux/glibc values used by the C source's target environment.
+        let value = unsafe { sysconf(name) };
+        (value > 0).then_some(value)
+    }
+
     #[cfg(target_os = "linux")]
     pub(super) fn getrusage(who: i32) -> Option<RUsage> {
         let mut usage = MaybeUninit::<RUsage>::uninit();
         // SAFETY: usage points to writable, properly aligned storage for the C
         // library to initialize on success. The selector is one of the POSIX
         // RUSAGE_* constants used by the C source.
-        if unsafe { getrusage(who, usage.as_mut_ptr()) } == -1 {
+        if unsafe { libc_getrusage(who, usage.as_mut_ptr()) } == -1 {
             return None;
         }
         // SAFETY: getrusage returned success, so usage is initialized.
@@ -938,6 +1017,39 @@ mod tests {
             None
         );
         assert_eq!(super::linux_resource::clock_ticks_to_usec(1, 0), None);
+    }
+
+    #[test]
+    fn linux_sysconf_conversions_reject_invalid_values() {
+        assert_eq!(super::linux_resource::positive_c_long_to_usize(1), Some(1));
+        assert_eq!(super::linux_resource::positive_c_long_to_usize(0), None);
+        assert_eq!(super::linux_resource::positive_c_long_to_usize(-1), None);
+        assert_eq!(
+            super::linux_resource::positive_c_long_to_isize(4096),
+            Some(4096)
+        );
+        assert_eq!(super::linux_resource::positive_c_long_to_isize(0), None);
+        assert_eq!(super::linux_resource::positive_c_long_to_isize(-4096), None);
+    }
+
+    #[test]
+    fn linux_sysconf_physical_memory_conversion_matches_c_shape() {
+        assert_eq!(
+            super::linux_resource::physical_memory_mb_from_sysconf(4096, 262_144),
+            Some(1024)
+        );
+        assert_eq!(
+            super::linux_resource::physical_memory_mb_from_sysconf(2048, 1536),
+            Some(3)
+        );
+        assert_eq!(
+            super::linux_resource::physical_memory_mb_from_sysconf(0, 262_144),
+            None
+        );
+        assert_eq!(
+            super::linux_resource::physical_memory_mb_from_sysconf(4096, -1),
+            None
+        );
     }
 
     #[test]
