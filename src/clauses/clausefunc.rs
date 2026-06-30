@@ -20,7 +20,7 @@ use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
-use crate::terms::signature::FP_IS_INJ_DEF_SKOLEM;
+use crate::terms::signature::{FP_FOF_OP, FP_IS_INJ_DEF_SKOLEM, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::{arrow_type_flattened, type_get_max_arity, type_is_predicate};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -976,7 +976,9 @@ pub(crate) fn tformula_fcode_alloc(
     }
 
     let term = Term::top_alloc(op, arity);
-    term.set_type(Some(bank.signature().type_bank().bool_type()));
+    if op != SIG_NAMED_LAMBDA_CODE {
+        term.set_type(Some(bank.signature().type_bank().bool_type()));
+    }
     if bank.signature().is_predicate(op) {
         term.set_prop(TP_PRED_POS);
     }
@@ -1052,6 +1054,114 @@ pub fn tformula_shift_quantors2(bank: &mut TermBank, form: &Term) -> Result<Term
     Ok(shifted)
 }
 
+/// Distributes disjunction over conjunction in a term-encoded NNF formula.
+///
+/// This matches C `TFormulaDistributeDisjunctions` for a single suitably
+/// preprocessed formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding a changed formula or distributed
+/// connective fails.
+///
+/// # Panics
+///
+/// Panics if the input formula violates the C precondition that it is an NNF
+/// formula containing only quantifiers, conjunctions, disjunctions, literals, or
+/// Boolean constants, or if required formula arguments are malformed.
+pub fn tformula_distribute_disjunctions(
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<Term, Diagnostic> {
+    if form.is_db_var() {
+        return Ok(form.clone());
+    }
+
+    let (and_code, or_code) = {
+        let sig = bank.signature();
+        (sig.and_code(), sig.or_code())
+    };
+    assert!(
+        tformula_is_quantified(bank, form)
+            || form.f_code() == or_code
+            || form.f_code() == and_code
+            || tformula_is_literal(bank, form)
+            || form == bank.true_term()
+            || form == bank.false_term(),
+        "TFormulaDistributeDisjunctions expects a preprocessed NNF formula"
+    );
+
+    let mut left = None;
+    let mut right = None;
+    let mut changed = false;
+    if tformula_has_subform1(bank, form) {
+        let original = formula_argument(form, 0);
+        let distributed = tformula_distribute_disjunctions(bank, &original)?;
+        changed = distributed != original;
+        left = Some(distributed);
+    } else if tformula_is_quantified(bank, form) {
+        left = Some(formula_argument(form, 0));
+    }
+
+    if tformula_has_subform2(bank, form) || tformula_is_quantified(bank, form) {
+        let original = formula_argument(form, 1);
+        let distributed = tformula_distribute_disjunctions(bank, &original)?;
+        changed |= distributed != original;
+        right = Some(distributed);
+    }
+
+    let mut current = if changed {
+        tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            left.expect("changed formula must have a left argument"),
+            right,
+        )?
+    } else {
+        form.clone()
+    };
+
+    if current.f_code() == or_code && current.arity() == 2 {
+        let left_arg = formula_argument(&current, 0);
+        let right_arg = formula_argument(&current, 1);
+        if !left_arg.is_db_var() && left_arg.f_code() == and_code {
+            let distributed_left = tformula_fcode_alloc(
+                bank,
+                or_code,
+                formula_argument(&left_arg, 0),
+                Some(right_arg.clone()),
+            )?;
+            let distributed_right = tformula_fcode_alloc(
+                bank,
+                or_code,
+                formula_argument(&left_arg, 1),
+                Some(right_arg),
+            )?;
+            let conjunction =
+                tformula_fcode_alloc(bank, and_code, distributed_left, Some(distributed_right))?;
+            current = tformula_distribute_disjunctions(bank, &conjunction)?;
+        } else if !right_arg.is_db_var() && right_arg.f_code() == and_code {
+            let distributed_right = tformula_fcode_alloc(
+                bank,
+                or_code,
+                formula_argument(&right_arg, 1),
+                Some(left_arg.clone()),
+            )?;
+            let distributed_left = tformula_fcode_alloc(
+                bank,
+                or_code,
+                formula_argument(&right_arg, 0),
+                Some(left_arg),
+            )?;
+            let conjunction =
+                tformula_fcode_alloc(bank, and_code, distributed_left, Some(distributed_right))?;
+            current = tformula_distribute_disjunctions(bank, &conjunction)?;
+        }
+    }
+
+    Ok(current)
+}
+
 fn extract_formula_core(
     bank: &mut TermBank,
     form: &Term,
@@ -1103,6 +1213,27 @@ fn extract_formula_core(
     }
 
     Ok(current)
+}
+
+fn tformula_has_subform1(bank: &TermBank, form: &Term) -> bool {
+    bank.signature().query_prop(form.f_code(), FP_FOF_OP) && form.arity() >= 1
+}
+
+fn tformula_has_subform2(bank: &TermBank, form: &Term) -> bool {
+    bank.signature().query_prop(form.f_code(), FP_FOF_OP) && form.arity() >= 2
+}
+
+fn tformula_is_quantified(bank: &TermBank, form: &Term) -> bool {
+    !form.is_db_var()
+        && matches!(form.f_code(), code if code == bank.signature().qex_code()
+            || code == bank.signature().qall_code()
+            || code == SIG_NAMED_LAMBDA_CODE)
+}
+
+fn tformula_is_literal(bank: &TermBank, form: &Term) -> bool {
+    matches!(form.f_code(), code if code == bank.signature().eqn_code()
+        || code == bank.signature().neqn_code())
+        && form.arity() == 2
 }
 
 fn extract_formula_core2(
@@ -1923,8 +2054,8 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_neg_alloc, tformula_shift_quantors, tformula_shift_quantors2,
-        tformula_simplify_decoded,
+        tformula_distribute_disjunctions, tformula_neg_alloc, tformula_shift_quantors,
+        tformula_shift_quantors2, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -2782,6 +2913,92 @@ mod tests {
         let flattened = tformula_neg_alloc(&mut bank, &negated).unwrap();
 
         assert_eq!(flattened, atom);
+    }
+
+    #[test]
+    fn tformula_distribute_disjunctions_distributes_left_conjunction() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "dist_left_a");
+        let b = typed_const(&mut bank, "dist_left_b");
+        let c = typed_const(&mut bank, "dist_left_c");
+        let d = typed_const(&mut bank, "dist_left_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let middle = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &left, &middle);
+        let formula = bool_binary_with_code(&mut bank, or_code, &conjunction, &right);
+
+        let distributed = tformula_distribute_disjunctions(&mut bank, &formula).unwrap();
+
+        assert_eq!(distributed.f_code(), and_code);
+        let left_or = distributed.argument(0).unwrap();
+        let right_or = distributed.argument(1).unwrap();
+        assert_eq!(left_or.f_code(), or_code);
+        assert_eq!(right_or.f_code(), or_code);
+        assert_eq!(left_or.argument(0).as_ref(), Some(&left));
+        assert_eq!(left_or.argument(1).as_ref(), Some(&right));
+        assert_eq!(right_or.argument(0).as_ref(), Some(&middle));
+        assert_eq!(right_or.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn tformula_distribute_disjunctions_distributes_right_conjunction_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "dist_right_a");
+        let b = typed_const(&mut bank, "dist_right_b");
+        let c = typed_const(&mut bank, "dist_right_c");
+        let d = typed_const(&mut bank, "dist_right_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let middle = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &middle, &right);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &conjunction);
+
+        let distributed = tformula_distribute_disjunctions(&mut bank, &formula).unwrap();
+
+        assert_eq!(distributed.f_code(), and_code);
+        let left_or = distributed.argument(0).unwrap();
+        let right_or = distributed.argument(1).unwrap();
+        assert_eq!(left_or.f_code(), or_code);
+        assert_eq!(right_or.f_code(), or_code);
+        assert_eq!(left_or.argument(0).as_ref(), Some(&middle));
+        assert_eq!(left_or.argument(1).as_ref(), Some(&left));
+        assert_eq!(right_or.argument(0).as_ref(), Some(&right));
+        assert_eq!(right_or.argument(1).as_ref(), Some(&left));
+    }
+
+    #[test]
+    fn tformula_distribute_disjunctions_rebuilds_quantifier_body() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -142);
+        let a = typed_const(&mut bank, "dist_quant_a");
+        let b = typed_const(&mut bank, "dist_quant_b");
+        let c = typed_const(&mut bank, "dist_quant_c");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let middle = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let qall_code = bank.signature().qall_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &left, &middle);
+        let body = bool_binary_with_code(&mut bank, or_code, &conjunction, &right);
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+
+        let distributed = tformula_distribute_disjunctions(&mut bank, &quantified).unwrap();
+
+        assert_eq!(distributed.f_code(), qall_code);
+        assert_eq!(distributed.argument(0).as_ref(), Some(&x));
+        let body = distributed.argument(1).unwrap();
+        assert_eq!(body.f_code(), and_code);
+        assert_eq!(body.argument(0).unwrap().f_code(), or_code);
+        assert_eq!(body.argument(1).unwrap().f_code(), or_code);
     }
 
     #[test]
