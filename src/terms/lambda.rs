@@ -901,6 +901,22 @@ fn tformula_quantor_alloc(
     bank.term_top_insert(formula)
 }
 
+fn tformula_fcode_alloc(
+    bank: &mut TermBank,
+    f_code: FunCode,
+    left: Term,
+    right: Term,
+) -> Result<Term, Diagnostic> {
+    let formula = Term::top_alloc(f_code, 2);
+    formula.set_type(Some(bank.signature().type_bank().bool_type()));
+    if bank.signature().is_predicate(f_code) {
+        formula.set_prop(TP_PRED_POS);
+    }
+    formula.set_argument(0, left);
+    formula.set_argument(1, right);
+    bank.term_top_insert(formula)
+}
+
 /// Decodes formula terms into the CNF-facing representation and encodes atoms.
 ///
 /// This matches C `DecodeFormulasForCNF`.
@@ -980,6 +996,104 @@ pub fn decode_formulas_for_cnf(bank: &mut TermBank, term: &Term) -> Result<Term,
     };
 
     encode_predicate_as_eqn(bank, result)
+}
+
+fn lambda_eq_to_forall(bank: &mut TermBank, term: &Term) -> Result<Option<Term>, Diagnostic> {
+    if !term.has_eq_neq() {
+        return Ok(None);
+    }
+
+    let (eqn_code, neqn_code) = {
+        let sig = bank.signature();
+        (sig.eqn_code(), sig.neqn_code())
+    };
+    if !matches!(term.f_code(), code if code == eqn_code || code == neqn_code) || term.arity() != 2
+    {
+        return Ok(Some(term.clone()));
+    }
+
+    let left = term
+        .argument(0)
+        .expect("lambda equality left argument is uninitialized");
+    let right = term
+        .argument(1)
+        .expect("lambda equality right argument is uninitialized");
+    if !(left.is_lambda() || right.is_lambda()) {
+        return Ok(Some(term.clone()));
+    }
+
+    let mut left_vars = Vec::new();
+    let mut right_vars = Vec::new();
+    let _ = unfold_lambda(&left, &mut left_vars);
+    let _ = unfold_lambda(&right, &mut right_vars);
+    assert!(
+        !left_vars.is_empty() || !right_vars.is_empty(),
+        "lambda equality must expose at least one binder"
+    );
+    let longer_vars = if left_vars.len() > right_vars.len() {
+        &left_vars
+    } else {
+        &right_vars
+    };
+
+    let mut fresh_vars = Vec::with_capacity(longer_vars.len());
+    let mut encoded_vars = Vec::with_capacity(longer_vars.len());
+    for db_var in longer_vars {
+        let type_ = db_var.type_().expect("lambda binder must have a type");
+        let fresh_var = bank.vars().get_fresh_var(&type_);
+        encoded_vars.push(encode_predicate_as_eqn(bank, fresh_var.clone())?);
+        fresh_vars.push(fresh_var);
+    }
+
+    let applied_left = apply_terms(bank, &left, &encoded_vars)?;
+    let applied_right = apply_terms(bank, &right, &encoded_vars)?;
+    let normalized_left = beta_normalize_db(bank, &applied_left)?;
+    let normalized_right = beta_normalize_db(bank, &applied_right)?;
+    let bool_type = bank.signature().type_bank().bool_type();
+    let mut result = if normalized_left.type_().as_ref() == Some(&bool_type) {
+        let f_code = if term.f_code() == eqn_code {
+            bank.signature().equiv_code()
+        } else {
+            bank.signature().xor_code()
+        };
+        let left = encode_predicate_as_eqn(bank, normalized_left)?;
+        let right = encode_predicate_as_eqn(bank, normalized_right)?;
+        tformula_fcode_alloc(bank, f_code, left, right)?
+    } else {
+        tformula_fcode_alloc(bank, term.f_code(), normalized_left, normalized_right)?
+    };
+
+    let universal = matches!(
+        result.f_code(),
+        code if code == bank.signature().eqn_code() || code == bank.signature().equiv_code()
+    );
+    while let Some(var) = fresh_vars.pop() {
+        let quantifier = if universal {
+            bank.signature().qall_code()
+        } else {
+            bank.signature().qex_code()
+        };
+        result = tformula_quantor_alloc(bank, quantifier, var, result)?;
+    }
+    Ok(Some(result))
+}
+
+/// Turns equations between lambda terms into quantified non-lambda formulas.
+///
+/// This matches C `LambdaToForall` over a single term-encoded formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic if mapping, application, beta normalization, predicate
+/// encoding, or formula rebuilding fails.
+///
+/// # Panics
+///
+/// Panics if equality or lambda cells are malformed, or if mapper invariants are
+/// violated.
+pub fn lambda_to_forall(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    bank.vars().set_v_counts_to_used();
+    bank.map_term(term, &mut lambda_eq_to_forall)
 }
 
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
@@ -1519,9 +1633,10 @@ mod tests {
     use super::{
         apply_terms, beta_normalize_db, close_with_type_prefix, decode_formulas_for_cnf,
         flatten_apps, lambda_eta_expand_db, lambda_eta_expand_db_top_level, lambda_eta_reduce_db,
-        lambda_normalize_db, named_to_db, post_cnf_encode_formulas, shift_db, unfold_lambda,
-        whnf_deref,
+        lambda_normalize_db, lambda_to_forall, named_to_db, post_cnf_encode_formulas, shift_db,
+        unfold_lambda, whnf_deref,
     };
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
@@ -1533,6 +1648,20 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
@@ -1589,6 +1718,14 @@ mod tests {
         let formula = Term::top_alloc(quantifier, 1);
         formula.set_type(Some(bank.signature().type_bank().bool_type()));
         formula.set_argument(0, body.clone());
+        bank.term_top_insert(formula).unwrap()
+    }
+
+    fn formula_binary(bank: &mut TermBank, f_code: FunCode, left: &Term, right: &Term) -> Term {
+        let formula = Term::top_alloc(f_code, 2);
+        formula.set_type(Some(bank.signature().type_bank().bool_type()));
+        formula.set_argument(0, left.clone());
+        formula.set_argument(1, right.clone());
         bank.term_top_insert(formula).unwrap()
     }
 
@@ -1981,6 +2118,72 @@ mod tests {
         assert_eq!(decoded.f_code(), bank.signature().neqn_code());
         assert_eq!(decoded.argument(0).as_ref(), Some(bank.true_term()));
         assert_eq!(decoded.argument(1).as_ref(), Some(bank.true_term()));
+    }
+
+    #[test]
+    fn lambda_to_forall_turns_function_lambda_equality_into_universal_formula() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "lambda_forall_f", unary_type.clone());
+        let g = typed_const_with_type(&mut bank, "lambda_forall_g", unary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let left_body = apply_terms(&mut bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let left_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &left_body).unwrap();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = formula_binary(&mut bank, eqn_code, &left_lambda, &g);
+
+        let converted = lambda_to_forall(&mut bank, &equality).unwrap();
+
+        assert_eq!(converted.f_code(), bank.signature().qall_code());
+        assert_eq!(converted.arity(), 2);
+        let binder = converted.argument(0).unwrap();
+        assert!(binder.is_free_var());
+        assert_eq!(binder.type_(), Some(i_type));
+        let body = converted.argument(1).unwrap();
+        assert_eq!(body.f_code(), eqn_code);
+        assert_eq!(body.argument(0).unwrap().f_code(), f.f_code());
+        assert_eq!(
+            body.argument(0).unwrap().argument(0).as_ref(),
+            Some(&binder)
+        );
+        assert_eq!(body.argument(1).unwrap().f_code(), g.f_code());
+        assert_eq!(
+            body.argument(1).unwrap().argument(0).as_ref(),
+            Some(&binder)
+        );
+    }
+
+    #[test]
+    fn lambda_to_forall_turns_boolean_lambda_equality_into_equivalence() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let pred_type = alloc_arrow_type(vec![i_type.clone(), bool_type]);
+        let p = typed_const_with_type(&mut bank, "lambda_forall_p", pred_type.clone());
+        let q = typed_const_with_type(&mut bank, "lambda_forall_q", pred_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let left_body = apply_terms(&mut bank, &p, std::slice::from_ref(&db0)).unwrap();
+        let left_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &left_body).unwrap();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = formula_binary(&mut bank, eqn_code, &left_lambda, &q);
+
+        let converted = lambda_to_forall(&mut bank, &equality).unwrap();
+
+        assert_eq!(converted.f_code(), bank.signature().qall_code());
+        let body = converted.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().equiv_code());
+        let left_atom = body.argument(0).unwrap();
+        let right_atom = body.argument(1).unwrap();
+        assert_eq!(left_atom.f_code(), eqn_code);
+        assert_eq!(right_atom.f_code(), eqn_code);
+        assert_eq!(left_atom.argument(0).unwrap().f_code(), p.f_code());
+        assert_eq!(right_atom.argument(0).unwrap().f_code(), q.f_code());
+        assert_eq!(left_atom.argument(1).as_ref(), Some(bank.true_term()));
+        assert_eq!(right_atom.argument(1).as_ref(), Some(bank.true_term()));
     }
 
     #[test]

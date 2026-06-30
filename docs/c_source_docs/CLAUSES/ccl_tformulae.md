@@ -216,6 +216,14 @@ Source files reviewed: `CLAUSES/ccl_tformulae.h`, `CLAUSES/ccl_tformulae.c`.
 - Change-later candidate: `literal_tform_tstp_parse` always returns through `EncodePredicateAsEqn`, so ordinary Boolean predicates become `$eq(p(...),$true)` and `$false` becomes `$neq($true,$true)` before later simplification can normalize them. Rust mirrors this shape for Boolean term arguments in the temporary term-bank bridge; a full formula owner should make predicate-as-literal encoding an explicit lowering step instead of hiding it in the parser.
 - Change-later candidate: `TFormulaAppEncode` prints the formula-level operator represented in the term encoding, so reverse implication, XOR, NAND, and NOR remain visible as `<=`, `<~>`, `~&`, and `~|` in the app-encoded output even if later proof lowering can normalize them semantically. Rust now keeps these variants through the supported bridge for compatibility; a full formula owner should make this source-spelling-preserving render path explicit rather than depending on normalized clause forms.
 
+### Rust Port Status Notes
+
+- `src/terms/lambda.rs` now stages `LambdaToForall` for a single term-encoded formula, including the C `lambda_eq_to_forall` mapping that applies fresh variables to lambda equality sides, beta-normalizes, converts Boolean equality/disequality to equivalence/XOR, encodes Boolean atoms as predicate equalities, and closes the result with universal or existential quantifiers. Formula-set/archive integration through `TFormulaSetLambdaNormalize` remains tied to full formula-owner plumbing.
+
+### Change-Later Observations
+
+- C `LambdaToForall` begins by calling `VarBankSetVCountsToUsed` and then relies on `TermMap`'s NULL-return optimization to stop descending into subterms that have no equality/disequality. Rust mirrors that with `TermBank::map_term` and explicit fresh-variable count initialization; keep this ordering when the formula-set wrapper is added.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
