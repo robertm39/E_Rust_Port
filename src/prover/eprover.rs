@@ -111,8 +111,8 @@ use crate::terms::signature::{
 use crate::terms::simpletypes::{type_app_encoded_name, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
-use crate::terms::termfunc::{term_app_encode, term_standard_weight};
-use crate::terms::termtypes::{term_identity_id, RewriteLevel, Term};
+use crate::terms::termfunc::{term_app_encode, term_collect_variables, term_standard_weight};
+use crate::terms::termtypes::{term_identity_id, DerefType, RewriteLevel, Term};
 use crate::terms::typebanks::TypeBank;
 
 const MEGA: u64 = 1_048_576;
@@ -8749,11 +8749,20 @@ fn simple_fof_answer_literal_formula(
     Ok(SimpleFofFormula::Literal(literal))
 }
 
+#[derive(Clone, Debug)]
+struct SimpleFofLetReplacement {
+    old_lhs: Term,
+    fresh_lhs: Term,
+}
+
 fn simple_fof_formulas_to_clause_literal_lists(
-    formulas: Vec<SimpleFofFormula>,
+    mut formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
+    if !negate_as_conjecture {
+        formulas = simple_fof_lift_direct_let_formulas(formulas, bank)?;
+    }
     let universal_dependencies = simple_fof_global_free_variables(&formulas);
     simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         formulas,
@@ -8761,6 +8770,317 @@ fn simple_fof_formulas_to_clause_literal_lists(
         &universal_dependencies,
         bank,
     )
+}
+
+fn simple_fof_lift_direct_let_formulas(
+    formulas: Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let mut definitions = Vec::new();
+    let mut transformed = Vec::with_capacity(formulas.len());
+    for formula in formulas {
+        transformed.push(simple_fof_lift_direct_let_formula(
+            formula,
+            &mut definitions,
+            bank,
+        )?);
+    }
+    transformed.extend(definitions);
+    Ok(transformed)
+}
+
+fn simple_fof_lift_direct_let_formula(
+    formula: SimpleFofFormula,
+    definitions: &mut Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+) -> Result<SimpleFofFormula, Diagnostic> {
+    Ok(match formula {
+        SimpleFofFormula::Literal(literal) => {
+            simple_fof_lift_direct_let_literal(literal, definitions, bank)?
+        }
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        } => SimpleFofFormula::Implication {
+            antecedents: simple_fof_lift_direct_let_formula_vec(antecedents, definitions, bank)?,
+            consequents: simple_fof_lift_direct_let_formula_vec(consequents, definitions, bank)?,
+        },
+        SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => SimpleFofFormula::ReverseImplication {
+            antecedents: simple_fof_lift_direct_let_formula_vec(antecedents, definitions, bank)?,
+            consequents: simple_fof_lift_direct_let_formula_vec(consequents, definitions, bank)?,
+        },
+        SimpleFofFormula::Equivalence { left, right } => SimpleFofFormula::Equivalence {
+            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
+            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
+        },
+        SimpleFofFormula::Xor { left, right } => SimpleFofFormula::Xor {
+            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
+            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
+        },
+        SimpleFofFormula::Nand { left, right } => SimpleFofFormula::Nand {
+            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
+            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
+        },
+        SimpleFofFormula::Nor { left, right } => SimpleFofFormula::Nor {
+            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
+            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
+        },
+        SimpleFofFormula::Conjunction(formulas) => SimpleFofFormula::Conjunction(
+            simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+        ),
+        SimpleFofFormula::Disjunction(formulas) => SimpleFofFormula::Disjunction(
+            simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+        ),
+        SimpleFofFormula::Negation(formulas) => SimpleFofFormula::Negation(
+            simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+        ),
+        SimpleFofFormula::Truth(_)
+        | SimpleFofFormula::Universal { .. }
+        | SimpleFofFormula::Existential { .. } => formula,
+    })
+}
+
+fn simple_fof_lift_direct_let_formula_vec(
+    formulas: Vec<SimpleFofFormula>,
+    definitions: &mut Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    formulas
+        .into_iter()
+        .map(|formula| simple_fof_lift_direct_let_formula(formula, definitions, bank))
+        .collect()
+}
+
+fn simple_fof_lift_direct_let_literal(
+    literal: Eqn,
+    definitions: &mut Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+) -> Result<SimpleFofFormula, Diagnostic> {
+    if literal.right() == bank.true_term()
+        && literal.left().f_code() == SIG_LET_CODE
+        && literal.left().type_().as_ref().is_some_and(Type::is_bool)
+    {
+        let body = simple_fof_lift_let_term(literal.left(), definitions, bank)?;
+        let body = simple_fof_bool_term_to_formulas(&body, bank)?;
+        return Ok(if literal.is_positive() {
+            simple_fof_formula_from_conjunction(body)
+        } else {
+            SimpleFofFormula::Negation(body)
+        });
+    }
+
+    if let Some(left) = simple_fof_lift_first_term_let(literal.left(), definitions, bank)? {
+        let lifted = Eqn::alloc(left, literal.right().clone(), bank, literal.is_positive())?;
+        return simple_fof_lift_direct_let_literal(lifted, definitions, bank);
+    }
+
+    if let Some(right) = simple_fof_lift_first_term_let(literal.right(), definitions, bank)? {
+        let lifted = Eqn::alloc(literal.left().clone(), right, bank, literal.is_positive())?;
+        return simple_fof_lift_direct_let_literal(lifted, definitions, bank);
+    }
+
+    Ok(SimpleFofFormula::Literal(literal))
+}
+
+fn simple_fof_formula_from_conjunction(formulas: Vec<SimpleFofFormula>) -> SimpleFofFormula {
+    match formulas.len() {
+        0 => SimpleFofFormula::Truth(true),
+        1 => formulas.into_iter().next().expect("formula length checked"),
+        _ => SimpleFofFormula::Conjunction(formulas),
+    }
+}
+
+fn simple_fof_lift_first_term_let(
+    term: &Term,
+    definitions: &mut Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    if term.f_code() == SIG_LET_CODE {
+        return simple_fof_lift_let_term(term, definitions, bank).map(Some);
+    }
+    if term.is_lambda() || term.is_any_var() {
+        return Ok(None);
+    }
+
+    for index in 0..term.arity() {
+        let argument = simple_fof_formula_term_argument(term, index, "term-position $let")?;
+        if let Some(replacement) = simple_fof_lift_first_term_let(&argument, definitions, bank)? {
+            return simple_fof_term_replace_argument_with_context(
+                term,
+                index,
+                &replacement,
+                "term-position $let",
+                bank,
+            )
+            .map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn simple_fof_lift_let_term(
+    term: &Term,
+    definitions: &mut Vec<SimpleFofFormula>,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    debug_assert_eq!(term.f_code(), SIG_LET_CODE);
+    let body_index = term
+        .arity()
+        .checked_sub(1)
+        .ok_or_else(|| Diagnostic::new(ErrorCode::TYPE_ERROR, "$let body is uninitialized"))?;
+
+    let mut replacements = BTreeMap::new();
+    for index in 0..body_index {
+        let definition = simple_fof_formula_term_argument(term, index, "$let definition")?;
+        let (old_f_code, replacement) =
+            simple_fof_let_replacement_for_definition(&definition, bank)?;
+        let definition_formulas =
+            simple_fof_let_definition_formulas(&definition, &replacement.fresh_lhs, bank)?;
+        let definition_formulas =
+            simple_fof_lift_direct_let_formula_vec(definition_formulas, definitions, bank)?;
+        definitions.extend(definition_formulas);
+        replacements.insert(old_f_code, replacement);
+    }
+
+    let body = simple_fof_formula_term_argument(term, body_index, "$let body")?;
+    let body = simple_fof_replace_let_body(&body, &replacements, bank)?;
+    if body.f_code() == SIG_LET_CODE {
+        simple_fof_lift_let_term(&body, definitions, bank)
+    } else {
+        Ok(body)
+    }
+}
+
+fn simple_fof_let_replacement_for_definition(
+    definition: &Term,
+    bank: &mut TermBank,
+) -> Result<(i64, SimpleFofLetReplacement), Diagnostic> {
+    if definition.f_code() != bank.signature().eqn_code() {
+        return Err(Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            "$let definition must be an equality",
+        ));
+    }
+    let old_lhs = simple_fof_formula_term_argument(definition, 0, "$let definition")?;
+    let rhs = simple_fof_formula_term_argument(definition, 1, "$let definition")?;
+    let formal_args = simple_fof_let_formal_arguments(&old_lhs)?;
+    let formal_ids = formal_args
+        .iter()
+        .map(term_identity_id)
+        .collect::<BTreeSet<_>>();
+
+    let mut free_vars = BTreeMap::new();
+    term_collect_variables(&rhs, &mut free_vars);
+    let mut all_vars = free_vars
+        .into_iter()
+        .filter(|(id, _)| !formal_ids.contains(id))
+        .map(|(_, variable)| variable)
+        .collect::<Vec<_>>();
+    all_vars.sort_by_key(|variable| std::cmp::Reverse(variable.f_code()));
+    all_vars.extend(formal_args);
+
+    let lhs_type = old_lhs.type_().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            "$let definition left side has no type",
+        )
+    })?;
+    let fresh_lhs = bank.alloc_new_skolem(&all_vars, Some(&lhs_type))?;
+    Ok((
+        old_lhs.f_code(),
+        SimpleFofLetReplacement { old_lhs, fresh_lhs },
+    ))
+}
+
+fn simple_fof_let_formal_arguments(lhs: &Term) -> Result<Vec<Term>, Diagnostic> {
+    let mut arguments = Vec::with_capacity(lhs.arity());
+    for index in 0..lhs.arity() {
+        let argument = simple_fof_formula_term_argument(lhs, index, "$let definition head")?;
+        if !argument.is_free_var() {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$let definition head arguments must be variables",
+            ));
+        }
+        arguments.push(argument);
+    }
+    Ok(arguments)
+}
+
+fn simple_fof_let_definition_formulas(
+    definition: &Term,
+    fresh_lhs: &Term,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let rhs = simple_fof_formula_term_argument(definition, 1, "$let definition")?;
+    if rhs.type_().as_ref().is_some_and(Type::is_bool) {
+        return Ok(vec![SimpleFofFormula::Equivalence {
+            left: simple_fof_bool_term_to_formulas(fresh_lhs, bank)?,
+            right: simple_fof_bool_term_to_formulas(&rhs, bank)?,
+        }]);
+    }
+
+    let literal = Eqn::alloc(fresh_lhs.clone(), rhs, bank, true)?;
+    Ok(simple_fof_literal_formulas(vec![literal]))
+}
+
+fn simple_fof_replace_let_body(
+    term: &Term,
+    replacements: &BTreeMap<i64, SimpleFofLetReplacement>,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    if term.is_any_var() {
+        return Ok(term.clone());
+    }
+
+    let mut changed = false;
+    let replaced = Term::top_copy_without_args(term);
+    for index in 0..term.arity() {
+        let argument = simple_fof_formula_term_argument(term, index, "$let body")?;
+        let new_argument = simple_fof_replace_let_body(&argument, replacements, bank)?;
+        changed |= new_argument != argument;
+        replaced.set_argument(index, new_argument);
+    }
+
+    let mut result = if changed {
+        bank.term_top_insert(replaced)?
+    } else {
+        term.clone()
+    };
+
+    if let Some(replacement) = replacements.get(&result.f_code()) {
+        result = simple_fof_instantiate_let_replacement(replacement, &result, bank)?;
+    }
+    Ok(result)
+}
+
+fn simple_fof_instantiate_let_replacement(
+    replacement: &SimpleFofLetReplacement,
+    occurrence: &Term,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    if occurrence.arity() != replacement.old_lhs.arity() {
+        return Err(Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            "$let body application arity does not match its definition",
+        ));
+    }
+
+    let mut subst = Substitution::new();
+    let instantiated = (|| {
+        for index in 0..occurrence.arity() {
+            let variable =
+                simple_fof_formula_term_argument(&replacement.old_lhs, index, "$let definition")?;
+            let argument = simple_fof_formula_term_argument(occurrence, index, "$let body")?;
+            subst.add_binding(&variable, &argument);
+        }
+        bank.insert_no_props_cached(&replacement.fresh_lhs, DerefType::Always)
+    })();
+    subst.backtrack();
+    instantiated
 }
 
 fn simple_fof_formulas_to_clause_literal_lists_with_dependencies(
@@ -9214,12 +9534,28 @@ fn simple_fof_term_replace_argument(
     replacement: &Term,
     bank: &mut TermBank,
 ) -> Result<Term, Diagnostic> {
+    simple_fof_term_replace_argument_with_context(
+        term,
+        target_index,
+        replacement,
+        "term-position $ite",
+        bank,
+    )
+}
+
+fn simple_fof_term_replace_argument_with_context(
+    term: &Term,
+    target_index: usize,
+    replacement: &Term,
+    context: &str,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
     let replaced = Term::top_copy_without_args(term);
     for index in 0..term.arity() {
         let argument = if index == target_index {
             replacement.clone()
         } else {
-            simple_fof_formula_term_argument(term, index, "term-position $ite")?
+            simple_fof_formula_term_argument(term, index, context)?
         };
         replaced.set_argument(index, argument);
     }
@@ -17817,7 +18153,75 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains("% CNFization successful!\n"));
-        assert!(printed.contains("$let($eq(f,$eq(p(a),$true)),$eq(f,$true)) <- .\n"));
+        assert!(printed.contains("epred1_0 <- .\n"));
+        assert!(printed.contains("p(a) <- epred1_0.\n"));
+        assert!(printed.contains("epred1_0 <- p(a).\n"));
+        assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_lifts_non_boolean_let_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-non-boolean-let");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             fof(let_obj, axiom, ($let(f:$i, f := a, f) = b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("esk1_0=a <- .\n"));
+        assert!(printed.contains("esk1_0=b <- .\n"));
+        assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_lifts_let_definitions_out_of_disjunction() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-let-disjunction");
+        std::fs::write(
+            &path,
+            "fof(let_disj, axiom, (r | $let(f:$o, f := p(a), f))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("r; epred1_0 <- .\n"));
+        assert!(printed.contains("p(a) <- epred1_0.\n"));
+        assert!(printed.contains("epred1_0 <- p(a).\n"));
+        assert!(!printed.contains("r; p(a) <- epred1_0.\n"));
+        assert!(!printed.contains("r; epred1_0 <- p(a).\n"));
+        assert!(!printed.contains("$let"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
