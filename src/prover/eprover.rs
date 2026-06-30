@@ -4684,6 +4684,11 @@ fn simple_fof_preload_app_encoded_literal(
 ) -> Result<(), Diagnostic> {
     if let Some(term) = simple_fof_literal_formula_term(literal, bank) {
         simple_fof_preload_app_encoded_formula_term(term, bank)
+    } else if literal.is_equ_lit(bank)
+        && simple_fof_term_contains_fool(&[literal.left(), literal.right()])
+    {
+        simple_fof_preload_app_encoded_formula_or_term(literal.left(), bank)?;
+        simple_fof_preload_app_encoded_formula_or_term(literal.right(), bank)
     } else {
         let mut sink = String::new();
         eqn_write_app_encode(&mut sink, bank, literal, false)
@@ -4745,7 +4750,7 @@ fn simple_fof_preload_app_encoded_let(term: &Term, bank: &mut TermBank) -> Resul
         simple_fof_preload_app_encoded_let_definition(&definition, bank)?;
     }
     let body = simple_fof_formula_term_argument(term, body_index, "$let body")?;
-    simple_fof_preload_app_encoded_formula_term(&body, bank)
+    simple_fof_preload_app_encoded_formula_or_term(&body, bank)
 }
 
 fn simple_fof_preload_app_encoded_let_definition(
@@ -4770,10 +4775,35 @@ fn simple_fof_preload_app_encoded_formula_or_term(
 ) -> Result<(), Diagnostic> {
     if term.type_().as_ref().is_some_and(Type::is_bool) {
         simple_fof_preload_app_encoded_formula_term(term, bank)
+    } else if term.f_code() == SIG_ITE_CODE {
+        simple_fof_preload_app_encoded_formula_term(
+            &simple_fof_formula_term_argument(term, 0, "$ite")?,
+            bank,
+        )?;
+        for index in 1..3 {
+            simple_fof_preload_app_encoded_formula_or_term(
+                &simple_fof_formula_term_argument(term, index, "$ite")?,
+                bank,
+            )?;
+        }
+        Ok(())
+    } else if term.f_code() == SIG_LET_CODE {
+        simple_fof_preload_app_encoded_let(term, bank)
     } else {
         let _encoded = term_app_encode(term, bank.signature_mut())?;
         Ok(())
     }
+}
+
+fn simple_fof_term_contains_fool(terms: &[&Term]) -> bool {
+    let mut stack: Vec<Term> = terms.iter().map(|term| (*term).clone()).collect();
+    while let Some(term) = stack.pop() {
+        if matches!(term.f_code(), SIG_ITE_CODE | SIG_LET_CODE) {
+            return true;
+        }
+        stack.extend(term.argument_clones().into_iter().flatten());
+    }
+    false
 }
 
 fn simple_fof_formulas_are_app_encoded_prop_true(formulas: &[SimpleFofFormula]) -> bool {
@@ -4880,6 +4910,15 @@ fn simple_fof_write_app_encoded_literal(
             output.push(')');
             Ok(())
         }
+    } else if literal.is_equ_lit(bank)
+        && simple_fof_term_contains_fool(&[literal.left(), literal.right()])
+    {
+        simple_fof_write_app_encoded_formula_or_term(output, bank, literal.left())?;
+        if literal.is_negative() {
+            output.push('!');
+        }
+        output.push('=');
+        simple_fof_write_app_encoded_formula_or_term(output, bank, literal.right())
     } else {
         eqn_write_app_encode(output, bank, literal, false)
     }
@@ -4994,7 +5033,7 @@ fn simple_fof_write_app_encoded_let(
     simple_fof_write_app_encoded_let_definitions(output, bank, &definitions)?;
     output.push(',');
     let body = simple_fof_formula_term_argument(term, body_index, "$let body")?;
-    simple_fof_write_app_encoded_formula_term(output, bank, &body)?;
+    simple_fof_write_app_encoded_formula_or_term(output, bank, &body)?;
     output.push(')');
     Ok(())
 }
@@ -5075,6 +5114,25 @@ fn simple_fof_write_app_encoded_formula_or_term(
 ) -> Result<(), Diagnostic> {
     if term.type_().as_ref().is_some_and(Type::is_bool) {
         simple_fof_write_app_encoded_formula_term(output, bank, term)
+    } else if term.f_code() == SIG_ITE_CODE {
+        output.push_str("$ite(");
+        simple_fof_write_app_encoded_formula_term(
+            output,
+            bank,
+            &simple_fof_formula_term_argument(term, 0, "$ite")?,
+        )?;
+        for index in 1..3 {
+            output.push(',');
+            simple_fof_write_app_encoded_formula_or_term(
+                output,
+                bank,
+                &simple_fof_formula_term_argument(term, index, "$ite")?,
+            )?;
+        }
+        output.push(')');
+        Ok(())
+    } else if term.f_code() == SIG_LET_CODE {
+        simple_fof_write_app_encoded_let(output, bank, term)
     } else {
         let encoded = term_app_encode(term, bank.signature_mut())?;
         bank.write_term(output, &encoded, true)
@@ -9947,13 +10005,28 @@ fn parse_simple_fof_fool_term_atom(
 
     let term = bank.parse_term_with_distinct_checks(scanner)?;
     if !term.type_().as_ref().is_some_and(Type::is_bool) {
+        return parse_simple_fof_non_boolean_fool_literal(scanner, bank, term).map(Some);
+    }
+    let literal = Eqn::alloc(term, bank.true_term().clone(), bank, true)?;
+    Ok(Some(simple_fof_literal_formulas(vec![literal])))
+}
+
+fn parse_simple_fof_non_boolean_fool_literal(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    left: Term,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if !scanner.test_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN) {
         return Err(Diagnostic::new(
             ErrorCode::TYPE_ERROR,
             "FOOL formula atom must have Boolean type",
         ));
     }
-    let literal = Eqn::alloc(term, bank.true_term().clone(), bank, true)?;
-    Ok(Some(simple_fof_literal_formulas(vec![literal])))
+    let positive = scanner.test_tok(TokenType::EQUAL_SIGN);
+    scanner.accept_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)?;
+    let right = bank.parse_term_with_distinct_checks(scanner)?;
+    let literal = Eqn::alloc(left, right, bank, positive)?;
+    Ok(simple_fof_literal_formulas(vec![literal]))
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -12540,6 +12613,41 @@ mod tests {
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("tff(ne_bool, axiom, ($ite("));
         assert!(printed.contains("<~>app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_non_boolean_fool_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-non-boolean-fool-term-equality");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
+             fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(ite_i_eq, axiom, $ite(app_"));
+        assert!(printed.contains(",a,b)=c)."));
+        assert!(printed.contains("tff(let_i_eq, axiom, $let(f:$i,f:=a,f)=b)."));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -20006,6 +20114,40 @@ mod tests {
             &path,
             "fof(eq_bool, axiom, ($ite(p(a), q(a), r(a)) = s(a))).\n\
              fof(ne_bool, axiom, ($ite(p(a), q(a), r(a)) != s(a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_non_boolean_fool_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-non-boolean-fool-term-equality");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
+             fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
