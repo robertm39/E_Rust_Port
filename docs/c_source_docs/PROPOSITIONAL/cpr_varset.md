@@ -93,4 +93,15 @@ Source files reviewed: `PROPOSITIONAL/cpr_varset.h`, `PROPOSITIONAL/cpr_varset.c
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/propositional/varset.rs` ports `AtomSetAlloc`, `AtomSetEmpty`, `AtomSetInsert`, `AtomSetExtract`, and the drain behavior used by `AtomSetFree`.
+- The Rust port represents cells with stable index handles owned by `AtomSet` instead of exposing the sentinel/list nodes as raw pointers. It preserves insertion after the sentinel, LIFO extraction from `set->succ`, arbitrary live-cell extraction, duplicate atoms, and the C assertion that `PLiteralNoLit` must not be extracted.
+- The shared propositional literal vocabulary starts in `src/propositional/mod.rs` with `PLiteralCode`, `PLiteralNoLit`, and `PAtomP` equivalents so later `cpr_propsig`, `cpr_propclauses`, `cpr_dpllformula`, and `cpr_dpll` ports can use the same encoding.
+
+### Change Later
+
+- C uses `AtomSet_p` for both the set sentinel and ordinary cells, so callers can accidentally pass the sentinel, a stale cell, or a `PLiteralNoLit` payload to `AtomSetExtract`; the Rust API separates the owner from cell handles but keeps assertion-shaped failures for invalid extraction. Once all DPLL callers are ported and compatibility-tested, consider validating `PLiteralNoLit` at insertion or using a stronger typed literal wrapper.
+- `AtomSetFree` drains the circular list one cell at a time even though atom cells have no owned payload beyond the code. Rust mirrors the observable extraction order; after performance baselines are available, a contiguous worklist representation may be simpler if no caller relies on arbitrary live-cell extraction.
 <!-- END MANUAL REVIEW: c_source_docs -->
