@@ -15,9 +15,9 @@ use crate::clauses::clausefunc::{
     tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_copy_def,
     tformula_create_def, tformula_decode_polarity, tformula_fcode_alloc, tformula_find_defs,
     tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true, tformula_lift_ite,
-    tformula_mark_polarity, tformula_preload_types, tformula_simplify, tformula_to_cnf,
-    tformula_tptp_string, tformula_unroll_fool_result, TFormulaDefinitions,
-    TFormulaTptpPrintOptions,
+    tformula_lift_lets, tformula_mark_polarity, tformula_preload_types, tformula_simplify,
+    tformula_to_cnf, tformula_tptp_string, tformula_unencode_root_eqn, tformula_unroll_fool_result,
+    tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
@@ -124,6 +124,7 @@ pub struct FormulaSetCnfResult {
     pub terms_recovered_by_gc: i64,
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
+    pub formulas_lets_lifted: i64,
     pub formulas_lambda_normalized: i64,
     pub formulas_simplified: i64,
     pub boolean_equalities_replaced: i64,
@@ -243,6 +244,7 @@ pub struct FormulaSetIntroduceDefsResult {
 pub struct FormulaSetHigherOrderPreprocessResult {
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
+    pub formulas_lets_lifted: i64,
     pub formulas_lambda_normalized: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
@@ -570,6 +572,33 @@ impl WrappedFormula {
         }
         self.set_formula(lifted);
         Ok(true)
+    }
+
+    /// Applies C `lift_lets` as used by `TFormulaSetLiftLets`.
+    ///
+    /// The returned formulas are the generated global definitions that the set
+    /// owner must wrap and append after the traversal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if variable renaming, LET lifting, predicate
+    /// encoding, closure, instantiation, app flattening, or term-bank insertion
+    /// fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if a `$let` cell,
+    /// definition equality, or definition head is malformed.
+    pub fn lift_lets(&mut self, bank: &mut TermBank) -> Result<Vec<Term>, Diagnostic> {
+        let original = self.formula().clone();
+        bank.vars().set_v_counts_to_used();
+        let renamed = tformula_var_rename(bank, &original)?;
+        let lifted = tformula_lift_lets(bank, &renamed)?;
+        if lifted.definitions.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.set_formula(tformula_unencode_root_eqn(bank, &lifted.formula));
+        Ok(lifted.definitions)
     }
 
     /// Applies C `TFormulaSetLambdaNormalize` to this wrapper's formula term.
@@ -1614,6 +1643,52 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `TFormulaSetLiftLets` in insertion order.
+    ///
+    /// Generated definition wrappers are appended after the traversal in the
+    /// same stack-pop order C uses. Formula-level derivation storage and proof
+    /// output are deferred, so this returns the `DCIntroDef` and `DCApplyDef`
+    /// opcodes that should be attached by a future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if variable renaming, LET lifting, predicate
+    /// encoding, closure, instantiation, app flattening, or term-bank insertion
+    /// fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or if a `$let` cell,
+    /// definition equality, or definition head is malformed.
+    pub fn lift_lets(
+        &mut self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+
+        let mut lifted_definitions = Vec::new();
+        for formula in &mut self.formulas {
+            let definitions = formula.lift_lets(bank)?;
+            if !definitions.is_empty() {
+                result.formulas_lets_lifted += 1;
+                for definition in definitions {
+                    lifted_definitions.push(WrappedFormula::wt_formula_alloc(definition));
+                    result.formula_derivation_ops.push(DC_INTRO_DEF);
+                    result.formula_derivation_ops.push(DC_APPLY_DEF);
+                }
+            }
+        }
+
+        while let Some(definition) = lifted_definitions.pop() {
+            self.insert(definition);
+        }
+        Ok(result)
+    }
+
     /// Applies C `TFormulaSetLambdaNormalize` in insertion order.
     ///
     /// This is gated to higher-order problems and mirrors C's
@@ -1753,7 +1828,7 @@ impl FormulaSet {
     /// This preserves the supported C phase order: supported higher-order
     /// preprocessing, optional set-level FOOL unrolling, formula
     /// simplification, definition introduction, then the archive/copy/CNF
-    /// drain loop. Higher-order ITE/LET/unfold/lift-lambda set preprocessing,
+    /// drain loop. Higher-order unfold/lift-lambda set preprocessing,
     /// post-CNF clause lambda lifting, proof-document output, and term-bank GC
     /// side effects from full `FormulaSetCNF2` are still deferred.
     ///
@@ -1789,6 +1864,12 @@ impl FormulaSet {
         result
             .formula_derivation_ops
             .extend(lift_ite_result.formula_derivation_ops);
+
+        let lift_let_result = self.lift_lets(bank, options.problem_type)?;
+        result.formulas_lets_lifted = lift_let_result.formulas_lets_lifted;
+        result
+            .formula_derivation_ops
+            .extend(lift_let_result.formula_derivation_ops);
 
         if options.lambda_to_forall {
             let normalize_result = self.lambda_normalize_forall(bank, options.problem_type)?;
@@ -2243,8 +2324,8 @@ mod tests {
     };
     use crate::terms::lambda::{apply_terms as lambda_apply_terms, close_with_db_var};
     use crate::terms::signature::{
-        Signature, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE,
-        SIG_TRUE_CODE,
+        Signature, SIG_DB_LAMBDA_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE,
+        SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
@@ -2331,6 +2412,17 @@ mod tests {
         term.set_argument(0, condition.clone());
         term.set_argument(1, if_true.clone());
         term.set_argument(2, if_false.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn let_term(bank: &mut TermBank, definitions: &[Term], body: &Term) -> Term {
+        let type_ = body.type_().expect("$let body must have a type");
+        let term = Term::top_alloc(SIG_LET_CODE, definitions.len() + 1);
+        term.set_type(Some(type_));
+        for (index, definition) in definitions.iter().enumerate() {
+            term.set_argument(index, definition.clone());
+        }
+        term.set_argument(definitions.len(), body.clone());
         bank.term_top_insert(term).unwrap()
     }
 
@@ -3519,6 +3611,54 @@ mod tests {
     }
 
     #[test]
+    fn formula_set_lift_lets_is_higher_order_gated() {
+        let mut bank = test_bank();
+        let local_symbol = typed_const(&mut bank, "set_lift_let_local_symbol");
+        let definition_value = typed_const(&mut bank, "set_lift_let_definition_value");
+        let target = typed_const(&mut bank, "set_lift_let_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let definition =
+            bool_binary_with_code(&mut bank, eqn_code, &local_symbol, &definition_value);
+        let let_term = let_term(&mut bank, &[definition], &local_symbol);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &let_term, &target);
+        let mut first_order = FormulaSet::new();
+        first_order.insert(WrappedFormula::wt_formula_alloc(formula.clone()));
+
+        let first_order_result = first_order
+            .lift_lets(&mut bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(first_order_result.formulas_lets_lifted, 0);
+        assert!(first_order_result.formula_derivation_ops.is_empty());
+        assert_eq!(first_order.cardinality(), 1);
+        assert_eq!(first_order.iter().next().unwrap().formula(), &formula);
+
+        let mut higher_order = FormulaSet::new();
+        higher_order.insert(WrappedFormula::wt_formula_alloc(formula));
+
+        let result = higher_order
+            .lift_lets(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_lets_lifted, 1);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_INTRO_DEF, DC_APPLY_DEF]
+        );
+        assert_eq!(higher_order.cardinality(), 2);
+        let formulas = higher_order.iter().collect::<Vec<_>>();
+        let rewritten = formulas[0].formula();
+        assert_eq!(rewritten.f_code(), eqn_code);
+        assert_ne!(rewritten.argument(0).unwrap().f_code(), SIG_LET_CODE);
+        let generated_definition = formulas[1].formula();
+        assert_eq!(generated_definition.f_code(), eqn_code);
+        assert_eq!(
+            generated_definition.argument(1).as_ref(),
+            Some(&definition_value)
+        );
+    }
+
+    #[test]
     fn formula_set_lambda_normalize_forall_is_higher_order_gated() {
         let mut bank = test_bank();
         let formula = db_lambda_equality(&mut bank, "set_lambda_norm");
@@ -3739,6 +3879,49 @@ mod tests {
         assert!(result.formula_derivation_ops.contains(&DC_LIFT_ITE));
         assert_eq!(result.original_formulas_archived, 1);
         assert_eq!(archive.iter().next().unwrap().formula().f_code(), and_code);
+        assert_eq!(clauses.members(), result.clauses_generated);
+        assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
+    fn formula_set_cnf2_lifts_lets_before_archive_drain() {
+        let mut bank = test_bank();
+        let local_symbol = typed_const(&mut bank, "set_cnf_lift_let_local_symbol");
+        let definition_value = typed_const(&mut bank, "set_cnf_lift_let_definition_value");
+        let target = typed_const(&mut bank, "set_cnf_lift_let_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let definition =
+            bool_binary_with_code(&mut bank, eqn_code, &local_symbol, &definition_value);
+        let let_term = let_term(&mut bank, &[definition], &local_symbol);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &let_term, &target);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.formulas_lets_lifted, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_INTRO_DEF));
+        assert!(result.formula_derivation_ops.contains(&DC_APPLY_DEF));
+        assert_eq!(result.original_formulas_archived, 2);
+        assert!(archive.iter().all(|formula| {
+            formula.formula().f_code() != SIG_LET_CODE
+                && formula
+                    .formula()
+                    .argument(0)
+                    .is_none_or(|argument| argument.f_code() != SIG_LET_CODE)
+        }));
         assert_eq!(clauses.members(), result.clauses_generated);
         assert!(result.clauses_generated > 0);
     }

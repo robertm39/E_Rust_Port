@@ -25,7 +25,7 @@ use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_start_token, FunCode};
 use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
-    decode_formulas_for_cnf, lambda_eta_reduce_db, post_cnf_encode_formulas,
+    decode_formulas_for_cnf, flatten_apps, lambda_eta_reduce_db, post_cnf_encode_formulas,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::replace::tb_term_pos_replace;
@@ -1269,6 +1269,17 @@ struct TFormulaIteExpansion {
     if_false: Term,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TFormulaLetLiftResult {
+    pub formula: Term,
+    pub definitions: Vec<Term>,
+}
+
+struct TFormulaLetDefinition {
+    old_lhs: Term,
+    fresh_lhs: Term,
+}
+
 /// Applies C `do_ite_unroll` to a term-encoded formula.
 ///
 /// Formula-position `$ite(C,T,F)` becomes `(~C|T)&(C|F)`. Literal-side
@@ -1458,6 +1469,261 @@ fn tformula_term_replace_argument(
         replaced.set_argument(index, argument);
     }
     bank.term_top_insert(replaced)
+}
+
+/// Applies C `lift_lets` to a variable-renamed term-encoded formula.
+///
+/// The returned definitions are the globally closed formulas introduced for
+/// local `$let` definitions, in the same push order C stores in `lifted_lets`.
+/// The caller owns the surrounding `TFormulaSetLiftLets` responsibilities:
+/// fresh-variable-bank seeding, `TFormulaVarRename`, root `unencode_eqns`, and
+/// appending the generated wrappers to the formula set.
+///
+/// # Errors
+///
+/// Returns a diagnostic if fresh symbol allocation, predicate encoding,
+/// quantifier closure, replacement instantiation, app flattening, or term-bank
+/// insertion fails.
+///
+/// # Panics
+///
+/// Panics if a `$let` cell, let definition equality, or definition head is
+/// malformed.
+pub fn tformula_lift_lets(
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<TFormulaLetLiftResult, Diagnostic> {
+    let mut definitions = Vec::new();
+    let formula = lift_lets(bank, form, &mut definitions)?;
+    Ok(TFormulaLetLiftResult {
+        formula,
+        definitions,
+    })
+}
+
+fn lift_lets(
+    bank: &mut TermBank,
+    term: &Term,
+    fresh_defs: &mut Vec<Term>,
+) -> Result<Term, Diagnostic> {
+    if term.is_any_var() {
+        return Ok(term.clone());
+    }
+
+    if term.f_code() == SIG_LET_CODE {
+        assert!(term.arity() >= 1, "$let must have at least a body");
+        let body_index = term.arity() - 1;
+        let mut closed_defs = BTreeMap::new();
+        let mut lifted_defs = Vec::with_capacity(body_index);
+        for index in 0..body_index {
+            let lifted_def = lift_lets(bank, &formula_argument(term, index), fresh_defs)?;
+            close_let_def(bank, &mut closed_defs, &lifted_def)?;
+            lifted_defs.push(lifted_def);
+        }
+        make_fresh_let_defs(bank, &lifted_defs, &closed_defs, fresh_defs)?;
+        let body = replace_let_body(bank, &closed_defs, &formula_argument(term, body_index))?;
+        return lift_lets(bank, &body, fresh_defs);
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+        let lifted = lift_lets(bank, &arg, fresh_defs)?;
+        changed |= lifted != arg;
+        copy.set_argument(index, lifted);
+    }
+
+    if !changed {
+        return Ok(term.clone());
+    }
+
+    if copy.is_phony_app()
+        && copy
+            .argument(0)
+            .is_some_and(|head| !head.is_phony_app_target())
+    {
+        let head = copy
+            .argument(0)
+            .expect("changed phony application head is uninitialized");
+        let args = (1..copy.arity())
+            .map(|index| {
+                copy.argument(index).unwrap_or_else(|| {
+                    panic!("phony application argument {index} is uninitialized")
+                })
+            })
+            .collect::<Vec<_>>();
+        let result_type = copy
+            .type_()
+            .expect("changed phony application must have a type");
+        return flatten_apps(bank, &head, &args, &result_type);
+    }
+
+    bank.term_top_insert(copy)
+}
+
+fn close_let_def(
+    bank: &mut TermBank,
+    closed_defs: &mut BTreeMap<i64, TFormulaLetDefinition>,
+    definition: &Term,
+) -> Result<(), Diagnostic> {
+    assert_eq!(
+        definition.f_code(),
+        bank.signature().eqn_code(),
+        "$let definition must be an equality"
+    );
+    let old_lhs = formula_argument(definition, 0);
+    let rhs = formula_argument(definition, 1);
+    let formal_args = let_definition_formal_args(&old_lhs);
+    let formal_ids = formal_args
+        .iter()
+        .map(term_identity_id)
+        .collect::<BTreeSet<_>>();
+    let mut all_vars = tformula_collect_free_vars(bank, &rhs)
+        .into_iter()
+        .filter(|var| !formal_ids.contains(&term_identity_id(var)))
+        .collect::<Vec<_>>();
+    all_vars.extend(formal_args);
+
+    let lhs_type = old_lhs
+        .type_()
+        .expect("$let definition left side must have a type");
+    let fresh_lhs = bank.alloc_new_skolem(&all_vars, Some(&lhs_type))?;
+    closed_defs.insert(
+        old_lhs.f_code(),
+        TFormulaLetDefinition { old_lhs, fresh_lhs },
+    );
+    Ok(())
+}
+
+fn let_definition_formal_args(old_lhs: &Term) -> Vec<Term> {
+    let mut args = Vec::with_capacity(old_lhs.arity());
+    for index in 0..old_lhs.arity() {
+        let arg = old_lhs
+            .argument(index)
+            .unwrap_or_else(|| panic!("$let definition head argument {index} is uninitialized"));
+        assert!(
+            arg.is_free_var(),
+            "$let definition head arguments must be free variables"
+        );
+        args.push(arg);
+    }
+    args
+}
+
+fn make_fresh_let_defs(
+    bank: &mut TermBank,
+    definitions: &[Term],
+    closed_defs: &BTreeMap<i64, TFormulaLetDefinition>,
+    fresh_defs: &mut Vec<Term>,
+) -> Result<(), Diagnostic> {
+    for definition in definitions {
+        assert_eq!(
+            definition.f_code(),
+            bank.signature().eqn_code(),
+            "$let definition must be an equality"
+        );
+        let old_lhs = formula_argument(definition, 0);
+        let rhs = formula_argument(definition, 1);
+        let fresh_lhs = closed_defs
+            .get(&old_lhs.f_code())
+            .unwrap_or_else(|| panic!("missing closed $let definition for {}", old_lhs.f_code()))
+            .fresh_lhs
+            .clone();
+
+        let matrix = if rhs.type_().as_ref().is_some_and(Type::is_bool) {
+            let left = tformula_encode_predicate_as_eqn(bank, fresh_lhs)?;
+            let right = tformula_encode_predicate_as_eqn(bank, rhs)?;
+            tformula_fcode_alloc(bank, bank.signature().equiv_code(), left, Some(right))?
+        } else {
+            tformula_fcode_alloc(bank, bank.signature().eqn_code(), fresh_lhs, Some(rhs))?
+        };
+        fresh_defs.push(tformula_closure(bank, &matrix, true)?);
+    }
+    Ok(())
+}
+
+fn replace_let_body(
+    bank: &mut TermBank,
+    closed_defs: &BTreeMap<i64, TFormulaLetDefinition>,
+    term: &Term,
+) -> Result<Term, Diagnostic> {
+    let mut result = if term.is_any_var() {
+        term.clone()
+    } else {
+        let copy = Term::top_copy_without_args(term);
+        let mut changed = false;
+        for (index, arg) in term.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("$let body argument {index} is uninitialized"));
+            let replaced = replace_let_body(bank, closed_defs, &arg)?;
+            changed |= replaced != arg;
+            copy.set_argument(index, replaced);
+        }
+        if changed {
+            bank.term_top_insert(copy)?
+        } else {
+            term.clone()
+        }
+    };
+
+    if let Some(definition) = closed_defs.get(&result.f_code()) {
+        result = instantiate_let_definition(bank, definition, &result)?;
+    }
+    Ok(result)
+}
+
+fn instantiate_let_definition(
+    bank: &mut TermBank,
+    definition: &TFormulaLetDefinition,
+    occurrence: &Term,
+) -> Result<Term, Diagnostic> {
+    assert_eq!(
+        occurrence.arity(),
+        definition.old_lhs.arity(),
+        "$let body application arity must match its definition"
+    );
+    let mut substitution = Substitution::new();
+    let instantiated = {
+        for index in 0..occurrence.arity() {
+            let variable = definition
+                .old_lhs
+                .argument(index)
+                .unwrap_or_else(|| panic!("$let definition argument {index} is uninitialized"));
+            let argument = occurrence
+                .argument(index)
+                .unwrap_or_else(|| panic!("$let occurrence argument {index} is uninitialized"));
+            substitution.add_binding(&variable, &argument);
+        }
+        bank.insert_no_props_cached(&definition.fresh_lhs, DerefType::Always)
+    };
+    substitution.backtrack();
+    instantiated
+}
+
+/// Undo C's root `unencode_eqns` rewrite for formula-shaped equality-to-true.
+#[must_use]
+pub fn tformula_unencode_root_eqn(bank: &TermBank, term: &Term) -> Term {
+    let eqn_code = bank.signature().eqn_code();
+    if term.f_code() != eqn_code || term.arity() != 2 {
+        return term.clone();
+    }
+    let left = formula_argument(term, 0);
+    if term.argument(1).as_ref() != Some(bank.true_term())
+        || left.is_any_var()
+        || !tformula_unencode_eqn_left_is_formula(bank, &left)
+    {
+        return term.clone();
+    }
+    left
+}
+
+fn tformula_unencode_eqn_left_is_formula(bank: &TermBank, left: &Term) -> bool {
+    let sig = bank.signature();
+    sig.query_prop(left.f_code(), FP_FOF_OP)
+        || left.f_code() == sig.qex_code()
+        || left.f_code() == sig.qall_code()
+        || left.f_code() == sig.eqn_code()
+        || left.f_code() == sig.neqn_code()
 }
 
 /// Applies C `TFormulaUnrollFOOL` and preserves its change flag.
@@ -5749,13 +6015,14 @@ mod tests {
         tformula_is_closed, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_const,
         tformula_is_prop_false, tformula_is_prop_true, tformula_is_quantified,
         tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped, tformula_lift_ite,
-        tformula_lit_alloc, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
-        tformula_neg_alloc, tformula_negate, tformula_nnf, tformula_preload_types,
-        tformula_prop_constant_alloc, tformula_quantor_alloc, tformula_shift_quantors,
-        tformula_shift_quantors2, tformula_simplify, tformula_simplify_decoded,
-        tformula_skolemize_outermost, tformula_stack_to_form, tformula_to_cnf, tformula_tptp_parse,
-        tformula_tptp_string, tformula_tstp_parse, tformula_unroll_fool, tformula_var_is_free,
-        tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_lift_lets, tformula_lit_alloc, tformula_mark_polarity, tformula_mini_scope,
+        tformula_mini_scope3, tformula_neg_alloc, tformula_negate, tformula_nnf,
+        tformula_preload_types, tformula_prop_constant_alloc, tformula_quantor_alloc,
+        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
+        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_stack_to_form,
+        tformula_to_cnf, tformula_tptp_parse, tformula_tptp_string, tformula_tstp_parse,
+        tformula_unroll_fool, tformula_var_is_free, tformula_var_rename, TFormulaDefinitions,
+        TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -5779,7 +6046,7 @@ mod tests {
     use crate::terms::lambda::apply_terms as lambda_apply_terms;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
-        SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE,
+        SIG_ITE_CODE, SIG_LET_CODE, SIG_NAMED_LAMBDA_CODE,
     };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -5982,6 +6249,17 @@ mod tests {
     fn typed_ite(bank: &mut TermBank, condition: &Term, if_true: &Term, if_false: &Term) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         ite_with_type(bank, condition, if_true, if_false, &type_)
+    }
+
+    fn let_term(bank: &mut TermBank, definitions: &[Term], body: &Term) -> Term {
+        let type_ = body.type_().expect("$let body must have a type");
+        let term = Term::top_alloc(SIG_LET_CODE, definitions.len() + 1);
+        term.set_type(Some(type_));
+        for (index, definition) in definitions.iter().enumerate() {
+            term.set_argument(index, definition.clone());
+        }
+        term.set_argument(definitions.len(), body.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     fn typed_binary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -6871,6 +7149,39 @@ mod tests {
         let true_case_literal = true_case_first_branch.argument(1).unwrap();
         assert_eq!(true_case_literal.f_code(), eqn_code);
         assert_eq!(true_case_literal.argument(0).as_ref(), Some(&left_then));
+    }
+
+    #[test]
+    fn tformula_lift_lets_replaces_local_symbol_and_emits_definition() {
+        let mut bank = test_bank();
+        let local_symbol = typed_const(&mut bank, "lift_let_local_symbol");
+        let definition_value = typed_const(&mut bank, "lift_let_definition_value");
+        let target = typed_const(&mut bank, "lift_let_target");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let definition =
+            bool_binary_with_code(&mut bank, eqn_code, &local_symbol, &definition_value);
+        let let_term = let_term(&mut bank, &[definition], &local_symbol);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &let_term, &target);
+
+        let lifted = tformula_lift_lets(&mut bank, &formula).unwrap();
+
+        assert_eq!(lifted.definitions.len(), 1);
+        assert_eq!(lifted.formula.f_code(), eqn_code);
+        assert_eq!(lifted.formula.argument(1).as_ref(), Some(&target));
+        let fresh_symbol = lifted.formula.argument(0).unwrap();
+        assert_ne!(fresh_symbol, local_symbol);
+        assert_ne!(fresh_symbol.f_code(), local_symbol.f_code());
+
+        let generated_definition = &lifted.definitions[0];
+        assert_eq!(generated_definition.f_code(), eqn_code);
+        assert_eq!(
+            generated_definition.argument(0).as_ref(),
+            Some(&fresh_symbol)
+        );
+        assert_eq!(
+            generated_definition.argument(1).as_ref(),
+            Some(&definition_value)
+        );
     }
 
     #[test]
