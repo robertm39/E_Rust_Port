@@ -1,4 +1,5 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::memory::mem_is_low;
 use crate::clauses::clause::{clause_print_lop_format_string, Clause};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
@@ -10,6 +11,7 @@ use crate::clauses::groundconstr::{
     VarConstraintMap,
 };
 use crate::clauses::propclauses::{PropClause, PropClauseSet};
+use crate::inout::signals::time_is_up;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 use std::collections::BTreeMap;
@@ -650,6 +652,32 @@ pub fn clause_create_ground_instances(
     resolve: bool,
     taut_check: bool,
 ) -> Result<bool, Diagnostic> {
+    clause_create_ground_instances_with_stop(
+        bank,
+        clause,
+        inst,
+        groundset,
+        subsume,
+        resolve,
+        taut_check,
+        grounding_stop_state,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
+)]
+fn clause_create_ground_instances_with_stop(
+    bank: &mut TermBank,
+    clause: &Clause,
+    inst: &mut VarSetInst,
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+    stop: fn() -> Option<GroundSetState>,
+) -> Result<bool, Diagnostic> {
     if !inst.initialize() {
         return Ok(true);
     }
@@ -657,7 +685,7 @@ pub fn clause_create_ground_instances(
     let mut res = true;
     let mut next = true;
     let mut error = None;
-    while next && res {
+    while next && res && stop().is_none() {
         inst.apply();
         let mut literals = match clause.literals().copy_to_bank(bank) {
             Ok(literals) => literals,
@@ -710,6 +738,32 @@ pub fn clause_slice_create_ground_instances(
     taut_check: bool,
     give_up: Option<i64>,
 ) -> Result<GroundInstanceOutcome, Diagnostic> {
+    clause_slice_create_ground_instances_with_stop(
+        bank,
+        clauses,
+        groundset,
+        subsume,
+        resolve,
+        taut_check,
+        give_up,
+        grounding_stop_state,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
+)]
+fn clause_slice_create_ground_instances_with_stop(
+    bank: &mut TermBank,
+    clauses: &[Clause],
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+    give_up: Option<i64>,
+    stop: fn() -> Option<GroundSetState>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
     let mut default_terms = Vec::new();
     sig_collect_constant_terms(bank, &mut default_terms, None)?;
 
@@ -726,16 +780,19 @@ pub fn clause_slice_create_ground_instances(
 
     let mut outcome = GroundInstanceOutcome::Complete;
     for clause in clauses {
+        if stop().is_some() {
+            break;
+        }
         let mut inst = VarSetInst::alloc(clause);
         inst.set_all_alternatives(&default_terms);
-        if !clause_create_ground_instances(
-            bank, clause, &mut inst, groundset, subsume, resolve, taut_check,
+        if !clause_create_ground_instances_with_stop(
+            bank, clause, &mut inst, groundset, subsume, resolve, taut_check, stop,
         )? {
             outcome = GroundInstanceOutcome::EmptyClause;
             break;
         }
     }
-    groundset.set_complete(GroundSetState::Complete);
+    finish_groundset_completion(groundset, stop);
     Ok(outcome)
 }
 
@@ -758,6 +815,32 @@ pub fn clause_set_create_ground_instances(
     taut_check: bool,
     give_up: Option<i64>,
 ) -> Result<GroundInstanceOutcome, Diagnostic> {
+    clause_set_create_ground_instances_with_stop(
+        bank,
+        clauses,
+        groundset,
+        subsume,
+        resolve,
+        taut_check,
+        give_up,
+        grounding_stop_state,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
+)]
+fn clause_set_create_ground_instances_with_stop(
+    bank: &mut TermBank,
+    clauses: &ClauseSet,
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+    give_up: Option<i64>,
+    stop: fn() -> Option<GroundSetState>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
     let mut default_terms = Vec::new();
     sig_collect_constant_terms(bank, &mut default_terms, None)?;
 
@@ -774,16 +857,19 @@ pub fn clause_set_create_ground_instances(
 
     let mut outcome = GroundInstanceOutcome::Complete;
     for clause in clauses.iter() {
+        if stop().is_some() {
+            break;
+        }
         let mut inst = VarSetInst::alloc(clause);
         inst.set_all_alternatives(&default_terms);
-        if !clause_create_ground_instances(
-            bank, clause, &mut inst, groundset, subsume, resolve, taut_check,
+        if !clause_create_ground_instances_with_stop(
+            bank, clause, &mut inst, groundset, subsume, resolve, taut_check, stop,
         )? {
             outcome = GroundInstanceOutcome::EmptyClause;
             break;
         }
     }
-    groundset.set_complete(GroundSetState::Complete);
+    finish_groundset_completion(groundset, stop);
     Ok(outcome)
 }
 
@@ -815,6 +901,34 @@ pub fn clause_slice_create_constrained_ground_instances(
     give_up: Option<i64>,
     just_one_instance: Option<i64>,
 ) -> Result<GroundInstanceOutcome, Diagnostic> {
+    clause_slice_create_constrained_ground_instances_with_stop(
+        bank,
+        clauses,
+        groundset,
+        subsume,
+        resolve,
+        taut_check,
+        give_up,
+        just_one_instance,
+        grounding_stop_state,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
+)]
+fn clause_slice_create_constrained_ground_instances_with_stop(
+    bank: &mut TermBank,
+    clauses: &[Clause],
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+    give_up: Option<i64>,
+    just_one_instance: Option<i64>,
+    stop: fn() -> Option<GroundSetState>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
     let mut default_terms = Vec::new();
     sig_collect_constant_terms(
         bank,
@@ -828,6 +942,9 @@ pub fn clause_slice_create_constrained_ground_instances(
 
     let mut outcome = GroundInstanceOutcome::Complete;
     for clause in clauses {
+        if stop().is_some() {
+            break;
+        }
         let mut inst = VarSetInst::constrained_alloc(
             &positive_table,
             &negative_table,
@@ -840,14 +957,14 @@ pub fn clause_slice_create_constrained_ground_instances(
         }) {
             return Ok(GroundInstanceOutcome::EstimateLimitExceeded);
         }
-        if !clause_create_ground_instances(
-            bank, clause, &mut inst, groundset, subsume, resolve, taut_check,
+        if !clause_create_ground_instances_with_stop(
+            bank, clause, &mut inst, groundset, subsume, resolve, taut_check, stop,
         )? {
             outcome = GroundInstanceOutcome::EmptyClause;
             break;
         }
     }
-    groundset.set_complete(GroundSetState::Complete);
+    finish_groundset_completion(groundset, stop);
     Ok(outcome)
 }
 
@@ -876,6 +993,34 @@ pub fn clause_set_create_constrained_ground_instances(
     give_up: Option<i64>,
     just_one_instance: Option<i64>,
 ) -> Result<GroundInstanceOutcome, Diagnostic> {
+    clause_set_create_constrained_ground_instances_with_stop(
+        bank,
+        clauses,
+        groundset,
+        subsume,
+        resolve,
+        taut_check,
+        give_up,
+        just_one_instance,
+        grounding_stop_state,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
+)]
+fn clause_set_create_constrained_ground_instances_with_stop(
+    bank: &mut TermBank,
+    clauses: &ClauseSet,
+    groundset: &mut GroundSet,
+    subsume: bool,
+    resolve: bool,
+    taut_check: bool,
+    give_up: Option<i64>,
+    just_one_instance: Option<i64>,
+    stop: fn() -> Option<GroundSetState>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
     let mut default_terms = Vec::new();
     sig_collect_constant_terms(
         bank,
@@ -889,6 +1034,9 @@ pub fn clause_set_create_constrained_ground_instances(
 
     let mut outcome = GroundInstanceOutcome::Complete;
     for clause in clauses.iter() {
+        if stop().is_some() {
+            break;
+        }
         let mut inst = VarSetInst::constrained_alloc(
             &positive_table,
             &negative_table,
@@ -901,15 +1049,29 @@ pub fn clause_set_create_constrained_ground_instances(
         }) {
             return Ok(GroundInstanceOutcome::EstimateLimitExceeded);
         }
-        if !clause_create_ground_instances(
-            bank, clause, &mut inst, groundset, subsume, resolve, taut_check,
+        if !clause_create_ground_instances_with_stop(
+            bank, clause, &mut inst, groundset, subsume, resolve, taut_check, stop,
         )? {
             outcome = GroundInstanceOutcome::EmptyClause;
             break;
         }
     }
-    groundset.set_complete(GroundSetState::Complete);
+    finish_groundset_completion(groundset, stop);
     Ok(outcome)
+}
+
+fn grounding_stop_state() -> Option<GroundSetState> {
+    if time_is_up() {
+        Some(GroundSetState::Timeout)
+    } else if mem_is_low() {
+        Some(GroundSetState::LowMemory)
+    } else {
+        None
+    }
+}
+
+fn finish_groundset_completion(groundset: &mut GroundSet, stop: fn() -> Option<GroundSetState>) {
+    groundset.set_complete(stop().unwrap_or(GroundSetState::Complete));
 }
 
 #[must_use]
@@ -1088,14 +1250,15 @@ fn usize_diff_as_i32(left: usize, right: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_cmp_by_len, clause_create_ground_instances, clause_eqlit_recode, clause_get_max_lit,
-        clause_print_dimacs_string, clause_print_dimacs_to_writers,
-        clause_set_create_constrained_ground_instances, clause_set_create_ground_instances,
-        clause_set_eqlit_recode, clause_set_print_dimacs_string,
-        clause_set_print_dimacs_to_writers, clause_slice_create_constrained_ground_instances,
-        clause_slice_create_ground_instances, eqn_eqlit_recode, print_dimacs_header_string,
-        GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState, VarSetInst,
-        DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        clause_cmp_by_len, clause_create_ground_instances_with_stop, clause_eqlit_recode,
+        clause_get_max_lit, clause_print_dimacs_string, clause_print_dimacs_to_writers,
+        clause_set_create_constrained_ground_instances_with_stop,
+        clause_set_create_ground_instances_with_stop, clause_set_eqlit_recode,
+        clause_set_print_dimacs_string, clause_set_print_dimacs_to_writers,
+        clause_slice_create_constrained_ground_instances_with_stop,
+        clause_slice_create_ground_instances_with_stop, eqn_eqlit_recode,
+        print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState,
+        VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -1170,6 +1333,26 @@ mod tests {
         let mut clause = Clause::alloc(EqnList::from_vec(literals));
         clause.set_weight(clause.standard_weight());
         clause
+    }
+
+    const fn never_stop() -> Option<GroundSetState> {
+        None
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test stop callbacks must match the grounding helper signature"
+    )]
+    const fn timeout_stop() -> Option<GroundSetState> {
+        Some(GroundSetState::Timeout)
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test stop callbacks must match the grounding helper signature"
+    )]
+    const fn low_memory_stop() -> Option<GroundSetState> {
+        Some(GroundSetState::LowMemory)
     }
 
     #[test]
@@ -1696,7 +1879,7 @@ mod tests {
         inst.set_all_alternatives(&[first.clone(), second.clone()]);
         let mut groundset = GroundSet::new();
 
-        assert!(clause_create_ground_instances(
+        assert!(clause_create_ground_instances_with_stop(
             &mut bank,
             &clause,
             &mut inst,
@@ -1704,6 +1887,7 @@ mod tests {
             false,
             false,
             false,
+            never_stop,
         )
         .unwrap());
 
@@ -1735,7 +1919,7 @@ mod tests {
         inst.set_all_alternatives(&[first]);
         let mut groundset = GroundSet::new();
 
-        assert!(clause_create_ground_instances(
+        assert!(clause_create_ground_instances_with_stop(
             &mut bank,
             &clause,
             &mut inst,
@@ -1743,6 +1927,7 @@ mod tests {
             false,
             false,
             true,
+            never_stop,
         )
         .unwrap());
 
@@ -1767,7 +1952,7 @@ mod tests {
         let max_literal = groundset.max_literal();
         let mut inst = VarSetInst::alloc(&Clause::empty());
 
-        assert!(!clause_create_ground_instances(
+        assert!(!clause_create_ground_instances_with_stop(
             &mut bank,
             &Clause::empty(),
             &mut inst,
@@ -1775,6 +1960,7 @@ mod tests {
             false,
             false,
             false,
+            never_stop,
         )
         .unwrap());
 
@@ -1807,7 +1993,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_slice_create_ground_instances(
+            clause_slice_create_ground_instances_with_stop(
                 &mut bank,
                 &clauses,
                 &mut groundset,
@@ -1815,6 +2001,7 @@ mod tests {
                 false,
                 false,
                 None,
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::Complete
@@ -1852,7 +2039,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_slice_create_ground_instances(
+            clause_slice_create_ground_instances_with_stop(
                 &mut bank,
                 &clauses,
                 &mut groundset,
@@ -1860,6 +2047,7 @@ mod tests {
                 false,
                 false,
                 Some(3),
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::EstimateLimitExceeded
@@ -1875,7 +2063,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_slice_create_ground_instances(
+            clause_slice_create_ground_instances_with_stop(
                 &mut bank,
                 &clauses,
                 &mut groundset,
@@ -1883,6 +2071,7 @@ mod tests {
                 false,
                 false,
                 None,
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::EmptyClause
@@ -1890,6 +2079,35 @@ mod tests {
         assert_eq!(groundset.complete(), GroundSetState::Complete);
         assert_eq!(groundset.members(), 1);
         assert_eq!(groundset.dimacs_print_members(), 2);
+    }
+
+    #[test]
+    fn clause_slice_grounding_marks_timeout_from_stop_state() {
+        let mut bank = test_bank();
+        let _ground = typed_const(&mut bank, "a");
+        let x = typed_var(&bank, -2);
+        let atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let clauses = vec![clause_from(vec![predicate_literal(&mut bank, &atom, true)])];
+        let mut groundset = GroundSet::new();
+
+        assert_eq!(
+            clause_slice_create_ground_instances_with_stop(
+                &mut bank,
+                &clauses,
+                &mut groundset,
+                false,
+                false,
+                false,
+                None,
+                timeout_stop,
+            )
+            .unwrap(),
+            GroundInstanceOutcome::Complete
+        );
+
+        assert_eq!(groundset.complete(), GroundSetState::Timeout);
+        assert_eq!(groundset.members(), 0);
+        assert_eq!(x.binding(), None);
     }
 
     #[test]
@@ -1903,7 +2121,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_set_create_ground_instances(
+            clause_set_create_ground_instances_with_stop(
                 &mut bank,
                 &set,
                 &mut groundset,
@@ -1911,6 +2129,7 @@ mod tests {
                 false,
                 false,
                 None,
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::Complete
@@ -1921,6 +2140,37 @@ mod tests {
             groundset.units().get(&ground_atom.entry_no()),
             Some(&GcuEncoding::Pos)
         );
+    }
+
+    #[test]
+    fn constrained_clause_set_grounding_marks_low_memory_from_stop_state() {
+        let mut bank = test_bank();
+        let ground = typed_const(&mut bank, "a");
+        let x = typed_var(&bank, -2);
+        let atom = predicate_atom(&mut bank, "p", std::slice::from_ref(&x));
+        let set =
+            ClauseSet::from_clauses([clause_from(vec![predicate_literal(&mut bank, &atom, true)])]);
+        let mut groundset = GroundSet::new();
+
+        assert_eq!(
+            clause_set_create_constrained_ground_instances_with_stop(
+                &mut bank,
+                &set,
+                &mut groundset,
+                false,
+                false,
+                false,
+                None,
+                Some(ground.f_code()),
+                low_memory_stop,
+            )
+            .unwrap(),
+            GroundInstanceOutcome::Complete
+        );
+
+        assert_eq!(groundset.complete(), GroundSetState::LowMemory);
+        assert_eq!(groundset.members(), 0);
+        assert_eq!(x.binding(), None);
     }
 
     #[test]
@@ -1938,7 +2188,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_slice_create_constrained_ground_instances(
+            clause_slice_create_constrained_ground_instances_with_stop(
                 &mut bank,
                 &clauses,
                 &mut groundset,
@@ -1947,6 +2197,7 @@ mod tests {
                 false,
                 None,
                 None,
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::Complete
@@ -1978,7 +2229,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_slice_create_constrained_ground_instances(
+            clause_slice_create_constrained_ground_instances_with_stop(
                 &mut bank,
                 &clauses,
                 &mut groundset,
@@ -1987,6 +2238,7 @@ mod tests {
                 false,
                 None,
                 Some(second.f_code()),
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::Complete
@@ -2017,7 +2269,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_slice_create_constrained_ground_instances(
+            clause_slice_create_constrained_ground_instances_with_stop(
                 &mut bank,
                 &clauses,
                 &mut groundset,
@@ -2026,6 +2278,7 @@ mod tests {
                 false,
                 Some(1),
                 None,
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::EstimateLimitExceeded
@@ -2049,7 +2302,7 @@ mod tests {
         let mut groundset = GroundSet::new();
 
         assert_eq!(
-            clause_set_create_constrained_ground_instances(
+            clause_set_create_constrained_ground_instances_with_stop(
                 &mut bank,
                 &set,
                 &mut groundset,
@@ -2058,6 +2311,7 @@ mod tests {
                 false,
                 None,
                 None,
+                never_stop,
             )
             .unwrap(),
             GroundInstanceOutcome::Complete

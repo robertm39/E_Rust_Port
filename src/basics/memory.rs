@@ -229,6 +229,19 @@ pub fn memory_stats() -> MemoryStats {
 }
 
 #[must_use]
+pub fn mem_is_low() -> bool {
+    lock_state().stats.mem_is_low
+}
+
+#[must_use]
+pub fn set_mem_is_low(value: bool) -> bool {
+    let mut state = lock_state();
+    let old = state.stats.mem_is_low;
+    state.stats.mem_is_low = value;
+    old
+}
+
+#[must_use]
 pub fn mem_flush_free_list() -> (usize, usize) {
     lock_state().flush_free_lists()
 }
@@ -413,9 +426,9 @@ pub(crate) fn memory_test_lock() -> MutexGuard<'static, ()> {
 mod tests {
     use super::{
         int_array_alloc, mem_add_new_chunk, mem_debug_print_stats, mem_flush_free_list,
-        mem_free_list_print, memory_stats, memory_test_lock, reset_memory_for_tests, secure_malloc,
-        secure_realloc, secure_strdup, secure_strndup, size_free, size_malloc, MemoryPolicy,
-        MEM_ALIGN, MEM_MULTIPLIER,
+        mem_free_list_print, mem_is_low, memory_stats, memory_test_lock, reset_memory_for_tests,
+        secure_malloc, secure_realloc, secure_strdup, secure_strndup, set_mem_is_low, size_free,
+        size_malloc, MemoryPolicy, MEM_ALIGN, MEM_MULTIPLIER,
     };
 
     #[test]
@@ -461,6 +474,18 @@ mod tests {
         let stats = memory_stats();
         assert_eq!(stats.free_list_blocks, MEM_MULTIPLIER);
         assert_eq!(stats.free_list_bytes, MEM_MULTIPLIER * MEM_ALIGN * 2);
+    }
+
+    #[test]
+    fn mem_is_low_accessors_preserve_c_global_shape() {
+        let _guard = memory_test_lock();
+        reset_memory_for_tests();
+
+        assert!(!mem_is_low());
+        assert!(!set_mem_is_low(true));
+        assert!(mem_is_low());
+        assert!(set_mem_is_low(false));
+        assert!(!mem_is_low());
     }
 
     #[test]
