@@ -14,7 +14,8 @@ use crate::clauses::clausefunc::{
     clause_eliminate_naked_boolean_variables, clause_is_orphaned_with, clause_normalize_equations,
     clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
     clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_delete_orphans_with,
-    clause_set_recognize_choice, tformula_fcode_alloc,
+    clause_set_recognize_choice, tformula_clause_encode, tformula_conjunctive_nf3,
+    tformula_fcode_alloc, tformula_to_cnf,
 };
 use crate::clauses::clausepos::ClausePos;
 use crate::clauses::clausesets::{clause_set_list_get_max_date, ClauseSet};
@@ -24,9 +25,10 @@ use crate::clauses::context_sr::{
     clause_set_find_context_sr_clauses,
 };
 use crate::clauses::derivation::{
-    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, DC_ARG_CONG, DC_CHOICE_AX,
-    DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES,
-    DC_EXT_SUP, DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_POS_EXT, DC_PRIM_ENUM,
+    clause_push_derivation, ClauseDerivationRef, DerivationParentRef, FormulaDerivationRef,
+    DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_DYNAMIC_CNF,
+    DC_EVAL_ANSWERS, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_LEIBNIZ_ELIM, DC_NEG_EXT,
+    DC_POS_EXT, DC_PRIM_ENUM,
 };
 use crate::clauses::diseq_decomp::compute_dis_eq_decompositions;
 use crate::clauses::eqn::Eqn;
@@ -96,7 +98,7 @@ use crate::inout::signals::time_is_up;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::lambda::{
-    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
+    apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix, lambda_normalize_db,
 };
 use crate::terms::match_mgu::occur_check;
 use crate::terms::replace::tb_term_pos_replace;
@@ -130,6 +132,8 @@ pub const DEFAULT_WEIGHT_FUNCTIONS: &str = concat!(
     "TSMRDefault   = TSMWeight(ConstPrio, 1, 1, 2, flat, E_KNOWLEDGE,",
     "100000,1.0,1.0,Flat,IndexIdentity,100000,-20,20,-2,-1,0,2)\n",
 );
+
+const IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT: i64 = 100;
 
 pub const DEFAULT_HEURISTICS: &str = concat!(
     "Weight     = (1*weight21_ugg)                       \n",
@@ -2891,10 +2895,13 @@ fn proof_state_replacing_inferences_impl<W: fmt::Write>(
     if problem_type() == ProblemType::HigherOrder
         && clause_needs_immediate_clausification(&clause, state.terms())
     {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "replacing_inferences higher-order immediate clausification is not ported yet",
-        ));
+        proof_state_immediate_clausification(state, clause, control.heuristic_parms().fool_unroll)?;
+        let empty = if let Some((output, session)) = doc_context.as_mut() {
+            proof_state_insert_new_clauses_with_docs(&mut **output, session, state, control)?
+        } else {
+            proof_state_insert_new_clauses(state, control)?
+        };
+        return Ok(ReplacingInferenceOutcome::Replaced { empty });
     }
 
     if control.heuristic_parms().er_varlit_destructive {
@@ -2961,6 +2968,60 @@ fn clause_needs_immediate_clausification(clause: &Clause, terms: &TermBank) -> b
         .as_slice()
         .iter()
         .any(|literal| literal.is_clausifiable(terms))
+}
+
+fn proof_state_immediate_clausification(
+    state: &mut ProofState,
+    clause: Clause,
+    fool_unroll: bool,
+) -> Result<(), Diagnostic> {
+    state.terms().vars().set_v_counts_to_used();
+
+    let formula = tformula_clause_encode(state.terms_mut(), &clause, ProblemType::HigherOrder)?;
+    let cnf = tformula_conjunctive_nf3(
+        state.terms_mut(),
+        &formula,
+        IMMEDIATE_CLAUSIFICATION_MINISCOPE_LIMIT,
+        fool_unroll,
+    )?;
+    let fresh_vars = state.fresh_vars().clone();
+    let mut results = ClauseSet::new();
+    let source = FormulaDerivationRef::new(clause.ident());
+    tformula_to_cnf(
+        state.terms_mut(),
+        cnf.formula(),
+        clause.query_tptp_type(),
+        &mut results,
+        &fresh_vars,
+        source,
+        ProblemType::HigherOrder,
+    )?;
+
+    while let Some(mut result) = results.extract_first() {
+        lambda_normalize_clause_terms(state.terms_mut(), &mut result)?;
+        result.set_derivation(None);
+        set_ho_generation_proof_object(&mut result, &clause, None, DC_DYNAMIC_CNF, 0);
+        result.set_weight(result.standard_weight());
+        state.tmp_store_mut().insert(result);
+    }
+    state.archive_mut().insert(clause);
+    Ok(())
+}
+
+fn lambda_normalize_clause_terms(
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<(), Diagnostic> {
+    for literal in clause.literals_mut().as_mut_slice() {
+        let left = literal.left().clone();
+        let right = literal.right().clone();
+        let normalized_left = lambda_normalize_db(bank, &left)?;
+        let normalized_right = lambda_normalize_db(bank, &right)?;
+        literal.set_left_raw(normalized_left);
+        literal.set_right_raw(normalized_right);
+    }
+    clause.set_weight(clause.standard_weight());
+    Ok(())
 }
 
 /// Normalizes and inserts a surviving selected clause into a processed set.
@@ -7357,8 +7418,9 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DerivationParentRef,
         DC_ARG_CONG, DC_CHOICE_AX, DC_CHOICE_INST, DC_CNF_EVAL_GC, DC_CNF_QUOTE, DC_CONDENSE,
-        DC_CONTEXT_SR, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_INV_REC, DC_LEIBNIZ_ELIM,
-        DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM, DC_SR,
+        DC_CONTEXT_SR, DC_DYNAMIC_CNF, DC_EXT_EQ_FACT, DC_EXT_EQ_RES, DC_EXT_SUP, DC_INV_REC,
+        DC_LEIBNIZ_ELIM, DC_NEG_EXT, DC_NORMALIZE, DC_ORDERED_FACTOR, DC_POS_EXT, DC_PRIM_ENUM,
+        DC_SR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -10337,7 +10399,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_replacing_inferences_higher_order_clausifiable_remains_diagnostic() {
+    fn proof_state_replacing_inferences_higher_order_clausifiable_requeues_dynamic_cnf() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
@@ -10356,13 +10418,25 @@ mod tests {
         assert!(clause.literals().as_slice()[0].is_clausifiable(state.terms()));
         let packed = fv_index_pack_clause(clause, None);
         let mut control = proof_control_alloc();
+        control.set_ocb(empty_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "ReplacingImmediateCnfTest");
 
-        let error = proof_state_replacing_inferences(&mut state, &mut control, packed).unwrap_err();
+        let outcome = proof_state_replacing_inferences(&mut state, &mut control, packed)
+            .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("immediate clausification"));
+        let ReplacingInferenceOutcome::Replaced { empty } = outcome else {
+            panic!("clausifiable higher-order literal should replace the selected clause");
+        };
+        let empty = empty.expect("dynamic CNF of $true <=> $false should derive empty clause");
+        assert_eq!(empty.literal_number(), 0);
+        assert!(derivation_contains_operation(&empty, DC_DYNAMIC_CNF));
+        assert!(derivation_contains_parent(&empty, 4_085));
         assert!(state.tmp_store().is_empty());
-        assert!(state.archive().is_empty());
+        assert!(state.eval_store().is_empty());
+        assert!(state.unprocessed().is_empty());
+        assert!(state.archive().find_by_id(4_085).is_some());
+        assert_eq!(state.statistics().generated_count, 1);
+        assert_eq!(state.statistics().generated_lit_count, 1);
     }
 
     #[test]

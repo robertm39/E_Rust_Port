@@ -21,7 +21,7 @@ use crate::clauses::eqn_props::{
 use crate::clauses::eqnlist::EqnList;
 use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
-    lambda_eta_reduce_db, post_cnf_encode_formulas,
+    decode_formulas_for_cnf, lambda_eta_reduce_db, post_cnf_encode_formulas,
 };
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::replace::tb_term_pos_replace;
@@ -1611,6 +1611,94 @@ fn tformula_prop_constant_alloc(bank: &mut TermBank, positive: bool) -> Result<T
     let f_code = bank.signature_mut().get_eqn_code(positive);
     let true_term = bank.true_term().clone();
     tformula_fcode_alloc(bank, f_code, true_term.clone(), Some(true_term))
+}
+
+/// Allocates a term-encoded formula for a literal.
+///
+/// This matches C `TFormulaLitAlloc`: first-order mode keeps the ordinary
+/// `$eq`/`$neq` literal encoding, while higher-order mode decodes formula
+/// terms and turns Boolean equalities into equivalence or XOR formulas.
+///
+/// # Errors
+///
+/// Returns a diagnostic if formula decoding or term-bank allocation fails.
+///
+/// # Panics
+///
+/// Panics if encoded equality allocation sees terms that are not shared in the
+/// term bank, matching the C term-bank precondition.
+pub fn tformula_lit_alloc(
+    bank: &mut TermBank,
+    literal: &Eqn,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    if problem_type == ProblemType::FirstOrder {
+        return literal.tb_term_encode(bank, PatEqnDirection::Normal);
+    }
+
+    let right_is_true = literal.right() == bank.true_term();
+    if right_is_true {
+        let mut formula = decode_formulas_for_cnf(bank, literal.left())?;
+        if literal.is_negative() {
+            let not_code = bank.signature().not_code();
+            formula = tformula_fcode_alloc(bank, not_code, formula, None)?;
+        }
+        return Ok(formula);
+    }
+
+    if literal.is_clausifiable(bank) {
+        let left = decode_formulas_for_cnf(bank, literal.left())?;
+        let right = decode_formulas_for_cnf(bank, literal.right())?;
+        let op = if literal.is_positive() {
+            bank.signature().equiv_code()
+        } else {
+            bank.signature().xor_code()
+        };
+        return tformula_fcode_alloc(bank, op, left, Some(right));
+    }
+
+    let left = decode_formulas_for_cnf(bank, literal.left())?;
+    let right = decode_formulas_for_cnf(bank, literal.right())?;
+    Eqn::terms_tb_term_encode(
+        bank,
+        &left,
+        &right,
+        literal.is_positive(),
+        PatEqnDirection::Normal,
+    )
+}
+
+/// Encodes a clause as a disjunction-shaped term formula.
+///
+/// This matches C `TFormulaClauseEncode`: empty clauses become `$false`, and
+/// non-empty clauses fold encoded literals from left to right with formula OR.
+/// Universal closure is intentionally left to `TFormulaClauseClosedEncode`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if literal encoding or formula allocation fails.
+///
+/// # Panics
+///
+/// Panics if a literal violates the term-bank sharing preconditions inherited
+/// from [`tformula_lit_alloc`].
+pub fn tformula_clause_encode(
+    bank: &mut TermBank,
+    clause: &Clause,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let mut literals = clause.literals().as_slice().iter();
+    let Some(first) = literals.next() else {
+        return tformula_prop_constant_alloc(bank, false);
+    };
+
+    let mut result = tformula_lit_alloc(bank, first, problem_type)?;
+    let or_code = bank.signature().or_code();
+    for literal in literals {
+        let next = tformula_lit_alloc(bank, literal, problem_type)?;
+        result = tformula_fcode_alloc(bank, or_code, result, Some(next))?;
+    }
+    Ok(result)
 }
 
 /// Estimates the number of clauses produced by clausifying a formula.
@@ -4417,14 +4505,14 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_collect_clause, tformula_conjunctive_nf, tformula_conjunctive_nf3,
-        tformula_copy_def, tformula_create_def, tformula_decode_polarity, tformula_def_rename,
-        tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
-        tformula_find_defs, tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3,
-        tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
-        tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_to_cnf, tformula_unroll_fool, tformula_var_rename, TFormulaDefinitions,
-        TFORM_MANY_CLAUSES,
+        tformula_clause_encode, tformula_collect_clause, tformula_conjunctive_nf,
+        tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
+        tformula_def_rename, tformula_distribute_disjunctions, tformula_estimate_clauses,
+        tformula_expand_literals, tformula_find_defs, tformula_lit_alloc, tformula_mark_polarity,
+        tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_nnf,
+        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
+        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_to_cnf,
+        tformula_unroll_fool, tformula_var_rename, TFormulaDefinitions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -6410,6 +6498,58 @@ mod tests {
 
         assert_eq!(result.formula(), &disequality);
         assert_eq!(result.derivation_ops(), &[DC_FNNF]);
+    }
+
+    #[test]
+    fn tformula_lit_alloc_ho_decodes_formula_literal() {
+        let mut bank = test_bank();
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+        let equiv_code = bank.signature().equiv_code();
+        let encoded = bool_binary_with_code(&mut bank, equiv_code, &true_term, &false_term);
+        let literal = literal(&mut bank, &encoded, &true_term, false);
+
+        let formula = tformula_lit_alloc(&mut bank, &literal, ProblemType::HigherOrder).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().not_code());
+        let decoded = formula.argument(0).unwrap();
+        assert_eq!(decoded.f_code(), equiv_code);
+        assert_ne!(decoded.argument(0).unwrap(), true_term);
+        assert_ne!(decoded.argument(1).unwrap(), false_term);
+    }
+
+    #[test]
+    fn tformula_clause_encode_handles_empty_and_folds_literals() {
+        let mut bank = test_bank();
+        let empty = Clause::alloc(EqnList::new());
+
+        let false_formula =
+            tformula_clause_encode(&mut bank, &empty, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(false_formula.f_code(), bank.signature().neqn_code());
+        assert_eq!(false_formula.argument(0).as_ref(), Some(bank.true_term()));
+        assert_eq!(false_formula.argument(1).as_ref(), Some(bank.true_term()));
+
+        let a = typed_const(&mut bank, "clause_encode_a");
+        let b = typed_const(&mut bank, "clause_encode_b");
+        let c = typed_const(&mut bank, "clause_encode_c");
+        let d = typed_const(&mut bank, "clause_encode_d");
+        let clause = clause_from(vec![
+            literal(&mut bank, &a, &b, true),
+            literal(&mut bank, &c, &d, false),
+        ]);
+
+        let encoded = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(encoded.f_code(), bank.signature().or_code());
+        let left = encoded.argument(0).unwrap();
+        let right = encoded.argument(1).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        assert_eq!(left.argument(0).as_ref(), Some(&a));
+        assert_eq!(left.argument(1).as_ref(), Some(&b));
+        assert_eq!(right.f_code(), bank.signature().neqn_code());
+        assert_eq!(right.argument(0).as_ref(), Some(&c));
+        assert_eq!(right.argument(1).as_ref(), Some(&d));
     }
 
     #[test]
