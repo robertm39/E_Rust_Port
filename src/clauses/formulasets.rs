@@ -213,6 +213,13 @@ pub struct FormulaSetIntroduceDefsResult {
     pub formula_derivation_ops: Vec<i64>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetArchiveResult {
+    pub formulas_archived: i64,
+    pub quoted_formula_sources: Vec<FormulaDerivationRef>,
+    pub formula_derivation_ops: Vec<i64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WrappedFormula {
     entry_id: u64,
@@ -1087,6 +1094,31 @@ impl FormulaSet {
         };
         self.insert(formula);
         true
+    }
+
+    /// Applies C `FormulaSetArchive`.
+    ///
+    /// Each formula is extracted in insertion order, the original wrapper is
+    /// moved to `archive`, and a flat copy is inserted back into this set. The
+    /// formula-level `DCFofQuote` derivation stack is deferred, so this returns
+    /// the quote sources and opcodes that should be attached by a future owner.
+    #[must_use]
+    pub fn archive_into(&mut self, archive: &mut Self) -> FormulaSetArchiveResult {
+        let mut result = FormulaSetArchiveResult::default();
+        let mut tmpset = Self::new();
+
+        while let Some(handle) = self.extract_first() {
+            let source = FormulaDerivationRef::new(handle.ident());
+            let newform = handle.flat_copy();
+            tmpset.insert(newform);
+            archive.insert(handle);
+            result.formulas_archived += 1;
+            result.quoted_formula_sources.push(source);
+            result.formula_derivation_ops.push(DC_FOF_QUOTE);
+        }
+
+        self.insert_set(&mut tmpset);
+        result
     }
 
     #[must_use]
@@ -2090,6 +2122,56 @@ mod tests {
             vec![third_id, moved_first_id]
         );
         assert_eq!(formula_set_stack_cardinality(&[&to, &from]), 2);
+    }
+
+    #[test]
+    fn formula_set_archive_moves_originals_and_replaces_flat_copies() {
+        let mut bank = test_bank();
+        let first_term = typed_const(&mut bank, "archive_first");
+        let second_term = typed_const(&mut bank, "archive_second");
+        let mut first = WrappedFormula::wt_formula_alloc(first_term.clone());
+        first.set_tptp_type(CP_TYPE_AXIOM);
+        first.set_info(Some(ClauseInfo::new(Some("archive_name"), None, 1, 1)));
+        let first_entry = first.entry_id();
+        let first_source = FormulaDerivationRef::new(first.ident());
+        let mut second = WrappedFormula::wt_formula_alloc(second_term.clone());
+        second.set_is_clause(true);
+        let second_entry = second.entry_id();
+        let second_source = FormulaDerivationRef::new(second.ident());
+        let mut set = FormulaSet::new();
+        set.insert(first);
+        set.insert(second);
+        let mut archive = FormulaSet::new();
+
+        let result = set.archive_into(&mut archive);
+
+        assert_eq!(result.formulas_archived, 2);
+        assert_eq!(
+            result.quoted_formula_sources,
+            vec![first_source, second_source]
+        );
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_FOF_QUOTE, DC_FOF_QUOTE]
+        );
+        assert_eq!(
+            archive
+                .iter()
+                .map(WrappedFormula::entry_id)
+                .collect::<Vec<_>>(),
+            vec![first_entry, second_entry]
+        );
+        let copied = set.iter().collect::<Vec<_>>();
+        assert_eq!(copied.len(), 2);
+        assert_ne!(copied[0].entry_id(), first_entry);
+        assert_ne!(copied[1].entry_id(), second_entry);
+        assert_eq!(copied[0].ident(), first_source.ident());
+        assert_eq!(copied[1].ident(), second_source.ident());
+        assert_eq!(copied[0].query_tptp_type(), CP_TYPE_AXIOM);
+        assert!(copied[1].is_clause());
+        assert_eq!(copied[0].info(), None);
+        assert_eq!(copied[0].formula(), &first_term);
+        assert_eq!(copied[1].formula(), &second_term);
     }
 
     #[test]
