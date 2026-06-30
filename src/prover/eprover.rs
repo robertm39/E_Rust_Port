@@ -8837,9 +8837,15 @@ fn simple_fof_lift_direct_let_formula(
         SimpleFofFormula::Negation(formulas) => SimpleFofFormula::Negation(
             simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
         ),
-        SimpleFofFormula::Truth(_)
-        | SimpleFofFormula::Universal { .. }
-        | SimpleFofFormula::Existential { .. } => formula,
+        SimpleFofFormula::Universal { bound, formulas } => SimpleFofFormula::Universal {
+            bound,
+            formulas: simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+        },
+        SimpleFofFormula::Existential { bound, formulas } => SimpleFofFormula::Existential {
+            bound,
+            formulas: simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+        },
+        SimpleFofFormula::Truth(_) => formula,
     })
 }
 
@@ -8899,6 +8905,9 @@ fn simple_fof_lift_first_term_let(
     bank: &mut TermBank,
 ) -> Result<Option<Term>, Diagnostic> {
     if term.f_code() == SIG_LET_CODE {
+        if !simple_fof_let_term_is_liftable(term, bank)? {
+            return Ok(None);
+        }
         return simple_fof_lift_let_term(term, definitions, bank).map(Some);
     }
     if term.is_lambda() || term.is_any_var() {
@@ -8927,6 +8936,9 @@ fn simple_fof_lift_let_term(
     bank: &mut TermBank,
 ) -> Result<Term, Diagnostic> {
     debug_assert_eq!(term.f_code(), SIG_LET_CODE);
+    if !simple_fof_let_term_is_liftable(term, bank)? {
+        return Ok(term.clone());
+    }
     let body_index = term
         .arity()
         .checked_sub(1)
@@ -8952,6 +8964,29 @@ fn simple_fof_lift_let_term(
     } else {
         Ok(body)
     }
+}
+
+fn simple_fof_let_term_is_liftable(term: &Term, bank: &TermBank) -> Result<bool, Diagnostic> {
+    debug_assert_eq!(term.f_code(), SIG_LET_CODE);
+    let body_index = term
+        .arity()
+        .checked_sub(1)
+        .ok_or_else(|| Diagnostic::new(ErrorCode::TYPE_ERROR, "$let body is uninitialized"))?;
+    for index in 0..body_index {
+        let definition = simple_fof_formula_term_argument(term, index, "$let definition")?;
+        if definition.f_code() != bank.signature().eqn_code() {
+            return Err(Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$let definition must be an equality",
+            ));
+        }
+        let left = simple_fof_formula_term_argument(&definition, 0, "$let definition")?;
+        let right = simple_fof_formula_term_argument(&definition, 1, "$let definition")?;
+        if left.type_() != right.type_() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn simple_fof_let_replacement_for_definition(
@@ -18227,6 +18262,71 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_lifts_let_inside_quantifier_scopes() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-quantified-let");
+        std::fs::write(
+            &path,
+            "fof(let_univ, axiom, ![X]: ($let(f:$o, f := p(X), f))).\n\
+             fof(let_ex, axiom, ?[Y]: ($let(g:$o, g := q(Y), g))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("(epred1_1(X1))"));
+        assert!(printed.contains("(p(X1)|~epred1_1(X1))"));
+        assert!(printed.contains("(epred1_1(X1)|~p(X1))"));
+        assert!(printed.contains("(epred2_1(esk1_0))"));
+        assert!(printed.contains("(q(X1)|~epred2_1(X1))"));
+        assert!(printed.contains("(epred2_1(X1)|~q(X1))"));
+        assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cnf_only_lifts_existential_let_formula_atom() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-existential-let");
+        std::fs::write(
+            &path,
+            "fof(let_ex, axiom, ?[Y]: ($let(g:$o, g := q(Y), g))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("epred1_1(esk1_0) <- .\n"));
+        assert!(printed.contains("q(X1) <- epred1_1(X1).\n"));
+        assert!(printed.contains("epred1_1(X1) <- q(X1).\n"));
+        assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_prints_initial_clause_docs_in_default_pcl() {
         let _guard = global_state_lock();
         let path = temp_path("proof-initial-docs-pcl");
@@ -20194,15 +20294,17 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("cnf(i_0_"))
             .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 3, "{printed}");
+        assert_eq!(cnf_lines.len(), 4, "{printed}");
         assert!(cnf_lines
             .iter()
             .any(|line| line.contains("q(esk1_0)") && line.contains("~p(esk1_0)")));
         assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")
             && !line.contains("~p(esk1_0)")
             && line.contains("r(esk1_0)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("esk2_0=esk3_0")));
+        assert!(cnf_lines.iter().any(|line| line.contains("esk2_0=a")));
         assert!(!printed.contains("$ite("));
-        assert!(printed.contains("$let($eq(f,a),f)=esk2_0"));
+        assert!(!printed.contains("$let"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
