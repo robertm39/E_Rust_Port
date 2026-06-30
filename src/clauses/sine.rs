@@ -7,6 +7,7 @@ use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::FormulaProperties;
 use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
 use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -287,6 +288,68 @@ pub fn pstack_clause_del_prop(stack: &mut PStack<&mut Clause>, prop: FormulaProp
     }
 }
 
+/// Staged equivalent of C `PStackClausesMove`.
+///
+/// C stacks store raw `Clause_p` values whose current owner set is embedded in
+/// the clause cell. Rust uses clause identifiers for this staged helper, so
+/// callers provide the expected old owner set explicitly. The destination is
+/// also searched to preserve C's behavior for duplicate stack entries that
+/// move an already-selected clause to the destination tail again.
+///
+/// # Panics
+///
+/// Panics when a stacked clause identifier is not present in either `from` or
+/// `to`, matching C's assertion that every stacked clause pointer is set-owned.
+#[must_use]
+pub fn pstack_clauses_move(stack: &PStack<i64>, from: &mut ClauseSet, to: &mut ClauseSet) -> i64 {
+    let mut moved = 0;
+    for ident in stack.as_slice() {
+        let clause = from
+            .extract_by_id(*ident)
+            .or_else(|| to.extract_by_id(*ident))
+            .unwrap_or_else(|| panic!("stacked clause identifier is not set-owned: {ident}"));
+        to.insert(clause);
+        moved += 1;
+    }
+    moved
+}
+
+pub fn pstack_formula_del_prop(stack: &mut PStack<&mut WrappedFormula>, prop: FormulaProperties) {
+    for formula in stack.as_mut_slice() {
+        (*formula).del_prop(prop);
+    }
+}
+
+/// Staged equivalent of C `PStackFormulasMove`.
+///
+/// C stores raw `WFormula_p` values whose current owner set is embedded in the
+/// formula cell. Rust formula stacks currently store stable `WrappedFormula`
+/// entry ids, so callers provide the expected old owner set explicitly. The
+/// destination is also searched to preserve C's behavior for duplicate stack
+/// entries that move an already-selected formula to the destination tail again.
+///
+/// # Panics
+///
+/// Panics when a stacked entry id is not present in either `from` or `to`,
+/// matching C's assertion that every stacked formula pointer is set-owned.
+#[must_use]
+pub fn pstack_formulas_move(
+    stack: &PStack<u64>,
+    from: &mut FormulaSet,
+    to: &mut FormulaSet,
+) -> i64 {
+    let mut moved = 0;
+    for entry_id in stack.as_slice() {
+        let formula = from
+            .extract_entry(*entry_id)
+            .or_else(|| to.extract_entry(*entry_id))
+            .unwrap_or_else(|| panic!("stacked formula entry id is not set-owned: {entry_id}"));
+        to.insert(formula);
+        moved += 1;
+    }
+    moved
+}
+
 pub fn pqueue_store_clause<'a>(axioms: &mut PQueue<IntOrP<&'a Clause>>, clause: &'a Clause) {
     axioms.store_int(AxiomType::Clause.queue_tag());
     axioms.store_pointer(clause);
@@ -545,8 +608,9 @@ fn usize_to_i64(value: usize) -> i64 {
 mod tests {
     use super::{
         clause_set_find_ax_selection_seeds, pqueue_store_clause, pstack_clause_del_prop,
-        pstack_clause_print_tstp_string, select_axioms_clause_sets, select_threshold_clause_sets,
-        AxiomType, ClauseSineParams, DRel, DRelation,
+        pstack_clause_print_tstp_string, pstack_clauses_move, pstack_formula_del_prop,
+        pstack_formulas_move, select_axioms_clause_sets, select_threshold_clause_sets, AxiomType,
+        ClauseSineParams, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -554,13 +618,14 @@ mod tests {
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INPUT_FORMULA, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+        CP_INPUT_FORMULA, CP_IS_RELEVANT, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
         CP_TYPE_NEG_CONJECTURE,
     };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::f_generality::{GenDistrib, GeneralityMeasure};
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -790,6 +855,87 @@ mod tests {
 
         assert!(!first.query_prop(CP_INPUT_FORMULA));
         assert!(!second.query_prop(CP_INPUT_FORMULA));
+    }
+
+    #[test]
+    fn pstack_clauses_move_preserves_stack_order_and_relinks_duplicates() {
+        let mut first = Clause::empty();
+        first.set_ident(10);
+        let mut second = Clause::empty();
+        second.set_ident(20);
+        let mut third = Clause::empty();
+        third.set_ident(30);
+        let mut from = ClauseSet::from_clauses([first, second, third]);
+        let mut to = ClauseSet::new();
+        let mut stack = PStack::new();
+        stack.push(30);
+        stack.push(10);
+        stack.push(30);
+
+        assert_eq!(pstack_clauses_move(&stack, &mut from, &mut to), 3);
+
+        assert_eq!(from.members(), 1);
+        assert_eq!(from.iter().map(Clause::ident).collect::<Vec<_>>(), vec![20]);
+        assert_eq!(
+            to.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![10, 30]
+        );
+    }
+
+    #[test]
+    fn pstack_formula_del_prop_clears_property_on_each_stacked_formula() {
+        let mut bank = test_bank();
+        let mut first =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "sine_formula_prop_first"));
+        first.set_prop(CP_INPUT_FORMULA | CP_IS_RELEVANT);
+        let mut second =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "sine_formula_prop_second"));
+        second.set_prop(CP_INPUT_FORMULA | CP_IS_RELEVANT);
+        let mut stack = PStack::new();
+        stack.push(&mut first);
+        stack.push(&mut second);
+
+        pstack_formula_del_prop(&mut stack, CP_INPUT_FORMULA);
+        drop(stack);
+
+        assert!(!first.query_prop(CP_INPUT_FORMULA));
+        assert!(!second.query_prop(CP_INPUT_FORMULA));
+        assert!(first.query_prop(CP_IS_RELEVANT));
+        assert!(second.query_prop(CP_IS_RELEVANT));
+    }
+
+    #[test]
+    fn pstack_formulas_move_preserves_stack_order_and_relinks_duplicates() {
+        let mut bank = test_bank();
+        let first = WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "sine_move_first"));
+        let second = WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "sine_move_second"));
+        let third = WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "sine_move_third"));
+        let first_id = first.entry_id();
+        let second_id = second.entry_id();
+        let third_id = third.entry_id();
+        let mut from = FormulaSet::new();
+        from.insert(first);
+        from.insert(second);
+        from.insert(third);
+        let mut to = FormulaSet::new();
+        let mut stack = PStack::new();
+        stack.push(third_id);
+        stack.push(first_id);
+        stack.push(third_id);
+
+        assert_eq!(pstack_formulas_move(&stack, &mut from, &mut to), 3);
+
+        assert_eq!(from.cardinality(), 1);
+        assert_eq!(
+            from.iter()
+                .map(WrappedFormula::entry_id)
+                .collect::<Vec<_>>(),
+            vec![second_id]
+        );
+        assert_eq!(
+            to.iter().map(WrappedFormula::entry_id).collect::<Vec<_>>(),
+            vec![first_id, third_id]
+        );
     }
 
     #[test]
