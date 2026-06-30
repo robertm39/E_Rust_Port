@@ -13,6 +13,7 @@ use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_cmp, Term};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,24 +28,133 @@ pub struct SatCheckReport {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct SatClause {
+pub struct SatClause {
     literals: Vec<i32>,
     source: Clause,
     has_pure_lit: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-struct SatClauseSet {
+impl SatClause {
+    #[must_use]
+    pub fn literals(&self) -> &[i32] {
+        &self.literals
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> &Clause {
+        &self.source
+    }
+
+    #[must_use]
+    pub const fn has_pure_lit(&self) -> bool {
+        self.has_pure_lit
+    }
+
+    /// Writes this propositional clause in C `SatClausePrint` DIMACS shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a formatting error if `output` rejects a write.
+    pub fn write_dimacs(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        for literal in &self.literals {
+            write!(output, "{literal} ")?;
+        }
+        writeln!(output, "0")
+    }
+
+    #[must_use]
+    pub fn dimacs_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_dimacs(&mut output);
+        output
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SatClauseSet {
     renumber_index: BTreeMap<i64, i32>,
     max_lit: i32,
     clauses: Vec<SatClause>,
     exported: Vec<usize>,
     core: Vec<usize>,
     core_size: u64,
+    set_size_limit: i64,
+}
+
+impl Default for SatClauseSet {
+    fn default() -> Self {
+        Self {
+            renumber_index: BTreeMap::new(),
+            max_lit: 0,
+            clauses: Vec::new(),
+            exported: Vec::new(),
+            core: Vec::new(),
+            core_size: 0,
+            set_size_limit: -1,
+        }
+    }
 }
 
 impl SatClauseSet {
-    fn import_clause(&mut self, bank: &mut TermBank, clause: &Clause) -> Result<(), Diagnostic> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_max_clauses(&mut self, limit: i64) {
+        self.set_size_limit = limit;
+    }
+
+    #[must_use]
+    pub const fn max_lit(&self) -> i32 {
+        self.max_lit
+    }
+
+    #[must_use]
+    pub fn cardinality(&self) -> usize {
+        self.clauses.len()
+    }
+
+    #[must_use]
+    pub fn non_pure_cardinality(&self) -> usize {
+        self.exported.len()
+    }
+
+    #[must_use]
+    pub const fn core_size(&self) -> u64 {
+        self.core_size
+    }
+
+    #[must_use]
+    pub fn limit_reached(&self) -> bool {
+        self.set_size_limit == usize_to_i64(self.clauses.len())
+    }
+
+    #[must_use]
+    pub fn clauses(&self) -> &[SatClause] {
+        &self.clauses
+    }
+
+    /// Encodes one instantiated clause and appends it unless the C insertion
+    /// limit has been reached.
+    ///
+    /// Returns `Ok(false)` when `set_size_limit != -1` and the current
+    /// cardinality is greater than or equal to that signed limit, matching
+    /// `SatClauseCreateAndStore` returning `NULL`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if literal instantiation or SAT atom encoding
+    /// fails.
+    pub fn import_clause(
+        &mut self,
+        bank: &mut TermBank,
+        clause: &Clause,
+    ) -> Result<bool, Diagnostic> {
+        if self.set_size_limit != -1 && usize_to_i64(self.clauses.len()) >= self.set_size_limit {
+            return Ok(false);
+        }
+
         let mut literals = Vec::with_capacity(clause.literal_number());
         for literal in clause.literals().as_slice() {
             literals.push(self.translate_literal(bank, literal)?);
@@ -54,7 +164,48 @@ impl SatClauseSet {
             source: clause.clone(),
             has_pure_lit: false,
         });
+        Ok(true)
+    }
+
+    /// Imports clauses in set order until insertion reaches the C limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic from [`Self::import_clause`] if any literal cannot
+    /// be encoded.
+    pub fn import_clause_set(
+        &mut self,
+        bank: &mut TermBank,
+        clauses: &ClauseSet,
+    ) -> Result<i64, Diagnostic> {
+        let mut added = 0_i64;
+        for clause in clauses.iter() {
+            if !self.import_clause(bank, clause)? {
+                break;
+            }
+            added = added.saturating_add(1);
+        }
+        Ok(added)
+    }
+
+    /// Writes this propositional clause set in C `SatClauseSetPrint` DIMACS shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a formatting error if `output` rejects a write.
+    pub fn write_dimacs(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        writeln!(output, "p cnf {} {}", self.max_lit, self.clauses.len())?;
+        for clause in &self.clauses {
+            clause.write_dimacs(output)?;
+        }
         Ok(())
+    }
+
+    #[must_use]
+    pub fn dimacs_string(&self) -> String {
+        let mut output = String::new();
+        let _ = self.write_dimacs(&mut output);
+        output
     }
 
     fn translate_literal(&mut self, bank: &mut TermBank, literal: &Eqn) -> Result<i32, Diagnostic> {
@@ -209,7 +360,7 @@ pub fn sat_check_proof_state(
         .axioms()
         .add_conj_symbol_distribution(&mut conj_dist_array);
 
-    let mut satset = SatClauseSet::default();
+    let mut satset = SatClauseSet::new();
     {
         let bank = state.terms_mut();
         let mut substitution = pseudo_ground_substitution(
@@ -220,7 +371,7 @@ pub fn sat_check_proof_state(
             &dist_array,
         )?;
         for clause in &source_clauses {
-            satset.import_clause(bank, clause)?;
+            let _ = satset.import_clause(bank, clause)?;
         }
         substitution.backtrack();
     }
@@ -233,9 +384,9 @@ pub fn sat_check_proof_state(
     Ok(SatCheckReport {
         result,
         empty,
-        full_size: usize_to_u64(satset.clauses.len()),
-        actual_size: usize_to_u64(satset.exported.len()),
-        core_size: satset.core_size,
+        full_size: usize_to_u64(satset.cardinality()),
+        actual_size: usize_to_u64(satset.non_pure_cardinality()),
+        core_size: satset.core_size(),
         encoding_time,
         solver_time,
     })
@@ -594,6 +745,10 @@ fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -603,6 +758,7 @@ mod tests {
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         derivation_entries, ClauseDerivationRef, DerivationEntry, DC_CNF_ADD_ARG, DC_SAT_GEN,
     };
@@ -666,6 +822,66 @@ mod tests {
         assert!(set.clauses[0].has_pure_lit);
         assert!(set.clauses[1].has_pure_lit);
         assert!(!set.clauses[2].has_pure_lit);
+    }
+
+    #[test]
+    fn sat_clause_and_set_dimacs_rendering_matches_c_shape() {
+        let clause = SatClause {
+            literals: vec![1, -2],
+            source: Clause::empty(),
+            has_pure_lit: false,
+        };
+        let empty = SatClause {
+            literals: Vec::new(),
+            source: Clause::empty(),
+            has_pure_lit: false,
+        };
+        let set = SatClauseSet {
+            max_lit: 2,
+            clauses: vec![clause.clone(), empty],
+            ..SatClauseSet::default()
+        };
+
+        assert_eq!(clause.dimacs_string(), "1 -2 0\n");
+        assert_eq!(set.dimacs_string(), "p cnf 2 2\n1 -2 0\n0\n");
+    }
+
+    #[test]
+    fn sat_clause_set_import_honors_c_signed_limit() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (first, second) = {
+            let bank = state.terms_mut();
+            let a = typed_const(bank, "sat_limit_a");
+            let b = typed_const(bank, "sat_limit_b");
+            (
+                unit_clause(bank, &a, &a, true),
+                unit_clause(bank, &b, &b, true),
+            )
+        };
+        let clauses = ClauseSet::from_clauses([first.clone(), second]);
+        let mut satset = SatClauseSet::new();
+
+        satset.set_max_clauses(1);
+        assert!(!satset.limit_reached());
+        assert_eq!(
+            satset
+                .import_clause_set(state.terms_mut(), &clauses)
+                .unwrap(),
+            1
+        );
+        assert_eq!(satset.cardinality(), 1);
+        assert!(satset.limit_reached());
+        assert_eq!(
+            satset
+                .import_clause_set(state.terms_mut(), &clauses)
+                .unwrap(),
+            0
+        );
+
+        satset.set_max_clauses(-2);
+        assert!(!satset.limit_reached());
+        assert!(!satset.import_clause(state.terms_mut(), &first).unwrap());
+        assert_eq!(satset.cardinality(), 1);
     }
 
     #[test]
