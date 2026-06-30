@@ -79,7 +79,7 @@ use crate::heuristics::new_autoschedule::{
     DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
-    proof_control_init, proof_state_filter_unprocessed, proof_state_init,
+    proof_control_init, proof_state_filter_unprocessed, proof_state_init_with_ac_output,
     proof_state_reset_processed_with_global_indices, proof_state_saturate_with_global_indices,
     ProofControl, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
 };
@@ -5360,7 +5360,7 @@ fn run_proof_search<W: Write + ?Sized>(
             false,
         )?;
     }
-    proof_state_init(&mut state, &mut control)?;
+    proof_state_init_with_ac_output(output, config.output_level, &mut state, &mut control)?;
     write_preprocessing_time(output, config)?;
     if config.flags.contains(EProverFlag::CnfOnly) {
         write_cnf_only_success(output)?;
@@ -10247,6 +10247,13 @@ mod tests {
         preprocessing_config_debug_line(&EProverConfig::default())
     }
 
+    fn default_proof_search_prefix() -> String {
+        format!(
+            "{}% Scanning for AC axioms\n",
+            default_preprocessing_debug_line()
+        )
+    }
+
     fn run_config_from<I, S>(argv: I) -> Box<EProverConfig>
     where
         I: IntoIterator<Item = S>,
@@ -12956,7 +12963,9 @@ mod tests {
         assert_eq!(std::str::from_utf8(&stdout).unwrap(), debug_line);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            format!("% Version: {VERSION}\n\n% No proof found!\n% SZS status Satisfiable\n")
+            format!(
+                "% Version: {VERSION}\n% Scanning for AC axioms\n\n% No proof found!\n% SZS status Satisfiable\n"
+            )
         );
         std::fs::remove_file(&path).unwrap();
         stdout.clear();
@@ -12972,7 +12981,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "% Version: {VERSION}\n{debug_line}\n% No proof found!\n% SZS status Satisfiable\n"
+                "% Version: {VERSION}\n{debug_line}% Scanning for AC axioms\n\n% No proof found!\n% SZS status Satisfiable\n"
             )
         );
         std::fs::remove_file(&input_path).unwrap();
@@ -14037,8 +14046,35 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_initial_ac_scan_status() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-initial-ac-status");
+        std::fs::write(&path, "f(X,Y)=f(Y,X).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let ac_status = "% Scanning for AC axioms\n% f is commutative\n% AC handling enabled\n";
+        assert!(printed.contains(ac_status));
+        assert!(
+            printed.find(ac_status).unwrap() < printed.find("\n% CNFization successful!").unwrap()
         );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -14071,7 +14107,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}% SatCheck found unsatisfiable ground set\n\n% Proof found!\n% SZS status Unsatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -14267,7 +14303,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -14321,7 +14357,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -14496,7 +14532,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status Satisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -15044,7 +15080,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -15627,7 +15663,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -15907,7 +15943,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -15985,7 +16021,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16066,7 +16102,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16146,7 +16182,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16226,7 +16262,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16282,7 +16318,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16494,7 +16530,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16591,7 +16627,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}% SZS status Theorem\n% SZS answers Tuple [[a]|_]\n\n% Proof found!\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16646,7 +16682,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status Satisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16674,7 +16710,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16697,7 +16733,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% No proof found!\n% SZS status Satisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16725,7 +16761,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16753,7 +16789,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16786,7 +16822,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Failure: Out of unprocessed clauses!\n% SZS status GaveUp\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16819,7 +16855,7 @@ mod tests {
         assert_eq!(status, ErrorCode::INCOMPLETE_PROOFSTATE.exit_status());
         assert!(printed.starts_with(&format!(
             "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
-            default_preprocessing_debug_line()
+            default_proof_search_prefix()
         )));
         assert!(printed.contains("% Processed positive unit clauses:\n"));
         assert!(printed.lines().any(|line| line.ends_with("<- .")));
@@ -16888,7 +16924,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -16920,7 +16956,7 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(printed.starts_with(&format!(
             "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
-            default_preprocessing_debug_line()
+            default_proof_search_prefix()
         )));
         assert!(printed.contains(
             "% Saturated system contains the empty clause:\n <- .\n\n% Processed positive unit clauses:\n"
@@ -16955,7 +16991,7 @@ mod tests {
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(printed.starts_with(&format!(
             "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
-            default_preprocessing_debug_line()
+            default_proof_search_prefix()
         )));
         assert!(printed.contains("% Saturated system contains the empty clause:\ncnf("));
         assert!(printed.contains(", ($false)).\n\n% Processed positive unit clauses:\n"));
@@ -17021,7 +17057,7 @@ mod tests {
         assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
         assert!(printed.starts_with(&format!(
             "{}\n% No proof found!\n% SZS status Satisfiable\n",
-            default_preprocessing_debug_line()
+            default_proof_search_prefix()
         )));
         assert!(printed.contains("% Parsed axioms                        : 1\n"));
         assert!(printed.contains("% Initial clauses in saturation        : 1\n"));
@@ -17301,7 +17337,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}% Presaturation interreduction done\n\n% No proof found!\n% SZS status Satisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -18268,7 +18304,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Failure: User resource limit exceeded!\n% SZS status ResourceOut\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -18299,7 +18335,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         std::fs::remove_file(&path).unwrap();
@@ -18335,7 +18371,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Watchlist is empty!\n% SZS status ResourceOut\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -18524,7 +18560,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Watchlist is empty!\n% SZS status ResourceOut\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());
@@ -18608,7 +18644,7 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Clause set closed under restricted calculus!\n% SZS status GaveUp\n",
-                default_preprocessing_debug_line()
+                default_proof_search_prefix()
             )
         );
         assert!(stderr.is_empty());

@@ -676,7 +676,9 @@ pub fn proof_state_init(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
-    proof_state_init_impl::<String>(state, control, None)
+    proof_state_init_impl::<String, _>(state, control, None, |state, control| {
+        Ok(proof_state_init_ac_handling(state, control))
+    })
 }
 
 /// Initializes the ported proof-state portions of C `ProofStateInit` while
@@ -692,14 +694,39 @@ pub fn proof_state_init_with_docs(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
-    proof_state_init_impl(state, control, Some((output, session)))
+    proof_state_init_impl(state, control, Some((output, session)), |state, control| {
+        Ok(proof_state_init_ac_handling(state, control))
+    })
 }
 
-fn proof_state_init_impl<W: fmt::Write>(
+/// Initializes the ported proof-state portions of C `ProofStateInit` while
+/// rendering represented `OutputLevel` AC scan/status output.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_init`], plus any output
+/// diagnostic from the AC scan/status rendering.
+pub fn proof_state_init_with_ac_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<ProofStateInitOutcome, Diagnostic> {
+    proof_state_init_impl::<String, _>(state, control, None, |state, control| {
+        proof_state_init_ac_handling_with_output(output, output_level, state, control)
+    })
+}
+
+fn proof_state_init_impl<W, A>(
     state: &mut ProofState,
     control: &mut ProofControl,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
-) -> Result<ProofStateInitOutcome, Diagnostic> {
+    mut ac_scan: A,
+) -> Result<ProofStateInitOutcome, Diagnostic>
+where
+    W: fmt::Write,
+    A: FnMut(&mut ProofState, &mut ProofControl) -> Result<bool, Diagnostic>,
+{
     debug_assert!(state.processed_pos_rules().is_empty());
     debug_assert!(state.processed_pos_eqns().is_empty());
     debug_assert!(state.processed_neg_units().is_empty());
@@ -708,7 +735,7 @@ fn proof_state_init_impl<W: fmt::Write>(
     let _ = proof_state_recognize_choice_axioms(state, control)?;
     let watchlist_indexed = proof_state_init_indexing(state, control)?;
     let axiom_outcome = proof_state_init_axioms_impl(state, control, &mut doc_context)?;
-    let ac_handling_active = proof_state_init_ac_handling(state, control);
+    let ac_handling_active = ac_scan(state, control)?;
     Ok(ProofStateInitOutcome {
         watchlist_indexed,
         initial_clauses: axiom_outcome.initial_clauses,
