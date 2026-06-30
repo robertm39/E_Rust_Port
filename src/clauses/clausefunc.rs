@@ -1812,6 +1812,36 @@ pub fn tformula_has_free_vars(bank: &TermBank, form: &Term) -> Option<Term> {
     tformula_collect_free_vars(bank, form).into_iter().next()
 }
 
+/// Returns whether `var` occurs free in a term-encoded formula.
+///
+/// This matches C `TFormulaVarIsFree`: it first trusts the formula `v_count`
+/// cache, treats term identity as an occurrence, masks only `$qex` and `$qall`
+/// binder variables, and otherwise recursively scans every argument. In
+/// particular, named-lambda cells are not binder-aware in this direct query;
+/// they are traversed like ordinary binary cells.
+#[must_use]
+pub fn tformula_var_is_free(bank: &TermBank, form: &Term, var: &Term) -> bool {
+    if form.v_count() == 0 {
+        return false;
+    }
+    if form == var {
+        return true;
+    }
+    if form.f_code() == bank.signature().qex_code() || form.f_code() == bank.signature().qall_code()
+    {
+        if formula_argument(form, 0) == *var {
+            false
+        } else {
+            tformula_var_is_free(bank, &formula_argument(form, 1), var)
+        }
+    } else {
+        form.argument_clones()
+            .into_iter()
+            .flatten()
+            .any(|arg| tformula_var_is_free(bank, &arg, var))
+    }
+}
+
 /// Wraps a formula in one universal or existential quantifier.
 ///
 /// This matches C `TFormulaAddQuantor`: `universal` selects `!`, otherwise
@@ -4376,28 +4406,6 @@ fn tformula_is_literal(bank: &TermBank, form: &Term) -> bool {
         && form.arity() == 2
 }
 
-fn tformula_var_is_free(bank: &TermBank, form: &Term, var: &Term) -> bool {
-    if form.v_count() == 0 {
-        return false;
-    }
-    if form == var {
-        return true;
-    }
-    if form.f_code() == bank.signature().qex_code() || form.f_code() == bank.signature().qall_code()
-    {
-        if formula_argument(form, 0) == *var {
-            false
-        } else {
-            tformula_var_is_free(bank, &formula_argument(form, 1), var)
-        }
-    } else {
-        form.argument_clones()
-            .into_iter()
-            .flatten()
-            .any(|arg| tformula_var_is_free(bank, &arg, var))
-    }
-}
-
 struct BindingRestore {
     variable: Term,
     old_binding: Option<Term>,
@@ -5251,7 +5259,8 @@ mod tests {
         tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
         tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
         tformula_stack_to_form, tformula_to_cnf, tformula_tptp_string, tformula_unroll_fool,
-        tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_var_is_free, tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions,
+        TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -5274,7 +5283,7 @@ mod tests {
     use crate::terms::lambda::apply_terms as lambda_apply_terms;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
-        SIG_ITE_CODE,
+        SIG_ITE_CODE, SIG_NAMED_LAMBDA_CODE,
     };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -7325,6 +7334,41 @@ mod tests {
         let closed = tformula_add_quantor(&mut bank, &quantified, true, &y).unwrap();
 
         assert!(tformula_is_closed(&bank, &closed));
+    }
+
+    #[test]
+    fn tformula_var_is_free_matches_direct_quantifier_query() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -304);
+        let y = typed_var(&bank, -306);
+        let a = typed_const(&mut bank, "direct_free_a");
+        let b = typed_const(&mut bank, "direct_free_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &y, &b);
+        let and_code = bank.signature().and_code();
+        let body = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let qall_code = bank.signature().qall_code();
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+
+        assert!(tformula_var_is_free(&bank, &body, &x));
+        assert!(!tformula_var_is_free(&bank, &quantified, &x));
+        assert!(tformula_var_is_free(&bank, &quantified, &y));
+        assert!(!tformula_var_is_free(&bank, &left_atom, &a));
+    }
+
+    #[test]
+    fn tformula_var_is_free_treats_named_lambda_binder_as_child() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -308);
+        let a = typed_const(&mut bank, "direct_free_lambda_a");
+        let b = typed_const(&mut bank, "direct_free_lambda_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let lambda = tformula_quantor_alloc(&mut bank, SIG_NAMED_LAMBDA_CODE, &x, &body).unwrap();
+
+        assert!(tformula_var_is_free(&bank, &lambda, &x));
+        assert!(tformula_collect_free_vars(&bank, &lambda).is_empty());
     }
 
     #[test]
