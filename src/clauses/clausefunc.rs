@@ -37,6 +37,9 @@ use crate::terms::termtypes::{
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub const TFORM_MANY_CLAUSES: i64 = i64::MAX;
+const TFORM_MANY_LIMIT: i64 = 1024;
+
 #[must_use]
 pub fn pstack_clause_print_lop_string(
     bank: &TermBank,
@@ -1088,6 +1091,145 @@ pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term
     }
 
     Ok(current)
+}
+
+/// Estimates the number of clauses produced by clausifying a formula.
+///
+/// This matches C `TFormulaEstimateClauses` for a single term-encoded formula:
+/// literals, marked definition subforms, applied free variables, and
+/// higher-order/partially applied formulas count as one clause; `$true` counts
+/// as zero; and estimates above C's `TFORM_MANY_LIMIT` return
+/// [`TFORM_MANY_CLAUSES`].
+///
+/// # Panics
+///
+/// Panics if a logical formula cell is malformed and lacks the C-required
+/// child arguments for its connective.
+#[must_use]
+pub fn tformula_estimate_clauses(bank: &TermBank, form: &Term, pos: bool) -> i64 {
+    if form.query_prop(TP_CHECK_FLAG)
+        || tformula_is_literal(bank, form)
+        || form.type_().as_ref().is_some_and(Type::is_arrow)
+    {
+        return 1;
+    }
+    if form == bank.true_term() {
+        return 0;
+    }
+    if form == bank.false_term() || form.is_applied_free_var() {
+        return 1;
+    }
+
+    let result = if pos {
+        estimate_positive_clauses(bank, form)
+    } else {
+        estimate_negative_clauses(bank, form)
+    };
+    if result > TFORM_MANY_LIMIT {
+        TFORM_MANY_CLAUSES
+    } else {
+        result
+    }
+}
+
+fn estimate_positive_clauses(bank: &TermBank, form: &Term) -> i64 {
+    let sig = bank.signature();
+    if form.f_code() == sig.and_code() {
+        let left = tformula_estimate_clauses(bank, &formula_argument(form, 0), true);
+        return if_many(left, || {
+            let right = tformula_estimate_clauses(bank, &formula_argument(form, 1), true);
+            if_many(right, || left + right)
+        });
+    }
+    if form.f_code() == sig.or_code() {
+        let left = tformula_estimate_clauses(bank, &formula_argument(form, 0), true);
+        return if_many(left, || {
+            let right = tformula_estimate_clauses(bank, &formula_argument(form, 1), true);
+            if_many(right, || left * right)
+        });
+    }
+    if form.f_code() == sig.impl_code() {
+        let left = tformula_estimate_clauses(bank, &formula_argument(form, 0), false);
+        return if_many(left, || {
+            let right = tformula_estimate_clauses(bank, &formula_argument(form, 1), true);
+            if_many(right, || left * right)
+        });
+    }
+    if form.f_code() == sig.equiv_code() {
+        let pos_left = tformula_estimate_clauses(bank, &formula_argument(form, 0), true);
+        return if_many(pos_left, || {
+            let pos_right = tformula_estimate_clauses(bank, &formula_argument(form, 1), true);
+            if_many(pos_right, || {
+                let neg_left = tformula_estimate_clauses(bank, &formula_argument(form, 0), false);
+                if_many(neg_left, || {
+                    let neg_right =
+                        tformula_estimate_clauses(bank, &formula_argument(form, 1), false);
+                    if_many(neg_right, || pos_left * neg_right + neg_left * pos_right)
+                })
+            })
+        });
+    }
+    if form.f_code() == sig.not_code() {
+        return tformula_estimate_clauses(bank, &formula_argument(form, 0), false);
+    }
+    if tformula_is_quantified(bank, form) {
+        return tformula_estimate_clauses(bank, &formula_argument(form, 1), true);
+    }
+    1
+}
+
+fn estimate_negative_clauses(bank: &TermBank, form: &Term) -> i64 {
+    let sig = bank.signature();
+    if form.f_code() == sig.and_code() {
+        let left = tformula_estimate_clauses(bank, &formula_argument(form, 0), false);
+        return if_many(left, || {
+            let right = tformula_estimate_clauses(bank, &formula_argument(form, 1), false);
+            if_many(right, || left * right)
+        });
+    }
+    if form.f_code() == sig.or_code() {
+        let left = tformula_estimate_clauses(bank, &formula_argument(form, 0), false);
+        return if_many(left, || {
+            let right = tformula_estimate_clauses(bank, &formula_argument(form, 1), false);
+            if_many(right, || left + right)
+        });
+    }
+    if form.f_code() == sig.impl_code() {
+        let left = tformula_estimate_clauses(bank, &formula_argument(form, 0), true);
+        return if_many(left, || {
+            let right = tformula_estimate_clauses(bank, &formula_argument(form, 1), false);
+            if_many(right, || left + right)
+        });
+    }
+    if form.f_code() == sig.equiv_code() {
+        let pos_left = tformula_estimate_clauses(bank, &formula_argument(form, 0), true);
+        return if_many(pos_left, || {
+            let pos_right = tformula_estimate_clauses(bank, &formula_argument(form, 1), true);
+            if_many(pos_right, || {
+                let neg_left = tformula_estimate_clauses(bank, &formula_argument(form, 0), false);
+                if_many(neg_left, || {
+                    let neg_right =
+                        tformula_estimate_clauses(bank, &formula_argument(form, 1), false);
+                    if_many(neg_right, || pos_left * pos_right + neg_left * neg_right)
+                })
+            })
+        });
+    }
+    if form.f_code() == sig.not_code() {
+        return tformula_estimate_clauses(bank, &formula_argument(form, 0), true);
+    }
+    if tformula_is_quantified(bank, form) {
+        return tformula_estimate_clauses(bank, &formula_argument(form, 1), false);
+    }
+    1
+}
+
+fn if_many(value: i64, next: impl FnOnce() -> i64) -> i64 {
+    if value == TFORM_MANY_CLAUSES {
+        TFORM_MANY_CLAUSES
+    } else {
+        next()
+    }
 }
 
 /// Transforms a simplified term-encoded formula into negation normal form.
@@ -2371,8 +2513,9 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_distribute_disjunctions, tformula_expand_literals, tformula_neg_alloc,
-        tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify_decoded,
+        tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
+        tformula_neg_alloc, tformula_nnf, tformula_shift_quantors, tformula_shift_quantors2,
+        tformula_simplify_decoded, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -2396,7 +2539,7 @@ mod tests {
     };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG};
     use crate::terms::typebanks::TypeBank;
     use std::collections::BTreeMap;
 
@@ -3294,6 +3437,100 @@ mod tests {
         let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
 
         assert_eq!(expanded, equality);
+    }
+
+    #[test]
+    fn tformula_estimate_clauses_counts_positive_and_negative_connectives() {
+        let mut bank = test_bank();
+        let left_a = typed_const(&mut bank, "estimate_a");
+        let left_b = typed_const(&mut bank, "estimate_b");
+        let left_c = typed_const(&mut bank, "estimate_c");
+        let left_d = typed_const(&mut bank, "estimate_d");
+        let right_a = typed_const(&mut bank, "estimate_e");
+        let right_b = typed_const(&mut bank, "estimate_f");
+        let right_c = typed_const(&mut bank, "estimate_g");
+        let right_d = typed_const(&mut bank, "estimate_h");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_1 = bool_binary_with_code(&mut bank, eqn_code, &left_a, &left_b);
+        let left_2 = bool_binary_with_code(&mut bank, eqn_code, &left_c, &left_d);
+        let right_1 = bool_binary_with_code(&mut bank, eqn_code, &right_a, &right_b);
+        let right_2 = bool_binary_with_code(&mut bank, eqn_code, &right_c, &right_d);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let impl_code = bank.signature().impl_code();
+        let equiv_code = bank.signature().equiv_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &left_1, &left_2);
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &right_1, &right_2);
+        let implication = bool_binary_with_code(&mut bank, impl_code, &conjunction, &disjunction);
+        let equivalence = bool_binary_with_code(&mut bank, equiv_code, &conjunction, &disjunction);
+
+        assert_eq!(tformula_estimate_clauses(&bank, &conjunction, true), 2);
+        assert_eq!(tformula_estimate_clauses(&bank, &conjunction, false), 1);
+        assert_eq!(tformula_estimate_clauses(&bank, &disjunction, true), 1);
+        assert_eq!(tformula_estimate_clauses(&bank, &disjunction, false), 2);
+        assert_eq!(tformula_estimate_clauses(&bank, &implication, true), 1);
+        assert_eq!(tformula_estimate_clauses(&bank, &implication, false), 4);
+        assert_eq!(tformula_estimate_clauses(&bank, &equivalence, true), 5);
+        assert_eq!(tformula_estimate_clauses(&bank, &equivalence, false), 4);
+    }
+
+    #[test]
+    fn tformula_estimate_clauses_treats_marked_subform_as_definition_atom() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "estimate_marked_a");
+        let b = typed_const(&mut bank, "estimate_marked_b");
+        let c = typed_const(&mut bank, "estimate_marked_c");
+        let d = typed_const(&mut bank, "estimate_marked_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let conjunction = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        conjunction.set_prop(TP_CHECK_FLAG);
+
+        assert_eq!(tformula_estimate_clauses(&bank, &conjunction, true), 1);
+        assert_eq!(tformula_estimate_clauses(&bank, &conjunction, false), 1);
+    }
+
+    #[test]
+    fn tformula_estimate_clauses_passes_through_quantifier_body() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -34);
+        let a = typed_const(&mut bank, "estimate_quant_a");
+        let b = typed_const(&mut bank, "estimate_quant_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let right = bool_binary_with_code(&mut bank, eqn_code, &x, &b);
+        let and_code = bank.signature().and_code();
+        let qall_code = bank.signature().qall_code();
+        let body = bool_binary_with_code(&mut bank, and_code, &left, &right);
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+
+        assert_eq!(tformula_estimate_clauses(&bank, &quantified, true), 2);
+        assert_eq!(tformula_estimate_clauses(&bank, &quantified, false), 1);
+    }
+
+    #[test]
+    fn tformula_estimate_clauses_returns_many_sentinel_above_c_limit() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "estimate_many_a");
+        let b = typed_const(&mut bank, "estimate_many_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let mut left = atom.clone();
+        let mut right = atom.clone();
+        for _ in 1..33 {
+            left = bool_binary_with_code(&mut bank, and_code, &left, &atom);
+            right = bool_binary_with_code(&mut bank, and_code, &right, &atom);
+        }
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &left, &right);
+
+        assert_eq!(
+            tformula_estimate_clauses(&bank, &disjunction, true),
+            TFORM_MANY_CLAUSES
+        );
     }
 
     #[test]
