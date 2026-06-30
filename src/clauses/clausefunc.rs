@@ -14,11 +14,15 @@ use crate::clauses::derivation::{
     DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
     DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
-use crate::clauses::eqn::{eqn_write_app_encode, eqn_write_fof, Eqn, EqnFofPrintOptions};
+use crate::clauses::eqn::{
+    eqn_fof_parse, eqn_write_app_encode, eqn_write_fof, Eqn, EqnFofPrintOptions,
+};
 use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
+use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::functypes::func_symb_start_token;
 use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
     decode_formulas_for_cnf, lambda_eta_reduce_db, post_cnf_encode_formulas,
@@ -1737,6 +1741,65 @@ pub fn tformula_lit_alloc(
         literal.is_positive(),
         PatEqnDirection::Normal,
     )
+}
+
+/// Parses a TSTP term-encoded formula.
+///
+/// This forwards to the term-bank implementation of C `TFormulaTSTPParse`.
+pub fn tformula_tstp_parse(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Term, Diagnostic> {
+    bank.parse_tformula_tstp(scanner)
+}
+
+/// Parses a TCF formula in TSTP syntax.
+///
+/// This matches C `TcfTSTPParse` for unquantified clause bodies by folding
+/// `EqnFOFParse` literals over `|`. Quantified TCF formulas reuse the general
+/// term-bank TSTP formula parser.
+pub fn tcf_tstp_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let start = func_symb_start_token()
+        | TokenType::ITE_TOKEN
+        | TokenType::LET_TOKEN
+        | TokenType::TILDE_SIGN
+        | TokenType::UNIV_QUANTOR
+        | TokenType::OPEN_BRACKET;
+    scanner.check_tok(start)?;
+
+    let in_parens = scanner.test_tok(TokenType::OPEN_BRACKET);
+    if in_parens {
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    }
+
+    let formula = if scanner.test_tok(TokenType::UNIV_QUANTOR) {
+        bank.parse_tformula_tstp(scanner)?
+    } else {
+        tcf_clause_tform_tstp_parse(scanner, bank, problem_type)?
+    };
+
+    if in_parens {
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    }
+    Ok(formula)
+}
+
+fn tcf_clause_tform_tstp_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let first = eqn_fof_parse(scanner, bank, problem_type)?;
+    let mut formula = tformula_lit_alloc(bank, &first, problem_type)?;
+    let or_code = bank.signature().or_code();
+    while scanner.test_tok(TokenType::FOF_OR) {
+        scanner.accept_tok(TokenType::FOF_OR)?;
+        let next_literal = eqn_fof_parse(scanner, bank, problem_type)?;
+        let next = tformula_lit_alloc(bank, &next_literal, problem_type)?;
+        formula = tformula_fcode_alloc(bank, or_code, formula, Some(next))?;
+    }
+    Ok(formula)
 }
 
 /// Encodes a clause as a disjunction-shaped term formula.
@@ -5350,25 +5413,25 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_add_quantor, tformula_app_encode_string, tformula_clause_closed_encode,
-        tformula_clause_encode, tformula_closure, tformula_collect_clause,
-        tformula_collect_free_vars, tformula_conjunctive_nf, tformula_conjunctive_nf3,
-        tformula_copy, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
-        tformula_def_rename, tformula_distribute_disjunctions, tformula_encode_predicate_as_eqn,
-        tformula_equal, tformula_estimate_clauses, tformula_expand_distinct,
-        tformula_expand_literals, tformula_fcode_alloc, tformula_find_defs,
-        tformula_find_max_var_code, tformula_gc_mark_cells, tformula_has_free_vars,
-        tformula_has_subform1, tformula_has_subform2, tformula_is_binary, tformula_is_closed,
-        tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_const,
+        tcf_tstp_parse, tformula_add_quantor, tformula_app_encode_string,
+        tformula_clause_closed_encode, tformula_clause_encode, tformula_closure,
+        tformula_collect_clause, tformula_collect_free_vars, tformula_conjunctive_nf,
+        tformula_conjunctive_nf3, tformula_copy, tformula_copy_def, tformula_create_def,
+        tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
+        tformula_encode_predicate_as_eqn, tformula_equal, tformula_estimate_clauses,
+        tformula_expand_distinct, tformula_expand_literals, tformula_fcode_alloc,
+        tformula_find_defs, tformula_find_max_var_code, tformula_gc_mark_cells,
+        tformula_has_free_vars, tformula_has_subform1, tformula_has_subform2, tformula_is_binary,
+        tformula_is_closed, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_const,
         tformula_is_prop_false, tformula_is_prop_true, tformula_is_quantified,
         tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped, tformula_lit_alloc,
         tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
         tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
         tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
         tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_stack_to_form, tformula_to_cnf, tformula_tptp_string, tformula_unroll_fool,
-        tformula_var_is_free, tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions,
-        TFORM_MANY_CLAUSES,
+        tformula_stack_to_form, tformula_to_cnf, tformula_tptp_string, tformula_tstp_parse,
+        tformula_unroll_fool, tformula_var_is_free, tformula_var_rename, TFormulaDefinitions,
+        TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -5388,6 +5451,7 @@ mod tests {
     use crate::clauses::eqn::{eqn_app_encode_string, Eqn};
     use crate::clauses::eqn_props::{EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::lambda::apply_terms as lambda_apply_terms;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
@@ -7382,6 +7446,67 @@ mod tests {
         assert_eq!(decoded.f_code(), equiv_code);
         assert_ne!(decoded.argument(0).unwrap(), true_term);
         assert_ne!(decoded.argument(1).unwrap(), false_term);
+    }
+
+    #[test]
+    fn tformula_tstp_parse_wrapper_uses_term_bank_formula_parser() {
+        let mut bank = test_bank();
+        let mut scanner =
+            Scanner::from_user_string("parse_wrap_left = parse_wrap_right", false).unwrap();
+
+        let formula = tformula_tstp_parse(&mut scanner, &mut bank).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(0).unwrap().f_code()),
+            Some("parse_wrap_left")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(1).unwrap().f_code()),
+            Some("parse_wrap_right")
+        );
+    }
+
+    #[test]
+    fn tcf_tstp_parse_folds_unquantified_clause_literals() {
+        let mut bank = test_bank();
+        let mut scanner =
+            Scanner::from_user_string("(tcf_parse_p(a)|~tcf_parse_q(b))", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let formula = tcf_tstp_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().or_code());
+        let left = formula.argument(0).unwrap();
+        let right = formula.argument(1).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        assert_eq!(right.f_code(), bank.signature().neqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("tcf_parse_p")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(0).unwrap().f_code()),
+            Some("tcf_parse_q")
+        );
+    }
+
+    #[test]
+    fn tcf_tstp_parse_accepts_universal_formula_prefix() {
+        let mut bank = test_bank();
+        let mut scanner =
+            Scanner::from_user_string("![X]:(tcf_quant_p(X)|tcf_quant_q(X))", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let formula = tcf_tstp_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().qall_code());
+        let body = formula.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().or_code());
     }
 
     #[test]

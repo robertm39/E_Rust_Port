@@ -2,7 +2,7 @@ use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::terms::dbvars::DbVarBank;
 use crate::terms::functypes::{func_symb_parse, FunCode, FuncSymbType};
 use crate::terms::garbage_coll::GcAdmin;
@@ -1367,6 +1367,82 @@ impl TermBank {
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
         self.parse_term_real(scanner, true)
+    }
+
+    /// Parses a TSTP term-encoded formula.
+    ///
+    /// This exposes the existing C `TFormulaTSTPParse` port used internally by
+    /// Boolean term-argument parsing.
+    pub fn parse_tformula_tstp(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        self.parse_tformula_tstp_subset(scanner)
+    }
+
+    /// Parses a `$distinct(...)` pseudo-formula in TSTP syntax.
+    ///
+    /// This matches C `TSTPDistinctParse`: every argument is parsed as a
+    /// zero-arity function symbol, including variable-looking identifiers, and
+    /// all arguments must have the same inferred type.
+    pub fn parse_tstp_distinct(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        scanner.accept_id("$distinct")?;
+        scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+
+        let first = self.parse_constant_term(scanner)?;
+        let expected_type = first.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "$distinct first argument has no inferred type",
+            )
+        })?;
+        let mut args = vec![first];
+
+        while scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            let position = token_pos_rep(scanner.current_token());
+            let arg = self.parse_constant_term(scanner)?;
+            if arg.type_().as_ref() != Some(&expected_type) {
+                return Err(Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    format!(
+                        "{position} All $distinct arguments have to be constants of the same type"
+                    ),
+                ));
+            }
+            args.push(arg);
+        }
+        scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+
+        let distinct_code = Self::require_formula_op_code(self.sig.distinct_code())?;
+        let distinct = Term::top_alloc(distinct_code, args.len());
+        for (index, arg) in args.into_iter().enumerate() {
+            distinct.set_argument(index, arg);
+        }
+        self.term_top_insert(distinct)
+    }
+
+    fn parse_constant_term(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
+        let position = token_pos_rep(scanner.current_token());
+        let mut id = DynamicString::new();
+        let id_type = func_symb_parse(scanner, &mut id)?;
+        let name = id.view().into_owned();
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!("{position} constant expected in $distinct argument list"),
+            ));
+        }
+
+        let f_code = term_sig_insert(&mut self.sig, &name, 0, false, id_type);
+        if f_code == 0 {
+            let registered_code = self.sig.find_f_code(&name);
+            let registered_arity = self.sig.find_arity(registered_code).unwrap_or(0);
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{position} constant expected but {name} registered with arity {registered_arity}"
+                ),
+            ));
+        }
+        self.create_const_term(f_code)
     }
 
     fn parse_term_real(
@@ -3051,6 +3127,12 @@ mod tests {
         TermBank::new(sig).unwrap()
     }
 
+    fn formula_bank() -> TermBank {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        TermBank::new(sig).unwrap()
+    }
+
     fn unary_i_arg_bank(outer_name: &str) -> TermBank {
         let mut sig = Signature::new(TypeBank::new());
         sig.insert_internal_codes().unwrap();
@@ -3068,6 +3150,15 @@ mod tests {
         let code = bank.signature_mut().insert_id(name, 0, false);
         bank.signature_mut()
             .declare_final_type(code, i_type)
+            .unwrap();
+        code
+    }
+
+    fn declare_bool_const(bank: &mut TermBank, name: &str) -> FunCode {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(code, bool_type)
             .unwrap();
         code
     }
@@ -3183,6 +3274,93 @@ mod tests {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         let term = bank.parse_term_simple(&mut scanner).unwrap();
         (bank, term)
+    }
+
+    #[test]
+    fn tformula_tstp_parse_lowers_boolean_equality_to_equivalence() {
+        let mut bank = formula_bank();
+        declare_bool_const(&mut bank, "tstp_formula_bool_left");
+        declare_bool_const(&mut bank, "tstp_formula_bool_right");
+        let mut scanner = Scanner::from_user_string(
+            "(tstp_formula_bool_left) = (tstp_formula_bool_right)",
+            false,
+        )
+        .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().equiv_code());
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let left = formula.argument(0).unwrap();
+        let right = formula.argument(1).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        assert_eq!(right.f_code(), bank.signature().eqn_code());
+        assert_eq!(left.argument(1), Some(bank.true_term().clone()));
+        assert_eq!(right.argument(1), Some(bank.true_term().clone()));
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("tstp_formula_bool_left")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(0).unwrap().f_code()),
+            Some("tstp_formula_bool_right")
+        );
+    }
+
+    #[test]
+    fn tstp_distinct_parse_allocates_variable_looking_constants_like_c() {
+        let mut bank = formula_bank();
+        let mut scanner =
+            Scanner::from_user_string("$distinct(X,distinct_const_a)", false).unwrap();
+
+        let distinct = bank.parse_tstp_distinct(&mut scanner).unwrap();
+
+        assert_eq!(distinct.f_code(), bank.signature().distinct_code());
+        assert_eq!(distinct.arity(), 2);
+        let uppercase = distinct.argument(0).unwrap();
+        let lowercase = distinct.argument(1).unwrap();
+        assert!(!uppercase.is_free_var());
+        assert_eq!(bank.signature().find_name(uppercase.f_code()), Some("X"));
+        assert_eq!(
+            bank.signature().find_name(lowercase.f_code()),
+            Some("distinct_const_a")
+        );
+        assert_eq!(uppercase.type_(), lowercase.type_());
+    }
+
+    #[test]
+    fn tstp_distinct_parse_rejects_compound_arguments() {
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string("$distinct(f(a),b)", false).unwrap();
+
+        let error = bank.parse_tstp_distinct(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("constant expected in $distinct argument list"));
+    }
+
+    #[test]
+    fn tstp_distinct_parse_rejects_mixed_argument_types() {
+        let mut bank = formula_bank();
+        declare_i_const(&mut bank, "distinct_i_arg");
+        declare_bool_const(&mut bank, "distinct_bool_arg");
+        let mut scanner =
+            Scanner::from_user_string("$distinct(distinct_i_arg,distinct_bool_arg)", false)
+                .unwrap();
+
+        let error = bank.parse_tstp_distinct(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+        assert!(error
+            .message()
+            .contains("All $distinct arguments have to be constants of the same type"));
     }
 
     fn cons_cell(head: Term, tail: Term) -> Term {
