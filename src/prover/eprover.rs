@@ -7093,10 +7093,6 @@ fn saturate_outcome_exit_status(
             reason: SaturateStopReason::Saturated,
             ..
         } => ErrorCode::INCOMPLETE_PROOFSTATE.exit_status(),
-        SaturateOutcome::Stopped {
-            reason: SaturateStopReason::TimeLimit,
-            ..
-        } => ErrorCode::CPU_LIMIT_ERROR.exit_status(),
         SaturateOutcome::Stopped { .. } => ErrorCode::RESOURCE_OUT.exit_status(),
     }
 }
@@ -11894,6 +11890,33 @@ mod tests {
         assert_eq!(soft_time_limit(), RLIM_INFINITY_COMPAT);
         assert_eq!(schedule_time_limit(), 0);
 
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_cooperative_time_limit_uses_resource_out_exit_status() {
+        let _guard = global_state_lock();
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let path = temp_path("cpu-limit-resource-out");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--lop-in", "--cpu-limit=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
+        assert!(String::from_utf8(stdout)
+            .unwrap()
+            .contains("\n% Failure: User resource limit exceeded!\n% SZS status ResourceOut\n"));
+        assert!(stderr.is_empty());
+
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
         std::fs::remove_file(&path).unwrap();
     }
 
