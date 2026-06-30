@@ -61,6 +61,17 @@ pub enum SignalOutcome {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SchedulerSignalOutcome {
+    SigTermCaught {
+        count: usize,
+        default_reset_attempted: bool,
+    },
+    Ignored {
+        signal: i32,
+    },
+}
+
 #[must_use]
 pub fn schedule_time_limit() -> u64 {
     SCHEDULE_TIME_LIMIT.load(Ordering::SeqCst)
@@ -212,12 +223,16 @@ pub fn e_signal_handler(signal: i32) -> SignalOutcome {
 }
 
 #[must_use]
-pub fn e_sig_term_sched_handler(signal: i32) -> bool {
+pub fn e_sig_term_sched_handler(signal: i32) -> SchedulerSignalOutcome {
     if signal == SIGTERM_COMPAT {
-        SIG_TERM_CAUGHT.fetch_add(1, Ordering::SeqCst);
-        true
+        let count = SIG_TERM_CAUGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        restore_scheduler_sigterm_default();
+        SchedulerSignalOutcome::SigTermCaught {
+            count,
+            default_reset_attempted: true,
+        }
     } else {
-        false
+        SchedulerSignalOutcome::Ignored { signal }
     }
 }
 
@@ -305,6 +320,13 @@ fn time_limit_deadline_usec(start_usec: i64, limit_seconds: u64) -> i64 {
     start_usec.saturating_add(limit_usec)
 }
 
+fn restore_scheduler_sigterm_default() {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let _ = linux_signal::restore_default_handler(SIGTERM_COMPAT);
+    }
+}
+
 #[must_use]
 const fn cpu_soft_timeout_rlimit_sequence(
     hard_limit: u64,
@@ -332,14 +354,25 @@ mod linux_signal {
     const SIG_ERR_COMPAT: usize = usize::MAX;
 
     extern "C" {
-        fn signal(signum: i32, handler: SignalHandler) -> usize;
+        #[link_name = "signal"]
+        fn signal_handler(signum: i32, handler: SignalHandler) -> usize;
+        #[link_name = "signal"]
+        fn signal_raw(signum: i32, handler: usize) -> usize;
     }
 
     pub(super) fn install_e_signal_handler(signal_number: i32) -> bool {
         // SAFETY: signal installs a process-global handler. The handler is an
         // extern "C" function with the required integer signal argument and no
         // captured Rust state.
-        (unsafe { signal(signal_number, signal_trampoline) }) != SIG_ERR_COMPAT
+        (unsafe { signal_handler(signal_number, signal_trampoline) }) != SIG_ERR_COMPAT
+    }
+
+    pub(super) fn restore_default_handler(signal_number: i32) -> bool {
+        const SIG_DFL_COMPAT: usize = 0;
+
+        // SAFETY: SIG_DFL is the C signal API's null handler sentinel. This is
+        // the same process-global reset used by C `ESigTermSchedHandler`.
+        (unsafe { signal_raw(signal_number, SIG_DFL_COMPAT) }) != SIG_ERR_COMPAT
     }
 
     extern "C" fn signal_trampoline(signal_number: i32) {
@@ -370,8 +403,8 @@ mod tests {
         schedule_time_limit, set_hard_time_limit, set_schedule_time_limit, set_silent_time_out,
         set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
         sig_term_caught, silent_time_out, soft_time_limit, system_time_limit, time_is_up,
-        time_limit_is_soft, SignalOutcome, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT,
-        SIGXCPU_COMPAT,
+        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, RLIM_INFINITY_COMPAT,
+        SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
@@ -638,10 +671,27 @@ mod tests {
         let _guard = global_state_lock();
         reset_signal_state_for_tests();
 
-        assert!(!e_sig_term_sched_handler(SIGINT_COMPAT));
+        assert_eq!(
+            e_sig_term_sched_handler(SIGINT_COMPAT),
+            SchedulerSignalOutcome::Ignored {
+                signal: SIGINT_COMPAT
+            }
+        );
         assert_eq!(sig_term_caught(), 0);
-        assert!(e_sig_term_sched_handler(SIGTERM_COMPAT));
-        assert!(e_sig_term_sched_handler(SIGTERM_COMPAT));
+        assert_eq!(
+            e_sig_term_sched_handler(SIGTERM_COMPAT),
+            SchedulerSignalOutcome::SigTermCaught {
+                count: 1,
+                default_reset_attempted: true,
+            }
+        );
+        assert_eq!(
+            e_sig_term_sched_handler(SIGTERM_COMPAT),
+            SchedulerSignalOutcome::SigTermCaught {
+                count: 2,
+                default_reset_attempted: true,
+            }
+        );
         assert_eq!(sig_term_caught(), 2);
     }
 
