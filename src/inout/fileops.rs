@@ -78,8 +78,12 @@ fn input_open_required(name: Option<&Path>) -> Result<InputSource, Diagnostic> {
     input_open(name, true)?.ok_or_else(|| io_diagnostic("Cannot open input for reading"))
 }
 
-pub fn input_close(input: InputSource) {
-    drop(input);
+pub fn input_close(input: InputSource) -> Result<(), Diagnostic> {
+    match input {
+        InputSource::Stdin => Ok(()),
+        InputSource::File(file) => close_file(file)
+            .map_err(|error| io_diagnostic(format!("Error while closing file: {error}"))),
+    }
 }
 
 pub fn file_load(name: &Path, dest: &mut DynamicString) -> Result<usize, Diagnostic> {
@@ -100,7 +104,7 @@ pub fn file_load(name: &Path, dest: &mut DynamicString) -> Result<usize, Diagnos
         dest.append_buffer(&buffer[..read]);
     }
 
-    input_close(input);
+    input_close(input)?;
     Ok(count)
 }
 
@@ -121,7 +125,7 @@ where
                 target.display()
             ))
         })?;
-        input_close(input);
+        input_close(input)?;
         count = count
             .checked_add(1)
             .ok_or_else(|| io_diagnostic("Too many source files to concatenate"))?;
@@ -144,8 +148,70 @@ pub fn file_print(output: &mut impl Write, name: &Path) -> Result<(), Diagnostic
     let mut input = input_open_required(Some(name))?;
     io::copy(&mut input, output)
         .map_err(|error| io_diagnostic(format!("Cannot print file {}: {error}", name.display())))?;
-    input_close(input);
+    input_close(input)?;
     Ok(())
+}
+
+fn close_file(file: File) -> io::Result<()> {
+    platform_close::close_file(file)
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod platform_close {
+    use std::fs::File;
+    use std::io;
+    use std::os::fd::IntoRawFd;
+
+    extern "C" {
+        fn close(fd: i32) -> i32;
+    }
+
+    pub(super) fn close_file(file: File) -> io::Result<()> {
+        let fd = file.into_raw_fd();
+        // SAFETY: into_raw_fd transfers ownership of a valid file descriptor.
+        // close consumes that descriptor exactly once and has no Rust aliases.
+        if unsafe { close(fd) } == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod platform_close {
+    use std::ffi::c_void;
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::io::IntoRawHandle;
+
+    extern "system" {
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+
+    pub(super) fn close_file(file: File) -> io::Result<()> {
+        let handle = file.into_raw_handle();
+        // SAFETY: into_raw_handle transfers ownership of a valid OS handle.
+        // CloseHandle consumes that handle exactly once and has no Rust aliases.
+        if unsafe { CloseHandle(handle.cast()) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+mod platform_close {
+    use std::fs::File;
+    use std::io;
+
+    pub(super) fn close_file(file: File) -> io::Result<()> {
+        drop(file);
+        Ok(())
+    }
 }
 
 #[must_use]
@@ -199,7 +265,7 @@ mod tests {
     use super::{
         concat_files, copy_file, file_exists, file_find_base_name, file_load, file_name_base_name,
         file_name_dir_name, file_name_is_absolute, file_name_strip, file_print, file_remove,
-        input_open, InputSource,
+        input_close, input_open, InputSource,
     };
     use crate::basics::dstrings::DynamicString;
     use crate::basics::error::ErrorCode;
@@ -328,7 +394,21 @@ mod tests {
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut source, &mut bytes).unwrap();
         assert_eq!(bytes, b"readable");
+        input_close(source).unwrap();
 
+        file_remove(&path).unwrap();
+    }
+
+    #[test]
+    fn input_close_skips_stdin_and_reports_successful_file_close() {
+        assert!(input_close(InputSource::Stdin).is_ok());
+
+        let path = temp_path("input-close");
+        remove_if_present(&path);
+        std::fs::write(&path, b"close").unwrap();
+        let source = input_open(Some(&path), true).unwrap().unwrap();
+
+        input_close(source).unwrap();
         file_remove(&path).unwrap();
     }
 }
