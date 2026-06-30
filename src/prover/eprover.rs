@@ -103,6 +103,7 @@ use crate::inout::signals::{
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
+use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db, set_eta_normalizer};
 use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL, SIG_ITE_CODE, SIG_LET_CODE,
@@ -2527,6 +2528,18 @@ fn apply_ordering_state(config: &EProverConfig) {
     }
 }
 
+fn apply_eta_normalization_state(config: &EProverConfig) {
+    match config
+        .search
+        .inference
+        .higher_order_preprocessing
+        .eta_normalization
+    {
+        EtaNormalization::Reduce => set_eta_normalizer(lambda_eta_reduce_db),
+        EtaNormalization::Expand => set_eta_normalizer(lambda_eta_expand_db),
+    }
+}
+
 const fn memory_limit_bytes_from_mb(memory_mb: i64) -> u64 {
     c_rlimit_from_arg(memory_mb).wrapping_mul(MEGA)
 }
@@ -4388,6 +4401,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     let _ = set_output_level(config.output_level);
     apply_time_limit_state(config);
     apply_ordering_state(config);
+    apply_eta_normalization_state(config);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -10218,6 +10232,10 @@ mod tests {
     };
     use crate::orderings::cto_lpo::{lpo_recursion_depth_limit, set_lpo_recursion_depth_limit};
     use crate::prover::version::VERSION;
+    use crate::terms::lambda::{
+        get_eta_normalizer, lambda_eta_expand_db, lambda_eta_reduce_db, set_eta_normalizer,
+        TermNormalizer,
+    };
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
@@ -10252,6 +10270,10 @@ mod tests {
         let previous = std::env::var_os(name);
         std::env::set_var(name, value);
         EnvGuard { name, previous }
+    }
+
+    fn eta_normalizer_is(expected: TermNormalizer) -> bool {
+        std::ptr::fn_addr_eq(get_eta_normalizer(), expected)
     }
 
     fn parse_lop_test_clause(bank: &mut TermBank, input: &str, ident: i64) -> Clause {
@@ -12917,6 +12939,50 @@ mod tests {
         assert_eq!(hard_time_limit(), RLIM_INFINITY_COMPAT);
         assert_eq!(soft_time_limit(), RLIM_INFINITY_COMPAT);
         assert_eq!(schedule_time_limit(), 0);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_applies_eta_normalize_option_to_global_normalizer() {
+        let _guard = global_state_lock();
+        set_eta_normalizer(lambda_eta_reduce_db);
+        let path = temp_path("eta-normalize-expand");
+        std::fs::write(&path, "").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--eta-normalize=expand", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(eta_normalizer_is(lambda_eta_expand_db));
+        assert!(stderr.is_empty());
+
+        set_eta_normalizer(lambda_eta_reduce_db);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_without_eta_normalize_resets_global_normalizer_to_reduce() {
+        let _guard = global_state_lock();
+        set_eta_normalizer(lambda_eta_expand_db);
+        let path = temp_path("eta-normalize-default");
+        std::fs::write(&path, "").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(eta_normalizer_is(lambda_eta_reduce_db));
+        assert!(stderr.is_empty());
 
         std::fs::remove_file(&path).unwrap();
     }
