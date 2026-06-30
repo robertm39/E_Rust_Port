@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
+use crate::clauses::formulasets::formula_set_definition_statistics;
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausesetfeatures::SpecLimits;
 use crate::inout::basicparser::{parse_bool, parse_float, parse_int, parse_plain_filename};
@@ -34,13 +35,18 @@ pub struct RawSpecFeatureCell {
 pub fn raw_spec_features_compute(features: &mut RawSpecFeatureCell, state: &ProofState) {
     let signature = state.terms().signature();
     let axioms = state.axioms();
+    let f_axioms = state.f_axioms();
+    let f_ax_archive = state.f_ax_archive();
     let raw_formula_features = state.raw_formula_features();
-    features.sentence_no = axioms.members() - raw_formula_features.lowered_clause_no
+    features.sentence_no = axioms.members() + f_axioms.cardinality()
+        - raw_formula_features.lowered_clause_no
         + raw_formula_features.sentence_no;
-    features.term_size = axioms.standard_weight() - raw_formula_features.lowered_clause_term_size
+    features.term_size = axioms.standard_weight() + f_axioms.standard_weight()
+        - raw_formula_features.lowered_clause_term_size
         + raw_formula_features.term_size;
     features.hypothesis_count = 0;
     features.conjecture_count = axioms.count_conjectures(&mut features.hypothesis_count);
+    features.conjecture_count += f_axioms.count_conjectures(&mut features.hypothesis_count);
     features.conjecture_count = features.conjecture_count
         - raw_formula_features.lowered_conjecture_count
         + raw_formula_features.conjecture_count;
@@ -55,12 +61,27 @@ pub fn raw_spec_features_compute(features: &mut RawSpecFeatureCell, state: &Proo
     features.fun_size = signature.count_symbols(false) - features.func_size;
     features.has_choice_sym = signature.has_choice_sym();
 
-    features.order = 1.max(raw_formula_features.order);
-    features.conj_order = 1.max(raw_formula_features.conj_order);
-    features.num_of_definitions = 0;
-    features.perc_of_form_defs = 0.0;
-    features.num_lambdas = raw_formula_features.num_lambdas;
-    features.app_var_lits = raw_formula_features.app_var_lits;
+    let formula_order = f_axioms
+        .iter()
+        .map(|formula| usize_to_i32_saturating(formula.conjecture_order(signature)))
+        .max()
+        .unwrap_or(0);
+    features.order = 1.max(formula_order).max(raw_formula_features.order);
+    features.conj_order = 1
+        .max(usize_to_i32_saturating(
+            f_axioms.conjecture_order(signature),
+        ))
+        .max(raw_formula_features.conj_order);
+
+    let definition_statistics =
+        formula_set_definition_statistics(f_axioms, f_ax_archive, state.terms());
+    features.num_of_definitions = definition_statistics.num_defs;
+    features.perc_of_form_defs = definition_statistics.percentage_form_defs;
+    features.num_lambdas = definition_statistics
+        .num_lams
+        .saturating_add(raw_formula_features.num_lambdas);
+    features.app_var_lits =
+        definition_statistics.has_app_var_lits || raw_formula_features.app_var_lits;
     features.class.clear();
 }
 
@@ -271,6 +292,10 @@ const fn bool_as_c_int(value: bool) -> i32 {
     }
 }
 
+fn usize_to_i32_saturating(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -280,10 +305,15 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::clause_parse;
+    use crate::clauses::clause_props::{CP_IS_LAMBDA_DEF, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
+    use crate::clauses::formulasets::{formula_set_definition_statistics, WrappedFormula};
     use crate::clauses::proofstate::ProofState;
     use crate::heuristics::clausesetfeatures::SpecLimits;
     use crate::inout::scanner::{IoFormat, Scanner};
-    use crate::terms::signature::FP_IGNORE_PROPS;
+    use crate::terms::signature::{FP_IGNORE_PROPS, SIG_PHONY_APP_CODE};
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::Term;
 
     fn insert_tstp_clause(state: &mut ProofState, input: &str) {
         let mut scanner = Scanner::from_user_string(input, false).unwrap();
@@ -291,6 +321,74 @@ mod tests {
         let clause =
             clause_parse(&mut scanner, state.terms_mut(), ProblemType::FirstOrder).unwrap();
         state.axioms_mut().insert(clause);
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: &Type) -> Term {
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_.clone())
+            .unwrap();
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        typed_const_with_type(bank, name, &type_)
+    }
+
+    fn typed_var(bank: &TermBank, code: i64) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(code, &type_)
+    }
+
+    fn typed_predicate_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .unwrap();
+        bank.signature_mut().declare_is_predicate(f_code).unwrap();
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn typed_unary_predicate(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let arg_type = arg.type_().expect("predicate argument must have a type");
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type.clone()]));
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, predicate_type)
+            .unwrap();
+        bank.signature_mut().declare_is_predicate(f_code).unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
+        term.set_argument(0, arg.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn phony_app(bank: &mut TermBank, head: &Term, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        let term = Term::top_alloc(SIG_PHONY_APP_CODE, 2);
+        term.set_type(Some(type_));
+        term.set_argument(0, head.clone());
+        term.set_argument(1, arg.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn usize_to_i32_for_test(value: usize) -> i32 {
+        i32::try_from(value).unwrap_or(i32::MAX)
     }
 
     fn small_limits() -> SpecLimits {
@@ -365,6 +463,111 @@ mod tests {
         assert!(features.perc_of_form_defs.abs() < f64::EPSILON);
         assert_eq!(features.num_lambdas, 0);
         assert!(!features.app_var_lits);
+        assert!(features.class.is_empty());
+    }
+
+    #[test]
+    fn compute_includes_owned_formula_sets() {
+        let mut state = ProofState::new(FP_IGNORE_PROPS).unwrap();
+        insert_tstp_clause(&mut state, "cnf(hyp, hypothesis, (p(a))).");
+
+        let conjecture_formula = {
+            let bank = state.terms_mut();
+            let default_type = bank.signature().type_bank().default_type();
+            let unary_type = bank
+                .signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![default_type.clone(), default_type]));
+            let higher_order_arg = typed_const_with_type(bank, "rawspec_ho_arg", &unary_type);
+            let atom = typed_unary_predicate(bank, "rawspec_ho_pred", &higher_order_arg);
+            let mut formula = WrappedFormula::wt_formula_alloc(atom);
+            formula.set_tptp_type(CP_TYPE_CONJECTURE);
+            formula
+        };
+        let hypothesis_formula = {
+            let atom = typed_predicate_const(state.terms_mut(), "rawspec_formula_hyp");
+            let mut formula = WrappedFormula::wt_formula_alloc(atom);
+            formula.set_tptp_type(CP_TYPE_HYPOTHESIS);
+            formula
+        };
+        let app_var_formula = {
+            let bank = state.terms_mut();
+            let eqn_code = bank.signature_mut().get_eqn_code(true);
+            let app_head = typed_var(bank, -101);
+            let app_arg = typed_const(bank, "rawspec_app_arg");
+            let app_var = phony_app(bank, &app_head, &app_arg);
+            let true_term = bank.true_term().clone();
+            WrappedFormula::wt_formula_alloc(bool_binary_with_code(
+                bank, eqn_code, &app_var, &true_term,
+            ))
+        };
+        let definition_formula = {
+            let bank = state.terms_mut();
+            let eqn_code = bank.signature_mut().get_eqn_code(true);
+            let predicate_head = typed_predicate_const(bank, "rawspec_definition_head");
+            let true_term = bank.true_term().clone();
+            let mut formula = WrappedFormula::wt_formula_alloc(bool_binary_with_code(
+                bank,
+                eqn_code,
+                &predicate_head,
+                &true_term,
+            ));
+            formula.set_prop(CP_IS_LAMBDA_DEF);
+            formula
+        };
+        state.f_axioms_mut().insert(conjecture_formula);
+        state.f_axioms_mut().insert(hypothesis_formula);
+        state.f_axioms_mut().insert(app_var_formula);
+        state.f_ax_archive_mut().insert(definition_formula);
+
+        let expected_sentence_no = state.axioms().members() + state.f_axioms().cardinality();
+        let expected_term_size =
+            state.axioms().standard_weight() + state.f_axioms().standard_weight();
+        let mut expected_hypotheses = 0;
+        let expected_conjectures = state.axioms().count_conjectures(&mut expected_hypotheses)
+            + state.f_axioms().count_conjectures(&mut expected_hypotheses);
+        let expected_order = 1.max(
+            state
+                .f_axioms()
+                .iter()
+                .map(|formula| {
+                    usize_to_i32_for_test(formula.conjecture_order(state.terms().signature()))
+                })
+                .max()
+                .unwrap_or(0),
+        );
+        let expected_conj_order = 1.max(usize_to_i32_for_test(
+            state.f_axioms().conjecture_order(state.terms().signature()),
+        ));
+        let expected_definition_stats = formula_set_definition_statistics(
+            state.f_axioms(),
+            state.f_ax_archive(),
+            state.terms(),
+        );
+        let mut features = RawSpecFeatureCell {
+            class: "stale".to_owned(),
+            num_of_definitions: -1,
+            perc_of_form_defs: -1.0,
+            num_lambdas: -1,
+            ..RawSpecFeatureCell::default()
+        };
+
+        raw_spec_features_compute(&mut features, &state);
+
+        assert_eq!(features.sentence_no, expected_sentence_no);
+        assert_eq!(features.term_size, expected_term_size);
+        assert_eq!(features.conjecture_count, expected_conjectures);
+        assert_eq!(features.hypothesis_count, expected_hypotheses);
+        assert_eq!(features.order, expected_order);
+        assert!(features.order > 1);
+        assert_eq!(features.conj_order, expected_conj_order);
+        assert_eq!(
+            features.num_of_definitions,
+            expected_definition_stats.num_defs
+        );
+        assert!((features.perc_of_form_defs - 1.0).abs() < f64::EPSILON);
+        assert_eq!(features.num_lambdas, expected_definition_stats.num_lams);
+        assert!(features.app_var_lits);
         assert!(features.class.is_empty());
     }
 
