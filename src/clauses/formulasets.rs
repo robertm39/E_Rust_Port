@@ -13,13 +13,13 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
     tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_is_literal,
-    tformula_is_prop_true, tformula_mark_polarity, tformula_preload_types, tformula_to_cnf,
-    tformula_tptp_string, TFormulaTptpPrintOptions,
+    tformula_is_prop_true, tformula_mark_polarity, tformula_preload_types, tformula_simplify,
+    tformula_to_cnf, tformula_tptp_string, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, FormulaDerivationRef, DC_FOF_QUOTE,
+    clause_push_formula_derivation, FormulaDerivationRef, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::lambda_normalize_db;
@@ -124,6 +124,12 @@ impl FormulaSetCnfOptions {
             problem_type,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetSimplifyResult {
+    pub formulas_changed: i64,
+    pub formula_derivation_ops: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -260,6 +266,31 @@ impl WrappedFormula {
         if let Some(formula) = &self.formula {
             tformula_mark_polarity(bank, formula, 1);
         }
+    }
+
+    /// Applies C `WFormulaSimplify` to this wrapped formula.
+    ///
+    /// C calls `TFormulaSimplify` with a quantifier-optimization limit of zero.
+    /// The staged Rust wrapper updates the formula term and reports whether it
+    /// changed; formula-level derivation storage remains deferred.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if simplifying or rebuilding the term-encoded
+    /// formula fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if the formula is
+    /// malformed.
+    pub fn simplify(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let original = self.formula().clone();
+        let simplified = tformula_simplify(bank, &original, 0)?;
+        if simplified == original {
+            return Ok(false);
+        }
+        self.set_formula(simplified);
+        Ok(true)
     }
 
     #[must_use]
@@ -925,6 +956,34 @@ impl FormulaSet {
         }
     }
 
+    /// Applies C `FormulaSetSimplify` to each formula in insertion order.
+    ///
+    /// This stages the mutating simplification and changed-count behavior. The
+    /// optional C term-bank garbage collections and formula derivation stack are
+    /// deferred until those owners are ported; changed formulas are represented
+    /// by `DCFofSimplify` opcodes in the result metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any wrapped formula cannot be simplified.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term or if a formula is malformed.
+    pub fn simplify(
+        &mut self,
+        bank: &mut TermBank,
+    ) -> Result<FormulaSetSimplifyResult, Diagnostic> {
+        let mut result = FormulaSetSimplifyResult::default();
+        for formula in &mut self.formulas {
+            if formula.simplify(bank)? {
+                result.formulas_changed += 1;
+                result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
+            }
+        }
+        Ok(result)
+    }
+
     /// Drains this set into CNF clauses using the staged core of C
     /// `FormulaSetCNF2`.
     ///
@@ -1260,7 +1319,7 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        DerivationEntry, FormulaDerivationRef, DC_DIST_DISJUNCTIONS, DC_FOF_QUOTE,
+        DerivationEntry, FormulaDerivationRef, DC_DIST_DISJUNCTIONS, DC_FOF_QUOTE, DC_FOF_SIMPLIFY,
         DC_SPLIT_CONJUNCT,
     };
     use crate::clauses::eqn::Eqn;
@@ -1847,6 +1906,63 @@ mod tests {
         assert!(as_clause_core.starts_with("cnf(flex_clause, negated_conjecture, ("));
         assert!(as_clause_core.contains("wf_flex_clause_a=wf_flex_clause_b|"));
         assert!(as_clause_core.ends_with("))."));
+    }
+
+    #[test]
+    fn wrapped_formula_simplify_updates_formula_like_c() {
+        let mut bank = test_bank();
+        let atom_left = typed_const(&mut bank, "wf_simpl_left");
+        let atom_right = typed_const(&mut bank, "wf_simpl_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &atom_left, &atom_right);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_formula = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let disjunction = bool_binary_with_code(&mut bank, or_code, &false_formula, &atom);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(disjunction);
+
+        assert!(wrapped.simplify(&mut bank).unwrap());
+        assert_eq!(wrapped.formula(), &atom);
+        assert!(!wrapped.simplify(&mut bank).unwrap());
+    }
+
+    #[test]
+    fn formula_set_simplify_counts_changes_and_preserves_order() {
+        let mut bank = test_bank();
+        let changed_left = typed_const(&mut bank, "set_simpl_changed_left");
+        let changed_right = typed_const(&mut bank, "set_simpl_changed_right");
+        let stable_left = typed_const(&mut bank, "set_simpl_stable_left");
+        let stable_right = typed_const(&mut bank, "set_simpl_stable_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let changed_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &changed_left, &changed_right);
+        let stable_atom = bool_binary_with_code(&mut bank, eqn_code, &stable_left, &stable_right);
+        let truth = bank.true_term().clone();
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let false_formula = bool_binary_with_code(&mut bank, neqn_code, &truth, &truth);
+        let or_code = bank.signature().or_code();
+        let changed_formula =
+            bool_binary_with_code(&mut bank, or_code, &false_formula, &changed_atom);
+        let mut changed = WrappedFormula::wt_formula_alloc(changed_formula);
+        let changed_entry = changed.entry_id();
+        changed.set_tptp_type(CP_TYPE_AXIOM);
+        let stable = WrappedFormula::wt_formula_alloc(stable_atom.clone());
+        let stable_entry = stable.entry_id();
+        let mut set = FormulaSet::new();
+        set.insert(changed);
+        set.insert(stable);
+
+        let result = set.simplify(&mut bank).unwrap();
+
+        assert_eq!(result.formulas_changed, 1);
+        assert_eq!(result.formula_derivation_ops, vec![DC_FOF_SIMPLIFY]);
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas[0].entry_id(), changed_entry);
+        assert_eq!(formulas[0].query_tptp_type(), CP_TYPE_AXIOM);
+        assert_eq!(formulas[0].formula(), &changed_atom);
+        assert_eq!(formulas[1].entry_id(), stable_entry);
+        assert_eq!(formulas[1].formula(), &stable_atom);
     }
 
     #[test]
