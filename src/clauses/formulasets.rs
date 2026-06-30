@@ -845,11 +845,13 @@ pub struct FormulaSetHigherOrderPreprocessResult {
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
     pub formulas_lets_lifted: i64,
+    pub formulas_lambdas_lifted: i64,
     pub formulas_def_symbols_unfolded: i64,
     pub unfolded_definition_rhs_rewritten: i64,
     pub unfolded_definitions_archived: i64,
     pub unfolded_original_definitions_archived: i64,
     pub definition_symbol_applications: i64,
+    pub lambda_lift_definitions_inserted: i64,
     pub formulas_lambda_normalized: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
@@ -2307,6 +2309,58 @@ impl FormulaSet {
         }
 
         while let Some(definition) = lifted_definitions.pop() {
+            self.insert(definition);
+        }
+        Ok(result)
+    }
+
+    /// Applies C `TFormulaSetLiftLambdas` in insertion order.
+    ///
+    /// Generated definition wrappers are appended after the original traversal,
+    /// so the definitions are not lifted again by the same pass. Formula-level
+    /// derivation storage and proof output are deferred; this returns the
+    /// `DCIntroDef` opcodes that should be attached by a future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if beta normalization, lambda lifting, predicate
+    /// encoding, or term-bank insertion fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or if a lambda,
+    /// formula, or definition payload is malformed.
+    pub fn lift_lambdas(
+        &mut self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+
+        bank.vars().set_v_counts_to_used();
+        let mut state = LambdaLiftState::default();
+        let mut lifted_definitions = BTreeMap::new();
+        for formula in &mut self.formulas {
+            let original = formula.formula().clone();
+            let mut formula_defs = Vec::new();
+            let lifted = lift_lambdas_in_term(bank, &original, &mut state, &mut formula_defs)?;
+            if lifted != original {
+                formula.set_formula(lifted);
+                result.formulas_lambdas_lifted += 1;
+                for definition in formula_defs.into_iter().rev() {
+                    result.lambda_lift_definitions_inserted += 1;
+                    result.formula_derivation_ops.push(DC_INTRO_DEF);
+                    lifted_definitions
+                        .entry(definition.entry_id())
+                        .or_insert(definition);
+                }
+            }
+        }
+
+        for definition in lifted_definitions.into_values() {
             self.insert(definition);
         }
         Ok(result)
@@ -4436,6 +4490,55 @@ mod tests {
             generated_definition.argument(1).as_ref(),
             Some(&definition_value)
         );
+    }
+
+    #[test]
+    fn formula_set_lift_lambdas_is_higher_order_gated_and_inserts_definitions() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let inner = typed_unary(&mut bank, "set_lift_lambda_body_f", &db0);
+        let body = typed_unary(&mut bank, "set_lift_lambda_body_g", &inner);
+        let lambda = close_with_db_var(&mut bank, &i_type, &body).unwrap();
+        let lambda_type = lambda.type_().expect("lambda term is typed");
+        let wrapped_lambda = typed_unary_with_types(
+            &mut bank,
+            "set_lift_lambda_wrapper",
+            &lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let target = typed_const(&mut bank, "set_lift_lambda_target");
+        let eqn_code = bank.signature().eqn_code();
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &wrapped_lambda, &target);
+        let mut first_order = FormulaSet::new();
+        first_order.insert(WrappedFormula::wt_formula_alloc(formula.clone()));
+
+        let first_order_result = first_order
+            .lift_lambdas(&mut bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(first_order_result.formulas_lambdas_lifted, 0);
+        assert_eq!(first_order_result.lambda_lift_definitions_inserted, 0);
+        assert!(first_order_result.formula_derivation_ops.is_empty());
+        assert_eq!(first_order.cardinality(), 1);
+        assert_eq!(first_order.iter().next().unwrap().formula(), &formula);
+
+        let mut higher_order = FormulaSet::new();
+        higher_order.insert(WrappedFormula::wt_formula_alloc(formula));
+
+        let result = higher_order
+            .lift_lambdas(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_lambdas_lifted, 1);
+        assert_eq!(result.lambda_lift_definitions_inserted, 1);
+        assert_eq!(result.formula_derivation_ops, vec![DC_INTRO_DEF]);
+        assert_eq!(higher_order.cardinality(), 2);
+        let formulas = higher_order.iter().collect::<Vec<_>>();
+        assert!(!formulas[0].formula().has_lambda_subterm());
+        assert_eq!(formulas[1].formula().f_code(), bank.signature().qall_code());
+        assert!(!formulas[1].formula().has_lambda_subterm());
     }
 
     #[test]
