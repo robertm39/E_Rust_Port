@@ -79,9 +79,9 @@ use crate::heuristics::new_autoschedule::{
     DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
-    proof_control_init, proof_state_filter_unprocessed, proof_state_init_with_ac_output,
+    proof_control_init, proof_state_filter_unprocessed, proof_state_init_with_output,
     proof_state_reset_processed_with_global_indices,
-    proof_state_saturate_with_global_indices_and_ac_output, ProofControl, SaturateOutcome,
+    proof_state_saturate_with_global_indices_and_output, ProofControl, SaturateOutcome,
     SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::rawspecfeatures::{
@@ -5361,7 +5361,7 @@ fn run_proof_search<W: Write + ?Sized>(
             false,
         )?;
     }
-    proof_state_init_with_ac_output(output, config.output_level, &mut state, &mut control)?;
+    proof_state_init_with_output(output, config.output_level, &mut state, &mut control)?;
     write_preprocessing_time(output, config)?;
     if config.flags.contains(EProverFlag::CnfOnly) {
         write_cnf_only_success(output)?;
@@ -5457,7 +5457,7 @@ fn run_main_saturation<W: Write + ?Sized>(
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, EProverError> {
-    Ok(proof_state_saturate_with_global_indices_and_ac_output(
+    Ok(proof_state_saturate_with_global_indices_and_output(
         output,
         config.output_level,
         state,
@@ -5928,7 +5928,7 @@ fn run_presaturation_interreduction(
 ) -> Result<Option<SaturateOutcome>, EProverError> {
     let selection_strategy = control.heuristic_parms().selection_strategy.clone();
     NO_GENERATION.clone_into(&mut control.heuristic_parms_mut().selection_strategy);
-    let outcome = proof_state_saturate_with_global_indices_and_ac_output(
+    let outcome = proof_state_saturate_with_global_indices_and_output(
         output,
         output_level,
         state,
@@ -18389,8 +18389,8 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "{}\n% Watchlist is empty!\n% SZS status ResourceOut\n",
-                default_proof_search_prefix()
+                "{}% Watchlist reduced by 1 clause\n% Scanning for AC axioms\n\n% Watchlist is empty!\n% SZS status ResourceOut\n",
+                default_preprocessing_debug_line()
             )
         );
         assert!(stderr.is_empty());
@@ -18578,8 +18578,8 @@ mod tests {
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             format!(
-                "{}\n% Watchlist is empty!\n% SZS status ResourceOut\n",
-                default_proof_search_prefix()
+                "{}% Watchlist reduced by 1 clause\n% Scanning for AC axioms\n\n% Watchlist is empty!\n% SZS status ResourceOut\n",
+                default_preprocessing_debug_line()
             )
         );
         assert!(stderr.is_empty());

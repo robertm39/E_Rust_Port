@@ -676,7 +676,7 @@ pub fn proof_state_init(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
-    proof_state_init_impl::<String, _>(state, control, None, |state, control| {
+    proof_state_init_impl::<String, _>(state, control, None, None, |state, control| {
         Ok(proof_state_init_ac_handling(state, control))
     })
 }
@@ -694,26 +694,58 @@ pub fn proof_state_init_with_docs(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
-    proof_state_init_impl(state, control, Some((output, session)), |state, control| {
-        Ok(proof_state_init_ac_handling(state, control))
-    })
+    proof_state_init_impl(
+        state,
+        control,
+        Some((output, session)),
+        None,
+        |state, control| Ok(proof_state_init_ac_handling(state, control)),
+    )
 }
 
 /// Initializes the ported proof-state portions of C `ProofStateInit` while
-/// rendering represented `OutputLevel` AC scan/status output.
+/// rendering represented `OutputLevel` text.
 ///
 /// # Errors
 ///
 /// Returns the same diagnostics as [`proof_state_init`], plus any output
-/// diagnostic from the AC scan/status rendering.
-pub fn proof_state_init_with_ac_output(
+/// diagnostic from watchlist or AC scan/status rendering.
+pub fn proof_state_init_with_output(
     output: &mut impl std::io::Write,
     output_level: i64,
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<ProofStateInitOutcome, Diagnostic> {
-    proof_state_init_impl::<String, _>(state, control, None, |state, control| {
-        proof_state_init_ac_handling_with_output(output, output_level, state, control)
+    let output = output as &mut dyn std::io::Write;
+    let mut output_context = Some((output, output_level));
+    debug_assert!(state.processed_pos_rules().is_empty());
+    debug_assert!(state.processed_pos_eqns().is_empty());
+    debug_assert!(state.processed_neg_units().is_empty());
+    debug_assert!(state.processed_non_units().is_empty());
+
+    let _ = proof_state_recognize_choice_axioms(state, control)?;
+    let watchlist_indexed = proof_state_init_indexing(state, control)?;
+    let axiom_outcome = {
+        let mut doc_context = None;
+        proof_state_init_axioms_impl::<String>(
+            state,
+            control,
+            &mut doc_context,
+            &mut output_context,
+        )?
+    };
+    let Some((output, output_level)) = output_context.as_mut() else {
+        unreachable!("proof-state output context should remain installed");
+    };
+    let ac_handling_active =
+        proof_state_init_ac_handling_with_output(&mut **output, *output_level, state, control)?;
+    Ok(ProofStateInitOutcome {
+        watchlist_indexed,
+        initial_clauses: axiom_outcome.initial_clauses,
+        sos_marked: axiom_outcome.sos_marked,
+        watchlist_matches: axiom_outcome.watchlist_matches,
+        watchlist_removed: axiom_outcome.watchlist_removed,
+        ac_handling_active,
     })
 }
 
@@ -721,6 +753,7 @@ fn proof_state_init_impl<W, A>(
     state: &mut ProofState,
     control: &mut ProofControl,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+    mut output_context: Option<(&mut dyn std::io::Write, i64)>,
     mut ac_scan: A,
 ) -> Result<ProofStateInitOutcome, Diagnostic>
 where
@@ -734,7 +767,8 @@ where
 
     let _ = proof_state_recognize_choice_axioms(state, control)?;
     let watchlist_indexed = proof_state_init_indexing(state, control)?;
-    let axiom_outcome = proof_state_init_axioms_impl(state, control, &mut doc_context)?;
+    let axiom_outcome =
+        proof_state_init_axioms_impl(state, control, &mut doc_context, &mut output_context)?;
     let ac_handling_active = ac_scan(state, control)?;
     Ok(ProofStateInitOutcome {
         watchlist_indexed,
@@ -797,7 +831,8 @@ pub fn proof_state_init_axioms(
     control: &mut ProofControl,
 ) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
     let mut doc_context = None;
-    proof_state_init_axioms_impl::<String>(state, control, &mut doc_context)
+    let mut output_context = None;
+    proof_state_init_axioms_impl::<String>(state, control, &mut doc_context, &mut output_context)
 }
 
 pub fn proof_state_recognize_choice_axioms(
@@ -828,13 +863,15 @@ pub fn proof_state_init_axioms_with_docs(
     control: &mut ProofControl,
 ) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
     let mut doc_context = Some((output, session));
-    proof_state_init_axioms_impl(state, control, &mut doc_context)
+    let mut output_context = None;
+    proof_state_init_axioms_impl(state, control, &mut doc_context, &mut output_context)
 }
 
 fn proof_state_init_axioms_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+    output_context: &mut Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateInitAxiomOutcome, Diagnostic> {
     let active_hcb_handle = control.active_hcb.ok_or_else(|| {
         Diagnostic::new(
@@ -874,12 +911,13 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
         for source in ordered_axioms {
             let mut new = source.copy_to_bank(state.terms_mut())?;
             new.set_prop(CP_INITIAL);
-            let watchlist_outcome = proof_state_check_watchlist_maybe_docs(
+            let watchlist_outcome = proof_state_check_watchlist_maybe_output(
                 state,
                 &mut new,
                 static_watchlist,
                 lambda_demod,
                 doc_context,
+                output_context.as_mut(),
             )?;
             if watchlist_outcome.subsumes_watch {
                 watchlist_matches += 1;
@@ -922,7 +960,8 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
 /// The current Rust path updates the local watchlist FV index and archive.
 /// Long-lived `wlindices` deletion is wired with the later state-owned
 /// global-index integration. Use [`proof_state_check_watchlist_with_docs`] for
-/// represented proof-documentation quote side effects.
+/// represented proof-documentation quote side effects, or
+/// [`proof_state_check_watchlist_with_output`] for C's `OutputLevel` text only.
 ///
 /// # Panics
 ///
@@ -937,12 +976,14 @@ pub fn proof_state_check_watchlist(
     lambda_demod: bool,
 ) -> ProofStateWatchlistOutcome {
     let mut doc_context = None;
+    let mut output_context = None;
     proof_state_check_watchlist_impl::<String>(
         state,
         clause,
         static_watchlist,
         lambda_demod,
         &mut doc_context,
+        output_context.as_mut(),
     )
     .unwrap_or_else(|err| panic!("plain watchlist check unexpectedly failed: {err}"))
 }
@@ -962,23 +1003,60 @@ pub fn proof_state_check_watchlist_with_docs(
     lambda_demod: bool,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
     let mut doc_context = Some((output, session));
+    let mut output_context = None;
     proof_state_check_watchlist_impl(
         state,
         clause,
         static_watchlist,
         lambda_demod,
         &mut doc_context,
+        output_context.as_mut(),
     )
 }
 
-fn proof_state_check_watchlist_maybe_docs<W: fmt::Write>(
+/// Runs C `check_watchlist` while rendering only C's `OutputLevel` text.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the output sink fails while printing the dynamic
+/// watchlist-reduction message.
+pub fn proof_state_check_watchlist_with_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    clause: &mut Clause,
+    static_watchlist: bool,
+    lambda_demod: bool,
+) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
+    let mut doc_context = None;
+    let output = output as &mut dyn std::io::Write;
+    let mut output_context = Some((output, output_level));
+    proof_state_check_watchlist_impl::<String>(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        &mut doc_context,
+        output_context.as_mut(),
+    )
+}
+
+fn proof_state_check_watchlist_maybe_output<W: fmt::Write>(
     state: &mut ProofState,
     clause: &mut Clause,
     static_watchlist: bool,
     lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+    output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
-    proof_state_check_watchlist_impl(state, clause, static_watchlist, lambda_demod, doc_context)
+    proof_state_check_watchlist_impl(
+        state,
+        clause,
+        static_watchlist,
+        lambda_demod,
+        doc_context,
+        output_context,
+    )
 }
 
 fn proof_state_check_watchlist_impl<W: fmt::Write>(
@@ -987,6 +1065,7 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
     static_watchlist: bool,
     _lambda_demod: bool,
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
+    mut output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProofStateWatchlistOutcome, Diagnostic> {
     let (terms, watchlist, archive) = state.terms_watchlist_archive_mut();
     let Some(watchlist) = watchlist else {
@@ -1033,6 +1112,8 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
                 Some("extract_subsumed_watched"),
                 None,
             )?;
+        } else if let Some((output, output_level)) = output_context.as_mut() {
+            proof_state_write_watchlist_reduction(&mut **output, *output_level, removed)?;
         }
         return Ok(ProofStateWatchlistOutcome {
             subsumes_watch: true,
@@ -1040,6 +1121,22 @@ fn proof_state_check_watchlist_impl<W: fmt::Write>(
         });
     }
     Ok(ProofStateWatchlistOutcome::default())
+}
+
+fn proof_state_write_watchlist_reduction(
+    output: &mut (impl std::io::Write + ?Sized),
+    output_level: i64,
+    removed: i64,
+) -> Result<(), Diagnostic> {
+    if output_level != 1 {
+        return Ok(());
+    }
+    let line = format!(
+        "{DEFAULT_COMCHAR_RAW} Watchlist reduced by {removed} clause{}\n",
+        if removed == 1 { "" } else { "s" }
+    );
+    std::io::Write::write_all(output, line.as_bytes())
+        .map_err(|err| Diagnostic::new(ErrorCode::OTHER_ERROR, err.to_string()))
 }
 
 /// Runs the local owned-watchlist body of C `simplify_watchlist`.
@@ -2719,7 +2816,7 @@ pub fn proof_state_insert_new_clauses(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
-    proof_state_insert_new_clauses_impl::<String>(state, control, None)
+    proof_state_insert_new_clauses_impl::<String>(state, control, None, None)
 }
 
 /// Drains `tmp_store` through C `insert_new_clauses` while emitting represented
@@ -2735,13 +2832,36 @@ pub fn proof_state_insert_new_clauses_with_docs(
     state: &mut ProofState,
     control: &mut ProofControl,
 ) -> Result<Option<Clause>, Diagnostic> {
-    proof_state_insert_new_clauses_impl(state, control, Some((output, session)))
+    proof_state_insert_new_clauses_impl(state, control, Some((output, session)), None)
+}
+
+/// Drains `tmp_store` through C `insert_new_clauses` while rendering only C's
+/// `OutputLevel` text.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_insert_new_clauses`], plus any
+/// output diagnostic from dynamic watchlist-reduction rendering.
+pub fn proof_state_insert_new_clauses_with_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+) -> Result<Option<Clause>, Diagnostic> {
+    let output = output as &mut dyn std::io::Write;
+    proof_state_insert_new_clauses_impl::<String>(
+        state,
+        control,
+        None,
+        Some((output, output_level)),
+    )
 }
 
 fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
     state: &mut ProofState,
     control: &mut ProofControl,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+    mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<Option<Clause>, Diagnostic> {
     proof_state_record_tmp_store_generated_snapshot(state);
 
@@ -2780,12 +2900,13 @@ fn proof_state_insert_new_clauses_impl<W: fmt::Write>(
 
         let static_watchlist = control.heuristic_parms().watchlist_is_static;
         let lambda_demod = control.heuristic_parms().lambda_demod;
-        let _ = proof_state_check_watchlist_maybe_docs(
+        let _ = proof_state_check_watchlist_maybe_output(
             state,
             &mut clause,
             static_watchlist,
             lambda_demod,
             &mut doc_context,
+            output_context.as_mut(),
         )?;
         if clause.is_empty() {
             return Ok(Some(clause));
@@ -5632,28 +5753,27 @@ pub fn proof_state_process_clause_with_docs(
     )
 }
 
-/// Processes one selected clause while rendering only C's dynamic AC
-/// `OutputLevel` status text.
+/// Processes one selected clause while rendering only C's `OutputLevel` text.
 ///
 /// # Errors
 ///
 /// Returns the same diagnostics as [`proof_state_process_clause`], plus any
-/// dynamic AC status output diagnostic.
-pub fn proof_state_process_clause_with_ac_output(
+/// output diagnostic from dynamic AC or watchlist-reduction rendering.
+pub fn proof_state_process_clause_with_output(
     output: &mut impl std::io::Write,
     output_level: i64,
     state: &mut ProofState,
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    let ac_output = output as &mut dyn std::io::Write;
+    let output = output as &mut dyn std::io::Write;
     proof_state_process_clause_impl::<String>(
         state,
         control,
         answer_limit,
         None,
         None,
-        Some((ac_output, output_level)),
+        Some((output, output_level)),
     )
 }
 
@@ -5687,14 +5807,14 @@ pub fn proof_state_process_clause_with_global_indices(
 }
 
 /// Processes one selected clause using caller-owned global indices while
-/// rendering only C's dynamic AC `OutputLevel` status text.
+/// rendering only C's `OutputLevel` text.
 ///
 /// # Errors
 ///
 /// Returns the same diagnostics as
-/// [`proof_state_process_clause_with_global_indices`], plus any dynamic AC
-/// status output diagnostic.
-pub fn proof_state_process_clause_with_global_indices_and_ac_output(
+/// [`proof_state_process_clause_with_global_indices`], plus any output
+/// diagnostic from dynamic AC or watchlist-reduction rendering.
+pub fn proof_state_process_clause_with_global_indices_and_output(
     output: &mut impl std::io::Write,
     output_level: i64,
     state: &mut ProofState,
@@ -5702,14 +5822,14 @@ pub fn proof_state_process_clause_with_global_indices_and_ac_output(
     answer_limit: i64,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    let ac_output = output as &mut dyn std::io::Write;
+    let output = output as &mut dyn std::io::Write;
     proof_state_process_clause_impl::<String>(
         state,
         control,
         answer_limit,
         Some(indices),
         None,
-        Some((ac_output, output_level)),
+        Some((output, output_level)),
     )
 }
 
@@ -5750,7 +5870,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
-    mut ac_output_context: Option<(&mut dyn std::io::Write, i64)>,
+    mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
@@ -5819,7 +5939,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             control,
             packed.clause(),
         )?
-    } else if let Some((output, output_level)) = ac_output_context.as_mut() {
+    } else if let Some((output, output_level)) = output_context.as_mut() {
         proof_state_check_ac_status_with_output(
             &mut **output,
             *output_level,
@@ -5864,6 +5984,16 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
             &mut clause,
             static_watchlist,
             lambda_demod,
+        )?
+    } else if output_context.is_some() {
+        let mut no_doc_context = None;
+        proof_state_check_watchlist_impl::<String>(
+            state,
+            &mut clause,
+            static_watchlist,
+            lambda_demod,
+            &mut no_doc_context,
+            output_context.as_mut(),
         )?
     } else {
         proof_state_check_watchlist(state, &mut clause, static_watchlist, lambda_demod)
@@ -5991,6 +6121,13 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     }
     let generated_empty = if let Some((output, session, _output_level)) = doc_context.as_mut() {
         proof_state_insert_new_clauses_with_docs(&mut **output, session, state, control)?
+    } else if let Some((output, output_level)) = output_context.as_mut() {
+        proof_state_insert_new_clauses_impl::<String>(
+            state,
+            control,
+            None,
+            Some((&mut **output, *output_level)),
+        )?
     } else {
         proof_state_insert_new_clauses(state, control)?
     };
@@ -6140,18 +6277,18 @@ pub fn proof_state_saturate(
     )
 }
 
-/// Runs the ported C `Saturate` loop while rendering only dynamic AC
-/// `OutputLevel` status text from selected-clause processing.
+/// Runs the ported C `Saturate` loop while rendering only C's `OutputLevel`
+/// text from selected-clause processing.
 ///
 /// # Errors
 ///
-/// Returns the same diagnostics as [`proof_state_saturate`], plus any dynamic
-/// AC status output diagnostic.
+/// Returns the same diagnostics as [`proof_state_saturate`], plus any output
+/// diagnostic from dynamic AC or watchlist-reduction rendering.
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
 )]
-pub fn proof_state_saturate_with_ac_output(
+pub fn proof_state_saturate_with_output(
     output: &mut impl std::io::Write,
     output_level: i64,
     state: &mut ProofState,
@@ -6164,7 +6301,7 @@ pub fn proof_state_saturate_with_ac_output(
     tb_insert_limit: i64,
     answer_limit: i64,
 ) -> Result<SaturateOutcome, Diagnostic> {
-    let ac_output = output as &mut dyn std::io::Write;
+    let output = output as &mut dyn std::io::Write;
     proof_state_saturate_impl(
         state,
         control,
@@ -6176,7 +6313,7 @@ pub fn proof_state_saturate_with_ac_output(
         tb_insert_limit,
         answer_limit,
         None,
-        Some((ac_output, output_level)),
+        Some((output, output_level)),
     )
 }
 
@@ -6224,19 +6361,18 @@ pub fn proof_state_saturate_with_global_indices(
 }
 
 /// Runs the ported C `Saturate` loop using caller-owned global indices while
-/// rendering only dynamic AC `OutputLevel` status text from selected-clause
-/// processing.
+/// rendering only C's `OutputLevel` text from selected-clause processing.
 ///
 /// # Errors
 ///
 /// Returns the same diagnostics as
-/// [`proof_state_saturate_with_global_indices`], plus any dynamic AC status
-/// output diagnostic.
+/// [`proof_state_saturate_with_global_indices`], plus any output diagnostic
+/// from dynamic AC or watchlist-reduction rendering.
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
 )]
-pub fn proof_state_saturate_with_global_indices_and_ac_output(
+pub fn proof_state_saturate_with_global_indices_and_output(
     output: &mut impl std::io::Write,
     output_level: i64,
     state: &mut ProofState,
@@ -6250,7 +6386,7 @@ pub fn proof_state_saturate_with_global_indices_and_ac_output(
     answer_limit: i64,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, Diagnostic> {
-    let ac_output = output as &mut dyn std::io::Write;
+    let output = output as &mut dyn std::io::Write;
     proof_state_saturate_impl(
         state,
         control,
@@ -6262,7 +6398,7 @@ pub fn proof_state_saturate_with_global_indices_and_ac_output(
         tb_insert_limit,
         answer_limit,
         Some(indices),
-        Some((ac_output, output_level)),
+        Some((output, output_level)),
     )
 }
 
@@ -6327,7 +6463,7 @@ fn proof_state_saturate_impl(
     tb_insert_limit: i64,
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
-    mut ac_output_context: Option<(&mut dyn std::io::Write, i64)>,
+    mut output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
     let mut sat_check_thresholds = SatCheckThresholds::new(control.heuristic_parms());
@@ -6355,7 +6491,7 @@ fn proof_state_saturate_impl(
             control,
             answer_limit,
             indices.as_deref_mut(),
-            ac_output_context.as_mut(),
+            output_context.as_mut(),
         )?;
         match process_outcome {
             ProcessClauseOutcome::NoClause => {
@@ -6424,9 +6560,9 @@ fn proof_state_process_clause_for_saturate(
     control: &mut ProofControl,
     answer_limit: i64,
     indices: Option<&mut GlobalIndices<'_>>,
-    ac_output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
+    output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    match (indices, ac_output_context) {
+    match (indices, output_context) {
         (Some(indices), Some((output, output_level))) => proof_state_process_clause_impl::<String>(
             state,
             control,
@@ -7331,7 +7467,7 @@ pub fn proof_state_init_ac_handling(state: &mut ProofState, control: &mut ProofC
 /// Returns a diagnostic if the output sink fails while printing the scan
 /// banner, signature AC status, or activation line.
 pub fn proof_state_init_ac_handling_with_output(
-    output: &mut impl std::io::Write,
+    output: &mut (impl std::io::Write + ?Sized),
     output_level: i64,
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -7589,20 +7725,22 @@ mod tests {
         proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
         proof_control_reset_sat_solver, proof_state_check_ac_status,
         proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
-        proof_state_cleanup_unprocessed_clauses, proof_state_cleanup_unprocessed_clauses_with,
-        proof_state_eval_clause_set, proof_state_filter_unprocessed,
-        proof_state_forward_contract_clause, proof_state_forward_contract_clause_with_docs,
-        proof_state_forward_contract_set, proof_state_forward_contract_set_reweight,
-        proof_state_forward_modify_clause, proof_state_forward_modify_clause_impl,
-        proof_state_forward_modify_clause_with_docs, proof_state_forward_subsumption,
-        proof_state_forward_subsumption_with_strong, proof_state_generate_new_clauses,
-        proof_state_generate_new_clauses_impl, proof_state_generate_new_clauses_with_docs,
+        proof_state_check_watchlist_with_output, proof_state_cleanup_unprocessed_clauses,
+        proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
+        proof_state_filter_unprocessed, proof_state_forward_contract_clause,
+        proof_state_forward_contract_clause_with_docs, proof_state_forward_contract_set,
+        proof_state_forward_contract_set_reweight, proof_state_forward_modify_clause,
+        proof_state_forward_modify_clause_impl, proof_state_forward_modify_clause_with_docs,
+        proof_state_forward_subsumption, proof_state_forward_subsumption_with_strong,
+        proof_state_generate_new_clauses, proof_state_generate_new_clauses_impl,
+        proof_state_generate_new_clauses_with_docs,
         proof_state_generate_new_clauses_with_global_indices,
         proof_state_generate_new_clauses_with_global_indices_and_docs, proof_state_init,
         proof_state_init_ac_handling, proof_state_init_ac_handling_with_output,
         proof_state_init_global_indices, proof_state_init_indexing, proof_state_init_with_docs,
-        proof_state_init_with_global_indices, proof_state_insert_new_clauses,
-        proof_state_insert_new_clauses_with_docs, proof_state_insert_processed_clause,
+        proof_state_init_with_global_indices, proof_state_init_with_output,
+        proof_state_insert_new_clauses, proof_state_insert_new_clauses_with_docs,
+        proof_state_insert_new_clauses_with_output, proof_state_insert_processed_clause,
         proof_state_move_eval_store_to_unprocessed,
         proof_state_move_eval_store_to_unprocessed_with_docs, proof_state_move_to_tmp_store,
         proof_state_move_to_tmp_store_with_global_indices, proof_state_process_clause,
@@ -7611,7 +7749,7 @@ mod tests {
         proof_state_replacing_inferences, proof_state_replacing_inferences_with_docs,
         proof_state_reset_processed, proof_state_reset_processed_with_docs,
         proof_state_reset_processed_with_global_indices, proof_state_saturate,
-        proof_state_saturate_with_ac_output, proof_state_saturate_with_global_indices,
+        proof_state_saturate_with_global_indices, proof_state_saturate_with_output,
         proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
         proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
         ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
@@ -8528,6 +8666,43 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_init_with_output_reports_dynamic_watchlist_reduction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (axiom, watch) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_init_watch_output", 4_032, 4_033);
+        state.axioms_mut().insert(axiom);
+        state.watchlist_mut().unwrap().insert(watch);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "InitWatchOutput".to_owned(),
+            ac_handling: AcHandling::None,
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec!["InitWatchOutput=(1*FIFOWeight(ConstPrio))".to_owned()];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let mut output = Vec::new();
+
+        let outcome = proof_state_init_with_output(&mut output, 1, &mut state, &mut control)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome.watchlist_removed, 1);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Watchlist reduced by 1 clause\n"
+        );
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+    }
+
+    #[test]
     fn proof_state_check_watchlist_with_docs_quotes_dynamic_extraction() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let (mut subsumer, mut watched) =
@@ -8607,6 +8782,47 @@ mod tests {
         let archived = state.archive().find_by_id(4_035).unwrap();
         assert!(archived.query_prop(CP_IS_DEAD));
         assert_eq!(subsumer.ident(), 4_034);
+        assert!(subsumer.query_prop(CP_SUBSUMES_WATCH));
+    }
+
+    #[test]
+    fn proof_state_check_watchlist_with_output_reports_output_level_one_reduction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (mut subsumer, watched) = watchlist_subsumption_pair(
+            state.terms_mut(),
+            "pc_watch_output_level_one",
+            4_036,
+            4_037,
+        );
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        let mut output = Vec::new();
+
+        let outcome = proof_state_check_watchlist_with_output(
+            &mut output,
+            1,
+            &mut state,
+            &mut subsumer,
+            false,
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            ProofStateWatchlistOutcome {
+                subsumes_watch: true,
+                removed: 1,
+            }
+        );
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Watchlist reduced by 1 clause\n"
+        );
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        assert_eq!(subsumer.ident(), 4_036);
         assert!(subsumer.query_prop(CP_SUBSUMES_WATCH));
     }
 
@@ -10276,6 +10492,37 @@ mod tests {
         assert!(queued.evaluations().is_some());
         assert_eq!(state.statistics().generated_count, 1);
         assert_eq!(state.statistics().non_trivial_generated_count, 1);
+    }
+
+    #[test]
+    fn proof_state_insert_new_clauses_with_output_reports_dynamic_watchlist_reduction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        state.statistics_mut().proc_non_trivial_count = 93;
+        let (generated, watched) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_insert_watch_output", 4_077, 4_078);
+        state.tmp_store_mut().insert(generated);
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
+        init_fifo_hcb(&mut control, &state, "InsertNewWatchOutput");
+        control.heuristic_parms_mut().watchlist_is_static = false;
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        let mut output = Vec::new();
+
+        let empty =
+            proof_state_insert_new_clauses_with_output(&mut output, 1, &mut state, &mut control)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(empty.is_none());
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Watchlist reduced by 1 clause\n"
+        );
+        assert_eq!(state.watchlist().unwrap().members(), 0);
+        assert_eq!(state.archive().members(), 1);
+        assert_eq!(state.unprocessed().members(), 1);
+        let queued = state.unprocessed().find_by_id(4_077).unwrap();
+        assert!(queued.query_prop(CP_SUBSUMES_WATCH));
     }
 
     #[test]
@@ -13081,7 +13328,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_saturate_with_ac_output_reports_dynamic_activation() {
+    fn proof_state_saturate_with_output_reports_dynamic_ac_activation() {
         let _guard = global_state_lock();
         let _time_limits =
             configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
@@ -13094,7 +13341,7 @@ mod tests {
         queue_unprocessed_for_process(&mut state, &mut control, clause);
         let mut output = Vec::new();
 
-        let outcome = proof_state_saturate_with_ac_output(
+        let outcome = proof_state_saturate_with_output(
             &mut output,
             1,
             &mut state,
@@ -13122,6 +13369,50 @@ mod tests {
             String::from_utf8(output).unwrap(),
             "% pc_saturate_dynamic_ac_f is commutative\n% AC handling enabled dynamically\n"
         );
+    }
+
+    #[test]
+    fn proof_state_saturate_with_output_reports_dynamic_watchlist_reduction() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (selected, watched) =
+            watchlist_subsumption_pair(state.terms_mut(), "pc_saturate_watch_output", 4_157, 4_158);
+        state.watchlist_mut().unwrap().insert(watched);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.heuristic_parms_mut().ac_handling = AcHandling::None;
+        control.heuristic_parms_mut().selection_strategy = NO_GENERATION.to_owned();
+        control.heuristic_parms_mut().watchlist_is_static = false;
+        proof_state_init_indexing(&mut state, &mut control).unwrap_or_else(|err| panic!("{err}"));
+        queue_unprocessed_for_process(&mut state, &mut control, selected);
+        let mut output = Vec::new();
+
+        let outcome = proof_state_saturate_with_output(
+            &mut output,
+            1,
+            &mut state,
+            &mut control,
+            1,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::Saturated,
+                processed_steps: 1,
+            }
+        );
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Watchlist reduced by 1 clause\n"
+        );
+        assert_eq!(state.watchlist().unwrap().members(), 0);
     }
 
     #[test]
