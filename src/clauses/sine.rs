@@ -7,7 +7,8 @@ use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::{FormulaProperties, CP_IS_LAMBDA_DEF};
 use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
 use crate::clauses::f_generality::{
-    clause_compute_d_rel, formula_compute_d_rel, GenDistrib, GeneralityMeasure,
+    clause_compute_d_rel, formula_add_symbol_dist_exist, formula_compute_d_rel, GenDistrib,
+    GeneralityMeasure,
 };
 use crate::clauses::formulasets::{formula_set_stack_cardinality, FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
@@ -103,6 +104,12 @@ impl<'a> DRel<'a> {
 #[derive(Debug)]
 pub struct DRelation<'a> {
     relation: Vec<Option<DRel<'a>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AxiomRef<'a> {
+    Clause(&'a Clause),
+    Formula(&'a WrappedFormula),
 }
 
 impl Default for DRelation<'_> {
@@ -336,7 +343,14 @@ pub struct ClauseSineParams {
     pub max_recursion_depth: i64,
     pub max_set_size: i64,
     pub max_set_fraction: f64,
+    pub formula_options: FormulaSineOptions,
     pub add_no_symbol_axioms: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSineOptions {
+    pub trim_implications: bool,
+    pub defined_symbols_in_drel: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -359,6 +373,17 @@ impl FormulaDRelationParams {
             force_definition: false,
         }
     }
+
+    #[must_use]
+    pub const fn from_sine_params(params: ClauseSineParams) -> Self {
+        Self {
+            gen_measure: params.gen_measure,
+            benevolence: params.benevolence,
+            generosity: params.generosity,
+            trim_implications: params.formula_options.trim_implications,
+            force_definition: params.formula_options.defined_symbols_in_drel,
+        }
+    }
 }
 
 impl ClauseSineParams {
@@ -372,9 +397,28 @@ impl ClauseSineParams {
             max_recursion_depth: i32::MAX as i64,
             max_set_size: i64::MAX,
             max_set_fraction: 1.0,
+            formula_options: FormulaSineOptions {
+                trim_implications: false,
+                defined_symbols_in_drel: false,
+            },
             add_no_symbol_axioms: false,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DefiningSineParams {
+    pub internal_symbols: FunCode,
+    pub signature_size: usize,
+    pub max_recursion_depth: i64,
+    pub max_set_size: i64,
+    pub trim_implications: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SineSetStacks<'a, 'sets> {
+    pub clauses: &'sets PStack<&'a ClauseSet>,
+    pub formulas: &'sets PStack<&'a FormulaSet>,
 }
 
 pub fn pstack_clause_del_prop(stack: &mut PStack<&mut Clause>, prop: FormulaProperties) {
@@ -458,6 +502,22 @@ pub fn pqueue_store_formula<'a>(
     axioms.store_pointer(formula);
 }
 
+pub fn pqueue_store_axiom_clause<'a>(
+    axioms: &mut PQueue<IntOrP<AxiomRef<'a>>>,
+    clause: &'a Clause,
+) {
+    axioms.store_int(AxiomType::Clause.queue_tag());
+    axioms.store_pointer(AxiomRef::Clause(clause));
+}
+
+pub fn pqueue_store_axiom_formula<'a>(
+    axioms: &mut PQueue<IntOrP<AxiomRef<'a>>>,
+    formula: &'a WrappedFormula,
+) {
+    axioms.store_int(AxiomType::Formula.queue_tag());
+    axioms.store_pointer(AxiomRef::Formula(formula));
+}
+
 pub fn clause_set_find_ax_selection_seeds<'a>(
     set: &'a ClauseSet,
     res: &mut PQueue<IntOrP<&'a Clause>>,
@@ -473,6 +533,21 @@ pub fn clause_set_find_ax_selection_seeds<'a>(
     found
 }
 
+pub fn clause_set_find_mixed_ax_selection_seeds<'a>(
+    set: &'a ClauseSet,
+    res: &mut PQueue<IntOrP<AxiomRef<'a>>>,
+    inc_hypos: bool,
+) -> i64 {
+    let mut found = 0;
+    for clause in set.iter() {
+        if clause.is_conjecture() || (inc_hypos && clause.is_hypothesis()) {
+            pqueue_store_axiom_clause(res, clause);
+            found += 1;
+        }
+    }
+    found
+}
+
 pub fn formula_set_find_ax_selection_seeds<'a>(
     set: &'a FormulaSet,
     res: &mut PQueue<IntOrP<&'a WrappedFormula>>,
@@ -482,6 +557,21 @@ pub fn formula_set_find_ax_selection_seeds<'a>(
     for formula in set.iter() {
         if formula.is_conjecture() || (inc_hypos && formula.is_hypothesis()) {
             pqueue_store_formula(res, formula);
+            found += 1;
+        }
+    }
+    found
+}
+
+pub fn formula_set_find_mixed_ax_selection_seeds<'a>(
+    set: &'a FormulaSet,
+    res: &mut PQueue<IntOrP<AxiomRef<'a>>>,
+    inc_hypos: bool,
+) -> i64 {
+    let mut found = 0;
+    for formula in set.iter() {
+        if formula.is_conjecture() || (inc_hypos && formula.is_hypothesis()) {
+            pqueue_store_axiom_formula(res, formula);
             found += 1;
         }
     }
@@ -617,6 +707,95 @@ pub fn select_defining_axioms_clause_sets<'a>(
     selected_count
 }
 
+/// Staged mixed clause/formula equivalent of C `SelectDefiningAxioms`.
+///
+/// Returns the number of newly selected objects pushed by this
+/// defining-axiom traversal. The queue must contain C-shaped adjacent
+/// type/payload entries produced by [`pqueue_store_axiom_clause`] and
+/// [`pqueue_store_axiom_formula`].
+///
+/// # Panics
+///
+/// Panics if the queue is malformed, if a tag is followed by the wrong payload
+/// kind, or if a selected object contains a function code outside
+/// `signature_size`.
+pub fn select_defining_axioms_clause_formula_sets<'a>(
+    drel: &mut DRelation<'a>,
+    params: DefiningSineParams,
+    axioms: &mut PQueue<IntOrP<AxiomRef<'a>>>,
+    res_clauses: &mut PStack<&'a Clause>,
+    res_formulas: &mut PStack<&'a WrappedFormula>,
+) -> i64 {
+    let mut dist_array = vec![0; params.signature_size];
+    let mut selected_clauses = BTreeSet::new();
+    let mut selected_formulas = BTreeSet::new();
+    let mut symbol_stack = Vec::new();
+    let mut selected_count = 0;
+    let mut recursion_level = 0;
+    axioms.store_int(AxiomType::NoType.queue_tag());
+
+    while !axioms.is_empty() {
+        if selected_count > params.max_set_size || recursion_level > params.max_recursion_depth {
+            break;
+        }
+        let type_ = axioms
+            .get_next_int()
+            .and_then(AxiomType::from_queue_tag)
+            .expect("SInE axiom queue must contain an axiom type tag");
+        match type_ {
+            AxiomType::NoType => {
+                recursion_level += 1;
+                if !axioms.is_empty() {
+                    axioms.store_int(AxiomType::NoType.queue_tag());
+                }
+            }
+            AxiomType::Clause => {
+                let Some(AxiomRef::Clause(clause)) = axioms.get_next_pointer() else {
+                    panic!("SInE clause queue tag must be followed by a clause");
+                };
+                if !selected_clauses.insert(std::ptr::from_ref(clause)) {
+                    continue;
+                }
+                res_clauses.push(clause);
+                clause.add_symbol_dist_exist(&mut dist_array, &mut symbol_stack);
+                selected_count += 1;
+                enqueue_new_symbol_relations_mixed(
+                    drel,
+                    params.internal_symbols,
+                    &mut dist_array,
+                    &mut symbol_stack,
+                    axioms,
+                );
+            }
+            AxiomType::Formula => {
+                let Some(AxiomRef::Formula(formula)) = axioms.get_next_pointer() else {
+                    panic!("SInE formula queue tag must be followed by a formula");
+                };
+                if !selected_formulas.insert(std::ptr::from_ref(formula)) {
+                    continue;
+                }
+                res_formulas.push(formula);
+                formula_add_symbol_dist_exist(
+                    formula,
+                    params.trim_implications,
+                    &mut dist_array,
+                    &mut symbol_stack,
+                );
+                selected_count += 1;
+                enqueue_new_symbol_relations_mixed(
+                    drel,
+                    params.internal_symbols,
+                    &mut dist_array,
+                    &mut symbol_stack,
+                    axioms,
+                );
+            }
+        }
+    }
+
+    selected_count
+}
+
 /// Clause-only equivalent of C `SelectAxioms`.
 ///
 /// `generality` must already contain the symbol distribution for `clause_sets`,
@@ -673,6 +852,98 @@ pub fn select_axioms_clause_sets<'a>(
             max_result_size,
             &mut selq,
             res_clauses,
+        )
+}
+
+/// Staged mixed clause/formula equivalent of C `SelectAxioms`.
+///
+/// `generality` must already contain the symbol distribution for the provided
+/// clause and formula sets, matching the C
+/// `StructFOFSpecInitDistrib`/`StructFOFSpecAddProblem` setup.
+///
+/// # Panics
+///
+/// Panics under the same mixed queue and function-code preconditions as
+/// [`select_defining_axioms_clause_formula_sets`], or when the clause/formula
+/// set stacks have different lengths.
+pub fn select_axioms_clause_formula_sets<'a>(
+    generality: &mut GenDistrib,
+    signature: &Signature,
+    sets: SineSetStacks<'a, '_>,
+    seed_start: usize,
+    params: ClauseSineParams,
+    res_clauses: &mut PStack<&'a Clause>,
+    res_formulas: &mut PStack<&'a WrappedFormula>,
+) -> i64 {
+    assert_eq!(
+        sets.clauses.len(),
+        sets.formulas.len(),
+        "SInE clause/formula set stacks must have matching lengths"
+    );
+
+    let mut drel = DRelation::new();
+    let mut selq = PQueue::new();
+
+    drel.add_clause_sets(
+        generality,
+        params.gen_measure,
+        params.benevolence,
+        params.generosity,
+        sets.clauses,
+    );
+    drel.add_formula_sets(
+        generality,
+        FormulaDRelationParams::from_sine_params(params),
+        signature,
+        sets.formulas,
+    );
+    let mut seeds = 0;
+    for index in seed_start..sets.clauses.len() {
+        seeds += clause_set_find_mixed_ax_selection_seeds(
+            sets.clauses.as_slice()[index],
+            &mut selq,
+            params.use_hypotheses,
+        );
+        seeds += formula_set_find_mixed_ax_selection_seeds(
+            sets.formulas.as_slice()[index],
+            &mut selq,
+            params.use_hypotheses,
+        );
+    }
+    if seeds == 0 {
+        return 0;
+    }
+
+    let ax_cardinality = clause_set_ref_stack_cardinality(sets.clauses)
+        + formula_set_stack_cardinality(sets.formulas.as_slice());
+    let max_result_size =
+        max_sine_result_size(ax_cardinality, params.max_set_size, params.max_set_fraction);
+    let mut selected_count = 0;
+    if params.add_no_symbol_axioms {
+        if let Some(no_symbol_axioms) = drel.entry(0) {
+            for clause in no_symbol_axioms.d_clauses().as_slice() {
+                res_clauses.push(*clause);
+            }
+            for formula in no_symbol_axioms.d_formulas().as_slice() {
+                res_formulas.push(*formula);
+            }
+        }
+        selected_count = usize_to_i64(res_clauses.len().saturating_add(res_formulas.len()));
+    }
+
+    selected_count
+        + select_defining_axioms_clause_formula_sets(
+            &mut drel,
+            DefiningSineParams {
+                internal_symbols: generality.internal_symbols(),
+                signature_size: generality.size(),
+                max_recursion_depth: params.max_recursion_depth,
+                max_set_size: max_result_size,
+                trim_implications: params.formula_options.trim_implications,
+            },
+            &mut selq,
+            res_clauses,
+            res_formulas,
         )
 }
 
@@ -803,6 +1074,32 @@ fn enqueue_new_symbol_relations<'a>(
     symbol_stack.clear();
 }
 
+fn enqueue_new_symbol_relations_mixed<'a>(
+    drel: &mut DRelation<'a>,
+    internal_symbols: FunCode,
+    dist_array: &mut [i64],
+    symbol_stack: &mut Vec<FunCode>,
+    axioms: &mut PQueue<IntOrP<AxiomRef<'a>>>,
+) {
+    for &f_code in symbol_stack.iter() {
+        if f_code > internal_symbols {
+            if let Some(frel) = drel.entry_mut(f_code) {
+                if !frel.is_activated() {
+                    frel.set_activated(true);
+                    for clause in frel.d_clauses().as_slice() {
+                        pqueue_store_axiom_clause(axioms, clause);
+                    }
+                    for formula in frel.d_formulas().as_slice() {
+                        pqueue_store_axiom_formula(axioms, formula);
+                    }
+                }
+            }
+        }
+        dist_array[f_code_index(f_code)] = 0;
+    }
+    symbol_stack.clear();
+}
+
 #[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -827,10 +1124,10 @@ mod tests {
         clause_set_find_ax_selection_seeds, formula_set_find_ax_selection_seeds,
         pqueue_store_clause, pqueue_store_formula, pstack_clause_del_prop,
         pstack_clause_print_tstp_string, pstack_clauses_move, pstack_formula_del_prop,
-        pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_sets,
-        select_definitions_formula_sets, select_threshold_clause_formula_sets,
-        select_threshold_clause_sets, AxiomType, ClauseSineParams, DRel, DRelation,
-        FormulaDRelationParams,
+        pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_formula_sets,
+        select_axioms_clause_sets, select_definitions_formula_sets,
+        select_threshold_clause_formula_sets, select_threshold_clause_sets, AxiomType,
+        ClauseSineParams, DRel, DRelation, FormulaDRelationParams, SineSetStacks,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -1824,6 +2121,140 @@ mod tests {
                 .map(|clause| clause.ident())
                 .collect::<Vec<_>>(),
             vec![10, 10]
+        );
+    }
+
+    #[test]
+    fn select_axioms_clause_formula_sets_walks_mixed_drelation_layers() {
+        let mut bank = test_bank();
+        let goal_symbol = typed_const(&mut bank, "mixed_gsine_goal");
+        let bridge_symbol = typed_const(&mut bank, "mixed_gsine_bridge");
+        let unrelated_symbol = typed_const(&mut bank, "mixed_gsine_unrelated");
+        let mut bridge_clause =
+            clause_from(vec![literal(&mut bank, &goal_symbol, &bridge_symbol, true)]);
+        bridge_clause.set_ident(20);
+        bridge_clause.set_tptp_type(CP_TYPE_AXIOM);
+        let mut unrelated_clause = clause_from(vec![literal(
+            &mut bank,
+            &unrelated_symbol,
+            &unrelated_symbol,
+            true,
+        )]);
+        unrelated_clause.set_ident(40);
+        unrelated_clause.set_tptp_type(CP_TYPE_AXIOM);
+        let clauses = ClauseSet::from_clauses([bridge_clause, unrelated_clause]);
+        let mut goal_formula = WrappedFormula::wt_formula_alloc(goal_symbol.clone());
+        goal_formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let goal_formula_id = goal_formula.entry_id();
+        let mut far_formula = WrappedFormula::wt_formula_alloc(typed_unary(
+            &mut bank,
+            "mixed_gsine_far",
+            &bridge_symbol,
+        ));
+        far_formula.set_tptp_type(CP_TYPE_AXIOM);
+        let far_formula_id = far_formula.entry_id();
+        let mut formulas = FormulaSet::new();
+        formulas.insert(goal_formula);
+        formulas.insert(far_formula);
+        let mut clause_sets = PStack::new();
+        clause_sets.push(&clauses);
+        let mut formula_sets = PStack::new();
+        formula_sets.push(&formulas);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&clause_sets);
+        generality.add_formula_sets(&formula_sets, false);
+        let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
+        params.benevolence = 10.0;
+        params.max_recursion_depth = 3;
+        let mut selected_clauses = PStack::new();
+        let mut selected_formulas = PStack::new();
+
+        let selected_count = select_axioms_clause_formula_sets(
+            &mut generality,
+            bank.signature(),
+            SineSetStacks {
+                clauses: &clause_sets,
+                formulas: &formula_sets,
+            },
+            0,
+            params,
+            &mut selected_clauses,
+            &mut selected_formulas,
+        );
+
+        assert_eq!(selected_count, 3);
+        assert_eq!(
+            selected_clauses
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![20]
+        );
+        assert_eq!(
+            selected_formulas
+                .as_slice()
+                .iter()
+                .map(|formula| formula.entry_id())
+                .collect::<Vec<_>>(),
+            vec![goal_formula_id, far_formula_id]
+        );
+    }
+
+    #[test]
+    fn select_axioms_clause_formula_sets_preserves_mixed_no_symbol_duplicate_quirk() {
+        let mut bank = test_bank();
+        let mut goal_clause = Clause::empty();
+        goal_clause.set_ident(10);
+        goal_clause.set_tptp_type(CP_TYPE_CONJECTURE);
+        let clauses = ClauseSet::from_clauses([goal_clause]);
+        let true_term = bank.create_const_term(SIG_TRUE_CODE).unwrap();
+        let mut goal_formula = WrappedFormula::wt_formula_alloc(true_term);
+        goal_formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let goal_formula_id = goal_formula.entry_id();
+        let mut formulas = FormulaSet::new();
+        formulas.insert(goal_formula);
+        let mut clause_sets = PStack::new();
+        clause_sets.push(&clauses);
+        let mut formula_sets = PStack::new();
+        formula_sets.push(&formulas);
+        let mut generality = GenDistrib::new(bank.signature());
+        generality.add_clause_sets(&clause_sets);
+        generality.add_formula_sets(&formula_sets, false);
+        let mut params = ClauseSineParams::g_sine(GeneralityMeasure::Terms);
+        params.add_no_symbol_axioms = true;
+        let mut selected_clauses = PStack::new();
+        let mut selected_formulas = PStack::new();
+
+        let selected_count = select_axioms_clause_formula_sets(
+            &mut generality,
+            bank.signature(),
+            SineSetStacks {
+                clauses: &clause_sets,
+                formulas: &formula_sets,
+            },
+            0,
+            params,
+            &mut selected_clauses,
+            &mut selected_formulas,
+        );
+
+        assert_eq!(selected_count, 4);
+        assert_eq!(
+            selected_clauses
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![10, 10]
+        );
+        assert_eq!(
+            selected_formulas
+                .as_slice()
+                .iter()
+                .map(|formula| formula.entry_id())
+                .collect::<Vec<_>>(),
+            vec![goal_formula_id, goal_formula_id]
         );
     }
 }

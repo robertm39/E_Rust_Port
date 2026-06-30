@@ -149,8 +149,9 @@ impl GenDistrib {
 
     pub fn add_formula(&mut self, formula: &WrappedFormula, trim_implications: bool, factor: i16) {
         let mut symbol_stack = Vec::new();
-        term_add_symbol_dist_exist(
-            formula_d_rel_term(formula, trim_implications),
+        formula_add_symbol_dist_exist(
+            formula,
+            trim_implications,
             &mut self.f_distrib,
             &mut symbol_stack,
         );
@@ -315,13 +316,27 @@ pub fn formula_compute_d_rel(
     trim_implications: bool,
 ) {
     let mut symbol_stack = Vec::new();
-    term_add_symbol_dist_exist(
-        formula_d_rel_term(formula, trim_implications),
+    formula_add_symbol_dist_exist(
+        formula,
+        trim_implications,
         &mut generality.f_distrib,
         &mut symbol_stack,
     );
     generality.compute_d_rel(gentype, benevolence, generosity, &symbol_stack, res);
     generality.clear_scratch_symbols(symbol_stack);
+}
+
+pub fn formula_add_symbol_dist_exist(
+    formula: &WrappedFormula,
+    trim_implications: bool,
+    dist_array: &mut [i64],
+    exists: &mut Vec<FunCode>,
+) {
+    term_add_symbol_dist_exist(
+        formula_d_rel_term(formula, trim_implications),
+        dist_array,
+        exists,
+    );
 }
 
 #[must_use]

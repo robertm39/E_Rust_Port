@@ -6151,6 +6151,10 @@ fn apply_gsine_clause_filter(
             max_recursion_depth: filter.max_recursion_depth,
             max_set_size: filter.max_set_size,
             max_set_fraction: filter.max_set_fraction,
+            formula_options: crate::clauses::sine::FormulaSineOptions {
+                trim_implications: filter.trim_implications,
+                defined_symbols_in_drel: filter.defined_symbols_in_drel,
+            },
             add_no_symbol_axioms: filter.add_no_symbol_axioms,
         };
         select_axioms_clause_sets(
