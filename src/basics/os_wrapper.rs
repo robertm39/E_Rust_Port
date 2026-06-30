@@ -99,7 +99,17 @@ pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
     combine_rlimit_results(data_result, as_result)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+#[must_use]
+pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
+    if mem_limit == 0 {
+        RLimResult::Success
+    } else {
+        windows_kernel32::set_process_memory_limit(mem_limit)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 #[must_use]
 pub const fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
@@ -462,12 +472,19 @@ fn windows_peak_working_set_pages() -> Option<u64> {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows_kernel32 {
+    use super::RLimResult;
     use std::ffi::c_void;
     use std::mem::{size_of, MaybeUninit};
+    use std::num::NonZeroUsize;
+    use std::ptr;
+    use std::sync::OnceLock;
 
     type Bool = i32;
     type Dword = u32;
     type Handle = *mut c_void;
+
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
+    pub(super) const JOB_OBJECT_LIMIT_PROCESS_MEMORY: Dword = 0x0000_0100;
 
     #[repr(C)]
     struct FileTime {
@@ -517,8 +534,48 @@ mod windows_kernel32 {
         peak_pagefile_usage: usize,
     }
 
+    #[repr(C)]
+    pub(super) struct JobObjectBasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        pub(super) limit_flags: Dword,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: Dword,
+        affinity: usize,
+        priority_class: Dword,
+        scheduling_class: Dword,
+    }
+
+    #[expect(
+        clippy::struct_field_names,
+        reason = "Win32 IO_COUNTERS layout uses count-suffixed fields"
+    )]
+    #[repr(C)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    pub(super) struct JobObjectExtendedLimitInformation {
+        pub(super) basic_limit_information: JobObjectBasicLimitInformation,
+        io_info: IoCounters,
+        pub(super) process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
     #[link(name = "kernel32")]
     extern "system" {
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> Bool;
+        fn CloseHandle(object: Handle) -> Bool;
+        fn CreateJobObjectW(job_attributes: *mut c_void, name: *const u16) -> Handle;
         fn GetCurrentProcess() -> Handle;
         fn GetProcessTimes(
             process: Handle,
@@ -534,6 +591,42 @@ mod windows_kernel32 {
             counters: *mut ProcessMemoryCounters,
             size: Dword,
         ) -> Bool;
+        fn SetInformationJobObject(
+            job: Handle,
+            info_class: i32,
+            job_object_info: *mut c_void,
+            job_object_info_length: Dword,
+        ) -> Bool;
+    }
+
+    pub(super) fn set_process_memory_limit(limit: u64) -> RLimResult {
+        let Ok(limit) = usize::try_from(limit) else {
+            return RLimResult::Failed;
+        };
+        let Some(job) = process_limit_job() else {
+            return RLimResult::Failed;
+        };
+        let Ok(info_size) = Dword::try_from(size_of::<JobObjectExtendedLimitInformation>()) else {
+            return RLimResult::Failed;
+        };
+        let mut info = job_object_extended_limit_information(limit);
+
+        // SAFETY: job is a live job-object handle retained for the process
+        // lifetime, info points to an initialized JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        // buffer, and info_size matches that buffer's layout.
+        let ok = unsafe {
+            SetInformationJobObject(
+                job,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                (&raw mut info).cast::<c_void>(),
+                info_size,
+            )
+        };
+        if ok == 0 {
+            RLimResult::Failed
+        } else {
+            RLimResult::Success
+        }
     }
 
     pub(super) fn process_times_100ns() -> Option<(u64, u64)> {
@@ -630,6 +723,65 @@ mod windows_kernel32 {
 
         let peak = u64::try_from(counters.peak_working_set_size).ok()?;
         Some(peak.div_ceil(page_size))
+    }
+
+    fn process_limit_job() -> Option<Handle> {
+        static PROCESS_LIMIT_JOB: OnceLock<Option<NonZeroUsize>> = OnceLock::new();
+
+        PROCESS_LIMIT_JOB
+            .get_or_init(create_assigned_job)
+            .map(|job| job.get() as Handle)
+    }
+
+    fn create_assigned_job() -> Option<NonZeroUsize> {
+        // SAFETY: null security attributes and null name request an unnamed
+        // job object from Kernel32; the returned handle is checked for null.
+        let job = unsafe { CreateJobObjectW(ptr::null_mut(), ptr::null()) };
+        if job.is_null() {
+            return None;
+        }
+
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle, and job is
+        // the non-null job handle returned by CreateJobObjectW.
+        let assigned = unsafe { AssignProcessToJobObject(job, GetCurrentProcess()) };
+        if assigned == 0 {
+            // SAFETY: job is an owned handle returned by CreateJobObjectW and
+            // has not been stored for process-lifetime use.
+            let _ = unsafe { CloseHandle(job) };
+            return None;
+        }
+
+        NonZeroUsize::new(job as usize)
+    }
+
+    pub(super) const fn job_object_extended_limit_information(
+        process_memory_limit: usize,
+    ) -> JobObjectExtendedLimitInformation {
+        JobObjectExtendedLimitInformation {
+            basic_limit_information: JobObjectBasicLimitInformation {
+                per_process_user_time_limit: 0,
+                per_job_user_time_limit: 0,
+                limit_flags: JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+                minimum_working_set_size: 0,
+                maximum_working_set_size: 0,
+                active_process_limit: 0,
+                affinity: 0,
+                priority_class: 0,
+                scheduling_class: 0,
+            },
+            io_info: IoCounters {
+                read_operation_count: 0,
+                write_operation_count: 0,
+                other_operation_count: 0,
+                read_transfer_count: 0,
+                write_transfer_count: 0,
+                other_transfer_count: 0,
+            },
+            process_memory_limit,
+            job_memory_limit: 0,
+            peak_process_memory_used: 0,
+            peak_job_memory_used: 0,
+        }
     }
 
     fn file_time_to_u64(time: &FileTime) -> u64 {
@@ -901,7 +1053,7 @@ mod tests {
         assert_eq!(RLimResult::Success.c_value(), 2);
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     #[test]
     fn unsupported_resource_limits_are_explicit() {
         use super::{get_hard_rlimit, get_soft_rlimit, set_rlimit, set_soft_rlimit};
@@ -912,6 +1064,25 @@ mod tests {
         assert_eq!(get_hard_rlimit(0), 0);
         assert_eq!(set_memory_limit(0), RLimResult::Success);
         assert_eq!(set_memory_limit(1), RLimResult::Failed);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_zero_memory_limit_is_noop() {
+        assert_eq!(set_memory_limit(0), RLimResult::Success);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_job_memory_limit_info_sets_process_limit() {
+        let info = super::windows_kernel32::job_object_extended_limit_information(4096);
+
+        assert_eq!(
+            info.basic_limit_information.limit_flags
+                & super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+            super::windows_kernel32::JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        );
+        assert_eq!(info.process_memory_limit, 4096);
     }
 
     #[cfg(target_os = "linux")]
