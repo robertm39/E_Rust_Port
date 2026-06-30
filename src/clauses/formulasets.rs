@@ -2,10 +2,11 @@ use crate::basics::pstacks::PStack;
 use crate::clauses::clause_props::{
     FormulaProperties, CP_IGNORE_PROPS, CP_IS_LAMBDA_DEF, CP_TYPE_CONJECTURE, CP_TYPE_QUESTION,
 };
-use crate::clauses::clausefunc::tformula_mark_polarity;
+use crate::clauses::clausefunc::{tformula_is_literal, tformula_mark_polarity};
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::termbanks::tb_term_collect_subterms;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
@@ -269,6 +270,62 @@ impl WrappedFormula {
 
         (left.f_code() > signature.internal_symbols()).then_some(left.f_code())
     }
+
+    /// Counts lambda cells that occur below a non-logical/non-lambda formula node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if a malformed lambda or
+    /// phony-application cell has uninitialized arguments.
+    #[must_use]
+    pub fn count_non_top_level_lambdas(&self, signature: &Signature) -> i32 {
+        tformula_count_non_top_level_lambdas(signature, self.formula())
+    }
+
+    /// Returns whether any literal side is an applied free variable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term.
+    #[must_use]
+    pub fn has_app_var_literal(&self, bank: &TermBank) -> bool {
+        tformula_has_app_var_literal(bank, self.formula())
+    }
+
+    fn lambda_definition_head_for_statistics(&self, bank: &TermBank) -> Option<Term> {
+        if !self.query_prop(CP_IS_LAMBDA_DEF) {
+            return None;
+        }
+
+        let signature = bank.signature();
+        let mut formula = self.formula().clone();
+        while formula.f_code() == signature.qall_code() && formula.arity() == 2 {
+            formula = formula.argument(1)?;
+        }
+
+        if formula.f_code() == signature.eqn_code() {
+            return formula.argument(0);
+        }
+        if formula.f_code() != signature.equiv_code() {
+            return None;
+        }
+
+        let equivalence_left = formula.argument(0)?;
+        if equivalence_left.f_code() != signature.eqn_code()
+            || equivalence_left.argument(1).as_ref() != Some(bank.true_term())
+        {
+            return None;
+        }
+        equivalence_left.argument(0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FormulaDefinitionStatistics {
+    pub num_defs: i32,
+    pub percentage_form_defs: f64,
+    pub num_lams: i32,
+    pub has_app_var_lits: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -448,6 +505,44 @@ pub fn formula_stack_cond_set_type(stack: &mut [WrappedFormula], type_: FormulaP
     }
 }
 
+#[must_use]
+pub fn formula_set_definition_statistics(
+    orig: &FormulaSet,
+    arch: &FormulaSet,
+    bank: &TermBank,
+) -> FormulaDefinitionStatistics {
+    let mut num_defs = 0_i32;
+    let mut form_defs = 0_i32;
+    let mut num_lams = 0_i32;
+    let mut has_app_var_lits = false;
+
+    for set in [orig, arch] {
+        for formula in set.iter() {
+            has_app_var_lits |= formula.has_app_var_literal(bank);
+            num_lams =
+                num_lams.saturating_add(formula.count_non_top_level_lambdas(bank.signature()));
+
+            if let Some(head) = formula.lambda_definition_head_for_statistics(bank) {
+                num_defs = num_defs.saturating_add(1);
+                if head.type_().as_ref().is_some_and(type_is_predicate) {
+                    form_defs = form_defs.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    FormulaDefinitionStatistics {
+        num_defs,
+        percentage_form_defs: if num_defs == 0 {
+            0.0
+        } else {
+            f64::from(form_defs) / f64::from(num_defs)
+        },
+        num_lams,
+        has_app_var_lits,
+    }
+}
+
 fn next_entry_id() -> u64 {
     WRAPPED_FORMULA_ENTRY_ID.fetch_add(1, Ordering::Relaxed)
 }
@@ -471,10 +566,64 @@ fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+fn tformula_count_non_top_level_lambdas(signature: &Signature, formula: &Term) -> i32 {
+    let mut stack = vec![(formula.clone(), true)];
+    let mut result = 0_i32;
+
+    while let Some((formula, mut is_at_top)) = stack.pop() {
+        if !formula.has_lambda_subterm() {
+            continue;
+        }
+
+        if is_at_top {
+            is_at_top = !formula.is_free_var()
+                && ((formula.f_code() > 0 && signature.is_logical_symbol(formula.f_code()))
+                    || formula.is_lambda());
+        } else if formula.is_lambda() {
+            result = result.saturating_add(1);
+        }
+
+        let start = usize::from(formula.is_phony_app() || formula.is_lambda());
+        for index in start..formula.arity() {
+            let child = formula
+                .argument(index)
+                .unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+            if child.has_lambda_subterm() {
+                stack.push((child, is_at_top));
+            }
+        }
+    }
+
+    result
+}
+
+fn tformula_has_app_var_literal(bank: &TermBank, formula: &Term) -> bool {
+    let mut stack = vec![formula.clone()];
+
+    while let Some(formula) = stack.pop() {
+        if tformula_is_literal(bank, &formula) {
+            let left_has_app_var = formula
+                .argument(0)
+                .is_some_and(|term| term.is_applied_free_var());
+            let right_has_app_var = formula
+                .argument(1)
+                .is_some_and(|term| term.is_applied_free_var());
+            if left_has_app_var || right_has_app_var {
+                return true;
+            }
+        } else if formula.f_code() > 0 && bank.signature().is_logical_symbol(formula.f_code()) {
+            stack.extend(formula.argument_clones().into_iter().flatten());
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        formula_set_stack_cardinality, formula_stack_cond_set_type, FormulaSet, WrappedFormula,
+        formula_set_definition_statistics, formula_set_stack_cardinality,
+        formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaSet, WrappedFormula,
     };
     use crate::clauses::clause_props::{
         CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
@@ -482,7 +631,8 @@ mod tests {
     };
     use crate::clauses::clausefunc::tformula_decode_polarity;
     use crate::clauses::clauseinfo::ClauseInfo;
-    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
+    use crate::terms::lambda::close_with_db_var;
+    use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
@@ -511,18 +661,38 @@ mod tests {
 
     fn typed_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        typed_unary_with_types(bank, name, arg, &type_, &type_)
+    }
+
+    fn typed_unary_with_types(
+        bank: &mut TermBank,
+        name: &str,
+        arg: &Term,
+        arg_type: &crate::terms::simpletypes::Type,
+        ret_type: &crate::terms::simpletypes::Type,
+    ) -> Term {
         let arrow = bank
             .signature_mut()
             .type_bank_mut()
-            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_.clone()]));
+            .insert_type_shared(alloc_arrow_type(vec![arg_type.clone(), ret_type.clone()]));
         let f_code = bank.signature_mut().insert_id(name, 1, false);
         bank.signature_mut()
             .declare_final_type(f_code, arrow)
             .unwrap();
         let term = Term::top_alloc(f_code, 1);
-        term.set_type(Some(type_));
+        term.set_type(Some(ret_type.clone()));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_predicate_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_)
+            .unwrap();
+        bank.signature_mut().declare_is_predicate(f_code).unwrap();
+        bank.create_const_term(f_code).unwrap()
     }
 
     fn bool_binary_with_code(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
@@ -818,5 +988,87 @@ mod tests {
         let mut untagged = equivalence_definition.flat_copy();
         untagged.del_prop(CP_IS_LAMBDA_DEF);
         assert_eq!(untagged.get_lambda_defined_symbol(bank.signature()), None);
+    }
+
+    #[test]
+    fn formula_set_definition_statistics_matches_c_scan_shapes() {
+        let mut bank = test_bank();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equiv_code = bank.signature().equiv_code();
+        let or_code = bank.signature().or_code();
+
+        let func_head = typed_const(&mut bank, "stats_function_head");
+        let func_rhs = typed_const(&mut bank, "stats_function_rhs");
+        let function_equation = bool_binary_with_code(&mut bank, eqn_code, &func_head, &func_rhs);
+        let mut function_definition = WrappedFormula::wt_formula_alloc(function_equation);
+        function_definition.set_prop(CP_IS_LAMBDA_DEF);
+
+        let predicate_head = typed_predicate_const(&mut bank, "stats_predicate_head");
+        let true_term = bank.true_term().clone();
+        let predicate_equation =
+            bool_binary_with_code(&mut bank, eqn_code, &predicate_head, &true_term);
+        let true_formula = bank.true_term().clone();
+        let predicate_equivalence =
+            bool_binary_with_code(&mut bank, equiv_code, &predicate_equation, &true_formula);
+        let mut predicate_definition = WrappedFormula::wt_formula_alloc(predicate_equivalence);
+        predicate_definition.set_prop(CP_IS_LAMBDA_DEF);
+
+        let loose_head = typed_predicate_const(&mut bank, "stats_loose_predicate_head");
+        let loose_rhs = typed_predicate_const(&mut bank, "stats_loose_predicate_rhs");
+        let loose_equation = bool_binary_with_code(&mut bank, eqn_code, &loose_head, &loose_rhs);
+        let true_formula = bank.true_term().clone();
+        let loose_equivalence =
+            bool_binary_with_code(&mut bank, equiv_code, &loose_equation, &true_formula);
+        let mut loose_definition = WrappedFormula::wt_formula_alloc(loose_equivalence);
+        loose_definition.set_prop(CP_IS_LAMBDA_DEF);
+        assert_eq!(
+            loose_definition.get_lambda_defined_symbol(bank.signature()),
+            Some(loose_head.f_code())
+        );
+
+        let binder_type = bank.signature().type_bank().default_type();
+        let lambda_body = typed_const(&mut bank, "stats_lambda_body");
+        let lambda = close_with_db_var(&mut bank, &binder_type, &lambda_body).unwrap();
+        assert_eq!(lambda.f_code(), SIG_DB_LAMBDA_CODE);
+        let lambda_type = lambda.type_().expect("lambda is typed");
+        let container_ret_type = bank.signature().type_bank().default_type();
+        let lambda_container = typed_unary_with_types(
+            &mut bank,
+            "stats_lambda_container",
+            &lambda,
+            &lambda_type,
+            &container_ret_type,
+        );
+        let lambda_rhs = typed_const(&mut bank, "stats_lambda_rhs");
+        let lambda_literal =
+            bool_binary_with_code(&mut bank, eqn_code, &lambda_container, &lambda_rhs);
+
+        let app_head = typed_var(&bank, -101);
+        let app_arg = typed_const(&mut bank, "stats_app_arg");
+        let app_var = phony_app(&mut bank, &app_head, &app_arg);
+        let app_literal = bool_binary_with_code(&mut bank, eqn_code, &app_var, &true_term);
+        let normal_literal = bool_binary_with_code(&mut bank, eqn_code, &func_rhs, &func_rhs);
+        let app_formula = bool_binary_with_code(&mut bank, or_code, &app_literal, &normal_literal);
+
+        let mut orig = FormulaSet::new();
+        orig.insert(function_definition);
+        orig.insert(loose_definition);
+        orig.insert(WrappedFormula::wt_formula_alloc(lambda_literal));
+        let mut arch = FormulaSet::new();
+        arch.insert(predicate_definition);
+        arch.insert(WrappedFormula::wt_formula_alloc(app_formula));
+
+        let stats = formula_set_definition_statistics(&orig, &arch, &bank);
+
+        assert_eq!(stats.num_defs, 2);
+        assert!((stats.percentage_form_defs - 0.5).abs() < f64::EPSILON);
+        assert_eq!(stats.num_lams, 1);
+        assert!(stats.has_app_var_lits);
+
+        let empty = FormulaSet::new();
+        assert_eq!(
+            formula_set_definition_statistics(&empty, &empty, &bank),
+            FormulaDefinitionStatistics::default()
+        );
     }
 }
