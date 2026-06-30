@@ -1866,6 +1866,10 @@ impl FormulaSet {
         moved
     }
 
+    pub fn clear(&mut self) {
+        self.formulas.clear();
+    }
+
     pub fn extract_first(&mut self) -> Option<WrappedFormula> {
         if self.formulas.is_empty() {
             None

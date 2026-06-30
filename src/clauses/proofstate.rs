@@ -15,6 +15,7 @@ use crate::clauses::derivation::{
 use crate::clauses::fcvindexing::{
     fvi_param_init_anchors, fvi_param_init_specs, FvIndexInitTargetSets, FvIndexParams,
 };
+use crate::clauses::formulasets::FormulaSet;
 use crate::clauses::freqvectors::FvCollect;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -201,7 +202,9 @@ pub struct ProofState {
     fresh_vars: VarBank,
     original_symbols: usize,
     axioms: ClauseSet,
+    f_axioms: FormulaSet,
     ax_archive: ClauseSet,
+    f_ax_archive: FormulaSet,
     processed_pos_rules: ClauseSet,
     processed_pos_eqns: ClauseSet,
     processed_neg_units: ClauseSet,
@@ -210,6 +213,7 @@ pub struct ProofState {
     tmp_store: ClauseSet,
     eval_store: ClauseSet,
     archive: ClauseSet,
+    f_archive: FormulaSet,
     choice_opcodes: BTreeMap<FunCode, Clause>,
     extract_roots: Vec<Clause>,
     watchlist: Option<ClauseSet>,
@@ -236,9 +240,10 @@ enum WatchlistActivation {
 impl ProofState {
     /// Allocates the currently ported proof-state owner fields.
     ///
-    /// Formula sets, global indices, demodulator trees, the temporary term bank,
-    /// and SAT integration are added by later slices. The clause-set, FV-index,
-    /// distinct-symbol, and statistic initialization mirrors C `ProofStateAlloc`.
+    /// Global indices, demodulator trees, the temporary term bank, and SAT
+    /// integration are added by later slices. The clause-set, formula-set,
+    /// FV-index, distinct-symbol, and statistic initialization mirrors C
+    /// `ProofStateAlloc`.
     ///
     /// # Errors
     ///
@@ -256,7 +261,9 @@ impl ProofState {
             fresh_vars,
             original_symbols: 0,
             axioms: ClauseSet::new(),
+            f_axioms: FormulaSet::new(),
             ax_archive: ClauseSet::new(),
+            f_ax_archive: FormulaSet::new(),
             processed_pos_rules: ClauseSet::new(),
             processed_pos_eqns: ClauseSet::new(),
             processed_neg_units: ClauseSet::new(),
@@ -265,6 +272,7 @@ impl ProofState {
             tmp_store: ClauseSet::new(),
             eval_store: ClauseSet::new(),
             archive: ClauseSet::new(),
+            f_archive: FormulaSet::new(),
             choice_opcodes: BTreeMap::new(),
             extract_roots: Vec::new(),
             watchlist: Some(ClauseSet::new()),
@@ -427,12 +435,30 @@ impl ProofState {
     }
 
     #[must_use]
+    pub const fn f_axioms(&self) -> &FormulaSet {
+        &self.f_axioms
+    }
+
+    pub fn f_axioms_mut(&mut self) -> &mut FormulaSet {
+        &mut self.f_axioms
+    }
+
+    #[must_use]
     pub const fn ax_archive(&self) -> &ClauseSet {
         &self.ax_archive
     }
 
     pub fn ax_archive_mut(&mut self) -> &mut ClauseSet {
         &mut self.ax_archive
+    }
+
+    #[must_use]
+    pub const fn f_ax_archive(&self) -> &FormulaSet {
+        &self.f_ax_archive
+    }
+
+    pub fn f_ax_archive_mut(&mut self) -> &mut FormulaSet {
+        &mut self.f_ax_archive
     }
 
     #[must_use]
@@ -505,6 +531,15 @@ impl ProofState {
 
     pub fn archive_mut(&mut self) -> &mut ClauseSet {
         &mut self.archive
+    }
+
+    #[must_use]
+    pub const fn f_archive(&self) -> &FormulaSet {
+        &self.f_archive
+    }
+
+    pub fn f_archive_mut(&mut self) -> &mut FormulaSet {
+        &mut self.f_archive
     }
 
     #[must_use]
@@ -1149,13 +1184,10 @@ impl ProofState {
         self.processed_cardinality() + self.unprocessed_cardinality()
     }
 
-    /// Counts clause axioms currently represented in Rust.
-    ///
-    /// C `ProofStateAxNo` also includes formula axioms; this returns the clause
-    /// side until `FormulaSet` is part of the proof-state owner.
+    /// Counts clause and formula axioms like C `ProofStateAxNo`.
     #[must_use]
     pub fn axiom_count(&self) -> i64 {
-        self.axioms.members()
+        self.axioms.members() + self.f_axioms.cardinality()
     }
 
     #[must_use]
@@ -1167,14 +1199,16 @@ impl ProofState {
             && self.unprocessed.is_untyped()
     }
 
-    /// Clears the clause sets covered by C `ProofStateResetClauseSets`.
+    /// Clears the clause/formula sets covered by C `ProofStateResetClauseSets`.
     ///
-    /// The C helper does not clear `definition_store`, despite its comment
-    /// saying all clause and formula sets are emptied. Rust preserves that until
-    /// definition-store reset semantics are audited with callers.
+    /// The C helper does not clear `definition_store` or `f_archive`, despite
+    /// its comment saying all clause and formula sets are emptied. Rust
+    /// preserves that until reset semantics are audited with callers.
     pub fn reset_clause_sets(&mut self) {
         self.axioms.clear();
+        self.f_axioms.clear();
         self.ax_archive.clear();
+        self.f_ax_archive.clear();
         self.processed_pos_rules.clear();
         self.processed_pos_eqns.clear();
         self.processed_neg_units.clear();
@@ -1193,14 +1227,15 @@ impl ProofState {
     ///
     /// C `TBGCCollect(state->terms)` marks registered clause/formula sets
     /// through the term bank's GC admin. The current Rust proof state owns the
-    /// clause sets directly, so this marks every currently represented
-    /// proof-state clause owner before sweeping. Formula-set participation is
-    /// added when formula owners are ported.
+    /// represented sets directly, so this marks every currently represented
+    /// proof-state owner before sweeping.
     pub fn collect_term_garbage(&mut self) -> i64 {
         let Self {
             terms,
             axioms,
+            f_axioms,
             ax_archive,
+            f_ax_archive,
             processed_pos_rules,
             processed_pos_eqns,
             processed_neg_units,
@@ -1209,6 +1244,7 @@ impl ProofState {
             tmp_store,
             eval_store,
             archive,
+            f_archive,
             watchlist,
             definition_store,
             ..
@@ -1235,6 +1271,9 @@ impl ProofState {
             for clause in watchlist.iter() {
                 clause.gc_mark_terms(terms);
             }
+        }
+        for set in [f_axioms, f_ax_archive, f_archive] {
+            set.gc_mark_cells(terms);
         }
 
         terms.gc_sweep()
@@ -1329,9 +1368,8 @@ impl ProofState {
 
     /// Prints proof-state counters like C `ProofStateStatisticsPrint`.
     ///
-    /// Formula-archive ownership and term-bank detail mode are not represented
-    /// here yet, so archived formulas remain zero and optional term-detail
-    /// lines stay with the later global proof-output integration.
+    /// Term-bank detail mode is not represented here yet, so optional
+    /// term-detail lines stay with the later global proof-output integration.
     ///
     /// # Errors
     ///
@@ -1564,7 +1602,8 @@ impl ProofState {
         )?;
         writeln!(
             output,
-            "{DEFAULT_COMCHAR_RAW} Current number of archived formulas  : 0"
+            "{DEFAULT_COMCHAR_RAW} Current number of archived formulas  : {}",
+            self.f_archive.cardinality()
         )?;
         writeln!(
             output,
@@ -1759,6 +1798,7 @@ mod tests {
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexParams;
+    use crate::clauses::formulasets::WrappedFormula;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{WATCHLIST_INLINE_QSTRING, WATCHLIST_INLINE_STRING};
     use crate::heuristics::to_params::TermOrdering;
@@ -1832,6 +1872,11 @@ mod tests {
         clause_from(vec![literal(bank, &left, &right, true)], ident)
     }
 
+    fn wrapped_formula(state: &mut ProofState, name: &str) -> WrappedFormula {
+        let formula = typed_const(state.terms_mut(), name);
+        WrappedFormula::wt_formula_alloc(formula)
+    }
+
     fn temp_path(stem: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(
@@ -1868,7 +1913,9 @@ mod tests {
         assert_eq!(state.original_symbols(), 0);
         assert!(state.watchlist().is_some());
         assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 0);
         assert_eq!(state.ax_archive().members(), 0);
+        assert_eq!(state.f_ax_archive().cardinality(), 0);
         assert_eq!(state.processed_pos_rules().members(), 0);
         assert_eq!(state.processed_pos_eqns().members(), 0);
         assert_eq!(state.processed_neg_units().members(), 0);
@@ -1877,6 +1924,7 @@ mod tests {
         assert_eq!(state.tmp_store().members(), 0);
         assert_eq!(state.eval_store().members(), 0);
         assert_eq!(state.archive().members(), 0);
+        assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.definition_store().members(), 0);
         assert!(state.state_is_complete());
         assert!(!state.has_interpreted_symbols());
@@ -2192,6 +2240,7 @@ mod tests {
         let non_unit = simple_clause(&mut state, "card_nonunit", 13);
         let unprocessed = simple_clause(&mut state, "card_unproc", 14);
         let axiom = simple_clause(&mut state, "card_axiom", 15);
+        let formula_axiom = wrapped_formula(&mut state, "card_formula_axiom");
 
         state.processed_pos_rules_mut().insert(rule);
         state.processed_pos_eqns_mut().insert(equation);
@@ -2199,11 +2248,23 @@ mod tests {
         state.processed_non_units_mut().insert(non_unit);
         state.unprocessed_mut().insert(unprocessed);
         state.axioms_mut().insert(axiom);
+        state.f_axioms_mut().insert(formula_axiom);
 
         assert_eq!(state.processed_cardinality(), 4);
         assert_eq!(state.unprocessed_cardinality(), 1);
         assert_eq!(state.cardinality(), 5);
-        assert_eq!(state.axiom_count(), 1);
+        assert_eq!(state.axiom_count(), 2);
+    }
+
+    #[test]
+    fn proof_state_statistics_reports_formula_archive_cardinality() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let archived = wrapped_formula(&mut state, "stats_archived_formula");
+        state.f_archive_mut().insert(archived);
+
+        assert!(state
+            .statistics_string(false)
+            .contains("Current number of archived formulas  : 1"));
     }
 
     #[test]
@@ -2337,9 +2398,15 @@ mod tests {
         let unprocessed = nontrivial_clause(&mut state, "reset_unproc", 32);
         let watch = nontrivial_clause(&mut state, "reset_watch", 33);
         let def = nontrivial_clause(&mut state, "reset_def", 34);
+        let formula_axiom = wrapped_formula(&mut state, "reset_formula_axiom");
+        let formula_ax_archive = wrapped_formula(&mut state, "reset_formula_ax_archive");
+        let formula_archive = wrapped_formula(&mut state, "reset_formula_archive");
         let params = FvIndexParams::new(FvIndexType::AcFold, false, true, 9, 1);
 
         state.axioms_mut().insert(axiom);
+        state.f_axioms_mut().insert(formula_axiom);
+        state.f_ax_archive_mut().insert(formula_ax_archive);
+        state.f_archive_mut().insert(formula_archive);
         state.processed_non_units_mut().insert(processed);
         state.unprocessed_mut().insert(unprocessed);
         state.watchlist_mut().unwrap().insert(watch);
@@ -2350,6 +2417,9 @@ mod tests {
 
         assert!(state.fvi_initialized());
         assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 0);
+        assert_eq!(state.f_ax_archive().cardinality(), 0);
+        assert_eq!(state.f_archive().cardinality(), 1);
         assert_eq!(state.processed_non_units().members(), 0);
         assert_eq!(state.unprocessed().members(), 0);
         assert_eq!(state.watchlist().unwrap().members(), 0);
