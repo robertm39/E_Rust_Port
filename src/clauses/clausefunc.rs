@@ -1809,6 +1809,182 @@ pub fn tformula_mini_scope(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
     Ok(current)
 }
 
+/// Conditionally mini-scopes small universal/existential subformulas.
+///
+/// This matches C `TFormulaMiniScope3`: it first finds maximal subformulas that
+/// start with a universal quantifier, contain an existential quantifier, and are
+/// within the given size limit. Those subformulas are mini-scoped with
+/// `TFormulaMiniScope`, then the original formula is copied while following the
+/// selected formula-cell bindings.
+///
+/// # Errors
+///
+/// Returns a diagnostic if mini-scoping a selected subformula or rebuilding the
+/// copied formula fails.
+///
+/// # Panics
+///
+/// Panics if a selected candidate already has a temporary binding.
+pub fn tformula_mini_scope3(
+    bank: &mut TermBank,
+    form: &Term,
+    miniscope_limit: i64,
+) -> Result<Term, Diagnostic> {
+    let mut candidates = BTreeMap::new();
+    let scan = tform_find_miniscopeable(bank, form, miniscope_limit, &mut candidates);
+
+    if candidates.is_empty() {
+        return Ok(form.clone());
+    }
+    assert!(
+        scan.has_existential,
+        "TFormulaMiniScope3 candidates imply an existential quantifier"
+    );
+
+    let mut bindings = Vec::with_capacity(candidates.len());
+    for candidate in candidates.into_values() {
+        assert!(
+            candidate.binding().is_none(),
+            "TFormulaMiniScope3 candidate must not already be bound"
+        );
+        let scoped = tformula_mini_scope(bank, &candidate)?;
+        bindings.push(BindingRestore::install(candidate, scoped));
+    }
+
+    let copied = tform_copy_mod(bank, form)?;
+    drop(bindings);
+    Ok(copied)
+}
+
+struct MiniscopeScan {
+    size: i64,
+    has_existential: bool,
+}
+
+fn tform_find_miniscopeable(
+    bank: &TermBank,
+    form: &Term,
+    limit: i64,
+    candidates: &mut BTreeMap<usize, Term>,
+) -> MiniscopeScan {
+    assert!(
+        !form.is_free_var(),
+        "tform_find_miniscopeable expects a formula root"
+    );
+
+    if form.v_count() == 0 {
+        return MiniscopeScan {
+            size: i64::MAX,
+            has_existential: false,
+        };
+    }
+    if tformula_is_literal(bank, form) || form.type_().as_ref().is_some_and(Type::is_arrow) {
+        return MiniscopeScan {
+            size: 1,
+            has_existential: false,
+        };
+    }
+
+    let qex_code = bank.signature().qex_code();
+    if tformula_is_quantified(bank, form) {
+        let mut nested_candidates = BTreeMap::new();
+        let body_scan = tform_find_miniscopeable(
+            bank,
+            &formula_argument(form, 1),
+            limit,
+            &mut nested_candidates,
+        );
+        let size = tform_size_add(1, body_scan.size);
+
+        if form.f_code() == qex_code {
+            candidates.extend(nested_candidates);
+            return MiniscopeScan {
+                size,
+                has_existential: true,
+            };
+        }
+
+        if size <= limit && body_scan.has_existential {
+            candidates.insert(term_identity_id(form), form.clone());
+        } else {
+            candidates.extend(nested_candidates);
+        }
+        return MiniscopeScan {
+            size,
+            has_existential: body_scan.has_existential,
+        };
+    }
+
+    let mut size = 1;
+    let mut has_existential = false;
+    if tformula_has_subform1(bank, form) {
+        let scan = tform_find_miniscopeable(bank, &formula_argument(form, 0), limit, candidates);
+        size = tform_size_add(size, tform_size_add(size, scan.size));
+        has_existential |= scan.has_existential;
+    }
+    if tformula_has_subform2(bank, form) {
+        let scan = tform_find_miniscopeable(bank, &formula_argument(form, 1), limit, candidates);
+        size = tform_size_add(size, tform_size_add(size, scan.size));
+        has_existential |= scan.has_existential;
+    }
+
+    MiniscopeScan {
+        size,
+        has_existential,
+    }
+}
+
+fn tform_size_add(left: i64, right: i64) -> i64 {
+    left.checked_add(right).unwrap_or(i64::MAX)
+}
+
+fn tform_copy_mod(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if tformula_is_literal(bank, form)
+        || form.type_().as_ref().is_some_and(Type::is_arrow)
+        || form.v_count() == 0
+        || form.is_free_var()
+    {
+        return Ok(form.clone());
+    }
+    if let Some(binding) = form.binding() {
+        return Ok(binding);
+    }
+
+    let mut left = None;
+    let mut right = None;
+    let mut changed = false;
+
+    if tformula_is_quantified(bank, form) {
+        left = Some(formula_argument(form, 0));
+        let original = formula_argument(form, 1);
+        let copied = tform_copy_mod(bank, &original)?;
+        changed = copied != original;
+        right = Some(copied);
+    } else if tformula_has_subform1(bank, form) {
+        let original = formula_argument(form, 0);
+        let copied = tform_copy_mod(bank, &original)?;
+        changed = copied != original;
+        left = Some(copied);
+    }
+    if tformula_has_subform2(bank, form) {
+        let original = formula_argument(form, 1);
+        let copied = tform_copy_mod(bank, &original)?;
+        changed |= copied != original;
+        right = Some(copied);
+    }
+
+    if changed {
+        tformula_fcode_alloc(
+            bank,
+            form.f_code(),
+            left.expect("changed copied formula must have a first argument"),
+            right,
+        )
+    } else {
+        Ok(form.clone())
+    }
+}
+
 /// Replaces every bound variable in a term-encoded formula with a fresh one.
 ///
 /// This matches C `TFormulaVarRename`: quantified variables are temporarily
@@ -3169,9 +3345,10 @@ mod tests {
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
         tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
-        tformula_mini_scope, tformula_neg_alloc, tformula_nnf, tformula_shift_quantors,
-        tformula_shift_quantors2, tformula_simplify, tformula_simplify_decoded,
-        tformula_skolemize_outermost, tformula_var_rename, TFORM_MANY_CLAUSES,
+        tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_nnf,
+        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
+        tformula_simplify_decoded, tformula_skolemize_outermost, tformula_var_rename,
+        TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -4565,6 +4742,73 @@ mod tests {
         let scoped_right = scoped.argument(1).unwrap();
         assert_eq!(scoped_right.f_code(), qall_code);
         assert_eq!(scoped_right.argument(1).as_ref(), Some(&free_atom));
+    }
+
+    #[test]
+    fn tformula_mini_scope3_leaves_too_large_candidate_unchanged() {
+        let mut bank = test_bank();
+        let universal_var = typed_var(&bank, -149);
+        let existential_var = typed_var(&bank, -151);
+        let left_const = typed_const(&mut bank, "miniscope3_large_a");
+        let right_const = typed_const(&mut bank, "miniscope3_large_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let universal_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &universal_var, &left_const);
+        let existential_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &existential_var, &right_const);
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let or_code = bank.signature().or_code();
+        let existential =
+            bool_binary_with_code(&mut bank, qex_code, &existential_var, &existential_atom);
+        let body = bool_binary_with_code(&mut bank, or_code, &universal_atom, &existential);
+        let formula = bool_binary_with_code(&mut bank, qall_code, &universal_var, &body);
+
+        let scoped = tformula_mini_scope3(&mut bank, &formula, 8).unwrap();
+
+        assert_eq!(scoped, formula);
+        assert!(formula.binding().is_none());
+    }
+
+    #[test]
+    fn tformula_mini_scope3_replaces_small_universal_existential_candidate() {
+        let mut bank = test_bank();
+        let universal_var = typed_var(&bank, -153);
+        let existential_var = typed_var(&bank, -155);
+        let left_const = typed_const(&mut bank, "miniscope3_small_a");
+        let right_const = typed_const(&mut bank, "miniscope3_small_b");
+        let other_left = typed_const(&mut bank, "miniscope3_small_c");
+        let other_right = typed_const(&mut bank, "miniscope3_small_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let universal_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &universal_var, &left_const);
+        let existential_atom =
+            bool_binary_with_code(&mut bank, eqn_code, &existential_var, &right_const);
+        let other = bool_binary_with_code(&mut bank, eqn_code, &other_left, &other_right);
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let or_code = bank.signature().or_code();
+        let and_code = bank.signature().and_code();
+        let existential =
+            bool_binary_with_code(&mut bank, qex_code, &existential_var, &existential_atom);
+        let candidate_body =
+            bool_binary_with_code(&mut bank, or_code, &universal_atom, &existential);
+        let candidate =
+            bool_binary_with_code(&mut bank, qall_code, &universal_var, &candidate_body);
+        let formula = bool_binary_with_code(&mut bank, and_code, &candidate, &other);
+
+        let scoped = tformula_mini_scope3(&mut bank, &formula, 9).unwrap();
+
+        assert_eq!(scoped.f_code(), and_code);
+        assert_eq!(scoped.argument(1).as_ref(), Some(&other));
+        let scoped_candidate = scoped.argument(0).unwrap();
+        assert_eq!(scoped_candidate.f_code(), or_code);
+        let scoped_left = scoped_candidate.argument(0).unwrap();
+        assert_eq!(scoped_left.f_code(), qall_code);
+        assert_eq!(scoped_left.argument(0).as_ref(), Some(&universal_var));
+        assert_eq!(scoped_left.argument(1).as_ref(), Some(&universal_atom));
+        assert_eq!(scoped_candidate.argument(1).as_ref(), Some(&existential));
+        assert!(candidate.binding().is_none());
     }
 
     #[test]
