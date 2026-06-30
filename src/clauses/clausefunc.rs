@@ -1701,6 +1701,110 @@ pub fn tformula_clause_encode(
     Ok(result)
 }
 
+/// Encodes a clause as a universally closed term formula.
+///
+/// This matches C `TFormulaClauseClosedEncode`: first build the unclosed
+/// disjunction with [`tformula_clause_encode`], then add the universal closure.
+///
+/// # Errors
+///
+/// Returns a diagnostic if literal encoding, formula allocation, or quantifier
+/// allocation fails.
+///
+/// # Panics
+///
+/// Panics if a literal violates the term-bank sharing preconditions inherited
+/// from [`tformula_lit_alloc`].
+pub fn tformula_clause_closed_encode(
+    bank: &mut TermBank,
+    clause: &Clause,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let formula = tformula_clause_encode(bank, clause, problem_type)?;
+    tformula_closure(bank, &formula, true)
+}
+
+/// Returns whether a term-encoded formula has no free variables.
+///
+/// This matches C `TFormulaIsClosed` without mutating the bank-wide
+/// `TPIsFreeVar` flags used by the C implementation.
+#[must_use]
+pub fn tformula_is_closed(bank: &TermBank, form: &Term) -> bool {
+    tformula_collect_free_vars(bank, form).is_empty()
+}
+
+/// Returns one free variable from a term-encoded formula, if any exists.
+///
+/// This matches C `TFormulaHasFreeVars` at the API level. The selected
+/// variable follows Rust's term-identity collection order rather than C's
+/// current pointer-tree root.
+#[must_use]
+pub fn tformula_has_free_vars(bank: &TermBank, form: &Term) -> Option<Term> {
+    tformula_collect_free_vars(bank, form).into_iter().next()
+}
+
+/// Wraps a formula in one universal or existential quantifier.
+///
+/// This matches C `TFormulaAddQuantor`: `universal` selects `!`, otherwise
+/// `?`, and the variable and formula are expected to already be bank-shared.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the quantifier symbol is unavailable or the
+/// resulting formula cannot be inserted into the bank.
+pub fn tformula_add_quantor(
+    bank: &mut TermBank,
+    form: &Term,
+    universal: bool,
+    variable: &Term,
+) -> Result<Term, Diagnostic> {
+    let quantifier = if universal {
+        bank.signature().qall_code()
+    } else {
+        bank.signature().qex_code()
+    };
+    tformula_fcode_alloc(bank, quantifier, variable.clone(), Some(form.clone()))
+}
+
+/// Wraps a formula in universal or existential quantifiers for `variables`.
+///
+/// This matches C `TFormulaAddQuantors` for a caller-provided variable order:
+/// each variable is wrapped around the current formula in slice order.
+///
+/// # Errors
+///
+/// Returns a diagnostic if any quantifier allocation fails.
+pub fn tformula_add_quantors(
+    bank: &mut TermBank,
+    form: &Term,
+    universal: bool,
+    variables: &[Term],
+) -> Result<Term, Diagnostic> {
+    let mut result = form.clone();
+    for variable in variables {
+        result = tformula_add_quantor(bank, &result, universal, variable)?;
+    }
+    Ok(result)
+}
+
+/// Returns the universal or existential closure of a term-encoded formula.
+///
+/// This matches C `TFormulaClosure`, with free variables collected by
+/// [`tformula_collect_free_vars`] and then wrapped through
+/// [`tformula_add_quantors`].
+///
+/// # Errors
+///
+/// Returns a diagnostic if any quantifier allocation fails.
+pub fn tformula_closure(
+    bank: &mut TermBank,
+    form: &Term,
+    universal: bool,
+) -> Result<Term, Diagnostic> {
+    let variables = tformula_collect_free_vars(bank, form);
+    tformula_add_quantors(bank, form, universal, &variables)
+}
+
 /// Estimates the number of clauses produced by clausifying a formula.
 ///
 /// This matches C `TFormulaEstimateClauses` for a single term-encoded formula:
@@ -3003,7 +3107,15 @@ fn tformula_rek_skolemize(
     }
 }
 
-fn tformula_collect_free_vars(bank: &TermBank, form: &Term) -> Vec<Term> {
+/// Collects free variables from a term-encoded formula.
+///
+/// This matches C `TFormulaCollectFreeVars` for the represented formula shapes:
+/// `$let` contributes only its body, DB variables are ignored, and quantifiers
+/// plus named lambdas bind their first argument while traversing their body.
+/// Unlike C, this staged Rust helper does not mutate `TPIsFreeVar`; it returns
+/// variables in term-identity order.
+#[must_use]
+pub fn tformula_collect_free_vars(bank: &TermBank, form: &Term) -> Vec<Term> {
     let mut vars = BTreeMap::new();
     let mut bound = Vec::new();
     tformula_collect_free_vars_rek(bank, form, &mut bound, &mut vars);
@@ -4505,10 +4617,12 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_clause_encode, tformula_collect_clause, tformula_conjunctive_nf,
-        tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
-        tformula_def_rename, tformula_distribute_disjunctions, tformula_estimate_clauses,
-        tformula_expand_literals, tformula_find_defs, tformula_lit_alloc, tformula_mark_polarity,
+        tformula_add_quantor, tformula_clause_closed_encode, tformula_clause_encode,
+        tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
+        tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
+        tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
+        tformula_estimate_clauses, tformula_expand_literals, tformula_find_defs,
+        tformula_has_free_vars, tformula_is_closed, tformula_lit_alloc, tformula_mark_polarity,
         tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_nnf,
         tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
         tformula_simplify_decoded, tformula_skolemize_outermost, tformula_to_cnf,
@@ -6550,6 +6664,77 @@ mod tests {
         assert_eq!(right.f_code(), bank.signature().neqn_code());
         assert_eq!(right.argument(0).as_ref(), Some(&c));
         assert_eq!(right.argument(1).as_ref(), Some(&d));
+    }
+
+    #[test]
+    fn tformula_free_var_helpers_respect_quantifier_binding() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -300);
+        let y = typed_var(&bank, -302);
+        let a = typed_const(&mut bank, "free_vars_a");
+        let b = typed_const(&mut bank, "free_vars_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &y, &b);
+        let and_code = bank.signature().and_code();
+        let body = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let qall_code = bank.signature().qall_code();
+        let quantified = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+
+        let free_vars = tformula_collect_free_vars(&bank, &quantified);
+
+        assert_eq!(free_vars, vec![y.clone()]);
+        assert_eq!(tformula_has_free_vars(&bank, &quantified), Some(y.clone()));
+        assert!(!tformula_is_closed(&bank, &quantified));
+
+        let closed = tformula_add_quantor(&mut bank, &quantified, true, &y).unwrap();
+
+        assert!(tformula_is_closed(&bank, &closed));
+    }
+
+    #[test]
+    fn tformula_closure_wraps_free_variables_with_requested_quantifier() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -310);
+        let y = typed_var(&bank, -312);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &x, &y);
+        let expected_vars = tformula_collect_free_vars(&bank, &formula);
+        let qex_code = bank.signature().qex_code();
+
+        let closure = tformula_closure(&mut bank, &formula, false).unwrap();
+
+        assert_eq!(expected_vars.len(), 2);
+        assert!(tformula_is_closed(&bank, &closure));
+        let mut current = closure.clone();
+        for expected_var in expected_vars.iter().rev() {
+            assert_eq!(current.f_code(), qex_code);
+            assert_eq!(current.argument(0).as_ref(), Some(expected_var));
+            current = current.argument(1).unwrap();
+        }
+        assert_eq!(current, formula);
+        assert!(!tformula_is_closed(&bank, &current));
+    }
+
+    #[test]
+    fn tformula_clause_closed_encode_adds_universal_closure() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -320);
+        let a = typed_const(&mut bank, "closed_encode_a");
+        let clause = clause_from(vec![literal(&mut bank, &x, &a, true)]);
+
+        let unclosed = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let closed =
+            tformula_clause_closed_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+
+        assert!(!tformula_is_closed(&bank, &unclosed));
+        assert!(tformula_is_closed(&bank, &closed));
+        assert_eq!(closed.f_code(), bank.signature().qall_code());
+        assert_eq!(closed.argument(0).as_ref(), Some(&x));
+        let body = closed.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        assert_eq!(body.argument(0).as_ref(), Some(&x));
+        assert_eq!(body.argument(1).as_ref(), Some(&a));
     }
 
     #[test]
