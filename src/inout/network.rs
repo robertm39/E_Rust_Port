@@ -1,6 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 pub const TCP_BACKLOG: usize = 10;
 pub const TCP_BUF_SIZE: usize = 1025;
@@ -281,7 +281,7 @@ pub fn tcp_string_recv_from_or_error(reader: &mut impl Read) -> Result<String, D
 
 #[must_use]
 pub fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
-    TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).ok()
+    platform_server_socket::create_server_socket_no_fail(port)
 }
 
 pub fn create_server_socket(port: u16) -> Result<TcpListener, Diagnostic> {
@@ -314,6 +314,142 @@ pub fn create_client_socket_no_fail(host: &str, port: u16) -> Result<TcpStream, 
 
 pub fn create_client_socket(host: &str, port: u16) -> Result<TcpStream, Diagnostic> {
     create_client_socket_no_fail(host, port)
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod platform_server_socket {
+    use super::TCP_BACKLOG;
+    use std::ffi::c_void;
+    use std::mem::size_of_val;
+    use std::net::TcpListener;
+    use std::os::fd::FromRawFd;
+    use std::os::raw::c_int;
+
+    const AF_INET: c_int = 2;
+    const SOCK_STREAM: c_int = 1;
+    const IPPROTO_TCP: c_int = 6;
+    const SOL_SOCKET: c_int = 1;
+    const SO_REUSEADDR: c_int = 2;
+    const SOCKADDR_IN_LEN: SockLen = 16;
+
+    type SockLen = u32;
+
+    #[repr(C)]
+    struct InAddr {
+        s_addr: u32,
+    }
+
+    #[repr(C)]
+    struct SockAddr {
+        family: u16,
+        data: [u8; 14],
+    }
+
+    #[repr(C)]
+    struct SockAddrIn {
+        family: u16,
+        port: u16,
+        address: InAddr,
+        zero: [u8; 8],
+    }
+
+    extern "C" {
+        fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> c_int;
+        fn setsockopt(
+            socket: c_int,
+            level: c_int,
+            option_name: c_int,
+            option_value: *const c_void,
+            option_len: SockLen,
+        ) -> c_int;
+        fn bind(socket: c_int, address: *const SockAddr, address_len: SockLen) -> c_int;
+        fn listen(socket: c_int, backlog: c_int) -> c_int;
+        fn close(fd: c_int) -> c_int;
+    }
+
+    pub(super) fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
+        // SAFETY: socket is called with C constants matching the AF_INET TCP
+        // stream socket shape used by cio_network.c. On success, the returned
+        // fd is either closed on error paths or transferred to TcpListener.
+        let fd = unsafe { socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) };
+        if fd == -1 {
+            return None;
+        }
+
+        if set_reuse_addr(fd).is_none() || bind_any(fd, port).is_none() || listen_fd(fd).is_none() {
+            close_fd(fd);
+            return None;
+        }
+
+        // SAFETY: fd is a live listening TCP socket created by socket, bound
+        // and switched to listening mode above. Ownership moves into
+        // TcpListener, so this module must not close fd after this point.
+        Some(unsafe { TcpListener::from_raw_fd(fd) })
+    }
+
+    fn set_reuse_addr(fd: c_int) -> Option<()> {
+        let yes: c_int = 1;
+        let option_len = SockLen::try_from(size_of_val(&yes)).ok()?;
+        // SAFETY: &yes points to a valid c_int option value for the duration
+        // of the call, and fd is owned by this module until success wrapping.
+        if unsafe {
+            setsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                (&raw const yes).cast::<c_void>(),
+                option_len,
+            )
+        } == -1
+        {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    fn bind_any(fd: c_int, port: u16) -> Option<()> {
+        let address = SockAddrIn {
+            family: u16::try_from(AF_INET).ok()?,
+            port: port.to_be(),
+            address: InAddr { s_addr: 0 },
+            zero: [0; 8],
+        };
+        // SAFETY: address is a properly initialized sockaddr_in with the C ABI
+        // layout used by bind for AF_INET. fd is a live socket owned here.
+        if unsafe { bind(fd, (&raw const address).cast::<SockAddr>(), SOCKADDR_IN_LEN) } == -1 {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    fn listen_fd(fd: c_int) -> Option<()> {
+        let backlog = c_int::try_from(TCP_BACKLOG).ok()?;
+        // SAFETY: fd is a bound TCP socket owned by this module, and backlog
+        // is the C TCP_BACKLOG value represented as c_int.
+        if unsafe { listen(fd, backlog) } == -1 {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    fn close_fd(fd: c_int) {
+        // SAFETY: fd is still owned by this module on all call sites and has
+        // not been transferred to TcpListener.
+        let _ = unsafe { close(fd) };
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform_server_socket {
+    use std::net::{Ipv4Addr, TcpListener};
+
+    pub(super) fn create_server_socket_no_fail(port: u16) -> Option<TcpListener> {
+        TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).ok()
+    }
 }
 
 #[cfg(test)]

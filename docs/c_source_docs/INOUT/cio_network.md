@@ -120,13 +120,13 @@ Source files reviewed: `INOUT/cio_network.h`, `INOUT/cio_network.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack, partial single-read/write status behavior, blocking send/receive loops, string send/receive wrappers, and safe `TcpListener`/`TcpStream` socket constructors.
+- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack, partial single-read/write status behavior, blocking send/receive loops, string send/receive wrappers, safe `TcpListener`/`TcpStream` socket constructors, and Linux server-socket creation with `SO_REUSEADDR` plus C backlog setup before wrapping the listening socket.
 - Tests cover message status values, new-message shape, packed header bytes, NUL truncation, partial writes, send loops, partial header/payload reads, closed-connection reporting, empty-payload status, receive loops, string wrappers, and ephemeral server binding.
 
 ### Change-Later Observations
 
 - `TCPMsgRead` prints header and payload read progress directly to stdout, treats an empty-payload message as a closed connection after reading the header, and appends payload data through C-string APIs after partial reads. Rust keeps the wire format and empty-payload status quirk, but appends only initialized bytes and omits the debug prints; revisit this only if byte-for-byte debug output compatibility becomes required.
-- `create_server_sock_nofail` sets `SO_REUSEADDR` before binding. The current Rust wrapper uses only `std::net::TcpListener::bind`, so exact reuse semantics are not represented without adding a platform socket option layer.
+- `create_server_sock_nofail` sets `SO_REUSEADDR` before binding. Rust now preserves that setup on Linux through a scoped socket-library boundary, but non-Linux reuse semantics and raw descriptor-number behavior remain deferred until server/client programs require byte-identical platform behavior.
 - `create_client_sock_nofail` continues iterating after a successful connection, which can leak or replace an earlier successful socket depending on later address records. Rust returns the first successful `TcpStream`; preserve that divergence unless a compatibility test shows a caller relies on the C loop's final-address behavior.
 
 ### Porting Focus
