@@ -31,6 +31,7 @@ use crate::terms::signature::{
 };
 use crate::terms::simpletypes::{
     arrow_type_flattened, type_app_encoded_name, type_get_max_arity, type_is_predicate, Type,
+    ST_BOOL,
 };
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -4431,25 +4432,82 @@ fn extract_formula_core(
     Ok(current)
 }
 
-fn tformula_has_subform1(bank: &TermBank, form: &Term) -> bool {
+/// Returns whether a term-encoded formula has a first formula subterm.
+///
+/// This matches C `TFormulaHasSubForm1`: the root symbol must carry
+/// `FPFOFOp`, and the cell arity must be at least one.
+#[must_use]
+pub fn tformula_has_subform1(bank: &TermBank, form: &Term) -> bool {
     bank.signature().query_prop(form.f_code(), FP_FOF_OP) && form.arity() >= 1
 }
 
-fn tformula_has_subform2(bank: &TermBank, form: &Term) -> bool {
+/// Returns whether a term-encoded formula has a second formula subterm.
+///
+/// This matches C `TFormulaHasSubForm2`: the root symbol must carry
+/// `FPFOFOp`, and the cell arity must be at least two.
+#[must_use]
+pub fn tformula_has_subform2(bank: &TermBank, form: &Term) -> bool {
     bank.signature().query_prop(form.f_code(), FP_FOF_OP) && form.arity() >= 2
 }
 
-fn tformula_is_quantified(bank: &TermBank, form: &Term) -> bool {
+/// Returns whether a term-encoded formula has binary arity.
+///
+/// This matches C `TFormulaIsBinary`.
+#[must_use]
+pub fn tformula_is_binary(form: &Term) -> bool {
+    form.arity() == 2
+}
+
+/// Returns whether a term-encoded formula has unary arity.
+///
+/// This matches C `TFormulaIsUnary`.
+#[must_use]
+pub fn tformula_is_unary(form: &Term) -> bool {
+    form.arity() == 1
+}
+
+/// Returns whether a term-encoded formula is a first-order quantifier cell.
+///
+/// This matches C `TFormulaIsQuantifiedNL`, which excludes DB variables and
+/// recognizes only `$qex` and `$qall`, not named lambda.
+#[must_use]
+pub fn tformula_is_quantified_nl(bank: &TermBank, form: &Term) -> bool {
+    !form.is_db_var()
+        && matches!(form.f_code(), code if code == bank.signature().qex_code()
+            || code == bank.signature().qall_code())
+}
+
+/// Returns whether a term-encoded formula is a quantifier-like cell.
+///
+/// This matches C `TFormulaIsQuantified`, including the named-lambda f-code.
+#[must_use]
+pub fn tformula_is_quantified(bank: &TermBank, form: &Term) -> bool {
     !form.is_db_var()
         && matches!(form.f_code(), code if code == bank.signature().qex_code()
             || code == bank.signature().qall_code()
             || code == SIG_NAMED_LAMBDA_CODE)
 }
 
-fn tformula_is_literal(bank: &TermBank, form: &Term) -> bool {
+/// Returns whether a term-encoded formula is an encoded equality literal.
+///
+/// This matches C `TFormulaIsLiteral`.
+#[must_use]
+pub fn tformula_is_literal(bank: &TermBank, form: &Term) -> bool {
     matches!(form.f_code(), code if code == bank.signature().eqn_code()
         || code == bank.signature().neqn_code())
         && form.arity() == 2
+}
+
+/// Returns whether a term-encoded formula is C's macro-level complex Boolean.
+///
+/// This mirrors the literal C `TFormulaIsComplexBool` macro. That macro passes
+/// the term cell itself to `TypeIsBool`, so compatibility is the term f-code
+/// check against `STBool`, not `form.type == $o`.
+#[must_use]
+pub fn tformula_is_complex_bool(bank: &TermBank, form: &Term) -> bool {
+    !form.is_any_var()
+        && bank.signature().is_logical_symbol(form.f_code())
+        && form.f_code() == ST_BOOL
 }
 
 struct BindingRestore {
@@ -5298,9 +5356,12 @@ mod tests {
         tformula_copy, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
         tformula_def_rename, tformula_distribute_disjunctions, tformula_encode_predicate_as_eqn,
         tformula_equal, tformula_estimate_clauses, tformula_expand_distinct,
-        tformula_expand_literals, tformula_find_defs, tformula_find_max_var_code,
-        tformula_gc_mark_cells, tformula_has_free_vars, tformula_is_closed, tformula_is_prop_const,
-        tformula_is_prop_false, tformula_is_prop_true, tformula_is_untyped, tformula_lit_alloc,
+        tformula_expand_literals, tformula_fcode_alloc, tformula_find_defs,
+        tformula_find_max_var_code, tformula_gc_mark_cells, tformula_has_free_vars,
+        tformula_has_subform1, tformula_has_subform2, tformula_is_binary, tformula_is_closed,
+        tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_const,
+        tformula_is_prop_false, tformula_is_prop_true, tformula_is_quantified,
+        tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped, tformula_lit_alloc,
         tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
         tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
         tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
@@ -7368,6 +7429,62 @@ mod tests {
         assert!(formula.query_prop(TP_GARBAGE_FLAG));
         assert!(a.query_prop(TP_GARBAGE_FLAG));
         assert!(b.query_prop(TP_GARBAGE_FLAG));
+    }
+
+    #[test]
+    fn tformula_predicate_wrappers_match_header_macros() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -296);
+        let a = typed_const(&mut bank, "formula_pred_a");
+        let b = typed_const(&mut bank, "formula_pred_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let not_code = bank.signature().not_code();
+        let negated = tformula_fcode_alloc(&mut bank, not_code, equality.clone(), None).unwrap();
+        let and_code = bank.signature().and_code();
+        let conjunction = tformula_fcode_alloc(
+            &mut bank,
+            and_code,
+            equality.clone(),
+            Some(equality.clone()),
+        )
+        .unwrap();
+        let qex_code = bank.signature().qex_code();
+        let existential = tformula_quantor_alloc(&mut bank, qex_code, &x, &equality).unwrap();
+        let lambda =
+            tformula_quantor_alloc(&mut bank, SIG_NAMED_LAMBDA_CODE, &x, &equality).unwrap();
+
+        assert!(tformula_has_subform1(&bank, &negated));
+        assert!(!tformula_has_subform2(&bank, &negated));
+        assert!(tformula_has_subform2(&bank, &conjunction));
+        assert!(tformula_is_unary(&negated));
+        assert!(!tformula_is_binary(&negated));
+        assert!(tformula_is_binary(&equality));
+        assert!(tformula_is_literal(&bank, &equality));
+        assert!(!tformula_is_literal(&bank, &negated));
+        assert!(tformula_is_quantified(&bank, &existential));
+        assert!(tformula_is_quantified_nl(&bank, &existential));
+        assert!(tformula_is_quantified(&bank, &lambda));
+        assert!(!tformula_is_quantified_nl(&bank, &lambda));
+    }
+
+    #[test]
+    fn tformula_complex_bool_preserves_c_type_macro_artifact() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "formula_complex_bool_a");
+        let b = typed_const(&mut bank, "formula_complex_bool_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+
+        assert!(true_term.type_().is_some_and(|type_| type_.is_bool()));
+        assert!(false_term.type_().is_some_and(|type_| type_.is_bool()));
+        assert!(equality.type_().is_some_and(|type_| type_.is_bool()));
+
+        assert!(tformula_is_complex_bool(&bank, &true_term));
+        assert!(!tformula_is_complex_bool(&bank, &false_term));
+        assert!(!tformula_is_complex_bool(&bank, &equality));
     }
 
     #[test]
