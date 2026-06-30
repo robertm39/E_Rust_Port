@@ -8,7 +8,7 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     tformula_app_encode_string, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
-    tformula_preload_types,
+    tformula_preload_types, tformula_tptp_string, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::terms::functypes::FunCode;
@@ -25,6 +25,61 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 static WRAPPED_FORMULA_ENTRY_ID: AtomicU64 = AtomicU64::new(1);
 static FORMULA_IDENT_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormulaPrintFormat {
+    Lop,
+    Tptp,
+    Tstp,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormulaTstpCompleteness {
+    Complete,
+    Open,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormulaTstpClauseMode {
+    AsFormula,
+    AsClauseCore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormulaTstpPrintOptions {
+    pub full_terms: bool,
+    pub completeness: FormulaTstpCompleteness,
+    pub clause_mode: FormulaTstpClauseMode,
+    pub keep_input_names: bool,
+}
+
+impl FormulaTstpPrintOptions {
+    #[must_use]
+    pub const fn complete_formula(full_terms: bool, keep_input_names: bool) -> Self {
+        Self {
+            full_terms,
+            completeness: FormulaTstpCompleteness::Complete,
+            clause_mode: FormulaTstpClauseMode::AsFormula,
+            keep_input_names,
+        }
+    }
+
+    #[must_use]
+    pub const fn open_formula(full_terms: bool, keep_input_names: bool) -> Self {
+        Self {
+            full_terms,
+            completeness: FormulaTstpCompleteness::Open,
+            clause_mode: FormulaTstpClauseMode::AsFormula,
+            keep_input_names,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_clause_mode(mut self, clause_mode: FormulaTstpClauseMode) -> Self {
+        self.clause_mode = clause_mode;
+        self
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WrappedFormula {
@@ -301,6 +356,152 @@ impl WrappedFormula {
         ))
     }
 
+    /// Renders C's `WFormulaTPTPPrint` shape for a formula-backed wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the contained term formula cannot be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term.
+    pub fn tptp_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        if self.is_clause {
+            return Err(formula_set_write_error(
+                "WFormulaTPTPPrint clause conversion is not ported",
+            ));
+        }
+        let rendered = tformula_tptp_string(
+            bank,
+            self.formula(),
+            full_terms,
+            TFormulaTptpPrintOptions::tptp(problem_type),
+        )?;
+        Ok(format!(
+            "input_formula({},{},{rendered}).",
+            self.get_id(keep_input_names),
+            self.tptp_role_name()
+        ))
+    }
+
+    /// Renders C's `WFormulaTSTPPrintFlex` shape for a formula-backed wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the contained term formula cannot be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term.
+    pub fn tstp_string_flex(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        options: FormulaTstpPrintOptions,
+    ) -> Result<String, Diagnostic> {
+        if self.is_clause {
+            let branch = match options.clause_mode {
+                FormulaTstpClauseMode::AsFormula => {
+                    "WFormulaTSTPPrintFlex clause-as-formula closure is not ported"
+                }
+                FormulaTstpClauseMode::AsClauseCore => {
+                    "WFormulaTSTPPrintFlex clause core printing is not ported"
+                }
+            };
+            return Err(formula_set_write_error(branch));
+        }
+
+        let formula_kind = if problem_type == ProblemType::HigherOrder {
+            "thf"
+        } else if self.is_untyped() {
+            "fof"
+        } else {
+            "tff"
+        };
+        let rendered = tformula_tptp_string(
+            bank,
+            self.formula(),
+            options.full_terms,
+            TFormulaTptpPrintOptions::tstp(problem_type),
+        )?;
+        let mut output = format!(
+            "{formula_kind}({}, {}, {rendered}",
+            self.get_id(options.keep_input_names),
+            self.tstp_role_name()
+        );
+        if options.completeness == FormulaTstpCompleteness::Complete {
+            output.push_str(").");
+        }
+        Ok(output)
+    }
+
+    /// Renders C's `WFormulaTSTPPrint` macro shape with `as_formula=true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the contained term formula cannot be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term.
+    pub fn tstp_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        complete: bool,
+        problem_type: ProblemType,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        self.tstp_string_flex(
+            bank,
+            problem_type,
+            FormulaTstpPrintOptions {
+                full_terms,
+                completeness: if complete {
+                    FormulaTstpCompleteness::Complete
+                } else {
+                    FormulaTstpCompleteness::Open
+                },
+                clause_mode: FormulaTstpClauseMode::AsFormula,
+                keep_input_names,
+            },
+        )
+    }
+
+    /// Renders C's `WFormulaPrint` dispatch for formula-backed wrappers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the selected output format or contained term
+    /// formula cannot be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term.
+    pub fn print_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        output_format: FormulaPrintFormat,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        match output_format {
+            FormulaPrintFormat::Lop | FormulaPrintFormat::Tptp => {
+                self.tptp_string(bank, full_terms, problem_type, keep_input_names)
+            }
+            FormulaPrintFormat::Tstp => {
+                self.tstp_string(bank, full_terms, true, problem_type, keep_input_names)
+            }
+        }
+    }
+
     /// Counts lambda cells that occur below a non-logical/non-lambda formula node.
     ///
     /// # Panics
@@ -350,6 +551,10 @@ impl WrappedFormula {
     }
 
     fn app_encode_role_name(&self) -> &'static str {
+        self.tstp_role_name()
+    }
+
+    fn tstp_role_name(&self) -> &'static str {
         match self.query_tptp_type() {
             CP_TYPE_AXIOM if self.query_prop(CP_INPUT_FORMULA) => "axiom",
             CP_TYPE_HYPOTHESIS => "hypothesis",
@@ -358,6 +563,16 @@ impl WrappedFormula {
             CP_TYPE_LEMMA => "lemma",
             CP_TYPE_NEG_CONJECTURE => "negated_conjecture",
             _ => "plain",
+        }
+    }
+
+    fn tptp_role_name(&self) -> &'static str {
+        match self.query_tptp_type() {
+            CP_TYPE_AXIOM => "axiom",
+            CP_TYPE_HYPOTHESIS => "hypothesis",
+            CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE => "conjecture",
+            CP_TYPE_QUESTION => "question",
+            _ => "unknown",
         }
     }
 }
@@ -531,6 +746,80 @@ impl FormulaSet {
         for formula in &self.formulas {
             formula.mark_polarity(bank);
         }
+    }
+
+    /// Renders C's `FormulaSetPrint` dispatch in formula insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if a wrapped formula cannot be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term.
+    pub fn print_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        output_format: FormulaPrintFormat,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        for formula in &self.formulas {
+            output.push_str(&formula.print_string(
+                bank,
+                full_terms,
+                problem_type,
+                output_format,
+                keep_input_names,
+            )?);
+            output.push('\n');
+        }
+        Ok(output)
+    }
+
+    /// Renders C's `FormulaSetPrettyPrintTSTP` in formula insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if type declarations or a wrapped formula cannot
+    /// be rendered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any wrapper has no formula term.
+    pub fn pretty_print_tstp_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        problem_type: ProblemType,
+        keep_input_names: bool,
+    ) -> Result<String, Diagnostic> {
+        let mut output = if self.is_untyped() {
+            String::new()
+        } else {
+            let mut declarations = Vec::new();
+            bank.signature()
+                .print_type_decls_tstp(&mut declarations, problem_type)
+                .map_err(|_| formula_set_write_error("failed to write TSTP type declarations"))?;
+            String::from_utf8(declarations).map_err(|_| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "TSTP type declarations are not valid UTF-8",
+                )
+            })?
+        };
+
+        for formula in &self.formulas {
+            output.push_str(&formula.tstp_string_flex(
+                bank,
+                problem_type,
+                FormulaTstpPrintOptions::complete_formula(full_terms, keep_input_names),
+            )?);
+            output.push('\n');
+        }
+        Ok(output)
     }
 
     /// Renders C's `FormulaSetAppEncode` output for this formula set.
@@ -722,7 +1011,8 @@ fn formula_set_write_error(message: &'static str) -> Diagnostic {
 mod tests {
     use super::{
         formula_set_definition_statistics, formula_set_stack_cardinality,
-        formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaSet, WrappedFormula,
+        formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat, FormulaSet,
+        FormulaTstpPrintOptions, WrappedFormula,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause_props::{
@@ -733,7 +1023,7 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::terms::lambda::close_with_db_var;
     use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
-    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, ST_INTEGER};
+    use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
     use crate::terms::termtypes::{DerefType, Term};
@@ -747,9 +1037,13 @@ mod tests {
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        typed_const_with_type(bank, name, &type_)
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: &Type) -> Term {
         let f_code = bank.signature_mut().insert_id(name, 0, false);
         bank.signature_mut()
-            .declare_final_type(f_code, type_)
+            .declare_final_type(f_code, type_.clone())
             .unwrap();
         bank.create_const_term(f_code).unwrap()
     }
@@ -1107,6 +1401,121 @@ mod tests {
         assert!(rendered.starts_with("tff(wf_app_named, axiom, "));
         assert!(rendered.ends_with(")."));
         assert!(rendered.contains("wf_app_a"));
+    }
+
+    #[test]
+    fn wrapped_formula_tptp_and_tstp_printers_match_c_roles_and_spacing() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_print_a");
+        let b = typed_const(&mut bank, "wf_print_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        wrapped.set_info(Some(ClauseInfo::new(Some("wf_print_neg"), None, 7, 3)));
+
+        let legacy_output = wrapped
+            .tptp_string(&mut bank, true, ProblemType::FirstOrder, true)
+            .unwrap();
+        let tstp_output = wrapped
+            .tstp_string(&mut bank, true, true, ProblemType::FirstOrder, true)
+            .unwrap();
+        let incomplete_tstp = wrapped
+            .tstp_string_flex(
+                &mut bank,
+                ProblemType::FirstOrder,
+                FormulaTstpPrintOptions::open_formula(true, true),
+            )
+            .unwrap();
+
+        assert!(legacy_output.starts_with("input_formula(wf_print_neg,conjecture,"));
+        assert!(legacy_output.contains("wf_print_a"));
+        assert!(legacy_output.contains("wf_print_b"));
+        assert!(legacy_output.ends_with(")."));
+        assert!(tstp_output.starts_with("fof(wf_print_neg, negated_conjecture, "));
+        assert!(tstp_output.contains("wf_print_a=wf_print_b"));
+        assert!(tstp_output.ends_with(")."));
+        assert!(incomplete_tstp.starts_with("fof(wf_print_neg, negated_conjecture, "));
+        assert!(!incomplete_tstp.ends_with(")."));
+    }
+
+    #[test]
+    fn formula_set_print_string_preserves_order_and_selected_format() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_print_a");
+        let b = typed_const(&mut bank, "set_print_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let first_formula = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let second_formula = bool_binary_with_code(&mut bank, eqn_code, &b, &a);
+        let mut first = WrappedFormula::wt_formula_alloc(first_formula);
+        first.set_tptp_type(CP_TYPE_AXIOM);
+        first.set_prop(CP_INPUT_FORMULA);
+        first.set_info(Some(ClauseInfo::new(Some("set_print_first"), None, 1, 1)));
+        let mut second = WrappedFormula::wt_formula_alloc(second_formula);
+        second.set_tptp_type(CP_TYPE_QUESTION);
+        second.set_info(Some(ClauseInfo::new(Some("set_print_second"), None, 2, 1)));
+        let mut set = FormulaSet::new();
+        set.insert(first);
+        set.insert(second);
+
+        let set_tstp_output = set
+            .print_string(
+                &mut bank,
+                true,
+                ProblemType::FirstOrder,
+                FormulaPrintFormat::Tstp,
+                true,
+            )
+            .unwrap();
+        let set_legacy_output = set
+            .print_string(
+                &mut bank,
+                true,
+                ProblemType::FirstOrder,
+                FormulaPrintFormat::Tptp,
+                true,
+            )
+            .unwrap();
+
+        let mut tstp_lines = set_tstp_output.lines();
+        assert!(tstp_lines
+            .next()
+            .is_some_and(|line| line.starts_with("fof(set_print_first, axiom, ")));
+        assert!(tstp_lines
+            .next()
+            .is_some_and(|line| line.starts_with("fof(set_print_second, question, ")));
+        assert_eq!(tstp_lines.next(), None);
+        assert!(set_legacy_output.starts_with("input_formula(set_print_first,axiom,"));
+        assert!(set_legacy_output.contains("\ninput_formula(set_print_second,question,"));
+        assert!(set_legacy_output.ends_with('\n'));
+    }
+
+    #[test]
+    fn formula_set_pretty_print_tstp_declares_typed_symbols_first() {
+        let mut bank = test_bank();
+        let integer = bank.signature().type_bank().integer_type();
+        let int_const = typed_const_with_type(&mut bank, "pretty_int", &integer);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &int_const, &int_const);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_tptp_type(CP_TYPE_AXIOM);
+        wrapped.set_prop(CP_INPUT_FORMULA);
+        wrapped.set_info(Some(ClauseInfo::new(Some("pretty_typed"), None, 1, 1)));
+        let mut set = FormulaSet::new();
+        set.insert(wrapped);
+
+        let rendered = set
+            .pretty_print_tstp_string(&mut bank, true, ProblemType::FirstOrder, true)
+            .unwrap();
+
+        let declaration = rendered
+            .find("tff(decl_")
+            .expect("typed pretty-print emits declarations");
+        let formula = rendered
+            .find("tff(pretty_typed, axiom, ")
+            .expect("typed pretty-print emits formula after declarations");
+        assert!(declaration < formula);
+        assert!(rendered.contains("pretty_int: $int"));
     }
 
     #[test]
