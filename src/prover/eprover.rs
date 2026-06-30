@@ -9910,6 +9910,8 @@ fn parse_simple_fof_existential_formula(
             formulas
         } else if scanner.test_id("$distinct") {
             parse_simple_fof_distinct_formula(scanner, bank)?
+        } else if let Some(formulas) = parse_simple_fof_fool_term_atom(scanner, bank)? {
+            formulas
         } else {
             if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::OPEN_BRACKET) {
                 return Err(simple_fof_unsupported_error(scanner));
@@ -12648,6 +12650,43 @@ mod tests {
         assert!(printed.contains("tff(ite_i_eq, axiom, $ite(app_"));
         assert!(printed.contains(",a,b)=c)."));
         assert!(printed.contains("tff(let_i_eq, axiom, $let(f:$i,f:=a,f)=b)."));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_existential_fool_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-existential-fool-body");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             fof(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             fof(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(ex_ite, axiom, ?[X"));
+        assert!(printed.contains("]:$ite(app_"));
+        assert!(printed.contains("tff(ex_let_eq, axiom, ?[X"));
+        assert!(printed.contains("]:$let(f:$i,f:=a,f)=X"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -19077,6 +19116,41 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_skolemizes_existential_fool_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-existential-fool-body");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             fof(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             fof(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed
+            .contains("$ite($eq(p(esk1_0),$true),$eq(q(esk1_0),$true),$eq(r(esk1_0),$true))"));
+        assert!(printed.contains("$let($eq(f,a),f)=esk2_0"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_rejects_tstp_formula_free_variables() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-tstp-formula-free-variables");
@@ -20148,6 +20222,41 @@ mod tests {
              tff(p_type, type, p: $i > $o).\n\
              fof(ite_i_eq, axiom, ($ite(p(a), a, b) = c)).\n\
              fof(let_i_eq, axiom, ($let(f:$i, f := a, f) = b)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_existential_fool_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-existential-fool-body");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             fof(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             fof(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
