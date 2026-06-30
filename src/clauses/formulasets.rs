@@ -40,8 +40,8 @@ use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
 use crate::terms::termtypes::{
-    term_del_prop, term_has_interpreted_symbol, DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY,
-    TP_OP_FLAG, TP_POS_POLARITY,
+    term_del_prop, term_has_interpreted_symbol, DerefType, Term, TermProperties, TP_CHECK_FLAG,
+    TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
 };
 use crate::terms::termvars::VarBank;
 use std::collections::BTreeSet;
@@ -1297,7 +1297,11 @@ impl FormulaSet {
         }
     }
 
-    fn del_term_props(&self, props: crate::terms::termtypes::TermProperties) {
+    /// Applies C `TFormulaSetDelTermpProp`.
+    ///
+    /// Walks formulas in set order, ignores wrappers without a formula payload,
+    /// and deletes `props` recursively using C's `DEREF_NEVER` behavior.
+    pub fn del_term_props(&self, props: TermProperties) {
         for formula in &self.formulas {
             if let Some(term) = &formula.formula {
                 term_del_prop(term, DerefType::Never, props);
@@ -2021,7 +2025,9 @@ mod tests {
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
-    use crate::terms::termtypes::{DerefType, Term};
+    use crate::terms::termtypes::{
+        DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY, TP_POS_POLARITY,
+    };
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
 
@@ -2270,6 +2276,29 @@ mod tests {
         assert_eq!(copied[0].info(), None);
         assert_eq!(copied[0].formula(), &first_term);
         assert_eq!(copied[1].formula(), &second_term);
+    }
+
+    #[test]
+    fn formula_set_del_term_props_clears_nested_terms_and_ignores_default_wrappers() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "del_props_left");
+        let right = typed_const(&mut bank, "del_props_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        formula.set_prop(TP_CHECK_FLAG);
+        left.set_prop(TP_CHECK_FLAG | TP_POS_POLARITY);
+        right.set_prop(TP_NEG_POLARITY);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::default_alloc());
+        set.insert(WrappedFormula::wt_formula_alloc(formula.clone()));
+
+        set.del_term_props(TP_CHECK_FLAG | TP_POS_POLARITY);
+
+        assert!(!formula.query_prop(TP_CHECK_FLAG));
+        assert!(!left.query_prop(TP_CHECK_FLAG));
+        assert!(!left.query_prop(TP_POS_POLARITY));
+        assert!(right.query_prop(TP_NEG_POLARITY));
+        assert!(!right.query_prop(TP_CHECK_FLAG));
     }
 
     #[test]
