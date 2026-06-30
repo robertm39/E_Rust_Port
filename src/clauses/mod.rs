@@ -21,6 +21,7 @@ pub mod f_generality;
 pub mod factor;
 pub mod fcvindexing;
 pub mod findex;
+pub mod formulasets;
 pub mod freqvectors;
 pub mod g_lithash;
 pub mod garbage_coll;

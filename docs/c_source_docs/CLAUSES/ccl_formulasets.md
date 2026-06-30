@@ -132,6 +132,18 @@ Source files reviewed: `CLAUSES/ccl_formulasets.h`, `CLAUSES/ccl_formulasets.c`.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `FormulaSetAppEncode` first walks every wrapped formula with `PreloadTypes`, then prints app-encoded type declarations, app-encoded symbol declarations, and finally each non-`$true` formula. It takes the term bank from the first set entry and assumes formula-shaped wrappers when calling `WFormulaAppEncode`; because `eprover` calls it after parsing both formula and clause owners, declarations can still include symbols introduced only by skipped clauses in mixed `--app-encode` input. A cleaned Rust API should keep the preload/declaration ordering explicit but avoid coupling declaration output to the first list cell or to clause-side parser artifacts once full `FormulaSet` ownership is available.
 
+### Rust Port Status
+
+- `src/clauses/formulasets.rs` now stages the basic `DefaultWFormulaAlloc`/`WTFormulaAlloc`/`WFormulaFlatCopy` identity, generated id rendering, input-name preservation policy, formula property/type helpers, and append-order `FormulaSet` owner operations for allocation, insert, insert-set, extract-first, extract-entry, delete-entry, move-formula, cardinality, and emptiness.
+- The staged owner also covers the set-level untyped/interpreted-symbol scans, lambda-definition-excluding standard weight, conjecture split/count/order helpers, f-code collection, formula-set stack cardinality, and conditional stack type propagation over term-encoded formula payloads.
+- Formula parsing, printing, app encoding, CNF/preprocessing integration, proof-state formula archives, GC marking, polarity marking, definition statistics, and exact pointer-stable formula handles remain pending.
+
+### Change Later
+
+- C represents each `FormulaSet` as an intrusive doubly linked list by mutating `set`, `pred`, and `succ` fields inside every `WFormula`. Rust currently uses by-value ownership with stable wrapper entry ids for the staged owner; once proof state owns formulas, revisit arena or stable-handle ownership so extraction and derivation paths can keep pointer-like identity without exposing list links as public API.
+- C `WFormulaGetId` combines a process-global generated-id counter with the mutable `FormulasKeepInputNames` global. The Rust helper takes input-name preservation explicitly; decide later whether executable compatibility needs a global policy shim or whether explicit call-site policy is preferable.
+- C `FormulaSetAppEncode` discovers the term bank through the first set entry and mixes declaration preloading with formula emission. A later Rust implementation should make the bank/declaration dependencies explicit before deciding whether to preserve mixed clause/formula declaration leakage as compatibility behavior.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
