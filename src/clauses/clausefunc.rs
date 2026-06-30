@@ -1008,6 +1008,83 @@ pub fn tformula_neg_alloc(bank: &mut TermBank, form: &Term) -> Result<Term, Diag
     tformula_fcode_alloc(bank, bank.signature().not_code(), form.clone(), None)
 }
 
+/// Expands literal encodings before FOOL/CNF lowering.
+///
+/// This matches C `TFormulaExpandLiterals` for a single term-encoded formula:
+/// disequality becomes an explicit negated equality, Boolean equality may
+/// become equivalence, and selected `$eq(F,$true)` wrappers around internal
+/// Boolean formulas are removed.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding a changed formula or allocating an
+/// expanded formula fails.
+///
+/// # Panics
+///
+/// Panics if the C precondition for unwrapping an internal Boolean formula is
+/// violated.
+pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if form.is_any_var() || form.arity() == 0 {
+        return Ok(form.clone());
+    }
+
+    let (eqn_code, neqn_code, not_code, equiv_code) = {
+        let sig = bank.signature();
+        (
+            sig.eqn_code(),
+            sig.neqn_code(),
+            sig.not_code(),
+            sig.equiv_code(),
+        )
+    };
+
+    let mut current = if form.f_code() == neqn_code {
+        let equality = tformula_fcode_alloc(
+            bank,
+            eqn_code,
+            formula_argument(form, 0),
+            Some(formula_argument(form, 1)),
+        )?;
+        tformula_fcode_alloc(bank, not_code, equality, None)?
+    } else {
+        form.clone()
+    };
+
+    let copy = Term::top_copy_without_args(&current);
+    let mut changed = false;
+    for (index, arg) in current.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+        let expanded = tformula_expand_literals(bank, &arg)?;
+        changed |= expanded != arg;
+        copy.set_argument(index, expanded);
+    }
+    if changed {
+        current = bank.term_top_insert(copy)?;
+    }
+
+    if current.arity() == 2 && current.f_code() == eqn_code {
+        let left = formula_argument(&current, 0);
+        if left.type_() == Some(bank.signature().type_bank().bool_type()) && !left.is_free_var() {
+            let right = formula_argument(&current, 1);
+            if right != *bank.true_term() {
+                current = tformula_fcode_alloc(bank, equiv_code, left, Some(right))?;
+            } else if left.f_code() < bank.signature().internal_symbols()
+                && left.f_code() != bank.signature().answer_code()
+            {
+                assert_eq!(
+                    right,
+                    bank.true_term().clone(),
+                    "internal Boolean equality must be compared to true"
+                );
+                current = left;
+            }
+        }
+    }
+
+    Ok(current)
+}
+
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
 ///
 /// This matches C `TFormulaShiftQuantors` for a single formula. The input is
@@ -2054,8 +2131,8 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_distribute_disjunctions, tformula_neg_alloc, tformula_shift_quantors,
-        tformula_shift_quantors2, tformula_simplify_decoded,
+        tformula_distribute_disjunctions, tformula_expand_literals, tformula_neg_alloc,
+        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -2913,6 +2990,70 @@ mod tests {
         let flattened = tformula_neg_alloc(&mut bank, &negated).unwrap();
 
         assert_eq!(flattened, atom);
+    }
+
+    #[test]
+    fn tformula_expand_literals_makes_disequality_negation_explicit() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "expand_neq_left");
+        let right = typed_const(&mut bank, "expand_neq_right");
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let disequality = bool_binary_with_code(&mut bank, neqn_code, &left, &right);
+
+        let expanded = tformula_expand_literals(&mut bank, &disequality).unwrap();
+
+        assert_eq!(expanded.f_code(), bank.signature().not_code());
+        let equality = expanded.argument(0).unwrap();
+        assert_eq!(equality.f_code(), bank.signature().eqn_code());
+        assert_eq!(equality.argument(0).as_ref(), Some(&left));
+        assert_eq!(equality.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn tformula_expand_literals_turns_boolean_equality_into_equivalence() {
+        let mut bank = test_bank();
+        let and_code = bank.signature().and_code();
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+        let left = bool_binary_with_code(&mut bank, and_code, &true_term, &false_term);
+        let right = false_term;
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+
+        let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
+
+        assert_eq!(expanded.f_code(), bank.signature().equiv_code());
+        assert_eq!(expanded.argument(0).as_ref(), Some(&left));
+        assert_eq!(expanded.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn tformula_expand_literals_unwraps_internal_boolean_eq_true() {
+        let mut bank = test_bank();
+        let or_code = bank.signature().or_code();
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+        let left = bool_binary_with_code(&mut bank, or_code, &true_term, &false_term);
+        let right = true_term;
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+
+        let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
+
+        assert_eq!(expanded, left);
+    }
+
+    #[test]
+    fn tformula_expand_literals_keeps_boolean_free_var_eq_true() {
+        let mut bank = test_bank();
+        let left = bool_var(&bank, -144);
+        let right = bank.true_term().clone();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+
+        let expanded = tformula_expand_literals(&mut bank, &equality).unwrap();
+
+        assert_eq!(expanded, equality);
     }
 
     #[test]
