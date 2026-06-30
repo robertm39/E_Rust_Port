@@ -8,6 +8,37 @@ use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground};
 use crate::terms::termtypes::Term;
 use std::collections::BTreeMap;
+use std::sync::{OnceLock, RwLock};
+
+pub type TermNormalizer = fn(&mut TermBank, &Term) -> Result<Term, Diagnostic>;
+
+fn eta_normalizer_cell() -> &'static RwLock<TermNormalizer> {
+    static ETA_NORMALIZER: OnceLock<RwLock<TermNormalizer>> = OnceLock::new();
+    ETA_NORMALIZER.get_or_init(|| RwLock::new(lambda_eta_reduce_db))
+}
+
+/// Registers the eta normalizer used by `lambda_normalize_db`, matching C `SetEtaNormalizer`.
+///
+/// # Panics
+///
+/// Panics if another caller poisoned the process-wide normalizer lock.
+pub fn set_eta_normalizer(normalizer: TermNormalizer) {
+    *eta_normalizer_cell()
+        .write()
+        .expect("eta normalizer lock is poisoned") = normalizer;
+}
+
+/// Returns the eta normalizer used by `lambda_normalize_db`, matching C `GetEtaNormalizer`.
+///
+/// # Panics
+///
+/// Panics if another caller poisoned the process-wide normalizer lock.
+#[must_use]
+pub fn get_eta_normalizer() -> TermNormalizer {
+    *eta_normalizer_cell()
+        .read()
+        .expect("eta normalizer lock is poisoned")
+}
 
 /// Applies arguments to `head`, preserving C `ApplyTerms` sharing through the term bank.
 ///
@@ -522,6 +553,23 @@ pub fn lambda_eta_reduce_db(bank: &mut TermBank, term: &Term) -> Result<Term, Di
     Ok(result)
 }
 
+/// Performs beta normalization followed by the registered eta normalizer,
+/// matching C `LambdaNormalizeDB`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if beta normalization or the registered eta normalizer
+/// fails.
+///
+/// # Panics
+///
+/// Panics if the registered eta-normalizer lock is poisoned or if the
+/// normalizer encounters malformed lambda/application cells.
+pub fn lambda_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let beta_normal = beta_normalize_db(bank, term)?;
+    get_eta_normalizer()(bank, &beta_normal)
+}
+
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
 ///
 /// # Errors
@@ -1016,7 +1064,8 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 mod tests {
     use super::{
         apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, lambda_eta_expand_db,
-        lambda_eta_expand_db_top_level, lambda_eta_reduce_db, shift_db, unfold_lambda,
+        lambda_eta_expand_db_top_level, lambda_eta_reduce_db, lambda_normalize_db, shift_db,
+        unfold_lambda,
     };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
@@ -1243,6 +1292,28 @@ mod tests {
         assert_eq!(reduced.f_code(), f.f_code());
         assert_eq!(reduced.arity(), 1);
         assert_eq!(reduced.argument(0).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn lambda_normalize_db_runs_beta_then_eta() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "lambda_normalize_f", unary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let inner_matrix = apply_terms(&mut bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let inner_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &inner_matrix)
+                .unwrap();
+        let outer_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &inner_lambda)
+                .unwrap();
+        let a = typed_const(&mut bank, "lambda_normalize_a");
+        let applied = apply_terms(&mut bank, &outer_lambda, std::slice::from_ref(&a)).unwrap();
+
+        let normalized = lambda_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(normalized, f);
     }
 
     #[test]

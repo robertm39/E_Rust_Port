@@ -148,9 +148,9 @@ Source files reviewed: `TERMS/cte_lambda.h`, `TERMS/cte_lambda.c`.
 
 ### Rust Port Status Notes
 
-- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning, equality-definition unfolding, and eta normalization: C-shaped `ApplyTerms`, `FlattenApps`, `flatten_and_make_shared`, `UnfoldLambda`, `drop_args`, `find_min_db`, `reduce_eta_top_level`, `LambdaEtaExpandDBTopLevel`, `LambdaEtaExpandDB`, `LambdaEtaReduceDB`, `CloseWithDBVar`, `CloseWithTypePrefix`, `AbstractVars`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
+- `src/terms/lambda.rs` now stages the DB-lambda helpers needed by higher-order argument pruning, equality-definition unfolding, and eta normalization: C-shaped `ApplyTerms`, `FlattenApps`, `flatten_and_make_shared`, `UnfoldLambda`, `drop_args`, `find_min_db`, `reduce_eta_top_level`, `LambdaEtaExpandDBTopLevel`, `LambdaEtaExpandDB`, `LambdaEtaReduceDB`, `SetEtaNormalizer`, `GetEtaNormalizer`, `LambdaNormalizeDB`, `CloseWithDBVar`, `CloseWithTypePrefix`, `AbstractVars`, `ShiftDB`, one-step `WHNF_step`, and DB beta normalization.
 - The staged beta normalizer handles phony applications headed by DB lambdas, consumed-argument substitution with DB-index shifting, recursive beta normalization under lambdas and ordinary top cells, and the C `BetaNormalizeDB` special case that unwraps `$eq(logical_symbol, $true)`.
-- Full `LambdaNormalizeDB` parity is not complete yet because named-lambda-to-DB conversion, formula CNF decode/encode helpers, and general cache-backed `WHNF_deref` integration remain later slices. The KBO6 LFHO ordering path has a comparison-local weak-head dereference helper for `DEREF_ALWAYS`, but it does not model the shared term-bank cache boundary.
+- Full `cte_lambda` parity is not complete yet because named-lambda-to-DB conversion, formula CNF decode/encode helpers, and general cache-backed `WHNF_deref` integration remain later slices. The KBO6 LFHO ordering path has a comparison-local weak-head dereference helper for `DEREF_ALWAYS`, but it does not model the shared term-bank cache boundary.
 
 ### Change-Later Observations
 
