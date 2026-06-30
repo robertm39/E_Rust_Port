@@ -63,6 +63,18 @@ pub const fn get_soft_rlimit(_resource: i32) -> u64 {
 
 #[cfg(target_os = "linux")]
 #[must_use]
+pub fn get_hard_rlimit(resource: i32) -> u64 {
+    linux_rlimit::get_hard_rlimit(resource)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn get_hard_rlimit(_resource: i32) -> u64 {
+    0
+}
+
+#[cfg(target_os = "linux")]
+#[must_use]
 pub fn set_memory_limit(mem_limit: u64) -> RLimResult {
     if mem_limit == 0 {
         return RLimResult::Success;
@@ -635,16 +647,9 @@ mod linux_rlimit {
     }
 
     pub(super) fn set_soft_rlimit(resource: i32, mut limit: u64) -> RLimResult {
-        let mut rlimit = MaybeUninit::<RLimit>::uninit();
-        // SAFETY: rlimit points to writable, properly aligned storage for the
-        // C library to initialize on success. The resource integer is passed
-        // through exactly like C's SetSoftRlimit wrapper.
-        if unsafe { getrlimit(resource, rlimit.as_mut_ptr()) } == -1 {
+        let Some(mut rlimit) = get_rlimit(resource) else {
             return RLimResult::Failed;
-        }
-        // SAFETY: getrlimit returned success, so the rlimit buffer is
-        // initialized by the C library.
-        let mut rlimit = unsafe { rlimit.assume_init() };
+        };
 
         let mut result = RLimResult::Success;
         if rlimit.maximum < limit {
@@ -662,15 +667,23 @@ mod linux_rlimit {
     }
 
     pub(super) fn get_soft_rlimit(resource: i32) -> u64 {
+        get_rlimit(resource).map_or(0, |limit| limit.current)
+    }
+
+    pub(super) fn get_hard_rlimit(resource: i32) -> u64 {
+        get_rlimit(resource).map_or(0, |limit| limit.maximum)
+    }
+
+    fn get_rlimit(resource: i32) -> Option<RLimit> {
         let mut rlimit = MaybeUninit::<RLimit>::uninit();
         // SAFETY: rlimit points to writable, properly aligned storage for the
         // C library to initialize on success.
         if unsafe { getrlimit(resource, rlimit.as_mut_ptr()) } == -1 {
-            return 0;
+            return None;
         }
         // SAFETY: getrlimit returned success, so the rlimit buffer is
         // initialized by the C library.
-        unsafe { rlimit.assume_init().current }
+        Some(unsafe { rlimit.assume_init() })
     }
 }
 
@@ -864,10 +877,11 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn unsupported_resource_limits_are_explicit() {
-        use super::{get_soft_rlimit, set_soft_rlimit};
+        use super::{get_hard_rlimit, get_soft_rlimit, set_soft_rlimit};
 
         assert_eq!(set_soft_rlimit(0, 1), RLimResult::Failed);
         assert_eq!(get_soft_rlimit(0), 0);
+        assert_eq!(get_hard_rlimit(0), 0);
         assert_eq!(set_memory_limit(0), RLimResult::Success);
         assert_eq!(set_memory_limit(1), RLimResult::Failed);
     }
@@ -875,10 +889,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_rlimit_boundary_reports_invalid_resource_like_c() {
-        use super::{get_soft_rlimit, set_soft_rlimit};
+        use super::{get_hard_rlimit, get_soft_rlimit, set_soft_rlimit};
 
         assert_eq!(set_soft_rlimit(-1, 1), RLimResult::Failed);
         assert_eq!(get_soft_rlimit(-1), 0);
+        assert_eq!(get_hard_rlimit(-1), 0);
         assert_eq!(set_memory_limit(0), RLimResult::Success);
     }
 

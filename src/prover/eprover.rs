@@ -89,7 +89,9 @@ use crate::inout::output::set_output_level;
 use crate::inout::scanner::{
     token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
 };
-use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
+use crate::inout::signals::{
+    configure_time_limits, e_signal_setup, SignalOutcome, RLIM_INFINITY_COMPAT, SIGXCPU_COMPAT,
+};
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
@@ -2295,6 +2297,14 @@ fn apply_time_limit_state(config: &EProverConfig) {
     configure_time_limits(hard_limit, soft_limit, schedule_limit);
 }
 
+fn setup_signal_handlers() -> Result<(), Diagnostic> {
+    if let SignalOutcome::HandlerInstallFailed { diagnostic, .. } = e_signal_setup(SIGXCPU_COMPAT) {
+        Err(diagnostic)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(any(test, target_os = "linux"))]
 fn cpu_rlimit_to_apply(config: &EProverConfig) -> Option<u64> {
     let hard_limit = config
@@ -2376,6 +2386,7 @@ where
     init_io(PROGRAM_NAME);
     let _io_guard = IoRunGuard;
     let _problem_type_guard = ProblemTypeRunGuard::new();
+    setup_signal_handlers()?;
     match process_options(argv)? {
         EProverAction::Help => {
             stdout.write_all(print_help().as_bytes())?;

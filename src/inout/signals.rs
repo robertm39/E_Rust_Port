@@ -1,5 +1,9 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::get_usec_clock;
+#[cfg(all(target_os = "linux", not(test)))]
+use crate::basics::os_wrapper::set_soft_rlimit;
+#[cfg(target_os = "linux")]
+use crate::basics::os_wrapper::{get_hard_rlimit, RLIMIT_CPU_COMPAT};
 use crate::inout::tempfile::temp_file_cleanup;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 
@@ -25,6 +29,10 @@ static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
 pub enum SignalOutcome {
     HandlerInstalled {
         signal: i32,
+    },
+    HandlerInstallFailed {
+        signal: i32,
+        diagnostic: Diagnostic,
     },
     SoftTimeLimitReached {
         next_limit: u64,
@@ -159,7 +167,28 @@ pub fn set_silent_time_out(value: bool) -> bool {
 
 #[must_use]
 pub fn e_signal_setup(signal: i32) -> SignalOutcome {
-    SYSTEM_TIME_LIMIT.store(RLIM_INFINITY_COMPAT, Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    {
+        SYSTEM_TIME_LIMIT.store(get_hard_rlimit(RLIMIT_CPU_COMPAT), Ordering::SeqCst);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        SYSTEM_TIME_LIMIT.store(RLIM_INFINITY_COMPAT, Ordering::SeqCst);
+    }
+
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        if !linux_signal::install_e_signal_handler(signal) {
+            return SignalOutcome::HandlerInstallFailed {
+                signal,
+                diagnostic: Diagnostic::new(
+                    ErrorCode::SYSTEM_ERROR,
+                    "Unable to set up signal handler",
+                ),
+            };
+        }
+    }
+
     SignalOutcome::HandlerInstalled { signal }
 }
 
@@ -188,6 +217,10 @@ fn handle_cpu_limit() -> SignalOutcome {
         let next_limit = HARD_TIME_LIMIT
             .load(Ordering::SeqCst)
             .min(SYSTEM_TIME_LIMIT.load(Ordering::SeqCst));
+        #[cfg(all(target_os = "linux", not(test)))]
+        {
+            let _ = set_soft_rlimit(RLIMIT_CPU_COMPAT, next_limit);
+        }
         let _ = e_signal_setup(SIGXCPU_COMPAT);
         return SignalOutcome::SoftTimeLimitReached { next_limit };
     }
@@ -228,6 +261,31 @@ fn time_limit_deadline_usec(start_usec: i64, limit_seconds: u64) -> i64 {
     let limit_usec = limit_seconds.saturating_mul(USEC_PER_SEC);
     let limit_usec = i64::try_from(limit_usec).unwrap_or(i64::MAX);
     start_usec.saturating_add(limit_usec)
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+#[allow(unsafe_code)]
+mod linux_signal {
+    use super::e_signal_handler;
+
+    type SignalHandler = extern "C" fn(i32);
+
+    const SIG_ERR_COMPAT: usize = usize::MAX;
+
+    extern "C" {
+        fn signal(signum: i32, handler: SignalHandler) -> usize;
+    }
+
+    pub(super) fn install_e_signal_handler(signal_number: i32) -> bool {
+        // SAFETY: signal installs a process-global handler. The handler is an
+        // extern "C" function with the required integer signal argument and no
+        // captured Rust state.
+        (unsafe { signal(signal_number, signal_trampoline) }) != SIG_ERR_COMPAT
+    }
+
+    extern "C" fn signal_trampoline(signal_number: i32) {
+        let _ = e_signal_handler(signal_number);
+    }
 }
 
 #[cfg(test)]
@@ -298,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn setup_records_system_limit_shape_without_installing_raw_handler() {
+    fn setup_records_system_limit_shape_without_installing_raw_handler_in_tests() {
         let _guard = global_state_lock();
         reset_signal_state_for_tests();
         let _ = set_system_time_limit(123);
@@ -309,6 +367,12 @@ mod tests {
                 signal: SIGXCPU_COMPAT
             }
         );
+        #[cfg(target_os = "linux")]
+        {
+            assert_ne!(system_time_limit(), 123);
+            assert!(system_time_limit() > 0);
+        }
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(system_time_limit(), RLIM_INFINITY_COMPAT);
     }
 
