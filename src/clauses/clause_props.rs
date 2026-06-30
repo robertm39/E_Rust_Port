@@ -67,7 +67,7 @@ impl FormulaProperties {
     pub const fn is_conjecture(self) -> bool {
         matches!(
             self.query_tptp_type(),
-            CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE
+            CP_TYPE_CONJECTURE | CP_TYPE_NEG_CONJECTURE | CP_TYPE_QUESTION
         )
     }
 }
@@ -280,6 +280,9 @@ mod tests {
         assert!(props.query(CP_INITIAL | CP_IS_SOS));
         assert!(props.is_conjecture());
         assert!(!props.is_hypothesis());
+
+        props.set_tptp_type(CP_TYPE_QUESTION);
+        assert!(props.is_conjecture());
 
         props.set_tptp_type(CP_TYPE_HYPOTHESIS);
         assert!(props.is_hypothesis());

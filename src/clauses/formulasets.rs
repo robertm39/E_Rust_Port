@@ -1314,10 +1314,7 @@ impl WrappedFormula {
 
     #[must_use]
     pub fn is_conjecture(&self) -> bool {
-        matches!(
-            self.query_tptp_type(),
-            CP_TYPE_CONJECTURE | CP_TYPE_QUESTION
-        ) || self.properties.is_conjecture()
+        self.properties.is_conjecture()
     }
 
     #[must_use]
