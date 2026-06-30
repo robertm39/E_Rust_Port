@@ -987,6 +987,25 @@ pub(crate) fn tformula_fcode_alloc(
     bank.term_top_insert(term)
 }
 
+/// Returns a formula equivalent to the negation of `form`.
+///
+/// This matches C `TFormulaNegAlloc`: it removes a single root negation when
+/// present and otherwise allocates `$not(form)`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if allocating the negated formula fails.
+///
+/// # Panics
+///
+/// Panics if a root negation cell is malformed.
+pub fn tformula_neg_alloc(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if form.f_code() == bank.signature().not_code() {
+        return Ok(formula_argument(form, 0));
+    }
+    tformula_fcode_alloc(bank, bank.signature().not_code(), form.clone(), None)
+}
+
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
 ///
 /// This matches C `TFormulaShiftQuantors` for a single formula. The input is
@@ -1904,7 +1923,8 @@ mod tests {
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify_decoded,
+        tformula_neg_alloc, tformula_shift_quantors, tformula_shift_quantors2,
+        tformula_simplify_decoded,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -2730,6 +2750,38 @@ mod tests {
         let simplified = tformula_simplify_decoded(&mut bank, &formula, true).unwrap();
 
         assert_eq!(simplified, formula);
+    }
+
+    #[test]
+    fn tformula_neg_alloc_wraps_non_negated_formula() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "neg_alloc_left");
+        let right = typed_const(&mut bank, "neg_alloc_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+
+        let negated = tformula_neg_alloc(&mut bank, &atom).unwrap();
+
+        assert_eq!(negated.f_code(), bank.signature().not_code());
+        assert_eq!(negated.argument(0).as_ref(), Some(&atom));
+        assert_eq!(
+            negated.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+    }
+
+    #[test]
+    fn tformula_neg_alloc_flattens_one_root_negation() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "neg_alloc_flatten_left");
+        let right = typed_const(&mut bank, "neg_alloc_flatten_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let negated = tformula_neg_alloc(&mut bank, &atom).unwrap();
+
+        let flattened = tformula_neg_alloc(&mut bank, &negated).unwrap();
+
+        assert_eq!(flattened, atom);
     }
 
     #[test]
