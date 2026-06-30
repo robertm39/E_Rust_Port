@@ -68,7 +68,7 @@ use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_de
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
-    spec_features_compute_clause_set_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
+    spec_features_compute_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
 };
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
@@ -5563,7 +5563,13 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
 
     let choice_max_depth = params.inst_choice_max_depth;
     let mut features = SpecFeatureCell::default();
-    spec_features_compute_clause_set_without_choice(&mut features, state.axioms(), state.terms());
+    spec_features_compute_without_choice(
+        &mut features,
+        state.axioms(),
+        Some(state.f_axioms()),
+        Some(state.f_ax_archive()),
+        state.terms(),
+    );
     features.order = auto_context.raw_features.order;
     features.goal_order = auto_context.raw_features.conj_order;
     features.num_of_definitions = auto_context.raw_features.num_of_definitions;
