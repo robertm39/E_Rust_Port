@@ -123,6 +123,35 @@ impl TFormulaCnfResult {
     }
 }
 
+/// Term-level result of C `TFormulaUnrollFOOL`.
+///
+/// `formula` is the final formula after literal expansion and FOOL unrolling.
+/// `fool_unrolled` reports only whether the `do_fool_unroll` mapper changed
+/// the already-expanded formula, matching the boolean returned by C
+/// `TFormulaUnrollFOOL`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TFormulaFoolUnrollResult {
+    formula: Term,
+    fool_unrolled: bool,
+}
+
+impl TFormulaFoolUnrollResult {
+    #[must_use]
+    pub fn formula(&self) -> &Term {
+        &self.formula
+    }
+
+    #[must_use]
+    pub fn into_formula(self) -> Term {
+        self.formula
+    }
+
+    #[must_use]
+    pub const fn fool_unrolled(&self) -> bool {
+        self.fool_unrolled
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TFormulaTptpPrintOptions {
     pub problem_type: ProblemType,
@@ -1231,8 +1260,35 @@ pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term
 /// Panics if a located FOOL subterm is not Boolean, or if formula cells are
 /// malformed.
 pub fn tformula_unroll_fool(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    Ok(tformula_unroll_fool_result(bank, form)?.into_formula())
+}
+
+/// Applies C `TFormulaUnrollFOOL` and preserves its change flag.
+///
+/// The C helper first expands literals unconditionally, then calls the
+/// `do_fool_unroll` mapper through `map_formula`. Its boolean return value is
+/// true only when the mapper changes the expanded formula; expansion-only
+/// changes do not count as `DCFoolUnroll`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if literal expansion, lambda eta-reduction, term
+/// replacement, or formula allocation fails.
+///
+/// # Panics
+///
+/// Panics if a located FOOL subterm is not Boolean, or if formula cells are
+/// malformed.
+pub fn tformula_unroll_fool_result(
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<TFormulaFoolUnrollResult, Diagnostic> {
     let expanded = tformula_expand_literals(bank, form)?;
-    do_fool_unroll(bank, &expanded)
+    let unrolled = do_fool_unroll(bank, &expanded)?;
+    Ok(TFormulaFoolUnrollResult {
+        fool_unrolled: unrolled != expanded,
+        formula: unrolled,
+    })
 }
 
 fn do_fool_unroll(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {

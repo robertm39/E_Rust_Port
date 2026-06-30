@@ -13,14 +13,15 @@ use crate::clauses::clause_props::{
 use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
     tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_fcode_alloc,
-    tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity, tformula_preload_types,
-    tformula_simplify, tformula_to_cnf, tformula_tptp_string, TFormulaTptpPrintOptions,
+    tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true, tformula_mark_polarity,
+    tformula_preload_types, tformula_simplify, tformula_to_cnf, tformula_tptp_string,
+    tformula_unroll_fool_result, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_FOF_QUOTE,
-    DC_FOF_SIMPLIFY, DC_NEGATE_CONJECTURE,
+    clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_EQ_TO_EQ,
+    DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_NEGATE_CONJECTURE,
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::lambda_normalize_db;
@@ -137,6 +138,13 @@ pub struct FormulaSetSimplifyResult {
 pub struct FormulaSetPreprocessConjecturesResult {
     pub conjectures_negated: i64,
     pub questions_annotated: i64,
+    pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetFoolUnrollResult {
+    pub boolean_equalities_replaced: i64,
+    pub formulas_unrolled: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
 
@@ -359,6 +367,53 @@ impl WrappedFormula {
         }
         self.set_tptp_type(CP_TYPE_CONJECTURE);
         Ok(true)
+    }
+
+    /// Applies C `WFormulaReplaceEqnWithEquiv`.
+    ///
+    /// Complex Boolean equalities become equivalence formulas, complex Boolean
+    /// disequalities become XOR formulas, and comparisons against `$true`
+    /// collapse to the Boolean side or its negation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if a rebuilt formula cannot be allocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if a formula cell has
+    /// uninitialized arguments.
+    pub fn replace_eqn_with_equiv(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let replaced = tformula_replace_eqn_with_equiv(bank, self.formula())?;
+        if replaced == *self.formula() {
+            return Ok(false);
+        }
+        self.set_formula(replaced);
+        Ok(true)
+    }
+
+    /// Applies C `TFormulaUnrollFOOL` to this wrapper.
+    ///
+    /// Literal expansion always updates the wrapped formula when it changes.
+    /// The returned flag reports only whether the FOOL unrolling mapper changed
+    /// the expanded formula, matching C's `TFormulaUnrollFOOL` return value and
+    /// `DCFoolUnroll` derivation condition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if literal expansion, lambda eta-reduction, term
+    /// replacement, or formula allocation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term, a located FOOL subterm is not
+    /// Boolean, or formula cells are malformed.
+    pub fn unroll_fool(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let result = tformula_unroll_fool_result(bank, self.formula())?;
+        if result.formula() != self.formula() {
+            self.set_formula(result.formula().clone());
+        }
+        Ok(result.fool_unrolled())
     }
 
     #[must_use]
@@ -1087,6 +1142,40 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `WFormulaSetUnrollFOOL` in insertion order.
+    ///
+    /// Each formula first runs `WFormulaReplaceEqnWithEquiv`, then
+    /// `TFormulaUnrollFOOL`. Formula-level derivation storage is deferred, so
+    /// this returns the C derivation opcodes that should be attached by a future
+    /// owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if formula rebuilding, literal expansion, lambda
+    /// eta-reduction, or term replacement fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any preprocessed wrapper has no formula term or a malformed
+    /// formula payload.
+    pub fn unroll_fool(
+        &mut self,
+        bank: &mut TermBank,
+    ) -> Result<FormulaSetFoolUnrollResult, Diagnostic> {
+        let mut result = FormulaSetFoolUnrollResult::default();
+        for formula in &mut self.formulas {
+            if formula.replace_eqn_with_equiv(bank)? {
+                result.boolean_equalities_replaced += 1;
+                result.formula_derivation_ops.push(DC_EQ_TO_EQ);
+            }
+            if formula.unroll_fool(bank)? {
+                result.formulas_unrolled += 1;
+                result.formula_derivation_ops.push(DC_FOOL_UNROLL);
+            }
+        }
+        Ok(result)
+    }
+
     /// Drains this set into CNF clauses using the staged core of C
     /// `FormulaSetCNF2`.
     ///
@@ -1438,6 +1527,61 @@ fn answer_lit_alloc(bank: &mut TermBank, variables: &[Term]) -> Result<Term, Dia
     tformula_fcode_alloc(bank, neqn_code, answer, Some(true_term))
 }
 
+fn tformula_replace_eqn_with_equiv(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    if form.is_db_var() || !form.has_eq_neq() || form.is_any_var() {
+        return Ok(form.clone());
+    }
+
+    let copy = Term::top_copy_without_args(form);
+    for (index, arg) in form.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+        copy.set_argument(index, tformula_replace_eqn_with_equiv(bank, &arg)?);
+    }
+    let current = bank.term_top_insert(copy)?;
+    rewrite_bool_eqn_root(bank, &current)
+}
+
+fn rewrite_bool_eqn_root(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let (eqn_code, neqn_code, equiv_code, xor_code, not_code) = {
+        let signature = bank.signature();
+        (
+            signature.eqn_code(),
+            signature.neqn_code(),
+            signature.equiv_code(),
+            signature.xor_code(),
+            signature.not_code(),
+        )
+    };
+    if form.arity() != 2 || (form.f_code() != eqn_code && form.f_code() != neqn_code) {
+        return Ok(form.clone());
+    }
+
+    let left = form
+        .argument(0)
+        .unwrap_or_else(|| panic!("Boolean equality left argument is uninitialized"));
+    let right = form
+        .argument(1)
+        .unwrap_or_else(|| panic!("Boolean equality right argument is uninitialized"));
+    if !tformula_is_complex_bool(bank, &left) || !tformula_is_complex_bool(bank, &right) {
+        return Ok(form.clone());
+    }
+
+    let true_term = bank.true_term().clone();
+    if form.f_code() == eqn_code {
+        if right != true_term {
+            return tformula_fcode_alloc(bank, equiv_code, left, Some(right));
+        }
+        if left != true_term {
+            return Ok(left);
+        }
+    } else if right != true_term {
+        return tformula_fcode_alloc(bank, xor_code, left, Some(right));
+    } else if left != true_term {
+        return tformula_fcode_alloc(bank, not_code, left, None);
+    }
+    Ok(form.clone())
+}
+
 fn formula_set_write_error(message: &'static str) -> Diagnostic {
     Diagnostic::new(ErrorCode::OTHER_ERROR, message)
 }
@@ -1459,13 +1603,15 @@ mod tests {
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_DIST_DISJUNCTIONS,
-        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT,
+        DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ,
+        DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::terms::lambda::close_with_db_var;
-    use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
+    use crate::terms::signature::{
+        Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+    };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termfunc::term_standard_weight;
@@ -1539,6 +1685,15 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
+    }
+
+    fn c_complex_bool_shape(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = bank.signature().type_bank().bool_type();
+        let payload = typed_const(bank, name);
+        let term = Term::top_alloc(SIG_TRUE_CODE, 1);
+        term.set_type(Some(type_));
+        term.set_argument(0, payload);
         bank.term_top_insert(term).unwrap()
     }
 
@@ -2198,6 +2353,98 @@ mod tests {
         );
         assert_eq!(formulas[2].query_tptp_type(), CP_TYPE_AXIOM);
         assert_eq!(formulas[2].formula(), &axiom_formula);
+    }
+
+    #[test]
+    fn wrapped_formula_replace_eqn_with_equiv_matches_c_complex_bool_shape() {
+        let mut bank = test_bank();
+        let left = c_complex_bool_shape(&mut bank, "wf_eq_to_eq_left");
+        let right = c_complex_bool_shape(&mut bank, "wf_eq_to_eq_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &left, &right);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(equality);
+
+        assert!(wrapped.replace_eqn_with_equiv(&mut bank).unwrap());
+
+        assert_eq!(wrapped.formula().f_code(), bank.signature().equiv_code());
+        assert_eq!(wrapped.formula().argument(0).as_ref(), Some(&left));
+        assert_eq!(wrapped.formula().argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn wrapped_formula_unroll_fool_expands_literals_without_counting_mapper_noops() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "wf_fool_expand_left");
+        let right = typed_const(&mut bank, "wf_fool_expand_right");
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let disequality = bool_binary_with_code(&mut bank, neqn_code, &left, &right);
+        let mut wrapped = WrappedFormula::wt_formula_alloc(disequality);
+
+        assert!(!wrapped.unroll_fool(&mut bank).unwrap());
+
+        assert_eq!(wrapped.formula().f_code(), bank.signature().not_code());
+        let equality = wrapped.formula().argument(0).unwrap();
+        assert_eq!(equality.f_code(), bank.signature().eqn_code());
+        assert_eq!(equality.argument(0).as_ref(), Some(&left));
+        assert_eq!(equality.argument(1).as_ref(), Some(&right));
+    }
+
+    #[test]
+    fn formula_set_unroll_fool_replaces_then_unrolls_in_order() {
+        let mut bank = test_bank();
+        let eq_left = c_complex_bool_shape(&mut bank, "set_fool_eq_left");
+        let eq_right = c_complex_bool_shape(&mut bank, "set_fool_eq_right");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equality = bool_binary_with_code(&mut bank, eqn_code, &eq_left, &eq_right);
+        let replacement_only = WrappedFormula::wt_formula_alloc(equality);
+
+        let a = typed_const(&mut bank, "set_fool_a");
+        let b = typed_const(&mut bank, "set_fool_b");
+        let c = typed_const(&mut bank, "set_fool_c");
+        let d = typed_const(&mut bank, "set_fool_d");
+        let target = typed_const(&mut bank, "set_fool_target");
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &c, &d);
+        let and_code = bank.signature().and_code();
+        let bool_arg = bool_binary_with_code(&mut bank, and_code, &left_atom, &right_atom);
+        let bool_type = bank.signature().type_bank().bool_type();
+        let default_type = bank.signature().type_bank().default_type();
+        let applied = typed_unary_with_types(
+            &mut bank,
+            "set_fool_fun",
+            &bool_arg,
+            &bool_type,
+            &default_type,
+        );
+        let unroll_formula = bool_binary_with_code(&mut bank, eqn_code, &applied, &target);
+        let unroll = WrappedFormula::wt_formula_alloc(unroll_formula);
+
+        let stable_left = typed_const(&mut bank, "set_fool_stable_left");
+        let stable_right = typed_const(&mut bank, "set_fool_stable_right");
+        let stable_formula =
+            bool_binary_with_code(&mut bank, eqn_code, &stable_left, &stable_right);
+        let stable = WrappedFormula::wt_formula_alloc(stable_formula.clone());
+
+        let mut set = FormulaSet::new();
+        set.insert(replacement_only);
+        set.insert(unroll);
+        set.insert(stable);
+
+        let result = set.unroll_fool(&mut bank).unwrap();
+
+        assert_eq!(result.boolean_equalities_replaced, 1);
+        assert_eq!(result.formulas_unrolled, 1);
+        assert_eq!(
+            result.formula_derivation_ops,
+            vec![DC_EQ_TO_EQ, DC_FOOL_UNROLL]
+        );
+        let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(
+            formulas[0].formula().f_code(),
+            bank.signature().equiv_code()
+        );
+        assert_eq!(formulas[1].formula().f_code(), bank.signature().and_code());
+        assert_eq!(formulas[2].formula(), &stable_formula);
     }
 
     #[test]
