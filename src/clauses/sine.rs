@@ -7,7 +7,7 @@ use crate::clauses::clause::{clause_write_tstp, Clause};
 use crate::clauses::clause_props::FormulaProperties;
 use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
 use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
-use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
+use crate::clauses::formulasets::{formula_set_stack_cardinality, FormulaSet, WrappedFormula};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -410,6 +410,30 @@ pub fn select_threshold_clause_sets<'a>(
     usize_to_i64(res_clauses.len())
 }
 
+pub fn select_threshold_clause_formula_sets<'a>(
+    clause_sets: &PStack<&'a ClauseSet>,
+    formula_sets: &PStack<&'a FormulaSet>,
+    threshold: i64,
+    res_clauses: &mut PStack<&'a Clause>,
+    res_formulas: &mut PStack<&'a WrappedFormula>,
+) -> i64 {
+    let ax_cardinality = clause_set_ref_stack_cardinality(clause_sets)
+        + formula_set_stack_cardinality(formula_sets.as_slice());
+
+    if ax_cardinality <= threshold {
+        for set in clause_sets.as_slice() {
+            set.push_clause_refs(res_clauses);
+        }
+        for set in formula_sets.as_slice() {
+            for formula in set.iter() {
+                res_formulas.push(formula);
+            }
+        }
+    }
+
+    usize_to_i64(res_clauses.len().saturating_add(res_formulas.len()))
+}
+
 /// Clause-only equivalent of C `SelectDefiningAxioms`.
 ///
 /// Returns the number of newly selected clauses pushed by this defining-axiom
@@ -689,7 +713,8 @@ mod tests {
         pqueue_store_clause, pqueue_store_formula, pstack_clause_del_prop,
         pstack_clause_print_tstp_string, pstack_clauses_move, pstack_formula_del_prop,
         pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_sets,
-        select_threshold_clause_sets, AxiomType, ClauseSineParams, DRel, DRelation,
+        select_threshold_clause_formula_sets, select_threshold_clause_sets, AxiomType,
+        ClauseSineParams, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -1275,6 +1300,115 @@ mod tests {
 
         assert_eq!(select_threshold_clause_sets(&sets, 1, 1, &mut result), 1);
         assert_eq!(result.as_slice()[0].ident(), existing.ident());
+    }
+
+    #[test]
+    fn select_threshold_clause_formula_sets_pushes_clauses_then_formulas_under_limit() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "threshold_mixed_a");
+        let b = typed_const(&mut bank, "threshold_mixed_b");
+        let mut first_clause = clause_from(vec![literal(&mut bank, &a, &a, true)]);
+        let mut second_clause = clause_from(vec![literal(&mut bank, &b, &b, true)]);
+        first_clause.set_ident(10);
+        second_clause.set_ident(20);
+        let clauses = ClauseSet::from_clauses([first_clause, second_clause]);
+        let first_formula =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "threshold_formula_first"));
+        let first_formula_id = first_formula.entry_id();
+        let second_formula =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "threshold_formula_second"));
+        let second_formula_id = second_formula.entry_id();
+        let mut formulas = FormulaSet::new();
+        formulas.insert(first_formula);
+        formulas.insert(second_formula);
+        let mut clause_sets = PStack::new();
+        clause_sets.push(&clauses);
+        let mut formula_sets = PStack::new();
+        formula_sets.push(&formulas);
+        let mut result_clauses = PStack::new();
+        let mut result_formulas = PStack::new();
+
+        assert_eq!(
+            select_threshold_clause_formula_sets(
+                &clause_sets,
+                &formula_sets,
+                4,
+                &mut result_clauses,
+                &mut result_formulas,
+            ),
+            4
+        );
+
+        assert_eq!(
+            result_clauses
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+        assert_eq!(
+            result_formulas
+                .as_slice()
+                .iter()
+                .map(|formula| formula.entry_id())
+                .collect::<Vec<_>>(),
+            vec![first_formula_id, second_formula_id]
+        );
+    }
+
+    #[test]
+    fn select_threshold_clause_formula_sets_returns_existing_combined_len_when_over_limit() {
+        let mut bank = test_bank();
+        let kept_clause_term = typed_const(&mut bank, "threshold_mixed_kept_clause");
+        let blocked_clause_term = typed_const(&mut bank, "threshold_mixed_blocked_clause");
+        let mut kept_clause = clause_from(vec![literal(
+            &mut bank,
+            &kept_clause_term,
+            &kept_clause_term,
+            true,
+        )]);
+        kept_clause.set_ident(10);
+        let blocked_clause = clause_from(vec![literal(
+            &mut bank,
+            &blocked_clause_term,
+            &blocked_clause_term,
+            true,
+        )]);
+        let clauses = ClauseSet::from_clauses([blocked_clause]);
+        let kept_formula = WrappedFormula::wt_formula_alloc(typed_const(
+            &mut bank,
+            "threshold_mixed_kept_formula",
+        ));
+        let kept_formula_id = kept_formula.entry_id();
+        let blocked_formula = WrappedFormula::wt_formula_alloc(typed_const(
+            &mut bank,
+            "threshold_mixed_blocked_formula",
+        ));
+        let mut formulas = FormulaSet::new();
+        formulas.insert(blocked_formula);
+        let mut clause_sets = PStack::new();
+        clause_sets.push(&clauses);
+        let mut formula_sets = PStack::new();
+        formula_sets.push(&formulas);
+        let mut result_clauses = PStack::new();
+        result_clauses.push(&kept_clause);
+        let mut result_formulas = PStack::new();
+        result_formulas.push(&kept_formula);
+
+        assert_eq!(
+            select_threshold_clause_formula_sets(
+                &clause_sets,
+                &formula_sets,
+                1,
+                &mut result_clauses,
+                &mut result_formulas,
+            ),
+            2
+        );
+
+        assert_eq!(result_clauses.as_slice()[0].ident(), 10);
+        assert_eq!(result_formulas.as_slice()[0].entry_id(), kept_formula_id);
     }
 
     #[test]
