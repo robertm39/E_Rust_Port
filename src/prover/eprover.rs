@@ -8772,6 +8772,22 @@ struct SimpleFofLetReplacement {
     fresh_lhs: Term,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SimpleFofBoolEqnReplacement {
+    PreserveEncodedEquality,
+    ReplaceWithEquivalence,
+}
+
+impl SimpleFofBoolEqnReplacement {
+    fn from_fool_unroll(fool_unroll: bool) -> Self {
+        if fool_unroll {
+            Self::ReplaceWithEquivalence
+        } else {
+            Self::PreserveEncodedEquality
+        }
+    }
+}
+
 fn simple_fof_formulas_to_clause_literal_lists(
     mut formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
@@ -8779,7 +8795,11 @@ fn simple_fof_formulas_to_clause_literal_lists(
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if !negate_as_conjecture {
-        formulas = simple_fof_lift_direct_let_formulas(formulas, bank)?;
+        formulas = simple_fof_lift_direct_let_formulas(
+            formulas,
+            SimpleFofBoolEqnReplacement::from_fool_unroll(fool_unroll),
+            bank,
+        )?;
     }
     formulas = simple_fof_simplify_formulas(formulas);
     let universal_dependencies = simple_fof_global_free_variables(&formulas);
@@ -8794,6 +8814,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
 
 fn simple_fof_lift_direct_let_formulas(
     formulas: Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let mut definitions = Vec::new();
@@ -8802,6 +8823,7 @@ fn simple_fof_lift_direct_let_formulas(
         transformed.push(simple_fof_lift_direct_let_formula(
             formula,
             &mut definitions,
+            bool_eqn_replacement,
             bank,
         )?);
     }
@@ -8809,88 +8831,179 @@ fn simple_fof_lift_direct_let_formulas(
     Ok(transformed)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "variant dispatcher keeps the let-lifting traversal order explicit"
+)]
 fn simple_fof_lift_direct_let_formula(
     formula: SimpleFofFormula,
     definitions: &mut Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<SimpleFofFormula, Diagnostic> {
     Ok(match formula {
         SimpleFofFormula::Literal(literal) => {
-            simple_fof_lift_direct_let_literal(literal, definitions, bank)?
+            simple_fof_lift_direct_let_literal(literal, definitions, bool_eqn_replacement, bank)?
         }
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
-        } => SimpleFofFormula::Implication {
-            antecedents: simple_fof_lift_direct_let_formula_vec(antecedents, definitions, bank)?,
-            consequents: simple_fof_lift_direct_let_formula_vec(consequents, definitions, bank)?,
-        },
+        } => {
+            let (antecedents, consequents) = simple_fof_lift_direct_let_formula_pair(
+                antecedents,
+                consequents,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?;
+            SimpleFofFormula::Implication {
+                antecedents,
+                consequents,
+            }
+        }
         SimpleFofFormula::ReverseImplication {
             antecedents,
             consequents,
-        } => SimpleFofFormula::ReverseImplication {
-            antecedents: simple_fof_lift_direct_let_formula_vec(antecedents, definitions, bank)?,
-            consequents: simple_fof_lift_direct_let_formula_vec(consequents, definitions, bank)?,
-        },
-        SimpleFofFormula::Equivalence { left, right } => SimpleFofFormula::Equivalence {
-            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
-            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
-        },
-        SimpleFofFormula::Xor { left, right } => SimpleFofFormula::Xor {
-            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
-            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
-        },
-        SimpleFofFormula::Nand { left, right } => SimpleFofFormula::Nand {
-            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
-            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
-        },
-        SimpleFofFormula::Nor { left, right } => SimpleFofFormula::Nor {
-            left: simple_fof_lift_direct_let_formula_vec(left, definitions, bank)?,
-            right: simple_fof_lift_direct_let_formula_vec(right, definitions, bank)?,
-        },
-        SimpleFofFormula::Conjunction(formulas) => SimpleFofFormula::Conjunction(
-            simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
-        ),
-        SimpleFofFormula::Disjunction(formulas) => SimpleFofFormula::Disjunction(
-            simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
-        ),
-        SimpleFofFormula::Negation(formulas) => SimpleFofFormula::Negation(
-            simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
-        ),
+        } => {
+            let (antecedents, consequents) = simple_fof_lift_direct_let_formula_pair(
+                antecedents,
+                consequents,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?;
+            SimpleFofFormula::ReverseImplication {
+                antecedents,
+                consequents,
+            }
+        }
+        SimpleFofFormula::Equivalence { left, right } => {
+            let (left, right) = simple_fof_lift_direct_let_formula_pair(
+                left,
+                right,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?;
+            SimpleFofFormula::Equivalence { left, right }
+        }
+        SimpleFofFormula::Xor { left, right } => {
+            let (left, right) = simple_fof_lift_direct_let_formula_pair(
+                left,
+                right,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?;
+            SimpleFofFormula::Xor { left, right }
+        }
+        SimpleFofFormula::Nand { left, right } => {
+            let (left, right) = simple_fof_lift_direct_let_formula_pair(
+                left,
+                right,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?;
+            SimpleFofFormula::Nand { left, right }
+        }
+        SimpleFofFormula::Nor { left, right } => {
+            let (left, right) = simple_fof_lift_direct_let_formula_pair(
+                left,
+                right,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?;
+            SimpleFofFormula::Nor { left, right }
+        }
+        SimpleFofFormula::Conjunction(formulas) => {
+            SimpleFofFormula::Conjunction(simple_fof_lift_direct_let_formula_vec(
+                formulas,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?)
+        }
+        SimpleFofFormula::Disjunction(formulas) => {
+            SimpleFofFormula::Disjunction(simple_fof_lift_direct_let_formula_vec(
+                formulas,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?)
+        }
+        SimpleFofFormula::Negation(formulas) => {
+            SimpleFofFormula::Negation(simple_fof_lift_direct_let_formula_vec(
+                formulas,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?)
+        }
         SimpleFofFormula::Universal { bound, formulas } => SimpleFofFormula::Universal {
             bound,
-            formulas: simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+            formulas: simple_fof_lift_direct_let_formula_vec(
+                formulas,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?,
         },
         SimpleFofFormula::Existential { bound, formulas } => SimpleFofFormula::Existential {
             bound,
-            formulas: simple_fof_lift_direct_let_formula_vec(formulas, definitions, bank)?,
+            formulas: simple_fof_lift_direct_let_formula_vec(
+                formulas,
+                definitions,
+                bool_eqn_replacement,
+                bank,
+            )?,
         },
         SimpleFofFormula::Truth(_) => formula,
     })
 }
 
+fn simple_fof_lift_direct_let_formula_pair(
+    left: Vec<SimpleFofFormula>,
+    right: Vec<SimpleFofFormula>,
+    definitions: &mut Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
+    bank: &mut TermBank,
+) -> Result<(Vec<SimpleFofFormula>, Vec<SimpleFofFormula>), Diagnostic> {
+    let left =
+        simple_fof_lift_direct_let_formula_vec(left, definitions, bool_eqn_replacement, bank)?;
+    let right =
+        simple_fof_lift_direct_let_formula_vec(right, definitions, bool_eqn_replacement, bank)?;
+    Ok((left, right))
+}
+
 fn simple_fof_lift_direct_let_formula_vec(
     formulas: Vec<SimpleFofFormula>,
     definitions: &mut Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     formulas
         .into_iter()
-        .map(|formula| simple_fof_lift_direct_let_formula(formula, definitions, bank))
+        .map(|formula| {
+            simple_fof_lift_direct_let_formula(formula, definitions, bool_eqn_replacement, bank)
+        })
         .collect()
 }
 
 fn simple_fof_lift_direct_let_literal(
     literal: Eqn,
     definitions: &mut Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<SimpleFofFormula, Diagnostic> {
     if literal.right() == bank.true_term()
         && literal.left().f_code() == SIG_LET_CODE
         && literal.left().type_().as_ref().is_some_and(Type::is_bool)
     {
-        let body = simple_fof_lift_let_term(literal.left(), definitions, bank)?;
-        let body = simple_fof_bool_term_to_formulas(&body, bank)?;
+        let body =
+            simple_fof_lift_let_term(literal.left(), definitions, bool_eqn_replacement, bank)?;
+        let body = simple_fof_bool_term_to_formulas(&body, bool_eqn_replacement, bank)?;
         return Ok(if literal.is_positive() {
             simple_fof_formula_from_conjunction(body)
         } else {
@@ -8898,14 +9011,18 @@ fn simple_fof_lift_direct_let_literal(
         });
     }
 
-    if let Some(left) = simple_fof_lift_first_term_let(literal.left(), definitions, bank)? {
+    if let Some(left) =
+        simple_fof_lift_first_term_let(literal.left(), definitions, bool_eqn_replacement, bank)?
+    {
         let lifted = Eqn::alloc(left, literal.right().clone(), bank, literal.is_positive())?;
-        return simple_fof_lift_direct_let_literal(lifted, definitions, bank);
+        return simple_fof_lift_direct_let_literal(lifted, definitions, bool_eqn_replacement, bank);
     }
 
-    if let Some(right) = simple_fof_lift_first_term_let(literal.right(), definitions, bank)? {
+    if let Some(right) =
+        simple_fof_lift_first_term_let(literal.right(), definitions, bool_eqn_replacement, bank)?
+    {
         let lifted = Eqn::alloc(literal.left().clone(), right, bank, literal.is_positive())?;
-        return simple_fof_lift_direct_let_literal(lifted, definitions, bank);
+        return simple_fof_lift_direct_let_literal(lifted, definitions, bool_eqn_replacement, bank);
     }
 
     Ok(SimpleFofFormula::Literal(literal))
@@ -9137,13 +9254,14 @@ fn simple_fof_simplify_quantified_formula(
 fn simple_fof_lift_first_term_let(
     term: &Term,
     definitions: &mut Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Option<Term>, Diagnostic> {
     if term.f_code() == SIG_LET_CODE {
         if !simple_fof_let_term_is_liftable(term, bank)? {
             return Ok(None);
         }
-        return simple_fof_lift_let_term(term, definitions, bank).map(Some);
+        return simple_fof_lift_let_term(term, definitions, bool_eqn_replacement, bank).map(Some);
     }
     if term.is_lambda() || term.is_any_var() {
         return Ok(None);
@@ -9151,7 +9269,9 @@ fn simple_fof_lift_first_term_let(
 
     for index in 0..term.arity() {
         let argument = simple_fof_formula_term_argument(term, index, "term-position $let")?;
-        if let Some(replacement) = simple_fof_lift_first_term_let(&argument, definitions, bank)? {
+        if let Some(replacement) =
+            simple_fof_lift_first_term_let(&argument, definitions, bool_eqn_replacement, bank)?
+        {
             return simple_fof_term_replace_argument_with_context(
                 term,
                 index,
@@ -9168,6 +9288,7 @@ fn simple_fof_lift_first_term_let(
 fn simple_fof_lift_let_term(
     term: &Term,
     definitions: &mut Vec<SimpleFofFormula>,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Term, Diagnostic> {
     debug_assert_eq!(term.f_code(), SIG_LET_CODE);
@@ -9184,10 +9305,18 @@ fn simple_fof_lift_let_term(
         let definition = simple_fof_formula_term_argument(term, index, "$let definition")?;
         let (old_f_code, replacement) =
             simple_fof_let_replacement_for_definition(&definition, bank)?;
-        let definition_formulas =
-            simple_fof_let_definition_formulas(&definition, &replacement.fresh_lhs, bank)?;
-        let definition_formulas =
-            simple_fof_lift_direct_let_formula_vec(definition_formulas, definitions, bank)?;
+        let definition_formulas = simple_fof_let_definition_formulas(
+            &definition,
+            &replacement.fresh_lhs,
+            bool_eqn_replacement,
+            bank,
+        )?;
+        let definition_formulas = simple_fof_lift_direct_let_formula_vec(
+            definition_formulas,
+            definitions,
+            bool_eqn_replacement,
+            bank,
+        )?;
         definitions.extend(definition_formulas);
         replacements.insert(old_f_code, replacement);
     }
@@ -9195,7 +9324,7 @@ fn simple_fof_lift_let_term(
     let body = simple_fof_formula_term_argument(term, body_index, "$let body")?;
     let body = simple_fof_replace_let_body(&body, &replacements, bank)?;
     if body.f_code() == SIG_LET_CODE {
-        simple_fof_lift_let_term(&body, definitions, bank)
+        simple_fof_lift_let_term(&body, definitions, bool_eqn_replacement, bank)
     } else {
         Ok(body)
     }
@@ -9283,13 +9412,14 @@ fn simple_fof_let_formal_arguments(lhs: &Term) -> Result<Vec<Term>, Diagnostic> 
 fn simple_fof_let_definition_formulas(
     definition: &Term,
     fresh_lhs: &Term,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let rhs = simple_fof_formula_term_argument(definition, 1, "$let definition")?;
     if rhs.type_().as_ref().is_some_and(Type::is_bool) {
         return Ok(vec![SimpleFofFormula::Equivalence {
-            left: simple_fof_bool_term_to_formulas(fresh_lhs, bank)?,
-            right: simple_fof_bool_term_to_formulas(&rhs, bank)?,
+            left: simple_fof_bool_term_to_formulas(fresh_lhs, bool_eqn_replacement, bank)?,
+            right: simple_fof_bool_term_to_formulas(&rhs, bool_eqn_replacement, bank)?,
         }]);
     }
 
@@ -9659,13 +9789,14 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
     fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
+    let bool_eqn_replacement = SimpleFofBoolEqnReplacement::from_fool_unroll(fool_unroll);
     let expands_to_formula_ite = literal.is_positive()
         && literal.right() == bank.true_term()
         && literal.left().f_code() == SIG_ITE_CODE
         && literal.left().type_().as_ref().is_some_and(Type::is_bool);
     if expands_to_formula_ite {
         let ite = literal.left().clone();
-        let formulas = simple_fof_bool_ite_term_to_formulas(&ite, bank)?;
+        let formulas = simple_fof_bool_ite_term_to_formulas(&ite, bool_eqn_replacement, bank)?;
         return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
             negate_as_conjecture,
@@ -9675,7 +9806,9 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
         );
     }
 
-    if let Some(formulas) = simple_fof_literal_term_ite_to_formulas(&literal, bank)? {
+    if let Some(formulas) =
+        simple_fof_literal_term_ite_to_formulas(&literal, bool_eqn_replacement, bank)?
+    {
         return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
             negate_as_conjecture,
@@ -9686,7 +9819,7 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
     }
 
     let bool_subterm_formulas = if fool_unroll {
-        simple_fof_literal_bool_subterm_to_formulas(&literal, bank)?
+        simple_fof_literal_bool_subterm_to_formulas(&literal, bool_eqn_replacement, bank)?
     } else {
         None
     };
@@ -9708,6 +9841,7 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
 
 fn simple_fof_bool_ite_term_to_formulas(
     term: &Term,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     debug_assert_eq!(term.f_code(), SIG_ITE_CODE);
@@ -9715,9 +9849,9 @@ fn simple_fof_bool_ite_term_to_formulas(
     let if_true = simple_fof_formula_term_argument(term, 1, "$ite")?;
     let if_false = simple_fof_formula_term_argument(term, 2, "$ite")?;
 
-    let condition = simple_fof_bool_term_to_formulas(&condition, bank)?;
-    let if_true = simple_fof_bool_term_to_formulas(&if_true, bank)?;
-    let if_false = simple_fof_bool_term_to_formulas(&if_false, bank)?;
+    let condition = simple_fof_bool_term_to_formulas(&condition, bool_eqn_replacement, bank)?;
+    let if_true = simple_fof_bool_term_to_formulas(&if_true, bool_eqn_replacement, bank)?;
+    let if_false = simple_fof_bool_term_to_formulas(&if_false, bool_eqn_replacement, bank)?;
 
     Ok(vec![
         SimpleFofFormula::Implication {
@@ -9733,6 +9867,7 @@ fn simple_fof_bool_ite_term_to_formulas(
 
 fn simple_fof_literal_term_ite_to_formulas(
     literal: &Eqn,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
     if let Some(expansion) = simple_fof_term_first_ite_expansion(literal.left(), bank)? {
@@ -9752,6 +9887,7 @@ fn simple_fof_literal_term_ite_to_formulas(
             &expansion.condition,
             if_true,
             if_false,
+            bool_eqn_replacement,
             bank,
         )
         .map(Some);
@@ -9774,6 +9910,7 @@ fn simple_fof_literal_term_ite_to_formulas(
             &expansion.condition,
             if_true,
             if_false,
+            bool_eqn_replacement,
             bank,
         )
         .map(Some);
@@ -9784,6 +9921,7 @@ fn simple_fof_literal_term_ite_to_formulas(
 
 fn simple_fof_literal_bool_subterm_to_formulas(
     literal: &Eqn,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
     if let Some(expansion) = simple_fof_term_first_bool_expansion(literal.left(), bank)? {
@@ -9803,6 +9941,7 @@ fn simple_fof_literal_bool_subterm_to_formulas(
             &expansion.condition,
             if_true,
             if_false,
+            bool_eqn_replacement,
             bank,
         )
         .map(Some);
@@ -9825,6 +9964,7 @@ fn simple_fof_literal_bool_subterm_to_formulas(
             &expansion.condition,
             if_true,
             if_false,
+            bool_eqn_replacement,
             bank,
         )
         .map(Some);
@@ -9837,9 +9977,10 @@ fn simple_fof_term_bool_expansion_to_formulas(
     condition: &Term,
     if_true: Eqn,
     if_false: Eqn,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let condition = simple_fof_bool_term_to_formulas(condition, bank)?;
+    let condition = simple_fof_bool_term_to_formulas(condition, bool_eqn_replacement, bank)?;
     Ok(vec![
         SimpleFofFormula::Implication {
             antecedents: condition.clone(),
@@ -9940,9 +10081,10 @@ fn simple_fof_term_ite_expansion_to_formulas(
     condition: &Term,
     if_true: Eqn,
     if_false: Eqn,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let condition = simple_fof_bool_term_to_formulas(condition, bank)?;
+    let condition = simple_fof_bool_term_to_formulas(condition, bool_eqn_replacement, bank)?;
     Ok(vec![
         SimpleFofFormula::Implication {
             antecedents: condition.clone(),
@@ -10020,6 +10162,7 @@ fn simple_fof_term_replace_argument_with_context(
 
 fn simple_fof_bool_term_to_formulas(
     term: &Term,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     if !term.type_().as_ref().is_some_and(Type::is_bool) {
@@ -10036,10 +10179,14 @@ fn simple_fof_bool_term_to_formulas(
         return Ok(simple_fof_truth_formula(false));
     }
     if term.f_code() == SIG_ITE_CODE {
-        return simple_fof_bool_ite_term_to_formulas(term, bank);
+        return simple_fof_bool_ite_term_to_formulas(term, bool_eqn_replacement, bank);
     }
-    if let Some(formulas) = simple_fof_bool_eqn_term_to_formulas(term, bank)? {
-        return Ok(formulas);
+    if bool_eqn_replacement == SimpleFofBoolEqnReplacement::ReplaceWithEquivalence {
+        if let Some(formulas) =
+            simple_fof_bool_eqn_term_to_formulas(term, bool_eqn_replacement, bank)?
+        {
+            return Ok(formulas);
+        }
     }
     if term.f_code() == bank.signature().eqn_code() || term.f_code() == bank.signature().neqn_code()
     {
@@ -10049,15 +10196,15 @@ fn simple_fof_bool_term_to_formulas(
     if term.f_code() == bank.signature().not_code() {
         let child = simple_fof_formula_term_argument(term, 0, "$not")?;
         return Ok(vec![SimpleFofFormula::Negation(
-            simple_fof_bool_term_to_formulas(&child, bank)?,
+            simple_fof_bool_term_to_formulas(&child, bool_eqn_replacement, bank)?,
         )]);
     }
 
     if let Some(operator) = simple_fof_app_encoded_formula_binary_operator(bank, term.f_code()) {
         let left = simple_fof_formula_term_argument(term, 0, "binary formula")?;
         let right = simple_fof_formula_term_argument(term, 1, "binary formula")?;
-        let left = simple_fof_bool_term_to_formulas(&left, bank)?;
-        let right = simple_fof_bool_term_to_formulas(&right, bank)?;
+        let left = simple_fof_bool_term_to_formulas(&left, bool_eqn_replacement, bank)?;
+        let right = simple_fof_bool_term_to_formulas(&right, bool_eqn_replacement, bank)?;
         return Ok(match operator {
             "&" => {
                 let mut formulas = left;
@@ -10089,7 +10236,7 @@ fn simple_fof_bool_term_to_formulas(
     {
         let variable = simple_fof_formula_term_argument(term, 0, "quantified formula")?;
         let body = simple_fof_formula_term_argument(term, 1, "quantified formula")?;
-        let body = simple_fof_bool_term_to_formulas(&body, bank)?;
+        let body = simple_fof_bool_term_to_formulas(&body, bool_eqn_replacement, bank)?;
         let bound = vec![variable];
         if term.f_code() == bank.signature().qall_code() {
             return Ok(vec![SimpleFofFormula::Universal {
@@ -10109,6 +10256,7 @@ fn simple_fof_bool_term_to_formulas(
 
 fn simple_fof_bool_eqn_term_to_formulas(
     term: &Term,
+    bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
 ) -> Result<Option<Vec<SimpleFofFormula>>, Diagnostic> {
     let is_equality = term.f_code() == bank.signature().eqn_code();
@@ -10126,8 +10274,8 @@ fn simple_fof_bool_eqn_term_to_formulas(
     }
 
     if right != *bank.true_term() {
-        let left = simple_fof_bool_term_to_formulas(&left, bank)?;
-        let right = simple_fof_bool_term_to_formulas(&right, bank)?;
+        let left = simple_fof_bool_term_to_formulas(&left, bool_eqn_replacement, bank)?;
+        let right = simple_fof_bool_term_to_formulas(&right, bool_eqn_replacement, bank)?;
         return Ok(Some(vec![if is_equality {
             SimpleFofFormula::Equivalence { left, right }
         } else {
@@ -10136,7 +10284,7 @@ fn simple_fof_bool_eqn_term_to_formulas(
     }
 
     if left != *bank.true_term() {
-        let left = simple_fof_bool_term_to_formulas(&left, bank)?;
+        let left = simple_fof_bool_term_to_formulas(&left, bool_eqn_replacement, bank)?;
         return Ok(Some(if is_equality {
             left
         } else {
@@ -11387,11 +11535,12 @@ mod tests {
         order_parms_from_config, preprocessing_config_debug_line, process_options,
         proof_control_from_config, resource_limit_warning_from_outcome,
         resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        temporary_executable_term_bank, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
-        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
+        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
+        PrimEnumMode, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
         WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
@@ -11423,7 +11572,7 @@ mod tests {
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
     use crate::terms::termbanks::TermBank;
-    use crate::terms::termtypes::RewriteLevel;
+    use crate::terms::termtypes::{RewriteLevel, Term};
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
     use std::fmt::Write as _;
@@ -11447,6 +11596,14 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!("eprover-{name}-{}.out", std::process::id()))
+    }
+
+    fn bool_binary_term(bank: &mut TermBank, f_code: i64, left: &Term, right: &Term) -> Term {
+        let term = Term::top_alloc(f_code, 2);
+        term.set_type(Some(bank.signature().type_bank().bool_type()));
+        term.set_argument(0, left.clone());
+        term.set_argument(1, right.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     fn set_env_var(name: &'static str, value: &str) -> EnvGuard {
@@ -18815,6 +18972,60 @@ mod tests {
         assert!(!printed.contains("$neq($and"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn simple_fof_bool_term_decoding_gates_complex_boolean_eqn_replacement() {
+        let _guard = global_state_lock();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let true_term = bank.true_term().clone();
+        let false_term = bank.false_term().clone();
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let eqn_code = bank.signature().eqn_code();
+        let neqn_code = bank.signature().neqn_code();
+
+        let conjunction = bool_binary_term(&mut bank, and_code, &true_term, &false_term);
+        let disjunction = bool_binary_term(&mut bank, or_code, &true_term, &false_term);
+        let equality = bool_binary_term(&mut bank, eqn_code, &conjunction, &disjunction);
+        let disequality = bool_binary_term(&mut bank, neqn_code, &conjunction, &disjunction);
+
+        let preserved = simple_fof_bool_term_to_formulas(
+            &equality,
+            SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
+            &mut bank,
+        )
+        .unwrap();
+        match preserved.as_slice() {
+            [SimpleFofFormula::Literal(literal)] => {
+                assert!(literal.is_positive());
+                assert_eq!(literal.left(), &conjunction);
+                assert_eq!(literal.right(), &disjunction);
+            }
+            other => panic!("encoded Boolean equality should remain a literal: {other:?}"),
+        }
+
+        let replaced = simple_fof_bool_term_to_formulas(
+            &equality,
+            SimpleFofBoolEqnReplacement::ReplaceWithEquivalence,
+            &mut bank,
+        )
+        .unwrap();
+        assert!(matches!(
+            replaced.as_slice(),
+            [SimpleFofFormula::Equivalence { .. }]
+        ));
+
+        let replaced_disequality = simple_fof_bool_term_to_formulas(
+            &disequality,
+            SimpleFofBoolEqnReplacement::ReplaceWithEquivalence,
+            &mut bank,
+        )
+        .unwrap();
+        assert!(matches!(
+            replaced_disequality.as_slice(),
+            [SimpleFofFormula::Xor { .. }]
+        ));
     }
 
     #[test]
