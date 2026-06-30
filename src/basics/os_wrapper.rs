@@ -115,6 +115,13 @@ pub fn get_usec_clock() -> i64 {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(clock_usec) = linux_resource::process_clock_usec() {
+            return clock_usec;
+        }
+    }
+
     let start = START.get_or_init(Instant::now);
     i64::try_from(start.elapsed().as_micros()).unwrap_or(i64::MAX)
 }
@@ -660,6 +667,8 @@ mod linux_resource {
     pub(super) const RUSAGE_SELF: i32 = 0;
     #[cfg(target_os = "linux")]
     pub(super) const RUSAGE_CHILDREN: i32 = -1;
+    #[cfg(target_os = "linux")]
+    const CLOCKS_PER_SEC_COMPAT: c_long = 1_000_000;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     #[repr(C)]
@@ -691,7 +700,25 @@ mod linux_resource {
 
     #[cfg(target_os = "linux")]
     extern "C" {
+        fn clock() -> c_long;
         fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn process_clock_usec() -> Option<i64> {
+        // SAFETY: clock has no pointer arguments and returns process CPU ticks
+        // for the current process, matching C GetUSecClock's use.
+        let ticks = unsafe { clock() };
+        clock_ticks_to_usec(ticks, CLOCKS_PER_SEC_COMPAT)
+    }
+
+    #[cfg(any(test, target_os = "linux"))]
+    pub(super) fn clock_ticks_to_usec(ticks: c_long, ticks_per_sec: c_long) -> Option<i64> {
+        if ticks < 0 || ticks_per_sec <= 0 {
+            return None;
+        }
+        let usec = i128::from(ticks) * 1_000_000_i128 / i128::from(ticks_per_sec);
+        i64::try_from(usec).ok()
     }
 
     #[cfg(target_os = "linux")]
@@ -894,6 +921,23 @@ mod tests {
                 max_resident_pages: 42,
             }
         );
+    }
+
+    #[test]
+    fn linux_clock_ticks_convert_like_c_get_usec_clock() {
+        assert_eq!(
+            super::linux_resource::clock_ticks_to_usec(2_500_000, 1_000_000),
+            Some(2_500_000)
+        );
+        assert_eq!(
+            super::linux_resource::clock_ticks_to_usec(3, 2),
+            Some(1_500_000)
+        );
+        assert_eq!(
+            super::linux_resource::clock_ticks_to_usec(-1, 1_000_000),
+            None
+        );
+        assert_eq!(super::linux_resource::clock_ticks_to_usec(1, 0), None);
     }
 
     #[test]

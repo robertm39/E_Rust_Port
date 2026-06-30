@@ -134,4 +134,5 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 
 - `SetMemoryLimit` labels the second branch as `RLIMIT_AS` when that macro is present, but the C call still passes `RLIMIT_DATA`. Rust now mirrors that duplicated `RLIMIT_DATA` behavior on Linux; after reference tests cover memory-limit handling, decide whether this is a typo to fix or a platform-specific compatibility quirk to keep.
 - Rust's Linux resource-usage path now uses a narrow `getrusage` boundary for the C-shaped resource footer, with `/proc/self/stat` and `/proc/self/status` retained only as fallback. Exact target units for maximum resident set size remain a compatibility detail to keep visible in output tests.
+- Rust's Linux `GetUSecClock` path now uses C `clock()` semantics for process CPU time. Unsupported targets still fall back to a monotonic process-relative wall clock, which should remain documented as a portability fallback rather than exact C behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->
