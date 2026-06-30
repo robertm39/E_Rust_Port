@@ -99,6 +99,33 @@ pub struct WrappedFormulaCnfResult {
     pub formula_derivation_ops: Vec<i64>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetCnfResult {
+    pub clauses_generated: i64,
+    pub original_formulas_archived: i64,
+    pub cnf_formulas_archived: i64,
+    pub quoted_formula_sources: Vec<FormulaDerivationRef>,
+    pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormulaSetCnfOptions {
+    pub miniscope_limit: i64,
+    pub fool_unroll: bool,
+    pub problem_type: ProblemType,
+}
+
+impl FormulaSetCnfOptions {
+    #[must_use]
+    pub const fn new(miniscope_limit: i64, fool_unroll: bool, problem_type: ProblemType) -> Self {
+        Self {
+            miniscope_limit,
+            fool_unroll,
+            problem_type,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WrappedFormula {
     entry_id: u64,
@@ -898,6 +925,65 @@ impl FormulaSet {
         }
     }
 
+    /// Drains this set into CNF clauses using the staged core of C
+    /// `FormulaSetCNF2`.
+    ///
+    /// This preserves the C archive/copy loop for the currently ported phases:
+    /// each input formula is extracted in set order, the original is inserted
+    /// into `archive`, a flat copy is clausified through [`WrappedFormula::cnf2_into`],
+    /// and the mutated copy is inserted into `archive`.
+    ///
+    /// The higher-order set preprocessing, set-level FOOL unrolling,
+    /// simplification, definition introduction, post-CNF clause lambda lifting,
+    /// and term-bank GC side effects from full `FormulaSetCNF2` are not part of
+    /// this staged helper yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if any wrapped formula cannot be transformed into
+    /// clauses.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same malformed-formula preconditions as
+    /// [`WrappedFormula::cnf2_into`].
+    pub fn cnf2_into(
+        &mut self,
+        archive: &mut Self,
+        clauseset: &mut ClauseSet,
+        bank: &mut TermBank,
+        fresh_vars: &VarBank,
+        options: FormulaSetCnfOptions,
+    ) -> Result<FormulaSetCnfResult, Diagnostic> {
+        let mut result = FormulaSetCnfResult::default();
+
+        while let Some(handle) = self.extract_first() {
+            let source = FormulaDerivationRef::new(handle.ident());
+            let mut form = handle.flat_copy();
+            archive.insert(handle);
+            result.original_formulas_archived += 1;
+            result.quoted_formula_sources.push(source);
+
+            let cnf_result = form.cnf2_into(
+                bank,
+                clauseset,
+                fresh_vars,
+                options.miniscope_limit,
+                options.fool_unroll,
+                options.problem_type,
+            )?;
+            result.clauses_generated += cnf_result.clauses_generated;
+            result
+                .formula_derivation_ops
+                .extend(cnf_result.formula_derivation_ops);
+
+            archive.insert(form);
+            result.cnf_formulas_archived += 1;
+        }
+
+        Ok(result)
+    }
+
     /// Renders C's `FormulaSetPrint` dispatch in formula insertion order.
     ///
     /// # Errors
@@ -1162,7 +1248,7 @@ mod tests {
     use super::{
         formula_set_definition_statistics, formula_set_stack_cardinality,
         formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat, FormulaSet,
-        FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
+        FormulaSetCnfOptions, FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1851,6 +1937,129 @@ mod tests {
                 ]
             );
         }
+    }
+
+    fn count_formula_set_cnf_derivations(
+        clauses: &ClauseSet,
+        split_source: FormulaDerivationRef,
+        quote_source: FormulaDerivationRef,
+    ) -> (i32, i32) {
+        let mut split_clauses = 0;
+        let mut quoted_clauses = 0;
+        for clause in clauses.iter() {
+            let derivation = clause.derivation().unwrap().as_slice();
+            let operation = match derivation.first() {
+                Some(DerivationEntry::Operation(operation)) => *operation,
+                _ => panic!("unexpected CNF clause derivation: {derivation:?}"),
+            };
+            let parent = match derivation.get(1) {
+                Some(DerivationEntry::FormulaParent(parent)) => *parent,
+                _ => panic!("unexpected CNF clause derivation: {derivation:?}"),
+            };
+            match operation {
+                DC_SPLIT_CONJUNCT => {
+                    split_clauses += 1;
+                    assert_eq!(parent, split_source);
+                    assert_eq!(clause.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+                }
+                DC_FOF_QUOTE => {
+                    quoted_clauses += 1;
+                    assert_eq!(parent, quote_source);
+                    assert_eq!(clause.query_tptp_type(), CP_TYPE_AXIOM);
+                }
+                _ => panic!("unexpected CNF clause derivation: {derivation:?}"),
+            }
+        }
+        (split_clauses, quoted_clauses)
+    }
+
+    #[test]
+    fn formula_set_cnf2_drains_inputs_and_archives_originals_then_cnf_copies() {
+        let mut bank = test_bank();
+        let atom_left = typed_const(&mut bank, "set_cnf_a");
+        let atom_middle = typed_const(&mut bank, "set_cnf_b");
+        let atom_right = typed_const(&mut bank, "set_cnf_c");
+        let atom_tail = typed_const(&mut bank, "set_cnf_d");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left = bool_binary_with_code(&mut bank, eqn_code, &atom_left, &atom_middle);
+        let right_left = bool_binary_with_code(&mut bank, eqn_code, &atom_middle, &atom_right);
+        let right_right = bool_binary_with_code(&mut bank, eqn_code, &atom_right, &atom_tail);
+        let and_code = bank.signature().and_code();
+        let or_code = bank.signature().or_code();
+        let right_conjunction =
+            bool_binary_with_code(&mut bank, and_code, &right_left, &right_right);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &right_conjunction);
+        let original_formula = formula.clone();
+        let mut first = WrappedFormula::wt_formula_alloc(formula);
+        first.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        first.set_info(Some(ClauseInfo::new(Some("set_cnf_formula"), None, 1, 1)));
+        let first_entry = first.entry_id();
+        let first_source = FormulaDerivationRef::new(first.ident());
+
+        let clause_left = typed_const(&mut bank, "set_cnf_e");
+        let clause_right = typed_const(&mut bank, "set_cnf_f");
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &clause_left,
+            &clause_right,
+            true,
+        )]));
+        let clause_formula =
+            tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let original_clause_formula = clause_formula.clone();
+        let mut second = WrappedFormula::wt_formula_alloc(clause_formula);
+        second.set_is_clause(true);
+        second.set_tptp_type(CP_TYPE_AXIOM);
+        let second_entry = second.entry_id();
+        let second_source = FormulaDerivationRef::new(second.ident());
+
+        let mut formulas = FormulaSet::new();
+        formulas.insert(first);
+        formulas.insert(second);
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = formulas
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder),
+            )
+            .unwrap();
+
+        assert!(formulas.is_empty());
+        assert_eq!(archive.cardinality(), 4);
+        assert_eq!(clauses.members(), 3);
+        assert_eq!(result.clauses_generated, 3);
+        assert_eq!(result.original_formulas_archived, 2);
+        assert_eq!(result.cnf_formulas_archived, 2);
+        assert_eq!(
+            result.quoted_formula_sources,
+            vec![first_source, second_source]
+        );
+        assert!(result
+            .formula_derivation_ops
+            .contains(&DC_DIST_DISJUNCTIONS));
+
+        let archived = archive.iter().collect::<Vec<_>>();
+        assert_eq!(archived[0].entry_id(), first_entry);
+        assert_eq!(archived[0].formula(), &original_formula);
+        assert_eq!(archived[1].ident(), first_source.ident());
+        assert_ne!(archived[1].entry_id(), first_entry);
+        assert_eq!(archived[1].info(), None);
+        assert_ne!(archived[1].formula(), &original_formula);
+        assert_eq!(archived[2].entry_id(), second_entry);
+        assert_eq!(archived[2].formula(), &original_clause_formula);
+        assert_eq!(archived[3].ident(), second_source.ident());
+        assert!(archived[3].is_clause());
+
+        assert_eq!(
+            count_formula_set_cnf_derivations(&clauses, first_source, second_source),
+            (2, 1)
+        );
     }
 
     #[test]
