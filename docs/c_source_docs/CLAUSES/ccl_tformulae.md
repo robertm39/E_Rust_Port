@@ -219,10 +219,12 @@ Source files reviewed: `CLAUSES/ccl_tformulae.h`, `CLAUSES/ccl_tformulae.c`.
 ### Rust Port Status Notes
 
 - `src/terms/lambda.rs` now stages `LambdaToForall` for a single term-encoded formula, including the C `lambda_eq_to_forall` mapping that applies fresh variables to lambda equality sides, beta-normalizes, converts Boolean equality/disequality to equivalence/XOR, encodes Boolean atoms as predicate equalities, and closes the result with universal or existential quantifiers. Formula-set/archive integration through `TFormulaSetLambdaNormalize` remains tied to full formula-owner plumbing.
+- `src/clauses/clausefunc.rs` now stages the `TFormulaCollectFreeVars` behavior needed by `TFormulaSkolemizeOutermost`: `$let` contributes only its body, DB variables are ignored, quantified/named-lambda binders mask their variable while the body is traversed, and the resulting dependency stack is sorted by term-handle identity to mirror C's pointer-keyed `PTree`.
 
 ### Change-Later Observations
 
 - C `LambdaToForall` begins by calling `VarBankSetVCountsToUsed` and then relies on `TermMap`'s NULL-return optimization to stop descending into subterms that have no equality/disequality. Rust mirrors that with `TermBank::map_term` and explicit fresh-variable count initialization; keep this ordering when the formula-set wrapper is added.
+- `TFormulaCollectFreeVars` sets `TPIsFreeVar` on every variable in the bank, temporarily deletes that property on bound variables while recursing, and leaves those property side effects visible on free variables. Rust's staged collector uses a local bound-variable stack and does not mutate term properties; a later formula owner should make free-variable collection a pure query unless a caller is proven to depend on the transient C flag state.
 
 ### Porting Focus
 

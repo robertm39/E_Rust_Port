@@ -1629,6 +1629,190 @@ pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
     )
 }
 
+/// Skolemizes a term-encoded formula as its universal closure.
+///
+/// This matches C `TFormulaSkolemizeOutermost`: globally free variables seed
+/// the Skolem dependency stack, universal variables are pushed while descending,
+/// and existential variables are temporarily bound to fresh Skolem terms while
+/// the body is copied with `DEREF_ALWAYS`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if allocating a Skolem symbol or rebuilding/copying a
+/// changed formula fails.
+///
+/// # Panics
+///
+/// Panics if the input violates the C preconditions: well-formed quantified
+/// cells, free and typed quantified variables, distinct quantified variables,
+/// and no pre-existing binding on variables being Skolemized.
+pub fn tformula_skolemize_outermost(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let mut free_vars = tformula_collect_free_vars(bank, form);
+    tformula_rek_skolemize(bank, form, &mut free_vars)
+}
+
+fn tformula_rek_skolemize(
+    bank: &mut TermBank,
+    form: &Term,
+    free_vars: &mut Vec<Term>,
+) -> Result<Term, Diagnostic> {
+    if term_is_ground(form) {
+        return Ok(form.clone());
+    }
+
+    if tformula_is_literal(bank, form) || form.type_().as_ref().is_some_and(Type::is_arrow) {
+        return bank.insert_no_props_cached(form, DerefType::Always);
+    }
+
+    let copies_as_bool_term = {
+        let sig = bank.signature();
+        !sig.is_logical_symbol(form.f_code())
+            && form
+                .type_()
+                .is_some_and(|type_| type_ == sig.type_bank().bool_type())
+    };
+    if copies_as_bool_term {
+        return bank.insert_no_props_cached(form, DerefType::Always);
+    }
+
+    let (qall_code, qex_code) = {
+        let sig = bank.signature();
+        (sig.qall_code(), sig.qex_code())
+    };
+
+    if form.f_code() == qex_code {
+        assert_eq!(
+            form.arity(),
+            2,
+            "existential formula must have variable and body arguments"
+        );
+        let variable = formula_argument(form, 0);
+        assert!(
+            variable.is_free_var(),
+            "existential quantifier must bind a free variable"
+        );
+        assert!(
+            variable.binding().is_none(),
+            "existential variable must not already be bound"
+        );
+        let variable_type = variable
+            .type_()
+            .expect("existential variable must have a type");
+        let skolem = bank.alloc_new_skolem(free_vars.as_slice(), Some(&variable_type))?;
+        let _binding = BindingRestore::install(variable, skolem);
+        return tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars);
+    }
+
+    if form.f_code() == qall_code {
+        assert_eq!(
+            form.arity(),
+            2,
+            "universal formula must have variable and body arguments"
+        );
+        let variable = formula_argument(form, 0);
+        assert!(
+            variable.is_free_var(),
+            "universal quantifier must bind a free variable"
+        );
+        assert!(
+            variable.binding().is_none(),
+            "universal variable must not already be bound"
+        );
+        free_vars.push(variable.clone());
+        let body_result = tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars);
+        let popped = free_vars.pop().expect("universal variable stack underflow");
+        assert_eq!(
+            popped, variable,
+            "universal variable stack must unwind in LIFO order"
+        );
+        let body = body_result?;
+        return tformula_fcode_alloc(bank, qall_code, variable, Some(body));
+    }
+
+    assert!(
+        tformula_has_subform1(bank, form),
+        "compound formula must have a first subformula"
+    );
+    let original_left = formula_argument(form, 0);
+    let left = tformula_rek_skolemize(bank, &original_left, free_vars)?;
+    let mut modified = left != original_left;
+    let mut right = None;
+    if tformula_has_subform2(bank, form) {
+        let original_right = formula_argument(form, 1);
+        let new_right = tformula_rek_skolemize(bank, &original_right, free_vars)?;
+        modified |= new_right != original_right;
+        right = Some(new_right);
+    }
+
+    if modified {
+        tformula_fcode_alloc(bank, form.f_code(), left, right)
+    } else {
+        Ok(form.clone())
+    }
+}
+
+fn tformula_collect_free_vars(bank: &TermBank, form: &Term) -> Vec<Term> {
+    let mut vars = BTreeMap::new();
+    let mut bound = Vec::new();
+    tformula_collect_free_vars_rek(bank, form, &mut bound, &mut vars);
+    vars.into_values().collect()
+}
+
+fn tformula_collect_free_vars_rek(
+    bank: &TermBank,
+    form: &Term,
+    bound: &mut Vec<usize>,
+    vars: &mut BTreeMap<usize, Term>,
+) {
+    if form.f_code() == SIG_LET_CODE {
+        if form.arity() > 0 {
+            tformula_collect_free_vars_rek(
+                bank,
+                &formula_argument(form, form.arity() - 1),
+                bound,
+                vars,
+            );
+        }
+        return;
+    }
+
+    if form.is_db_var() {
+        return;
+    }
+
+    if tformula_is_quantified(bank, form) && form.arity() == 2 {
+        let variable = formula_argument(form, 0);
+        let variable_id = term_identity_id(&variable);
+        bound.push(variable_id);
+        tformula_collect_free_vars_rek(bank, &formula_argument(form, 1), bound, vars);
+        let popped = bound.pop().expect("bound variable stack underflow");
+        assert_eq!(
+            popped, variable_id,
+            "bound variable stack must unwind in LIFO order"
+        );
+        return;
+    }
+
+    if form.is_free_var() {
+        let variable_id = term_identity_id(form);
+        if !bound.contains(&variable_id) {
+            vars.insert(variable_id, form.clone());
+        }
+        return;
+    }
+
+    for arg in form.argument_clones().into_iter().flatten() {
+        if arg.is_free_var() {
+            let variable_id = term_identity_id(&arg);
+            if !bound.contains(&variable_id) {
+                vars.insert(variable_id, arg);
+            }
+        } else {
+            tformula_collect_free_vars_rek(bank, &arg, bound, vars);
+        }
+    }
+}
+
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
 ///
 /// This matches C `TFormulaShiftQuantors` for a single formula. The input is
@@ -2721,8 +2905,8 @@ mod tests {
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
         tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
         tformula_mini_scope, tformula_neg_alloc, tformula_nnf, tformula_shift_quantors,
-        tformula_shift_quantors2, tformula_simplify_decoded, tformula_var_rename,
-        TFORM_MANY_CLAUSES,
+        tformula_shift_quantors2, tformula_simplify_decoded, tformula_skolemize_outermost,
+        tformula_var_rename, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -4160,6 +4344,100 @@ mod tests {
         let renamed_else = renamed_ite.argument(2).unwrap();
         assert_eq!(renamed_else.argument(0).as_ref(), Some(&outer_fresh));
         assert_eq!(renamed_else.argument(1).as_ref(), Some(&c));
+    }
+
+    #[test]
+    fn tformula_skolemize_outermost_replaces_closed_existential_with_constant() {
+        let mut bank = test_bank();
+        let z = typed_var(&bank, -180);
+        let a = typed_const(&mut bank, "skolem_const_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &z, &a);
+        let qex_code = bank.signature().qex_code();
+        let formula = bool_binary_with_code(&mut bank, qex_code, &z, &atom);
+
+        let skolemized = tformula_skolemize_outermost(&mut bank, &formula).unwrap();
+
+        assert!(z.binding().is_none());
+        assert_eq!(skolemized.f_code(), eqn_code);
+        let skolem = skolemized.argument(0).unwrap();
+        assert_ne!(skolem, z);
+        assert_eq!(skolem.arity(), 0);
+        assert_eq!(skolem.type_(), z.type_());
+        assert_eq!(skolemized.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn tformula_skolemize_outermost_uses_free_and_universal_dependencies() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -182);
+        let y = typed_var(&bank, -184);
+        let z = typed_var(&bank, -186);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &z, &y);
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let existential = bool_binary_with_code(&mut bank, qex_code, &z, &atom);
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &existential);
+
+        let skolemized = tformula_skolemize_outermost(&mut bank, &formula).unwrap();
+
+        assert!(z.binding().is_none());
+        assert_eq!(skolemized.f_code(), qall_code);
+        assert_eq!(skolemized.argument(0).as_ref(), Some(&x));
+        let body = skolemized.argument(1).unwrap();
+        assert_eq!(body.f_code(), eqn_code);
+        let skolem = body.argument(0).unwrap();
+        assert_eq!(skolem.arity(), 2);
+        assert_eq!(skolem.argument(0).as_ref(), Some(&y));
+        assert_eq!(skolem.argument(1).as_ref(), Some(&x));
+        assert_eq!(body.argument(1).as_ref(), Some(&y));
+    }
+
+    #[test]
+    fn tformula_skolemize_outermost_excludes_bound_vars_from_initial_free_stack() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -188);
+        let z = typed_var(&bank, -190);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &z, &x);
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let existential = bool_binary_with_code(&mut bank, qex_code, &z, &atom);
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &existential);
+
+        let skolemized = tformula_skolemize_outermost(&mut bank, &formula).unwrap();
+
+        let body = skolemized.argument(1).unwrap();
+        let skolem = body.argument(0).unwrap();
+        assert_eq!(skolem.arity(), 1);
+        assert_eq!(skolem.argument(0).as_ref(), Some(&x));
+        assert_eq!(body.argument(1).as_ref(), Some(&x));
+    }
+
+    #[test]
+    fn tformula_skolemize_outermost_copies_non_logical_boolean_terms_with_binding() {
+        let mut bank = test_bank();
+        let z = typed_var(&bank, -192);
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = alloc_arrow_type(vec![arg_type, bool_type]);
+        let p_code = bank.signature_mut().insert_id("skolem_bool_atom", 1, false);
+        bank.signature_mut()
+            .declare_final_type(p_code, predicate_type)
+            .unwrap();
+        let atom = bool_result_unary_with_code(&mut bank, p_code, &z);
+        let qex_code = bank.signature().qex_code();
+        let formula = bool_binary_with_code(&mut bank, qex_code, &z, &atom);
+
+        let skolemized = tformula_skolemize_outermost(&mut bank, &formula).unwrap();
+
+        assert!(z.binding().is_none());
+        assert_eq!(skolemized.f_code(), p_code);
+        let skolem = skolemized.argument(0).unwrap();
+        assert_ne!(skolem, z);
+        assert_eq!(skolem.arity(), 0);
+        assert_eq!(skolem.type_(), z.type_());
     }
 
     #[test]
