@@ -5880,8 +5880,25 @@ fn write_proof_search_side_outputs<W: Write + ?Sized>(
     next_doc_ident: i64,
 ) -> Result<(), EProverError> {
     write_answer_outputs(output, state)?;
+    write_sat_check_success_output(output, outcome)?;
     if let SaturateOutcome::Returned { clause, .. } = outcome {
         write_proof_success_doc(output, config, state.terms(), clause, next_doc_ident)?;
+    }
+    Ok(())
+}
+
+fn write_sat_check_success_output(
+    output: &mut impl Write,
+    outcome: &SaturateOutcome,
+) -> Result<(), EProverError> {
+    if matches!(
+        outcome,
+        SaturateOutcome::Returned {
+            reason: SaturateReturnReason::SatCheck,
+            ..
+        }
+    ) {
+        write_comment_line(output, "SatCheck found unsatisfiable ground set")?;
     }
     Ok(())
 }
@@ -14020,6 +14037,40 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             format!(
                 "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                default_preprocessing_debug_line()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_prints_sat_check_unsat_comment() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-sat-check-comment");
+        std::fs::write(&path, "a=b.\na!=b.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--satcheck=GlobalMin",
+                "--satcheck-proc-interval=1",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!(
+                "{}% SatCheck found unsatisfiable ground set\n\n% Proof found!\n% SZS status Unsatisfiable\n",
                 default_preprocessing_debug_line()
             )
         );
