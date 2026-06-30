@@ -11,22 +11,24 @@ use crate::clauses::clause_props::{
     CP_TYPE_QUESTION,
 };
 use crate::clauses::clausefunc::{
-    post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
-    tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_copy_def,
-    tformula_create_def, tformula_decode_polarity, tformula_fcode_alloc, tformula_find_defs,
-    tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
-    tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
-    tformula_simplify, tformula_to_cnf, tformula_tptp_string, tformula_unencode_root_eqn,
-    tformula_unroll_fool_result, tformula_var_rename, TFormulaDefinitions,
-    TFormulaTptpPrintOptions,
+    post_cnf_encode_clause_terms, tformula_add_quantor, tformula_app_encode_string,
+    tformula_clause_closed_encode, tformula_closure, tformula_collect_clause,
+    tformula_collect_free_vars, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
+    tformula_decode_polarity, tformula_encode_predicate_as_eqn, tformula_fcode_alloc,
+    tformula_find_defs, tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal,
+    tformula_is_prop_true, tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity,
+    tformula_preload_types, tformula_simplify, tformula_to_cnf, tformula_tptp_string,
+    tformula_unencode_root_eqn, tformula_unroll_fool_result, tformula_var_rename,
+    TFormulaDefinitions, TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
     DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE,
-    DC_NEGATE_CONJECTURE, DC_SPLIT_EQUIV,
+    DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SPLIT_EQUIV,
 };
+use crate::clauses::eqn_props::{EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::clauses::inferencedoc::{
     FormulaCreationInference, FormulaCreationParents, FormulaDocView, ProofDocSession,
@@ -34,11 +36,11 @@ use crate::clauses::inferencedoc::{
 };
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::{
-    abstract_vars, apply_terms, beta_normalize_db, lambda_normalize_db, lambda_to_forall,
-    named_to_db, unfold_lambda,
+    abstract_vars, apply_terms, beta_normalize_db, decode_formulas_for_cnf, lambda_normalize_db,
+    lambda_to_forall, named_to_db, unfold_lambda, whnf_step,
 };
 use crate::terms::signature::{Signature, SIG_NAMED_LAMBDA_CODE};
-use crate::terms::simpletypes::type_is_predicate;
+use crate::terms::simpletypes::{arrow_type_flattened, type_is_predicate};
 use crate::terms::termbanks::tb_term_collect_subterms;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
@@ -136,6 +138,9 @@ pub struct FormulaSetCnfResult {
     pub unfolded_original_definitions_archived: i64,
     pub definition_symbol_applications: i64,
     pub formulas_lambda_normalized: i64,
+    pub clauses_lambdas_lifted: i64,
+    pub lambda_lift_definitions_archived: i64,
+    pub lambda_lift_definition_clauses_generated: i64,
     pub formulas_simplified: i64,
     pub boolean_equalities_replaced: i64,
     pub formulas_fool_unrolled: i64,
@@ -153,9 +158,25 @@ pub struct FormulaSetCnfOptions {
     pub miniscope_limit: i64,
     pub def_limit: i64,
     pub fool_unroll: bool,
-    pub lambda_to_forall: bool,
-    pub unfold_only_forms: bool,
+    pub higher_order: FormulaSetHigherOrderCnfOptions,
     pub problem_type: ProblemType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormulaSetHigherOrderCnfOptions {
+    pub lambda_to_forall: bool,
+    pub lift_lambdas: bool,
+    pub unfold_only_forms: bool,
+}
+
+impl Default for FormulaSetHigherOrderCnfOptions {
+    fn default() -> Self {
+        Self {
+            lambda_to_forall: true,
+            lift_lambdas: true,
+            unfold_only_forms: true,
+        }
+    }
 }
 
 impl FormulaSetCnfOptions {
@@ -165,8 +186,11 @@ impl FormulaSetCnfOptions {
             miniscope_limit,
             def_limit: 0,
             fool_unroll,
-            lambda_to_forall: true,
-            unfold_only_forms: true,
+            higher_order: FormulaSetHigherOrderCnfOptions {
+                lambda_to_forall: true,
+                lift_lambdas: true,
+                unfold_only_forms: true,
+            },
             problem_type,
         }
     }
@@ -179,13 +203,19 @@ impl FormulaSetCnfOptions {
 
     #[must_use]
     pub const fn with_lambda_to_forall(mut self, lambda_to_forall: bool) -> Self {
-        self.lambda_to_forall = lambda_to_forall;
+        self.higher_order.lambda_to_forall = lambda_to_forall;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_lift_lambdas(mut self, lift_lambdas: bool) -> Self {
+        self.higher_order.lift_lambdas = lift_lambdas;
         self
     }
 
     #[must_use]
     pub const fn with_unfold_only_forms(mut self, unfold_only_forms: bool) -> Self {
-        self.unfold_only_forms = unfold_only_forms;
+        self.higher_order.unfold_only_forms = unfold_only_forms;
         self
     }
 }
@@ -428,6 +458,333 @@ fn unencode_eqns(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
     })
 }
 
+#[derive(Clone)]
+struct LooseDbReplacement {
+    fresh_var: Term,
+    db_var: Term,
+}
+
+fn unbind_loose_db_vars(
+    bank: &mut TermBank,
+    depth: FunCode,
+    term: &Term,
+    replacements: &mut BTreeMap<FunCode, LooseDbReplacement>,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        !term.is_lambda(),
+        "loose DB unbinding expects lambda prefixes to be removed"
+    );
+    if !term.has_db_subterm() {
+        return Ok(term.clone());
+    }
+    if term.is_db_var() {
+        if term.f_code() < depth {
+            return Ok(term.clone());
+        }
+        let entry = replacements.entry(term.f_code()).or_insert_with(|| {
+            let type_ = term.type_().expect("loose DB variable must have a type");
+            let fresh_var = bank.vars().get_fresh_var(&type_);
+            let db_var = bank.request_db_var(&type_, term.f_code() - depth);
+            LooseDbReplacement { fresh_var, db_var }
+        });
+        return Ok(entry.fresh_var.clone());
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let unbound = unbind_loose_db_vars(bank, depth, &arg, replacements)?;
+        if unbound != arg {
+            changed = true;
+        }
+        copy.set_argument(index, unbound);
+    }
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(term.clone())
+    }
+}
+
+fn lift_lambdas_in_term(
+    bank: &mut TermBank,
+    term: &Term,
+    state: &mut LambdaLiftState,
+    used_defs: &mut Vec<WrappedFormula>,
+) -> Result<Term, Diagnostic> {
+    let mut normalized = beta_normalize_db(bank, term)?;
+    let mut bound_vars = Vec::new();
+    let had_lambda_prefix = normalized.is_lambda();
+    if had_lambda_prefix {
+        normalized = unfold_lambda(&normalized, &mut bound_vars);
+    }
+
+    let lifted_body = if normalized.has_lambda_subterm() {
+        let copy = Term::top_copy_without_args(&normalized);
+        let mut changed = false;
+        for (index, arg) in normalized.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let lifted = lift_lambdas_in_term(bank, &arg, state, used_defs)?;
+            if lifted != arg {
+                changed = true;
+            }
+            copy.set_argument(index, lifted);
+        }
+        if changed {
+            bank.term_top_insert(copy)?
+        } else {
+            normalized.clone()
+        }
+    } else {
+        normalized.clone()
+    };
+
+    if had_lambda_prefix {
+        lift_lambda_prefix(bank, &bound_vars, &lifted_body, state, used_defs)
+    } else {
+        Ok(lifted_body)
+    }
+}
+
+fn lift_lambda_prefix(
+    bank: &mut TermBank,
+    bound_vars: &[Term],
+    body: &Term,
+    state: &mut LambdaLiftState,
+    used_defs: &mut Vec<WrappedFormula>,
+) -> Result<Term, Diagnostic> {
+    assert!(
+        !body.has_lambda_subterm(),
+        "lambda lifting expects nested lambdas to be lifted first"
+    );
+    let free_vars = tformula_collect_free_vars(bank, body);
+    let bound_to_fresh = bound_vars
+        .iter()
+        .map(|variable| {
+            let type_ = variable.type_().expect("lambda binder must have a type");
+            bank.vars().get_fresh_var(&type_)
+        })
+        .collect::<Vec<_>>();
+
+    let mut loose_replacements = BTreeMap::new();
+    let body_no_loose = unbind_loose_db_vars(
+        bank,
+        FunCode::try_from(bound_vars.len()).expect("lambda prefix length fits FunCode"),
+        body,
+        &mut loose_replacements,
+    )?;
+
+    let mut closed = body_no_loose;
+    for variable in bound_vars.iter().rev() {
+        let type_ = variable.type_().expect("lambda binder must have a type");
+        closed = crate::terms::lambda::close_with_db_var(bank, &type_, &closed)?;
+    }
+
+    let loose_fresh_vars = loose_replacements
+        .values()
+        .map(|replacement| replacement.fresh_var.clone())
+        .collect::<Vec<_>>();
+    let loose_db_vars = loose_replacements
+        .values()
+        .map(|replacement| replacement.db_var.clone())
+        .collect::<Vec<_>>();
+    let loose_db_types = loose_db_vars
+        .iter()
+        .map(|variable| {
+            variable
+                .type_()
+                .expect("loose DB variable must have a type")
+        })
+        .collect::<Vec<_>>();
+    let closed_type = closed.type_().expect("closed lambda body must have a type");
+    let result_type = bank
+        .signature_mut()
+        .type_bank_mut()
+        .insert_type_shared(arrow_type_flattened(&loose_db_types, &closed_type));
+
+    let def_head = bank.alloc_new_skolem(&free_vars, Some(&result_type))?;
+    let lifted = apply_terms(bank, &def_head, &loose_db_vars)?;
+    let lhs_wo_bound = apply_terms(bank, &def_head, &loose_fresh_vars)?;
+    let repl_lhs = apply_terms(bank, &lhs_wo_bound, &bound_to_fresh)?;
+    let applied_rhs = apply_terms(bank, &closed, &bound_to_fresh)?;
+    let repl_rhs = whnf_step(bank, &applied_rhs)?;
+
+    let mut definition = if body
+        .type_()
+        .as_ref()
+        .is_some_and(crate::terms::simpletypes::Type::is_bool)
+    {
+        let left = tformula_encode_predicate_as_eqn(bank, repl_lhs.clone())?;
+        let right = tformula_encode_predicate_as_eqn(bank, repl_rhs)?;
+        tformula_fcode_alloc(bank, bank.signature().equiv_code(), left, Some(right))?
+    } else {
+        tformula_fcode_alloc(
+            bank,
+            bank.signature().eqn_code(),
+            repl_lhs.clone(),
+            Some(repl_rhs),
+        )?
+    };
+    for argument in repl_lhs.argument_clones().into_iter().flatten() {
+        definition = tformula_add_quantor(bank, &definition, true, &argument)?;
+    }
+
+    let wrapped = WrappedFormula::wt_formula_alloc(definition);
+    state.definitions.push(wrapped.clone());
+    used_defs.push(wrapped);
+    Ok(lifted)
+}
+
+fn cond_lift_clause_lambda(
+    bank: &mut TermBank,
+    term: &Term,
+    state: &mut LambdaLiftState,
+    used_defs: &mut Vec<WrappedFormula>,
+) -> Result<Term, Diagnostic> {
+    if term.is_lambda() || !term.has_lambda_subterm() {
+        return Ok(term.clone());
+    }
+    let decoded = decode_formulas_for_cnf(bank, term)?;
+    lift_lambdas_in_term(bank, &decoded, state, used_defs)
+}
+
+fn clause_set_lift_lambdas(
+    set: &mut ClauseSet,
+    archive: &mut FormulaSet,
+    bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    unroll_fool: bool,
+) -> Result<ClauseSetLiftLambdasResult, Diagnostic> {
+    let mut result = ClauseSetLiftLambdasResult::default();
+    let mut state = LambdaLiftState::default();
+    let mut all_defs = BTreeMap::new();
+
+    bank.vars().set_v_counts_to_used();
+    for clause in set.iter_mut() {
+        let mut clause_changed = false;
+        let mut clause_defs = Vec::new();
+        for literal in clause.literals_mut().as_mut_slice() {
+            let left = cond_lift_clause_lambda(bank, literal.left(), &mut state, &mut clause_defs)?;
+            let right =
+                cond_lift_clause_lambda(bank, literal.right(), &mut state, &mut clause_defs)?;
+            if left != *literal.left() || right != *literal.right() {
+                clause_changed = true;
+                literal.set_left_raw(left);
+                literal.set_right_raw(right);
+                literal.del_prop(EP_MAX_IS_UP_TO_DATE | EP_IS_ORIENTED);
+            }
+        }
+
+        if clause_changed {
+            result.clauses_changed += 1;
+            for definition in clause_defs {
+                clause_push_formula_derivation(
+                    clause,
+                    DC_LIFT_LAMBDAS,
+                    Some(FormulaDerivationRef::new(definition.ident())),
+                    None,
+                );
+                result.clause_derivation_ops.push(DC_LIFT_LAMBDAS);
+                all_defs.entry(definition.entry_id()).or_insert(definition);
+            }
+            clause.set_weight(clause.standard_weight());
+        }
+    }
+
+    for definition in all_defs.into_values() {
+        let mut copy = definition.flat_copy();
+        archive.insert(definition);
+        result.definitions_archived += 1;
+        if unroll_fool {
+            let _changed = copy.unroll_fool(bank)?;
+        }
+        let _changed = copy.simplify(bank)?;
+        let cnf_result = copy.cnf2_into(
+            bank,
+            set,
+            fresh_vars,
+            100,
+            unroll_fool,
+            ProblemType::HigherOrder,
+        )?;
+        result.definition_clauses_generated += cnf_result.clauses_generated;
+        archive.insert(copy);
+    }
+
+    Ok(result)
+}
+
+fn apply_post_cnf_clause_lambda_lifting(
+    clauseset: &mut ClauseSet,
+    archive: &mut FormulaSet,
+    bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    fool_unroll: bool,
+    result: &mut FormulaSetCnfResult,
+) -> Result<(), Diagnostic> {
+    let lift_result = clause_set_lift_lambdas(clauseset, archive, bank, fresh_vars, fool_unroll)?;
+    result.clauses_lambdas_lifted = lift_result.clauses_changed;
+    result.lambda_lift_definitions_archived = lift_result.definitions_archived;
+    result.lambda_lift_definition_clauses_generated = lift_result.definition_clauses_generated;
+    Ok(())
+}
+
+struct FormulaSetCnfDrain<'a> {
+    archive: &'a mut FormulaSet,
+    clauseset: &'a mut ClauseSet,
+    bank: &'a mut TermBank,
+    fresh_vars: &'a VarBank,
+    options: FormulaSetCnfOptions,
+    old_nodes: &'a mut i64,
+    gc_threshold: &'a mut i64,
+    result: &'a mut FormulaSetCnfResult,
+}
+
+fn drain_formula_set_to_cnf(
+    set: &mut FormulaSet,
+    drain: &mut FormulaSetCnfDrain<'_>,
+) -> Result<(), Diagnostic> {
+    while let Some(handle) = set.extract_first() {
+        let source = FormulaDerivationRef::new(handle.ident());
+        let mut form = handle.flat_copy();
+        drain.archive.insert(handle);
+        drain.result.original_formulas_archived += 1;
+        drain.result.quoted_formula_sources.push(source);
+
+        let cnf_result = form.cnf2_into(
+            drain.bank,
+            drain.clauseset,
+            drain.fresh_vars,
+            drain.options.miniscope_limit,
+            drain.options.fool_unroll,
+            drain.options.problem_type,
+        )?;
+        drain.result.clauses_generated += cnf_result.clauses_generated;
+        drain
+            .result
+            .formula_derivation_ops
+            .extend(cnf_result.formula_derivation_ops);
+
+        let cnf_copy_has_formula = form.formula.is_some();
+        drain.archive.insert(form);
+        drain.result.cnf_formulas_archived += 1;
+        if cnf_copy_has_formula && drain.bank.non_var_term_nodes() > *drain.gc_threshold {
+            collect_formula_set_cnf_garbage(
+                drain.bank,
+                set,
+                drain.archive,
+                drain.clauseset,
+                drain.result,
+            );
+            *drain.old_nodes = drain.bank.non_var_term_nodes();
+            *drain.gc_threshold = formula_set_gc_threshold(*drain.old_nodes);
+        }
+    }
+
+    Ok(())
+}
+
 fn collect_formula_set_cnf_garbage(
     bank: &mut TermBank,
     set: &FormulaSet,
@@ -500,6 +857,19 @@ pub struct FormulaSetHigherOrderPreprocessResult {
 struct DefinitionSymbolMap {
     definitions: BTreeMap<FunCode, WrappedFormula>,
     recognized_entry_ids: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClauseSetLiftLambdasResult {
+    pub clauses_changed: i64,
+    pub definitions_archived: i64,
+    pub definition_clauses_generated: i64,
+    pub clause_derivation_ops: Vec<i64>,
+}
+
+#[derive(Default)]
+struct LambdaLiftState {
+    definitions: Vec<WrappedFormula>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -2206,9 +2576,10 @@ impl FormulaSet {
     /// This preserves the supported C phase order: supported higher-order
     /// preprocessing, optional set-level FOOL unrolling, formula
     /// simplification, definition introduction, then the archive/copy/CNF
-    /// drain loop. Higher-order lift-lambda set preprocessing, post-CNF clause
-    /// lambda lifting, proof-document output, and term-bank GC side effects
-    /// from full `FormulaSetCNF2` are still deferred.
+    /// drain loop, and optional post-CNF clause lambda lifting. Higher-order
+    /// formula-set lift-lambda preprocessing, proof-document output, and some
+    /// term-bank GC side effects from full `FormulaSetCNF2` are still
+    /// deferred.
     ///
     /// # Errors
     ///
@@ -2253,7 +2624,7 @@ impl FormulaSet {
             archive,
             bank,
             options.problem_type,
-            options.unfold_only_forms,
+            options.higher_order.unfold_only_forms,
         )?;
         result.formulas_def_symbols_unfolded = unfold_def_result.formulas_def_symbols_unfolded;
         result.unfolded_definition_rhs_rewritten =
@@ -2266,7 +2637,7 @@ impl FormulaSet {
             .formula_derivation_ops
             .extend(unfold_def_result.formula_derivation_ops);
 
-        if options.lambda_to_forall {
+        if options.higher_order.lambda_to_forall {
             let normalize_result = self.lambda_normalize_forall(bank, options.problem_type)?;
             result.formulas_lambda_normalized = normalize_result.formulas_lambda_normalized;
             result
@@ -2301,34 +2672,29 @@ impl FormulaSet {
             .formula_derivation_ops
             .extend(intro_result.formula_derivation_ops);
 
-        while let Some(handle) = self.extract_first() {
-            let source = FormulaDerivationRef::new(handle.ident());
-            let mut form = handle.flat_copy();
-            archive.insert(handle);
-            result.original_formulas_archived += 1;
-            result.quoted_formula_sources.push(source);
-
-            let cnf_result = form.cnf2_into(
-                bank,
+        drain_formula_set_to_cnf(
+            self,
+            &mut FormulaSetCnfDrain {
+                archive,
                 clauseset,
+                bank,
                 fresh_vars,
-                options.miniscope_limit,
-                options.fool_unroll,
-                options.problem_type,
-            )?;
-            result.clauses_generated += cnf_result.clauses_generated;
-            result
-                .formula_derivation_ops
-                .extend(cnf_result.formula_derivation_ops);
+                options,
+                old_nodes: &mut old_nodes,
+                gc_threshold: &mut gc_threshold,
+                result: &mut result,
+            },
+        )?;
 
-            let cnf_copy_has_formula = form.formula.is_some();
-            archive.insert(form);
-            result.cnf_formulas_archived += 1;
-            if cnf_copy_has_formula && bank.non_var_term_nodes() > gc_threshold {
-                collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result);
-                old_nodes = bank.non_var_term_nodes();
-                gc_threshold = formula_set_gc_threshold(old_nodes);
-            }
+        if options.higher_order.lift_lambdas {
+            apply_post_cnf_clause_lambda_lifting(
+                clauseset,
+                archive,
+                bank,
+                fresh_vars,
+                options.fool_unroll,
+                &mut result,
+            )?;
         }
 
         if bank.non_var_term_nodes() != old_nodes {
@@ -2692,7 +3058,7 @@ fn formula_set_write_error(message: &'static str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        formula_set_definition_statistics, formula_set_stack_cardinality,
+        clause_set_lift_lambdas, formula_set_definition_statistics, formula_set_stack_cardinality,
         formula_stack_cond_set_type, FormulaDefinitionStatistics, FormulaPrintFormat, FormulaSet,
         FormulaSetCnfOptions, FormulaTstpClauseMode, FormulaTstpPrintOptions, WrappedFormula,
     };
@@ -2710,7 +3076,8 @@ mod tests {
     use crate::clauses::derivation::{
         DerivationEntry, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
         DC_DIST_DISJUNCTIONS, DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL,
-        DC_INTRO_DEF, DC_LIFT_ITE, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT, DC_SPLIT_EQUIV,
+        DC_INTRO_DEF, DC_LIFT_ITE, DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SPLIT_CONJUNCT,
+        DC_SPLIT_EQUIV,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -4443,6 +4810,117 @@ mod tests {
         assert!(archive.iter().any(|formula| formula.formula() == &q_a));
         assert_eq!(clauses.members(), result.clauses_generated);
         assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
+    fn clause_set_lift_lambdas_archives_and_clausifies_definitions() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let inner = typed_unary(&mut bank, "clause_lift_lambda_body_f", &db0);
+        let body = typed_unary(&mut bank, "clause_lift_lambda_body_g", &inner);
+        let lambda = close_with_db_var(&mut bank, &i_type, &body).unwrap();
+        let lambda_type = lambda.type_().expect("lambda term is typed");
+        let wrapped_lambda = typed_unary_with_types(
+            &mut bank,
+            "clause_lift_lambda_wrapper",
+            &lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let target = typed_const(&mut bank, "clause_lift_lambda_target");
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &wrapped_lambda,
+            &target,
+            true,
+        )]));
+        let mut clauses = ClauseSet::from_clauses([clause]);
+        let mut archive = FormulaSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result =
+            clause_set_lift_lambdas(&mut clauses, &mut archive, &mut bank, &fresh_vars, false)
+                .unwrap();
+
+        assert_eq!(result.clauses_changed, 1);
+        assert_eq!(result.definitions_archived, 1);
+        assert!(result.definition_clauses_generated > 0);
+        assert_eq!(result.clause_derivation_ops, vec![DC_LIFT_LAMBDAS]);
+        assert_eq!(archive.cardinality(), 2);
+        assert_eq!(
+            clauses
+                .iter()
+                .next()
+                .unwrap()
+                .derivation()
+                .unwrap()
+                .as_slice()[0],
+            DerivationEntry::Operation(DC_LIFT_LAMBDAS)
+        );
+        let lifted_left = clauses
+            .iter()
+            .next()
+            .unwrap()
+            .literals()
+            .as_slice()
+            .first()
+            .unwrap()
+            .left()
+            .clone();
+        assert!(!lifted_left.has_lambda_subterm());
+        assert!(clauses.members() > 1);
+    }
+
+    #[test]
+    fn formula_set_cnf2_lifts_clause_lambdas_after_archive_drain() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let inner = typed_unary(&mut bank, "set_cnf_clause_lift_lambda_body_f", &db0);
+        let body = typed_unary(&mut bank, "set_cnf_clause_lift_lambda_body_g", &inner);
+        let lambda = close_with_db_var(&mut bank, &i_type, &body).unwrap();
+        let lambda_type = lambda.type_().expect("lambda term is typed");
+        let wrapped_lambda = typed_unary_with_types(
+            &mut bank,
+            "set_cnf_clause_lift_lambda_wrapper",
+            &lambda,
+            &lambda_type,
+            &i_type,
+        );
+        let target = typed_const(&mut bank, "set_cnf_clause_lift_lambda_target");
+        let clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank,
+            &wrapped_lambda,
+            &target,
+            true,
+        )]));
+        let formula = tformula_clause_encode(&mut bank, &clause, ProblemType::HigherOrder).unwrap();
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_is_clause(true);
+        let mut formulas = FormulaSet::new();
+        formulas.insert(wrapped);
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = formulas
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert!(formulas.is_empty());
+        assert_eq!(result.clauses_generated, 1);
+        assert_eq!(result.clauses_lambdas_lifted, 1);
+        assert_eq!(result.lambda_lift_definitions_archived, 1);
+        assert!(result.lambda_lift_definition_clauses_generated > 0);
+        assert!(clauses.members() > result.clauses_generated);
+        assert!(archive.cardinality() >= 4);
     }
 
     #[test]
