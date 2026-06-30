@@ -25,6 +25,7 @@ use crate::clauses::derivation::{
     DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_NEGATE_CONJECTURE,
     DC_SPLIT_EQUIV,
 };
+use crate::clauses::garbage_coll::tb_gc_collect;
 use crate::terms::functypes::FunCode;
 use crate::terms::lambda::lambda_normalize_db;
 use crate::terms::signature::Signature;
@@ -44,6 +45,8 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 static WRAPPED_FORMULA_ENTRY_ID: AtomicU64 = AtomicU64::new(1);
 static FORMULA_IDENT_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
+const TFORMULA_GC_LIMIT_NUMERATOR: i64 = 3;
+const TFORMULA_GC_LIMIT_DENOMINATOR: i64 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormulaPrintFormat {
@@ -111,6 +114,8 @@ pub struct FormulaSetCnfResult {
     pub clauses_generated: i64,
     pub original_formulas_archived: i64,
     pub cnf_formulas_archived: i64,
+    pub term_garbage_collections: i64,
+    pub terms_recovered_by_gc: i64,
     pub formulas_simplified: i64,
     pub boolean_equalities_replaced: i64,
     pub formulas_fool_unrolled: i64,
@@ -147,6 +152,22 @@ impl FormulaSetCnfOptions {
         self.def_limit = def_limit;
         self
     }
+}
+
+const fn formula_set_cnf_gc_threshold(old_nodes: i64) -> i64 {
+    old_nodes.saturating_mul(TFORMULA_GC_LIMIT_NUMERATOR) / TFORMULA_GC_LIMIT_DENOMINATOR
+}
+
+fn collect_formula_set_cnf_garbage(
+    bank: &mut TermBank,
+    set: &FormulaSet,
+    archive: &FormulaSet,
+    clauseset: &ClauseSet,
+    result: &mut FormulaSetCnfResult,
+) {
+    let recovered = tb_gc_collect(bank, &[clauseset], &[set, archive]);
+    result.term_garbage_collections += 1;
+    result.terms_recovered_by_gc += recovered;
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1367,6 +1388,8 @@ impl FormulaSet {
         options: FormulaSetCnfOptions,
     ) -> Result<FormulaSetCnfResult, Diagnostic> {
         let mut result = FormulaSetCnfResult::default();
+        let mut old_nodes = bank.non_var_term_nodes();
+        let mut gc_threshold = formula_set_cnf_gc_threshold(old_nodes);
 
         if options.fool_unroll {
             let unroll_result = self.unroll_fool(bank)?;
@@ -1413,8 +1436,18 @@ impl FormulaSet {
                 .formula_derivation_ops
                 .extend(cnf_result.formula_derivation_ops);
 
+            let cnf_copy_has_formula = form.formula.is_some();
             archive.insert(form);
             result.cnf_formulas_archived += 1;
+            if cnf_copy_has_formula && bank.non_var_term_nodes() > gc_threshold {
+                collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result);
+                old_nodes = bank.non_var_term_nodes();
+                gc_threshold = formula_set_cnf_gc_threshold(old_nodes);
+            }
+        }
+
+        if bank.non_var_term_nodes() != old_nodes {
+            collect_formula_set_cnf_garbage(bank, self, archive, clauseset, &mut result);
         }
 
         Ok(result)
@@ -3074,6 +3107,46 @@ mod tests {
         assert_eq!(rewritten_original.argument(1).as_ref(), Some(&tail));
         assert_eq!(clauses.members(), result.clauses_generated);
         assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
+    fn formula_set_cnf2_collects_term_garbage_after_cnf_growth() {
+        let mut bank = test_bank();
+        let dropped = typed_const(&mut bank, "set_cnf_gc_dropped");
+        let first = typed_const(&mut bank, "set_cnf_gc_first");
+        let second = typed_const(&mut bank, "set_cnf_gc_second");
+        let third = typed_const(&mut bank, "set_cnf_gc_third");
+        let fourth = typed_const(&mut bank, "set_cnf_gc_fourth");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let left_atom = bool_binary_with_code(&mut bank, eqn_code, &first, &second);
+        let right_atom = bool_binary_with_code(&mut bank, eqn_code, &third, &fourth);
+        let equiv_code = bank.signature().equiv_code();
+        let expensive = bool_binary_with_code(&mut bank, equiv_code, &left_atom, &right_atom);
+        let tail = bool_binary_with_code(&mut bank, eqn_code, &first, &fourth);
+        let or_code = bank.signature().or_code();
+        let formula = bool_binary_with_code(&mut bank, or_code, &expensive, &tail);
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::FirstOrder).with_def_limit(1),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert!(result.term_garbage_collections >= 1);
+        assert!(result.terms_recovered_by_gc >= 1);
+        assert!(bank.find(&dropped).is_none());
+        let archived_formula = archive.iter().next().unwrap().formula().clone();
+        assert!(bank.find(&archived_formula).is_some());
     }
 
     #[test]

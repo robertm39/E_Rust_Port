@@ -56,6 +56,14 @@ impl ClauseSetMarker for ClauseSet {
     }
 }
 
+impl ClauseSetMarker for &ClauseSet {
+    fn mark_clause_terms(&self, bank: &TermBank) {
+        for clause in self.iter() {
+            clause.gc_mark_terms(bank);
+        }
+    }
+}
+
 #[must_use]
 pub fn tb_gc_collect<C, F>(bank: &mut TermBank, clause_sets: &[C], formula_sets: &[F]) -> i64
 where
