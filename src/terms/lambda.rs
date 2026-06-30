@@ -375,6 +375,71 @@ pub fn lambda_eta_expand_db_top_level(
     Ok(result)
 }
 
+fn do_eta_expand_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let result = if term.is_lambda() {
+        let matrix = term.argument(1).expect("lambda matrix is uninitialized");
+        if matrix.has_eta_expandable_subterm() {
+            let new_matrix = do_eta_expand_db(bank, &matrix)?;
+            assert_ne!(new_matrix, matrix, "eta-expansion flag must imply a change");
+            let copy = Term::top_copy(term);
+            copy.set_argument(1, new_matrix);
+            bank.term_top_insert(copy)?
+        } else {
+            term.clone()
+        }
+    } else if term.arity() == 0 || !term.has_eta_expandable_subterm() {
+        term.clone()
+    } else {
+        let copy = Term::top_copy_without_args(term);
+        let start = usize::from(term.is_phony_app());
+        if term.is_phony_app() {
+            let head = term
+                .argument(0)
+                .expect("phony application head is uninitialized");
+            copy.set_argument(0, head);
+        }
+
+        let mut changed = false;
+        for index in start..term.arity() {
+            let arg = term
+                .argument(index)
+                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+            let expanded = do_eta_expand_db(bank, &arg)?;
+            if expanded != arg {
+                changed = true;
+            }
+            copy.set_argument(index, expanded);
+        }
+
+        if changed {
+            bank.term_top_insert(copy)?
+        } else {
+            term.clone()
+        }
+    };
+
+    lambda_eta_expand_db_top_level(bank, &result)
+}
+
+/// Performs eta-expansion on DB terms, matching C `LambdaEtaExpandDB`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a rebuilt eta-expanded term cannot be inserted into
+/// the term bank.
+///
+/// # Panics
+///
+/// Panics if lambda/application cells are malformed or required term types are
+/// missing.
+pub fn lambda_eta_expand_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    if term.has_eta_expandable_subterm() {
+        do_eta_expand_db(bank, term)
+    } else {
+        Ok(term.clone())
+    }
+}
+
 fn do_eta_reduce_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
     let mut result = if term.arity() == 0 || !term.has_lambda_subterm() {
         term.clone()
@@ -950,7 +1015,7 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps,
+        apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, lambda_eta_expand_db,
         lambda_eta_expand_db_top_level, lambda_eta_reduce_db, shift_db, unfold_lambda,
     };
     use crate::terms::signature::Signature;
@@ -1127,6 +1192,36 @@ mod tests {
         let arg = matrix.argument(0).unwrap();
         assert!(arg.is_db_var());
         assert_eq!(arg.f_code(), 0);
+    }
+
+    #[test]
+    fn lambda_eta_expand_db_recurses_into_ordinary_arguments() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let f = typed_const_with_type(&mut bank, "eta_expand_arg_f", unary_type.clone());
+        let wrapper_type = alloc_arrow_type(vec![unary_type.clone(), i_type.clone()]);
+        let wrapper_code = bank
+            .signature_mut()
+            .insert_id("eta_expand_wrapper", 1, false);
+        bank.signature_mut()
+            .declare_final_type(wrapper_code, wrapper_type)
+            .unwrap();
+        let wrapper = Term::top_alloc(wrapper_code, 1);
+        wrapper.set_type(Some(i_type));
+        wrapper.set_argument(0, f);
+        let wrapper = bank.term_top_insert(wrapper).unwrap();
+
+        let expanded = lambda_eta_expand_db(&mut bank, &wrapper).unwrap();
+
+        assert_eq!(expanded.f_code(), wrapper_code);
+        assert_eq!(expanded.arity(), 1);
+        let expanded_arg = expanded.argument(0).unwrap();
+        assert!(expanded_arg.is_lambda());
+        assert_eq!(expanded_arg.type_(), Some(unary_type));
     }
 
     #[test]
