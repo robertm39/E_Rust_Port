@@ -4488,7 +4488,7 @@ fn run_syntax_only(
         let parsed_file = parse_clause_file(
             file,
             config.parse_format,
-            FormulaPreprocessing::PARSE_ONLY,
+            FormulaPreprocessing::parse_only_from_config(config),
             &mut bank,
             &mut clauses,
             &mut watchlist,
@@ -8260,21 +8260,30 @@ struct FormulaPreprocessing {
     annotate_questions: bool,
     add_answer_literals: bool,
     conjectures_are_questions: bool,
+    fool_unroll: FoolUnroll,
 }
 
 impl FormulaPreprocessing {
-    const PARSE_ONLY: Self = Self {
-        annotate_questions: false,
-        add_answer_literals: false,
-        conjectures_are_questions: false,
-    };
-
     fn from_config(config: &EProverConfig) -> Self {
         Self {
             annotate_questions: true,
             add_answer_literals: config.answer_limit > 0,
             conjectures_are_questions: config.flags.contains(EProverFlag::ConjecturesAreQuestions),
+            fool_unroll: config.preprocessing.fool_unroll,
         }
+    }
+
+    fn parse_only_from_config(config: &EProverConfig) -> Self {
+        Self {
+            annotate_questions: false,
+            add_answer_literals: false,
+            conjectures_are_questions: false,
+            fool_unroll: config.preprocessing.fool_unroll,
+        }
+    }
+
+    fn fool_unroll_enabled(self) -> bool {
+        matches!(self.fool_unroll, FoolUnroll::Enabled)
     }
 }
 
@@ -8428,8 +8437,12 @@ fn parse_simple_tstp_formula_clause(
             bank,
         )?;
     }
-    let literal_lists =
-        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
+    let literal_lists = simple_fof_formulas_to_clause_literal_lists(
+        formulas,
+        formula_conjecture_seen,
+        formula_preprocessing.fool_unroll_enabled(),
+        bank,
+    )?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -8500,8 +8513,12 @@ fn parse_simple_tptp_formula_clause(
             bank,
         )?;
     }
-    let literal_lists =
-        simple_fof_formulas_to_clause_literal_lists(formulas, formula_conjecture_seen, bank)?;
+    let literal_lists = simple_fof_formulas_to_clause_literal_lists(
+        formulas,
+        formula_conjecture_seen,
+        formula_preprocessing.fool_unroll_enabled(),
+        bank,
+    )?;
     if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
         return Err(simple_fof_unsupported_error(scanner));
     }
@@ -8758,6 +8775,7 @@ struct SimpleFofLetReplacement {
 fn simple_fof_formulas_to_clause_literal_lists(
     mut formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if !negate_as_conjecture {
@@ -8769,6 +8787,7 @@ fn simple_fof_formulas_to_clause_literal_lists(
         formulas,
         negate_as_conjecture,
         &universal_dependencies,
+        fool_unroll,
         bank,
     )
 }
@@ -9338,12 +9357,14 @@ fn simple_fof_formulas_to_clause_literal_lists_with_dependencies(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture && formulas.len() > 1 {
         return simple_fof_negated_conjunction_to_clause_literal_lists(
             formulas,
             universal_dependencies,
+            fool_unroll,
             bank,
         );
     }
@@ -9355,6 +9376,7 @@ fn simple_fof_formulas_to_clause_literal_lists_with_dependencies(
                 formula,
                 negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )?,
         );
@@ -9365,6 +9387,7 @@ fn simple_fof_formulas_to_clause_literal_lists_with_dependencies(
 fn simple_fof_negated_conjunction_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let mut literal_lists = vec![EqnList::new()];
@@ -9374,6 +9397,7 @@ fn simple_fof_negated_conjunction_to_clause_literal_lists(
                 formula,
                 true,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )?;
         literal_lists =
@@ -9402,6 +9426,7 @@ fn simple_fof_skolemized_existential_scope_to_clause_literal_lists(
     bound: &[Term],
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if bound.is_empty() {
@@ -9409,6 +9434,7 @@ fn simple_fof_skolemized_existential_scope_to_clause_literal_lists(
             formulas,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         );
     }
@@ -9430,6 +9456,7 @@ fn simple_fof_skolemized_existential_scope_to_clause_literal_lists(
             formulas,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         )?;
         literal_lists
@@ -9629,6 +9656,7 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
     literal: Eqn,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let expands_to_formula_ite = literal.is_positive()
@@ -9642,6 +9670,7 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
             formulas,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         );
     }
@@ -9651,15 +9680,22 @@ fn simple_fof_literal_formula_to_clause_literal_lists(
             formulas,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         );
     }
 
-    if let Some(formulas) = simple_fof_literal_bool_subterm_to_formulas(&literal, bank)? {
+    let bool_subterm_formulas = if fool_unroll {
+        simple_fof_literal_bool_subterm_to_formulas(&literal, bank)?
+    } else {
+        None
+    };
+    if let Some(formulas) = bool_subterm_formulas {
         return simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         );
     }
@@ -10068,10 +10104,15 @@ fn simple_fof_bool_term_to_formulas(
     Ok(simple_fof_literal_formulas(vec![literal]))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one dispatcher mirrors the SimpleFofFormula variants without hiding the conversion flow"
+)]
 fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
     formula: SimpleFofFormula,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     match formula {
@@ -10083,6 +10124,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             literal,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         ),
         SimpleFofFormula::Implication {
@@ -10097,6 +10139,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             consequents,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         ),
         SimpleFofFormula::Equivalence { left, right } => {
@@ -10105,6 +10148,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 right,
                 negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )
         }
@@ -10113,6 +10157,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             right,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         ),
         SimpleFofFormula::Nand { left, right } => simple_fof_nand_formula_to_clause_literal_lists(
@@ -10120,6 +10165,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             right,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         ),
         SimpleFofFormula::Nor { left, right } => simple_fof_nor_formula_to_clause_literal_lists(
@@ -10127,6 +10173,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
             right,
             negate_as_conjecture,
             universal_dependencies,
+            fool_unroll,
             bank,
         ),
         SimpleFofFormula::Conjunction(formulas) => {
@@ -10134,6 +10181,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 formulas,
                 negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )
         }
@@ -10142,6 +10190,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 disjuncts,
                 negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )
         }
@@ -10150,6 +10199,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 formulas,
                 !negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )
         }
@@ -10159,6 +10209,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 formulas,
                 negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )
         }
@@ -10168,6 +10219,7 @@ fn simple_fof_formula_to_clause_literal_lists_with_dependencies(
                 formulas,
                 negate_as_conjecture,
                 universal_dependencies,
+                fool_unroll,
                 bank,
             )
         }
@@ -10179,6 +10231,7 @@ fn simple_fof_implication_formula_to_clause_literal_lists(
     consequents: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
@@ -10186,6 +10239,7 @@ fn simple_fof_implication_formula_to_clause_literal_lists(
             antecedents,
             consequents,
             universal_dependencies,
+            fool_unroll,
             bank,
         )
     } else {
@@ -10193,6 +10247,7 @@ fn simple_fof_implication_formula_to_clause_literal_lists(
             antecedents,
             consequents,
             universal_dependencies,
+            fool_unroll,
             bank,
         )
     }
@@ -10203,6 +10258,7 @@ fn simple_fof_equivalence_formula_to_clause_literal_lists(
     right: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
@@ -10210,10 +10266,17 @@ fn simple_fof_equivalence_formula_to_clause_literal_lists(
             left,
             right,
             universal_dependencies,
+            fool_unroll,
             bank,
         )
     } else {
-        simple_fof_equivalence_to_clause_literal_lists(left, right, universal_dependencies, bank)
+        simple_fof_equivalence_to_clause_literal_lists(
+            left,
+            right,
+            universal_dependencies,
+            fool_unroll,
+            bank,
+        )
     }
 }
 
@@ -10222,15 +10285,23 @@ fn simple_fof_xor_formula_to_clause_literal_lists(
     right: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
-        simple_fof_equivalence_to_clause_literal_lists(left, right, universal_dependencies, bank)
+        simple_fof_equivalence_to_clause_literal_lists(
+            left,
+            right,
+            universal_dependencies,
+            fool_unroll,
+            bank,
+        )
     } else {
         simple_fof_negated_equivalence_to_clause_literal_lists(
             left,
             right,
             universal_dependencies,
+            fool_unroll,
             bank,
         )
     }
@@ -10241,6 +10312,7 @@ fn simple_fof_nand_formula_to_clause_literal_lists(
     right: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let mut conjuncts = left;
@@ -10249,6 +10321,7 @@ fn simple_fof_nand_formula_to_clause_literal_lists(
         conjuncts,
         !negate_as_conjecture,
         universal_dependencies,
+        fool_unroll,
         bank,
     )
 }
@@ -10258,6 +10331,7 @@ fn simple_fof_nor_formula_to_clause_literal_lists(
     right: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let mut disjuncts = simple_fof_formulas_to_disjuncts(left);
@@ -10266,6 +10340,7 @@ fn simple_fof_nor_formula_to_clause_literal_lists(
         disjuncts,
         !negate_as_conjecture,
         universal_dependencies,
+        fool_unroll,
         bank,
     )
 }
@@ -10274,12 +10349,14 @@ fn simple_fof_conjunction_formula_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
         return simple_fof_negated_conjunction_to_clause_literal_lists(
             formulas,
             universal_dependencies,
+            fool_unroll,
             bank,
         );
     }
@@ -10287,6 +10364,7 @@ fn simple_fof_conjunction_formula_to_clause_literal_lists(
         formulas,
         negate_as_conjecture,
         universal_dependencies,
+        fool_unroll,
         bank,
     )
 }
@@ -10295,12 +10373,14 @@ fn simple_fof_disjunction_formula_to_clause_literal_lists(
     disjuncts: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     simple_fof_disjunction_to_clause_literal_lists(
         disjuncts,
         negate_as_conjecture,
         universal_dependencies,
+        fool_unroll,
         bank,
     )
 }
@@ -10310,6 +10390,7 @@ fn simple_fof_universal_scope_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
@@ -10318,6 +10399,7 @@ fn simple_fof_universal_scope_to_clause_literal_lists(
             bound,
             true,
             universal_dependencies,
+            fool_unroll,
             bank,
         )
     } else {
@@ -10327,6 +10409,7 @@ fn simple_fof_universal_scope_to_clause_literal_lists(
             formulas,
             false,
             &universal_dependencies,
+            fool_unroll,
             bank,
         )
     }
@@ -10337,6 +10420,7 @@ fn simple_fof_existential_scope_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
@@ -10346,6 +10430,7 @@ fn simple_fof_existential_scope_to_clause_literal_lists(
             formulas,
             true,
             &universal_dependencies,
+            fool_unroll,
             bank,
         )
     } else {
@@ -10354,6 +10439,7 @@ fn simple_fof_existential_scope_to_clause_literal_lists(
             bound,
             false,
             universal_dependencies,
+            fool_unroll,
             bank,
         )
     }
@@ -10363,18 +10449,21 @@ fn simple_fof_implication_to_clause_literal_lists(
     antecedents: Vec<SimpleFofFormula>,
     consequents: Vec<SimpleFofFormula>,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let negated_antecedents = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         antecedents,
         true,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let positive_consequents = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         consequents,
         false,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     Ok(simple_fof_clause_literal_list_products(
@@ -10387,12 +10476,14 @@ fn simple_fof_negated_implication_to_clause_literal_lists(
     antecedents: Vec<SimpleFofFormula>,
     consequents: Vec<SimpleFofFormula>,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let mut literal_lists = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         antecedents,
         false,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     literal_lists.extend(
@@ -10400,6 +10491,7 @@ fn simple_fof_negated_implication_to_clause_literal_lists(
             consequents,
             true,
             universal_dependencies,
+            fool_unroll,
             bank,
         )?,
     );
@@ -10422,30 +10514,35 @@ fn simple_fof_equivalence_to_clause_literal_lists(
     left: Vec<SimpleFofFormula>,
     right: Vec<SimpleFofFormula>,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let negative_left = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         left.clone(),
         true,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let positive_left = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         left,
         false,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let negative_right = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         right.clone(),
         true,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let positive_right = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         right,
         false,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
 
@@ -10462,30 +10559,35 @@ fn simple_fof_negated_equivalence_to_clause_literal_lists(
     left: Vec<SimpleFofFormula>,
     right: Vec<SimpleFofFormula>,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     let positive_left = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         left.clone(),
         false,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let negative_left = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         left,
         true,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let positive_right = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         right.clone(),
         false,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
     let negative_right = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
         right,
         true,
         universal_dependencies,
+        fool_unroll,
         bank,
     )?;
 
@@ -10502,6 +10604,7 @@ fn simple_fof_disjunction_to_clause_literal_lists(
     disjuncts: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     universal_dependencies: &[Term],
+    fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
     if negate_as_conjecture {
@@ -10512,6 +10615,7 @@ fn simple_fof_disjunction_to_clause_literal_lists(
                     disjunct,
                     true,
                     universal_dependencies,
+                    fool_unroll,
                     bank,
                 )?,
             );
@@ -10525,6 +10629,7 @@ fn simple_fof_disjunction_to_clause_literal_lists(
             disjunct,
             false,
             universal_dependencies,
+            fool_unroll,
             bank,
         )?;
         literal_lists = simple_fof_clause_literal_list_products(&literal_lists, &disjunct_literals);
@@ -18623,6 +18728,42 @@ mod tests {
     }
 
     #[test]
+    fn run_cnf_only_honors_disabled_fool_unroll_for_boolean_formula_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-cnf-term-position-bool-no-unroll");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(f_type, type, f: $o > $i).\n\
+             fof(bool_arg, axiom, (f((p(a)&q(a))) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--fool-unroll=false", "--cnf", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% CNFization successful!\n"));
+        assert!(printed.contains("f($and($eq(p(a),$true),$eq(q(a),$true)))=c <- .\n"));
+        assert!(!printed.contains("f($true)=c <- p(a), q(a).\n"));
+        assert!(!printed.contains("f($false)=c; p(a) <- .\n"));
+        assert!(!printed.contains("f($false)=c; q(a) <- .\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_cnf_only_accepts_boolean_let_formula_atom() {
         let _guard = global_state_lock();
         let path = temp_path("proof-cnf-boolean-let");
@@ -20528,6 +20669,46 @@ mod tests {
             .iter()
             .any(|line| line.contains("b=c") && line.contains("p(a)") && !line.contains("~p(a)")));
         assert!(!printed.contains("$ite"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_honors_disabled_fool_unroll_for_boolean_formula_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-term-position-bool-no-unroll");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(c_type, type, c: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(f_type, type, f: $o > $i).\n\
+             fof(bool_arg, axiom, (f((p(a)&q(a))) = c)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--fool-unroll=false",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(printed.matches("cnf(i_0_").count(), 1);
+        assert!(printed.contains("$and($eq(p(a),$true),$eq(q(a),$true))"));
+        assert!(!printed.contains("f($true)"));
+        assert!(!printed.contains("f($false)"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
