@@ -11,8 +11,11 @@ use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::set_hard_cpu_limit;
 #[cfg(not(test))]
 use crate::basics::os_wrapper::set_memory_limit;
+#[cfg(target_os = "linux")]
+use crate::basics::os_wrapper::RLIMIT_DATA_COMPAT;
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_core_number, get_system_phys_memory,
+    RLimResult,
 };
 #[cfg(all(target_os = "linux", not(test)))]
 use crate::basics::os_wrapper::{set_soft_rlimit, RLIMIT_CORE_COMPAT, RLIMIT_CPU_COMPAT};
@@ -2332,30 +2335,120 @@ fn native_hard_cpu_limit_to_apply(config: &EProverConfig) -> Option<u64> {
     (hard_limit != RLIM_INFINITY_COMPAT).then_some(hard_limit)
 }
 
-fn apply_os_resource_limit_state(config: &EProverConfig) {
-    #[cfg(all(target_os = "linux", not(test)))]
+fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
+    #[cfg(test)]
     {
-        if let Some(cpu_limit) = cpu_rlimit_to_apply(config) {
-            let _ = set_soft_rlimit(RLIMIT_CPU_COMPAT, cpu_limit);
-            let _ = set_soft_rlimit(RLIMIT_CORE_COMPAT, 0);
-        }
-    }
-
-    #[cfg(all(windows, not(test)))]
-    {
-        if let Some(cpu_limit) = native_hard_cpu_limit_to_apply(config) {
-            let _ = set_hard_cpu_limit(cpu_limit);
-        }
+        let _ = config;
+        Vec::new()
     }
 
     #[cfg(not(test))]
     {
-        let _ = set_memory_limit(config.memory_limit);
+        let mut warnings = Vec::new();
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(cpu_limit) = cpu_rlimit_to_apply(config) {
+                if let Some(warning) = rlimit_warning_from_result(
+                    set_soft_rlimit(RLIMIT_CPU_COMPAT, cpu_limit),
+                    RLIMIT_CPU_COMPAT,
+                    cpu_limit,
+                    cpu_rlimit_desc(config),
+                ) {
+                    warnings.push(warning);
+                }
+                if set_soft_rlimit(RLIMIT_CORE_COMPAT, 0) != RLimResult::Success {
+                    warnings.push(Diagnostic::new(
+                        ErrorCode::SYSTEM_ERROR,
+                        "Cannot prevent core dumps!",
+                    ));
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            if let Some(cpu_limit) = native_hard_cpu_limit_to_apply(config) {
+                if let Some(warning) = resource_limit_warning_from_result(
+                    set_hard_cpu_limit(cpu_limit),
+                    cpu_limit,
+                    "JOB_OBJECT_LIMIT_PROCESS_TIME",
+                ) {
+                    warnings.push(warning);
+                }
+            }
+        }
+
+        let memory_limit_result = set_memory_limit(config.memory_limit);
+        #[cfg(target_os = "linux")]
+        {
+            if memory_limit_result == RLimResult::Reduced {
+                warnings.push(
+                    resource_limit_warning_from_result(
+                        memory_limit_result,
+                        config.memory_limit,
+                        "memory limit",
+                    )
+                    .expect("reduced resource limits produce warnings"),
+                );
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            if let Some(warning) = resource_limit_warning_from_result(
+                memory_limit_result,
+                config.memory_limit,
+                "memory limit",
+            ) {
+                warnings.push(warning);
+            }
+        }
+        warnings
+    }
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn cpu_rlimit_desc(config: &EProverConfig) -> &'static str {
+    if config.soft_cpu_limit.is_some() {
+        "RLIMIT_CPU (E-Soft)"
+    } else {
+        "RLIMIT_CPU (E-Hard)"
+    }
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn rlimit_warning_from_result(
+    result: RLimResult,
+    resource: i32,
+    limit: u64,
+    desc: &str,
+) -> Option<Diagnostic> {
+    #[cfg(target_os = "linux")]
+    let data_resource = RLIMIT_DATA_COMPAT;
+    #[cfg(not(target_os = "linux"))]
+    let data_resource = 2;
+
+    if result == RLimResult::Failed && resource == data_resource {
+        return None;
     }
 
-    #[cfg(test)]
-    {
-        let _ = config;
+    resource_limit_warning_from_result(result, limit, desc)
+}
+
+fn resource_limit_warning_from_result(
+    result: RLimResult,
+    limit: u64,
+    desc: &str,
+) -> Option<Diagnostic> {
+    match result {
+        RLimResult::Failed => Some(Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!("Could not set limit {desc} to {limit}"),
+        )),
+        RLimResult::Reduced => Some(Diagnostic::new(
+            ErrorCode::SYSTEM_ERROR,
+            format!("Had to reduce limit {desc}"),
+        )),
+        RLimResult::Success => None,
     }
 }
 
@@ -2413,6 +2506,7 @@ where
         }
         EProverAction::Run(config) => {
             write_config_warnings(stderr, &config)?;
+            write_warnings(stderr, &apply_os_resource_limit_state(&config))?;
             run_config(stdout, &config)
         }
     }
@@ -2422,7 +2516,11 @@ fn write_config_warnings(
     stderr: &mut impl Write,
     config: &EProverConfig,
 ) -> Result<(), EProverError> {
-    for warning in &config.warnings {
+    write_warnings(stderr, &config.warnings)
+}
+
+fn write_warnings(stderr: &mut impl Write, warnings: &[Diagnostic]) -> Result<(), EProverError> {
+    for warning in warnings {
         stderr.write_all(warning.render_warning(PROGRAM_NAME).as_bytes())?;
     }
     Ok(())
@@ -4211,7 +4309,6 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
     let _ = set_output_level(config.output_level);
     apply_time_limit_state(config);
     apply_ordering_state(config);
-    apply_os_resource_limit_state(config);
     let mut output = open_configured_output(stdout, config.output_file.as_deref())?;
 
     if config.flags.contains(EProverFlag::PrintPid) {
@@ -9523,8 +9620,9 @@ mod tests {
     use super::{
         auto_memory_limit_from_system_mb, cpu_rlimit_to_apply, fv_index_params_from_config,
         heuristic_parms_from_config, native_hard_cpu_limit_to_apply, order_parms_from_config,
-        preprocessing_config_debug_line, process_options, proof_control_from_config, run,
-        run_config, temporary_executable_term_bank, write_saturation_proof_object_clause,
+        preprocessing_config_debug_line, process_options, proof_control_from_config,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        temporary_executable_term_bank, write_saturation_proof_object_clause,
         write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
         EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
         GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
@@ -9532,6 +9630,7 @@ mod tests {
         MEGA, THF_REQUIRES_HOL_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::os_wrapper::RLimResult;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::ProblemType;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -9696,6 +9795,49 @@ mod tests {
             panic!("expected run config");
         };
         assert_eq!(native_hard_cpu_limit_to_apply(&config), None);
+    }
+
+    #[test]
+    fn resource_limit_warning_text_matches_c_shapes() {
+        let failed =
+            resource_limit_warning_from_result(RLimResult::Failed, 100, "RLIMIT_CPU (E-Hard)")
+                .unwrap();
+        assert_eq!(failed.code(), ErrorCode::SYSTEM_ERROR);
+        assert_eq!(
+            failed.message(),
+            "Could not set limit RLIMIT_CPU (E-Hard) to 100"
+        );
+
+        let reduced =
+            resource_limit_warning_from_result(RLimResult::Reduced, 100, "RLIMIT_CPU (E-Soft)")
+                .unwrap();
+        assert_eq!(reduced.code(), ErrorCode::SYSTEM_ERROR);
+        assert_eq!(reduced.message(), "Had to reduce limit RLIMIT_CPU (E-Soft)");
+
+        assert_eq!(
+            resource_limit_warning_from_result(RLimResult::Success, 100, "RLIMIT_CPU"),
+            None
+        );
+    }
+
+    #[test]
+    fn linux_rlimit_data_failure_warning_is_masked_like_c() {
+        #[cfg(target_os = "linux")]
+        let data_resource = super::RLIMIT_DATA_COMPAT;
+        #[cfg(not(target_os = "linux"))]
+        let data_resource = 2;
+
+        assert_eq!(
+            rlimit_warning_from_result(RLimResult::Failed, data_resource, 100, "RLIMIT_DATA",),
+            None
+        );
+        assert!(rlimit_warning_from_result(
+            RLimResult::Failed,
+            data_resource + 1,
+            100,
+            "RLIMIT_CPU",
+        )
+        .is_some());
     }
 
     #[test]
