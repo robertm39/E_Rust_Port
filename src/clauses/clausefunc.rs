@@ -1544,6 +1544,91 @@ pub fn tformula_mini_scope(bank: &mut TermBank, form: &Term) -> Result<Term, Dia
     Ok(current)
 }
 
+/// Replaces every bound variable in a term-encoded formula with a fresh one.
+///
+/// This matches C `TFormulaVarRename`: quantified variables are temporarily
+/// bound to fresh variables, and literal/Boolean term copying follows those
+/// bindings with `DEREF_ALWAYS`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if rebuilding or copying the formula through the term
+/// bank fails.
+///
+/// # Panics
+///
+/// Panics if the input violates the C preconditions: no applied free-variable
+/// root, well-formed quantified cells, typed quantified variables, and a fresh
+/// variable bank state that cannot return the original quantified variable.
+pub fn tformula_var_rename(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    assert!(
+        !form.is_applied_free_var(),
+        "TFormulaVarRename expects no applied free-variable root"
+    );
+
+    let quantified = if tformula_is_quantified(bank, form) {
+        let quantified_var = formula_argument(form, 0);
+        let fresh_type = quantified_var
+            .type_()
+            .expect("quantified variable must have a type");
+        let fresh_var = bank.vars().get_fresh_var(&fresh_type);
+        assert_ne!(
+            fresh_var, quantified_var,
+            "fresh quantified variable must differ from original"
+        );
+        Some((
+            BindingRestore::install(quantified_var, fresh_var.clone()),
+            fresh_var,
+        ))
+    } else {
+        None
+    };
+    let fresh_quantified_var = quantified.as_ref().map(|(_, fresh_var)| fresh_var.clone());
+
+    if matches!(form.f_code(), SIG_LET_CODE | SIG_ITE_CODE) {
+        let copy = Term::top_copy_without_args(form);
+        for (index, arg) in form.argument_clones().into_iter().enumerate() {
+            let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
+            copy.set_argument(index, tformula_var_rename(bank, &arg)?);
+        }
+        return bank.term_top_insert(copy);
+    }
+
+    if tformula_is_literal(bank, form) || form.type_().as_ref().is_some_and(Type::is_arrow) {
+        return bank.insert_no_props_cached(form, DerefType::Always);
+    }
+
+    let copies_as_bool_term = {
+        let sig = bank.signature();
+        !sig.is_logical_symbol(form.f_code())
+            && form
+                .type_()
+                .is_some_and(|type_| type_ == sig.type_bank().bool_type())
+    };
+    if copies_as_bool_term {
+        return bank.insert_no_props_cached(form, DerefType::Always);
+    }
+
+    let mut arg1 = None;
+    let mut arg2 = None;
+    if tformula_is_quantified(bank, form) {
+        arg1 = fresh_quantified_var;
+        arg2 = Some(tformula_var_rename(bank, &formula_argument(form, 1))?);
+    } else if tformula_has_subform1(bank, form) {
+        arg1 = Some(tformula_var_rename(bank, &formula_argument(form, 0))?);
+    }
+    if tformula_has_subform2(bank, form) {
+        arg2 = Some(tformula_var_rename(bank, &formula_argument(form, 1))?);
+    }
+
+    tformula_fcode_alloc(
+        bank,
+        form.f_code(),
+        arg1.expect("formula operator must have a first argument"),
+        arg2,
+    )
+}
+
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
 ///
 /// This matches C `TFormulaShiftQuantors` for a single formula. The input is
@@ -1791,6 +1876,28 @@ fn tformula_var_is_free(bank: &TermBank, form: &Term, var: &Term) -> bool {
             .into_iter()
             .flatten()
             .any(|arg| tformula_var_is_free(bank, &arg, var))
+    }
+}
+
+struct BindingRestore {
+    variable: Term,
+    old_binding: Option<Term>,
+}
+
+impl BindingRestore {
+    fn install(variable: Term, new_binding: Term) -> Self {
+        let old_binding = variable.binding();
+        variable.set_binding(Some(new_binding));
+        Self {
+            variable,
+            old_binding,
+        }
+    }
+}
+
+impl Drop for BindingRestore {
+    fn drop(&mut self) {
+        self.variable.set_binding(self.old_binding.clone());
     }
 }
 
@@ -2614,7 +2721,8 @@ mod tests {
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
         tformula_distribute_disjunctions, tformula_estimate_clauses, tformula_expand_literals,
         tformula_mini_scope, tformula_neg_alloc, tformula_nnf, tformula_shift_quantors,
-        tformula_shift_quantors2, tformula_simplify_decoded, TFORM_MANY_CLAUSES,
+        tformula_shift_quantors2, tformula_simplify_decoded, tformula_var_rename,
+        TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::clauses::clause::Clause;
@@ -2635,6 +2743,7 @@ mod tests {
     use crate::terms::lambda::apply_terms as lambda_apply_terms;
     use crate::terms::signature::{
         Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_IS_INJ_DEF_SKOLEM, SIG_DB_LAMBDA_CODE,
+        SIG_ITE_CODE,
     };
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -2646,6 +2755,11 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    fn prepare_formula_fresh_vars(bank: &TermBank) {
+        bank.vars().set_v_counts_to_used();
+        bank.vars().set_fresh_count_to_used();
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
@@ -3939,6 +4053,113 @@ mod tests {
         assert_eq!(body.f_code(), and_code);
         assert_eq!(body.argument(0).unwrap().f_code(), or_code);
         assert_eq!(body.argument(1).unwrap().f_code(), or_code);
+    }
+
+    #[test]
+    fn tformula_var_rename_refreshes_nested_shadowed_quantifiers() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -150);
+        let a = typed_const(&mut bank, "var_rename_shadow_a");
+        let b = typed_const(&mut bank, "var_rename_shadow_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let outer_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let inner_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &b);
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let or_code = bank.signature().or_code();
+        let inner_quantifier = bool_binary_with_code(&mut bank, qex_code, &x, &inner_atom);
+        let body = bool_binary_with_code(&mut bank, or_code, &outer_atom, &inner_quantifier);
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &body);
+        prepare_formula_fresh_vars(&bank);
+
+        let renamed = tformula_var_rename(&mut bank, &formula).unwrap();
+
+        assert!(x.binding().is_none());
+        assert_eq!(renamed.f_code(), qall_code);
+        let outer_fresh = renamed.argument(0).unwrap();
+        assert_ne!(outer_fresh, x);
+        let renamed_body = renamed.argument(1).unwrap();
+        assert_eq!(renamed_body.f_code(), or_code);
+        let renamed_outer_atom = renamed_body.argument(0).unwrap();
+        assert_eq!(renamed_outer_atom.f_code(), eqn_code);
+        assert_eq!(renamed_outer_atom.argument(0).as_ref(), Some(&outer_fresh));
+        assert_eq!(renamed_outer_atom.argument(1).as_ref(), Some(&a));
+
+        let renamed_inner = renamed_body.argument(1).unwrap();
+        assert_eq!(renamed_inner.f_code(), qex_code);
+        let inner_fresh = renamed_inner.argument(0).unwrap();
+        assert_ne!(inner_fresh, x);
+        assert_ne!(inner_fresh, outer_fresh);
+        let renamed_inner_atom = renamed_inner.argument(1).unwrap();
+        assert_eq!(renamed_inner_atom.argument(0).as_ref(), Some(&inner_fresh));
+        assert_eq!(renamed_inner_atom.argument(1).as_ref(), Some(&b));
+    }
+
+    #[test]
+    fn tformula_var_rename_restores_existing_quantified_binding() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -160);
+        let existing = typed_var(&bank, -162);
+        let a = typed_const(&mut bank, "var_rename_restore_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let atom = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let qall_code = bank.signature().qall_code();
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &atom);
+        x.set_binding(Some(existing.clone()));
+        prepare_formula_fresh_vars(&bank);
+
+        let renamed = tformula_var_rename(&mut bank, &formula).unwrap();
+
+        assert_eq!(x.binding(), Some(existing.clone()));
+        let fresh = renamed.argument(0).unwrap();
+        assert_ne!(fresh, x);
+        assert_ne!(fresh, existing);
+        let renamed_atom = renamed.argument(1).unwrap();
+        assert_eq!(renamed_atom.argument(0).as_ref(), Some(&fresh));
+        assert_eq!(renamed_atom.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn tformula_var_rename_recurses_through_ite_arguments() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -170);
+        let a = typed_const(&mut bank, "var_rename_ite_a");
+        let b = typed_const(&mut bank, "var_rename_ite_b");
+        let c = typed_const(&mut bank, "var_rename_ite_c");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let condition = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let then_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &b);
+        let else_atom = bool_binary_with_code(&mut bank, eqn_code, &x, &c);
+        let qex_code = bank.signature().qex_code();
+        let qall_code = bank.signature().qall_code();
+        let then_quantifier = bool_binary_with_code(&mut bank, qex_code, &x, &then_atom);
+        let ite = Term::top_alloc(SIG_ITE_CODE, 3);
+        ite.set_type(Some(bank.signature().type_bank().bool_type()));
+        ite.set_argument(0, condition);
+        ite.set_argument(1, then_quantifier);
+        ite.set_argument(2, else_atom);
+        let ite = bank.term_top_insert(ite).unwrap();
+        let formula = bool_binary_with_code(&mut bank, qall_code, &x, &ite);
+        prepare_formula_fresh_vars(&bank);
+
+        let renamed = tformula_var_rename(&mut bank, &formula).unwrap();
+
+        assert!(x.binding().is_none());
+        let outer_fresh = renamed.argument(0).unwrap();
+        let renamed_ite = renamed.argument(1).unwrap();
+        assert_eq!(renamed_ite.f_code(), SIG_ITE_CODE);
+        let renamed_condition = renamed_ite.argument(0).unwrap();
+        assert_eq!(renamed_condition.argument(0).as_ref(), Some(&outer_fresh));
+        assert_eq!(renamed_condition.argument(1).as_ref(), Some(&a));
+        let renamed_then = renamed_ite.argument(1).unwrap();
+        let inner_fresh = renamed_then.argument(0).unwrap();
+        assert_ne!(inner_fresh, outer_fresh);
+        let renamed_then_atom = renamed_then.argument(1).unwrap();
+        assert_eq!(renamed_then_atom.argument(0).as_ref(), Some(&inner_fresh));
+        assert_eq!(renamed_then_atom.argument(1).as_ref(), Some(&b));
+        let renamed_else = renamed_ite.argument(2).unwrap();
+        assert_eq!(renamed_else.argument(0).as_ref(), Some(&outer_fresh));
+        assert_eq!(renamed_else.argument(1).as_ref(), Some(&c));
     }
 
     #[test]
