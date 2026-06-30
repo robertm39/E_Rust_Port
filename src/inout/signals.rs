@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::get_usec_clock;
 #[cfg(all(target_os = "linux", not(test)))]
@@ -5,6 +6,7 @@ use crate::basics::os_wrapper::set_rlimit;
 #[cfg(target_os = "linux")]
 use crate::basics::os_wrapper::{get_hard_rlimit, RLIMIT_CPU_COMPAT};
 use crate::inout::tempfile::temp_file_cleanup;
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 
 pub const RLIM_INFINITY_COMPAT: u64 = u64::MAX;
@@ -219,6 +221,26 @@ pub fn e_sig_term_sched_handler(signal: i32) -> bool {
     }
 }
 
+pub fn finalize_cpu_limit_outcome(
+    output: &mut impl Write,
+    outcome: &SignalOutcome,
+) -> io::Result<Option<u8>> {
+    match outcome {
+        SignalOutcome::CpuLimitExceeded { silent: true, .. } => {
+            Ok(Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()))
+        }
+        SignalOutcome::CpuLimitExceeded { silent: false, .. } => {
+            writeln!(
+                output,
+                "\n{DEFAULT_COMCHAR_RAW} Failure: Resource limit exceeded (time)"
+            )?;
+            writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS status ResourceOut")?;
+            Ok(Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn handle_cpu_limit() -> SignalOutcome {
     if TIME_LIMIT_IS_SOFT.swap(false, Ordering::SeqCst) {
         TIME_IS_UP.store(true, Ordering::SeqCst);
@@ -344,13 +366,14 @@ fn reset_signal_state_for_tests() {
 mod tests {
     use super::{
         configure_time_limits, e_sig_term_sched_handler, e_signal_handler, e_signal_setup,
-        hard_time_limit, reset_signal_state_for_tests, schedule_time_limit, set_hard_time_limit,
-        set_schedule_time_limit, set_silent_time_out, set_soft_time_limit, set_system_time_limit,
-        set_time_is_up, set_time_limit_is_soft, sig_term_caught, silent_time_out, soft_time_limit,
-        system_time_limit, time_is_up, time_limit_is_soft, SignalOutcome, RLIM_INFINITY_COMPAT,
-        SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        finalize_cpu_limit_outcome, hard_time_limit, reset_signal_state_for_tests,
+        schedule_time_limit, set_hard_time_limit, set_schedule_time_limit, set_silent_time_out,
+        set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
+        sig_term_caught, silent_time_out, soft_time_limit, system_time_limit, time_is_up,
+        time_limit_is_soft, SignalOutcome, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT,
+        SIGXCPU_COMPAT,
     };
-    use crate::basics::error::ErrorCode;
+    use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
     use crate::test_support::global_state_lock;
     use std::fs::File;
@@ -523,6 +546,59 @@ mod tests {
         assert!(!silent);
         assert_eq!(diagnostic.code(), ErrorCode::CPU_LIMIT_ERROR);
         assert_eq!(diagnostic.message(), "CPU time limit exceeded, terminating");
+    }
+
+    #[test]
+    fn cpu_limit_outcome_finalizer_writes_c_hard_timeout_shape() {
+        let mut output = Vec::new();
+        let status = finalize_cpu_limit_outcome(
+            &mut output,
+            &SignalOutcome::CpuLimitExceeded {
+                silent: false,
+                diagnostic: Some(Diagnostic::new(
+                    ErrorCode::CPU_LIMIT_ERROR,
+                    "CPU time limit exceeded, terminating",
+                )),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(status, Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "\n% Failure: Resource limit exceeded (time)\n% SZS status ResourceOut\n"
+        );
+    }
+
+    #[test]
+    fn cpu_limit_outcome_finalizer_keeps_silent_timeout_quiet() {
+        let mut output = Vec::new();
+        let status = finalize_cpu_limit_outcome(
+            &mut output,
+            &SignalOutcome::CpuLimitExceeded {
+                silent: true,
+                diagnostic: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(status, Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()));
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn cpu_limit_outcome_finalizer_ignores_other_signal_outcomes() {
+        let mut output = Vec::new();
+
+        assert_eq!(
+            finalize_cpu_limit_outcome(
+                &mut output,
+                &SignalOutcome::UnexpectedSignal { signal: 999 }
+            )
+            .unwrap(),
+            None
+        );
+        assert!(output.is_empty());
     }
 
     #[test]
