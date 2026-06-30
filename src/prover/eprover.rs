@@ -10123,7 +10123,7 @@ fn simple_fof_unsupported_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
         format!(
-            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, top-level Boolean $ite/$let atoms, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, formula-level equality, XORs, formula-level disequality, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
+            "{}(just read '{}'): FOF formula requires full clausification; this port currently supports only atomic formulas, top-level and existential-body Boolean $ite/$let atoms, $true/$false truth constants, atomic existential formulas, supported parenthesized existential bodies including quantified operands in positive or negative polarity, universally quantified fragments with supported existential scopes, universally quantified implications, equivalences, formula-level equality, XORs, formula-level disequality, NANDs, and NORs with supported existential operands, grouped or unparenthesized non-conjecture conjunctions/disjunctions including supported existential conjuncts or disjuncts, conjunctive disjuncts with supported existential conjuncts, and grouped or unparenthesized conjecture conjunctions/disjunctions of supported fragments",
             token_pos_rep(scanner.current_token()),
             scanner.current_token().literal()
         ),
@@ -12443,6 +12443,38 @@ mod tests {
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("tff(f1, axiom, "));
         assert!(!printed.contains("input_clause"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_old_tptp_existential_fool_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-old-tptp-existential-fool-body");
+        std::fs::write(
+            &path,
+            "input_formula(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             input_formula(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", "--tptp-in", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(ex_ite, axiom, ?[X"));
+        assert!(printed.contains("]:$ite(app_"));
+        assert!(printed.contains("tff(ex_let_eq, axiom, ?[X"));
+        assert!(printed.contains("]:$let(f:$i,f:=a,f)=X"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -19042,6 +19074,42 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_lowers_old_tptp_existential_fool_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-old-tptp-existential-fool-body");
+        std::fs::write(
+            &path,
+            "input_formula(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             input_formula(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tptp-in",
+                "--tstp-out",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed
+            .contains("$ite($eq(p(esk1_0),$true),$eq(q(esk1_0),$true),$eq(r(esk1_0),$true))"));
+        assert!(printed.contains("$let($eq(f,$eq(a,$true)),f)=esk2_0"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_auto_tstp_input_uses_tstp_output() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-auto-tstp");
@@ -19858,6 +19926,36 @@ mod tests {
 
         let status = run(
             ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_old_tptp_existential_fool_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-old-tptp-existential-fool-body");
+        std::fs::write(
+            &path,
+            "input_formula(ex_ite, axiom, ?[X]:$ite(p(X), q(X), r(X))).\n\
+             input_formula(ex_let_eq, axiom, ?[Y]:$let(f:$i, f := a, f) = Y).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", "--tptp-in", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
