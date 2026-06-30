@@ -14,7 +14,7 @@ use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
 use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF, FP_PSEUDO_PRED};
-use crate::terms::simpletypes::type_is_predicate;
+use crate::terms::simpletypes::{type_is_predicate, Type};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::{
     tb_term_collect_subterms, tb_term_del_prop_count, tb_term_is_ground, tb_term_is_type_term,
@@ -2363,6 +2363,9 @@ fn prepare_predicate_literal(bank: &mut TermBank, term: &Term) -> Result<(), Dia
             "Individual variable used at predicate position",
         ));
     }
+    if term.type_().as_ref().is_some_and(Type::is_bool) {
+        return Ok(());
+    }
     type_declare_is_predicate(bank.signature_mut(), term)
 }
 
@@ -2647,7 +2650,7 @@ mod tests {
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::eqn_props::{
         EqnSide, PatEqnDirection, EP_FROM_CLAUSE_LIT, EP_HAS_EQUIV, EP_IS_EQU_LITERAL,
         EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_PM_INTO_LIT, EP_IS_POSITIVE, EP_IS_SELECTED,
@@ -2669,7 +2672,22 @@ mod tests {
     };
     use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
     use std::collections::{BTreeMap, BTreeSet};
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -2812,6 +2830,29 @@ mod tests {
             eqn_fof_string(&bank, &literal, false, true, EqnFofPrintOptions::tptp()),
             "~equal(fof_a, fof_b)"
         );
+    }
+
+    #[test]
+    fn eqn_fof_parse_accepts_top_level_boolean_ite_atom() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("$ite(p(a), q(a), ~r(a))", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let literal = eqn_fof_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(
+            literal.left().f_code(),
+            crate::terms::signature::SIG_ITE_CODE
+        );
+        assert!(literal
+            .left()
+            .type_()
+            .as_ref()
+            .is_some_and(crate::terms::simpletypes::Type::is_bool));
+        assert_eq!(literal.right(), bank.true_term());
+        assert!(literal.is_positive());
     }
 
     #[test]
