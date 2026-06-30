@@ -208,6 +208,36 @@ impl SatClauseSet {
         output
     }
 
+    /// Marks clauses with pure literals and refreshes the C `exported` subset
+    /// to contain only clauses without pure literals.
+    ///
+    /// Returns the number of clauses marked as having at least one pure
+    /// literal, matching `SatClauseSetMarkPure`.
+    #[must_use]
+    pub fn mark_pure_and_export_non_pure(&mut self) -> u64 {
+        let pure = self.mark_pure();
+        self.export_non_pure();
+        pure
+    }
+
+    /// Checks for unsatisfiability and returns the extracted core clauses.
+    ///
+    /// This mirrors `SatClauseSetCheckAndGetCore`: it refreshes pure-literal
+    /// marks, exports only non-pure clauses, uses C's fixed decision limit of
+    /// 10000, and returns `None` for satisfiable or gave-up solver results.
+    /// Until `PicoSAT` ownership is wired in, the Rust internal solver supplies a
+    /// deletion-minimized core in exported-clause order.
+    #[must_use]
+    pub fn check_and_get_core(&mut self) -> Option<Vec<Clause>> {
+        let _ = self.mark_pure_and_export_non_pure();
+        let solver_clauses = self.solver_clauses_for_indices(&self.exported);
+        if solve_sat(&solver_clauses, self.max_lit, 10_000) != SolverStatus::Unsat {
+            return None;
+        }
+        let core = self.minimize_exported_core(10_000);
+        Some(self.clauses_for_indices(&core))
+    }
+
     fn translate_literal(&mut self, bank: &mut TermBank, literal: &Eqn) -> Result<i32, Diagnostic> {
         let atom_term = if literal.is_equ_lit(bank) {
             let left = bank.insert_instantiated(literal.left())?;
@@ -242,13 +272,7 @@ impl SatClauseSet {
     }
 
     fn check_unsat(&mut self, decision_limit: i32) -> (ProverResult, Option<Clause>) {
-        self.mark_pure();
-        self.exported = self
-            .clauses
-            .iter()
-            .enumerate()
-            .filter_map(|(index, clause)| (!clause.has_pure_lit).then_some(index))
-            .collect();
+        let _ = self.mark_pure_and_export_non_pure();
         self.core.clear();
         self.core_size = 0;
 
@@ -271,6 +295,13 @@ impl SatClauseSet {
         indices
             .iter()
             .map(|index| self.clauses[*index].literals.clone())
+            .collect()
+    }
+
+    fn clauses_for_indices(&self, indices: &[usize]) -> Vec<Clause> {
+        indices
+            .iter()
+            .map(|index| self.clauses[*index].source.clone())
             .collect()
     }
 
@@ -326,6 +357,15 @@ impl SatClauseSet {
             }
         }
         pure_clauses
+    }
+
+    fn export_non_pure(&mut self) {
+        self.exported = self
+            .clauses
+            .iter()
+            .enumerate()
+            .filter_map(|(index, clause)| (!clause.has_pure_lit).then_some(index))
+            .collect();
     }
 
     fn empty_clause_from_core(&self) -> Clause {
@@ -818,10 +858,12 @@ mod tests {
             ..SatClauseSet::default()
         };
 
-        assert_eq!(set.mark_pure(), 2);
+        assert_eq!(set.mark_pure_and_export_non_pure(), 2);
         assert!(set.clauses[0].has_pure_lit);
         assert!(set.clauses[1].has_pure_lit);
         assert!(!set.clauses[2].has_pure_lit);
+        assert_eq!(set.exported, vec![2]);
+        assert_eq!(set.non_pure_cardinality(), 1);
     }
 
     #[test]
@@ -1042,6 +1084,69 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&positive)),
             ]
         );
+    }
+
+    #[test]
+    fn check_and_get_core_returns_minimized_core_without_core_size_side_effect() {
+        let mut redundant_pos = Clause::empty();
+        redundant_pos.set_ident(301);
+        redundant_pos.set_csscpa_source(1);
+        let mut redundant_neg = Clause::empty();
+        redundant_neg.set_ident(302);
+        redundant_neg.set_csscpa_source(1);
+        let mut positive = Clause::empty();
+        positive.set_ident(303);
+        positive.set_csscpa_source(1);
+        let mut negative = Clause::empty();
+        negative.set_ident(304);
+        negative.set_csscpa_source(1);
+        let mut set = SatClauseSet {
+            max_lit: 2,
+            clauses: vec![
+                SatClause {
+                    literals: vec![1, 2],
+                    source: redundant_pos,
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![1, -2],
+                    source: redundant_neg,
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![1],
+                    source: positive,
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![-1],
+                    source: negative,
+                    has_pure_lit: false,
+                },
+            ],
+            ..SatClauseSet::default()
+        };
+
+        let core = set.check_and_get_core().unwrap();
+
+        assert_eq!(set.exported, vec![0, 1, 2, 3]);
+        assert_eq!(set.core_size(), 0);
+        assert_eq!(
+            core.iter().map(Clause::ident).collect::<Vec<_>>(),
+            vec![303, 304]
+        );
+
+        let mut sat = SatClauseSet {
+            max_lit: 2,
+            clauses: vec![SatClause {
+                literals: vec![1, 2],
+                source: Clause::empty(),
+                has_pure_lit: false,
+            }],
+            ..SatClauseSet::default()
+        };
+        assert!(sat.check_and_get_core().is_none());
+        assert!(sat.exported.is_empty());
     }
 
     #[test]
