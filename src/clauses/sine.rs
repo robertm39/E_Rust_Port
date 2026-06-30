@@ -4,7 +4,7 @@ use crate::basics::pqueue::{PQueue, PQueueInt};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{clause_write_tstp, Clause};
-use crate::clauses::clause_props::FormulaProperties;
+use crate::clauses::clause_props::{FormulaProperties, CP_IS_LAMBDA_DEF};
 use crate::clauses::clausesets::{clause_set_ref_stack_cardinality, ClauseSet};
 use crate::clauses::f_generality::{clause_compute_d_rel, GenDistrib, GeneralityMeasure};
 use crate::clauses::formulasets::{formula_set_stack_cardinality, FormulaSet, WrappedFormula};
@@ -434,6 +434,26 @@ pub fn select_threshold_clause_formula_sets<'a>(
     usize_to_i64(res_clauses.len().saturating_add(res_formulas.len()))
 }
 
+pub fn select_definitions_formula_sets<'a>(
+    _clause_sets: &PStack<&'a ClauseSet>,
+    formula_sets: &PStack<&'a FormulaSet>,
+    _res_clauses: &mut PStack<&'a Clause>,
+    res_formulas: &mut PStack<&'a WrappedFormula>,
+) -> i64 {
+    for set in formula_sets.as_slice() {
+        for formula in set.iter() {
+            if formula.query_prop(CP_IS_LAMBDA_DEF)
+                || formula.is_conjecture()
+                || formula.is_hypothesis()
+            {
+                res_formulas.push(formula);
+            }
+        }
+    }
+
+    usize_to_i64(res_formulas.len())
+}
+
 /// Clause-only equivalent of C `SelectDefiningAxioms`.
 ///
 /// Returns the number of newly selected clauses pushed by this defining-axiom
@@ -713,8 +733,8 @@ mod tests {
         pqueue_store_clause, pqueue_store_formula, pstack_clause_del_prop,
         pstack_clause_print_tstp_string, pstack_clauses_move, pstack_formula_del_prop,
         pstack_formula_print_tstp_string, pstack_formulas_move, select_axioms_clause_sets,
-        select_threshold_clause_formula_sets, select_threshold_clause_sets, AxiomType,
-        ClauseSineParams, DRel, DRelation,
+        select_definitions_formula_sets, select_threshold_clause_formula_sets,
+        select_threshold_clause_sets, AxiomType, ClauseSineParams, DRel, DRelation,
     };
     use crate::basics::defines::IntOrP;
     use crate::basics::pqueue::PQueue;
@@ -722,8 +742,8 @@ mod tests {
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
-        CP_INPUT_FORMULA, CP_IS_RELEVANT, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
-        CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
+        CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_IS_RELEVANT, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
+        CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
     };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
@@ -1409,6 +1429,94 @@ mod tests {
 
         assert_eq!(result_clauses.as_slice()[0].ident(), 10);
         assert_eq!(result_formulas.as_slice()[0].entry_id(), kept_formula_id);
+    }
+
+    #[test]
+    fn select_definitions_formula_sets_keeps_definitions_goals_and_hypotheses() {
+        let mut bank = test_bank();
+        let ignored_clause = Clause::empty();
+        let ignored_clause_set = ClauseSet::from_clauses([Clause::empty()]);
+        let mut clause_sets = PStack::new();
+        clause_sets.push(&ignored_clause_set);
+        let mut existing_formula =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_existing"));
+        existing_formula.set_tptp_type(CP_TYPE_AXIOM);
+        let existing_id = existing_formula.entry_id();
+
+        let mut plain_axiom =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_axiom"));
+        plain_axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut lambda_def =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_lambda"));
+        lambda_def.set_tptp_type(CP_TYPE_AXIOM);
+        lambda_def.set_prop(CP_IS_LAMBDA_DEF);
+        let lambda_id = lambda_def.entry_id();
+        let mut conjecture =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_conjecture"));
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let conjecture_id = conjecture.entry_id();
+        let mut hypothesis =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_hypothesis"));
+        hypothesis.set_tptp_type(CP_TYPE_HYPOTHESIS);
+        let hypothesis_id = hypothesis.entry_id();
+        let mut neg_conjecture =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_neg"));
+        neg_conjecture.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        let neg_conjecture_id = neg_conjecture.entry_id();
+        let mut question =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_question"));
+        question.set_tptp_type(CP_TYPE_QUESTION);
+        let question_id = question.entry_id();
+        let mut lambda_question =
+            WrappedFormula::wt_formula_alloc(typed_const(&mut bank, "select_defs_lambda_question"));
+        lambda_question.set_tptp_type(CP_TYPE_QUESTION);
+        lambda_question.set_prop(CP_IS_LAMBDA_DEF);
+        let lambda_question_id = lambda_question.entry_id();
+
+        let mut first_set = FormulaSet::new();
+        first_set.insert(plain_axiom);
+        first_set.insert(lambda_def);
+        first_set.insert(conjecture);
+        let mut second_set = FormulaSet::new();
+        second_set.insert(hypothesis);
+        second_set.insert(neg_conjecture);
+        second_set.insert(question);
+        second_set.insert(lambda_question);
+        let mut formula_sets = PStack::new();
+        formula_sets.push(&first_set);
+        formula_sets.push(&second_set);
+        let mut res_clauses = PStack::new();
+        res_clauses.push(&ignored_clause);
+        let mut res_formulas = PStack::new();
+        res_formulas.push(&existing_formula);
+
+        assert_eq!(
+            select_definitions_formula_sets(
+                &clause_sets,
+                &formula_sets,
+                &mut res_clauses,
+                &mut res_formulas,
+            ),
+            7
+        );
+
+        assert_eq!(res_clauses.len(), 1);
+        assert_eq!(
+            res_formulas
+                .as_slice()
+                .iter()
+                .map(|formula| formula.entry_id())
+                .collect::<Vec<_>>(),
+            vec![
+                existing_id,
+                lambda_id,
+                conjecture_id,
+                hypothesis_id,
+                neg_conjecture_id,
+                question_id,
+                lambda_question_id,
+            ]
+        );
     }
 
     #[test]
