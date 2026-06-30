@@ -14,10 +14,11 @@ use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_app_encode_string, tformula_clause_closed_encode,
     tformula_closure, tformula_collect_clause, tformula_conjunctive_nf3, tformula_copy_def,
     tformula_create_def, tformula_decode_polarity, tformula_fcode_alloc, tformula_find_defs,
-    tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true, tformula_lift_ite,
-    tformula_lift_lets, tformula_mark_polarity, tformula_preload_types, tformula_simplify,
-    tformula_to_cnf, tformula_tptp_string, tformula_unencode_root_eqn, tformula_unroll_fool_result,
-    tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions,
+    tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
+    tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
+    tformula_simplify, tformula_to_cnf, tformula_tptp_string, tformula_unencode_root_eqn,
+    tformula_unroll_fool_result, tformula_var_rename, TFormulaDefinitions,
+    TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
@@ -32,7 +33,10 @@ use crate::clauses::inferencedoc::{
     ProofDocWriteResult,
 };
 use crate::terms::functypes::FunCode;
-use crate::terms::lambda::{beta_normalize_db, lambda_normalize_db, lambda_to_forall, named_to_db};
+use crate::terms::lambda::{
+    abstract_vars, apply_terms, beta_normalize_db, lambda_normalize_db, lambda_to_forall,
+    named_to_db, unfold_lambda,
+};
 use crate::terms::signature::{Signature, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::termbanks::tb_term_collect_subterms;
@@ -45,7 +49,7 @@ use crate::terms::termtypes::{
     TP_NEG_POLARITY, TP_OP_FLAG, TP_POS_POLARITY,
 };
 use crate::terms::termvars::VarBank;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
@@ -53,6 +57,7 @@ static WRAPPED_FORMULA_ENTRY_ID: AtomicU64 = AtomicU64::new(1);
 static FORMULA_IDENT_COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
 const TFORMULA_GC_LIMIT_NUMERATOR: i64 = 3;
 const TFORMULA_GC_LIMIT_DENOMINATOR: i64 = 2;
+const MAX_DEF_SYMBOL_REWRITE_STEPS: i32 = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormulaPrintFormat {
@@ -125,6 +130,11 @@ pub struct FormulaSetCnfResult {
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
     pub formulas_lets_lifted: i64,
+    pub formulas_def_symbols_unfolded: i64,
+    pub unfolded_definition_rhs_rewritten: i64,
+    pub unfolded_definitions_archived: i64,
+    pub unfolded_original_definitions_archived: i64,
+    pub definition_symbol_applications: i64,
     pub formulas_lambda_normalized: i64,
     pub formulas_simplified: i64,
     pub boolean_equalities_replaced: i64,
@@ -144,6 +154,7 @@ pub struct FormulaSetCnfOptions {
     pub def_limit: i64,
     pub fool_unroll: bool,
     pub lambda_to_forall: bool,
+    pub unfold_only_forms: bool,
     pub problem_type: ProblemType,
 }
 
@@ -155,6 +166,7 @@ impl FormulaSetCnfOptions {
             def_limit: 0,
             fool_unroll,
             lambda_to_forall: true,
+            unfold_only_forms: true,
             problem_type,
         }
     }
@@ -170,6 +182,12 @@ impl FormulaSetCnfOptions {
         self.lambda_to_forall = lambda_to_forall;
         self
     }
+
+    #[must_use]
+    pub const fn with_unfold_only_forms(mut self, unfold_only_forms: bool) -> Self {
+        self.unfold_only_forms = unfold_only_forms;
+        self
+    }
 }
 
 const fn formula_set_gc_threshold(old_nodes: i64) -> i64 {
@@ -183,6 +201,231 @@ fn term_has_named_lambda(term: &Term) -> bool {
             .into_iter()
             .flatten()
             .any(|arg| term_has_named_lambda(&arg))
+}
+
+fn lambda_definition_sides(bank: &TermBank, formula: &Term) -> Option<(Term, Term)> {
+    let signature = bank.signature();
+    let mut body = formula.clone();
+    while body.f_code() == signature.qall_code() && body.arity() == 2 {
+        body = body.argument(1)?;
+    }
+
+    if body.f_code() == signature.eqn_code() && body.arity() == 2 {
+        return Some((body.argument(0)?, body.argument(1)?));
+    }
+
+    if body.f_code() != signature.equiv_code() || body.arity() != 2 {
+        return None;
+    }
+    let left = body.argument(0)?;
+    if left.f_code() != signature.eqn_code()
+        || left.arity() != 2
+        || left.argument(1).as_ref() != Some(bank.true_term())
+    {
+        return None;
+    }
+    Some((left.argument(0)?, body.argument(1)?))
+}
+
+fn create_definition_symbol_map(
+    set: &FormulaSet,
+    bank: &mut TermBank,
+    unfold_only_forms: bool,
+) -> Result<DefinitionSymbolMap, Diagnostic> {
+    let mut definitions = BTreeMap::new();
+    let mut recognized_entry_ids = Vec::new();
+    for formula in set.iter() {
+        if !formula.query_prop(CP_IS_LAMBDA_DEF) {
+            continue;
+        }
+
+        let Some((lhs, rhs)) = lambda_definition_sides(bank, formula.formula()) else {
+            continue;
+        };
+        let mut bvars = Vec::new();
+        let _lhs_matrix = unfold_lambda(&lhs, &mut bvars);
+        for variable in &mut bvars {
+            let type_ = variable
+                .type_()
+                .expect("lambda-definition binder must have a type");
+            *variable = bank.vars().get_fresh_var(&type_);
+        }
+        let lhs_applied = apply_terms(bank, &lhs, &bvars)?;
+        let lhs_body = beta_normalize_db(bank, &lhs_applied)?;
+        let rhs_applied = apply_terms(bank, &rhs, &bvars)?;
+        let rhs_applied = beta_normalize_db(bank, &rhs_applied)?;
+
+        let lhs_is_predicate = lhs.type_().as_ref().is_some_and(type_is_predicate);
+        if (unfold_only_forms && !lhs_is_predicate)
+            || lhs.f_code() <= bank.signature().internal_symbols()
+            || rhs == *bank.true_term()
+        {
+            continue;
+        }
+
+        let mut abstraction_vars = Vec::new();
+        let mut seen_vars = BTreeSet::new();
+        let mut is_definition = true;
+        for arg in lhs_body.argument_clones().into_iter().flatten() {
+            let arg = if arg.f_code() == bank.signature().eqn_code()
+                && arg.arity() == 2
+                && arg.argument(1).as_ref() == Some(bank.true_term())
+            {
+                arg.argument(0)
+                    .expect("encoded definition argument left side is uninitialized")
+            } else {
+                arg
+            };
+            if !arg.is_free_var() || !seen_vars.insert(arg.f_code()) {
+                is_definition = false;
+                break;
+            }
+            abstraction_vars.push(arg);
+        }
+        if !is_definition || term_has_f_code(&rhs_applied, lhs_body.f_code()) {
+            continue;
+        }
+
+        let rhs = abstract_vars(bank, &rhs_applied, &abstraction_vars)?;
+        if tformula_has_free_vars(bank, &rhs).is_some() {
+            continue;
+        }
+
+        let lhs_type = bank
+            .signature()
+            .get_type(lhs_body.f_code())
+            .cloned()
+            .expect("defined symbol must have a signature type");
+        let lhs_symbol = Term::top_alloc(lhs_body.f_code(), 0);
+        lhs_symbol.set_type(Some(lhs_type));
+        let lhs_symbol = bank.term_top_insert(lhs_symbol)?;
+        let eqn_code = bank.signature().eqn_code();
+        let definition = tformula_fcode_alloc(bank, eqn_code, lhs_symbol, Some(rhs))?;
+        let mut definition_wrapper = formula.flat_copy();
+        definition_wrapper.set_formula(definition);
+        definitions.insert(lhs_body.f_code(), definition_wrapper);
+        recognized_entry_ids.push(formula.entry_id());
+    }
+
+    Ok(DefinitionSymbolMap {
+        definitions,
+        recognized_entry_ids,
+    })
+}
+
+fn refresh_qvars(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    let mut bindings = BTreeMap::new();
+    refresh_qvars_rek(bank, form, &mut bindings)
+}
+
+fn refresh_qvars_rek(
+    bank: &mut TermBank,
+    form: &Term,
+    bindings: &mut BTreeMap<FunCode, Term>,
+) -> Result<Term, Diagnostic> {
+    if let Some(bound) = bindings.get(&form.f_code()) {
+        if form.is_free_var() {
+            return Ok(bound.clone());
+        }
+    }
+    if form.is_db_var() || form.arity() == 0 {
+        return Ok(form.clone());
+    }
+
+    let is_quantifier = {
+        let signature = bank.signature();
+        (form.f_code() == signature.qall_code() || form.f_code() == signature.qex_code())
+            && form.arity() == 2
+    };
+    if is_quantifier {
+        let variable = form
+            .argument(0)
+            .expect("quantifier variable is uninitialized");
+        let body = form.argument(1).expect("quantifier body is uninitialized");
+        let variable_type = variable
+            .type_()
+            .expect("quantified variable must have a type");
+        let fresh_var = bank.vars().get_fresh_var(&variable_type);
+        let previous = bindings.insert(variable.f_code(), fresh_var.clone());
+        let refreshed_body = refresh_qvars_rek(bank, &body, bindings)?;
+        if let Some(previous) = previous {
+            bindings.insert(variable.f_code(), previous);
+        } else {
+            bindings.remove(&variable.f_code());
+        }
+        return tformula_fcode_alloc(bank, form.f_code(), fresh_var, Some(refreshed_body));
+    }
+
+    let copy = Term::top_copy_without_args(form);
+    let mut changed = false;
+    for (index, arg) in form.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let refreshed = refresh_qvars_rek(bank, &arg, bindings)?;
+        if refreshed != arg {
+            changed = true;
+        }
+        copy.set_argument(index, refreshed);
+    }
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(form.clone())
+    }
+}
+
+fn do_rewrite_with_def_symbols(
+    bank: &mut TermBank,
+    term: &Term,
+    def_map: &BTreeMap<FunCode, WrappedFormula>,
+    used_defs: &mut BTreeSet<FunCode>,
+    steps: &mut i32,
+) -> Result<Term, Diagnostic> {
+    if *steps <= 0 || term.is_any_var() {
+        return Ok(term.clone());
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let rewritten = do_rewrite_with_def_symbols(bank, &arg, def_map, used_defs, steps)?;
+        if rewritten != arg {
+            changed = true;
+        }
+        copy.set_argument(index, rewritten);
+    }
+
+    let mut rewritten = if changed {
+        bank.term_top_insert(copy)?
+    } else {
+        term.clone()
+    };
+    let Some(rhs) = def_map
+        .get(&rewritten.f_code())
+        .and_then(|definition| definition.formula().argument(1))
+    else {
+        return Ok(rewritten);
+    };
+
+    let rhs = refresh_qvars(bank, &rhs)?;
+    let args = rewritten
+        .argument_clones()
+        .into_iter()
+        .enumerate()
+        .map(|(index, arg)| arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized")))
+        .collect::<Vec<_>>();
+    let applied = apply_terms(bank, &rhs, &args)?;
+    rewritten = beta_normalize_db(bank, &applied)?;
+    used_defs.insert(term.f_code());
+    rewritten = do_rewrite_with_def_symbols(bank, &rewritten, def_map, used_defs, steps)?;
+    *steps -= 1;
+    Ok(rewritten)
+}
+
+fn unencode_eqns(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    bank.map_term(term, &mut |bank, candidate| {
+        Ok(Some(tformula_unencode_root_eqn(bank, candidate)))
+    })
 }
 
 fn collect_formula_set_cnf_garbage(
@@ -245,8 +488,18 @@ pub struct FormulaSetHigherOrderPreprocessResult {
     pub formulas_named_to_db: i64,
     pub formulas_ites_lifted: i64,
     pub formulas_lets_lifted: i64,
+    pub formulas_def_symbols_unfolded: i64,
+    pub unfolded_definition_rhs_rewritten: i64,
+    pub unfolded_definitions_archived: i64,
+    pub unfolded_original_definitions_archived: i64,
+    pub definition_symbol_applications: i64,
     pub formulas_lambda_normalized: i64,
     pub formula_derivation_ops: Vec<i64>,
+}
+
+struct DefinitionSymbolMap {
+    definitions: BTreeMap<FunCode, WrappedFormula>,
+    recognized_entry_ids: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1689,6 +1942,131 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `TFormulaSetUnfoldDefSymbols`.
+    ///
+    /// The pass recognizes `CP_IS_LAMBDA_DEF` wrappers in C's definition
+    /// shapes, archives simplified `symbol = lambda` definitions, rewrites the
+    /// remaining formulas with those definitions, and moves recognized
+    /// original definition wrappers to the archive. Formula-level derivation
+    /// storage and proof output are deferred, so this returns the `DCFofQuote`
+    /// and `DCApplyDef` opcodes that should be attached by a future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if lambda application, beta normalization,
+    /// abstraction, quantified-variable refresh, term rewriting, or term-bank
+    /// insertion fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a recognized lambda-definition formula is malformed, if a
+    /// definition symbol lacks a signature type, or if a rewritten formula has
+    /// malformed term arguments.
+    pub fn unfold_def_symbols(
+        &mut self,
+        archive: &mut Self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        unfold_only_forms: bool,
+    ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+
+        bank.vars().set_v_counts_to_used();
+        let DefinitionSymbolMap {
+            mut definitions,
+            recognized_entry_ids,
+        } = create_definition_symbol_map(self, bank, unfold_only_forms)?;
+        result
+            .formula_derivation_ops
+            .extend(std::iter::repeat_n(DC_FOF_QUOTE, definitions.len()));
+
+        let definition_codes = definitions.keys().copied().collect::<Vec<_>>();
+        for definition_code in definition_codes {
+            let (lhs, rhs) = {
+                let definition = definitions
+                    .get(&definition_code)
+                    .expect("definition code disappeared");
+                (
+                    definition
+                        .formula()
+                        .argument(0)
+                        .expect("generated definition left side is uninitialized"),
+                    definition
+                        .formula()
+                        .argument(1)
+                        .expect("generated definition right side is uninitialized"),
+                )
+            };
+            let mut used_defs = BTreeSet::new();
+            let mut max_steps = MAX_DEF_SYMBOL_REWRITE_STEPS;
+            let new_rhs = do_rewrite_with_def_symbols(
+                bank,
+                &rhs,
+                &definitions,
+                &mut used_defs,
+                &mut max_steps,
+            )?;
+            if new_rhs != rhs {
+                let eqn_code = bank.signature().eqn_code();
+                let new_definition = tformula_fcode_alloc(bank, eqn_code, lhs, Some(new_rhs))?;
+                definitions
+                    .get_mut(&definition_code)
+                    .expect("definition code disappeared")
+                    .set_formula(new_definition);
+                result.unfolded_definition_rhs_rewritten += 1;
+                result.definition_symbol_applications += usize_to_i64(used_defs.len());
+                result
+                    .formula_derivation_ops
+                    .extend(std::iter::repeat_n(DC_APPLY_DEF, used_defs.len()));
+            }
+        }
+
+        let recognized = recognized_entry_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for formula in &mut self.formulas {
+            if recognized.contains(&formula.entry_id()) {
+                continue;
+            }
+            let mut used_defs = BTreeSet::new();
+            let mut max_steps = MAX_DEF_SYMBOL_REWRITE_STEPS;
+            let rewritten = do_rewrite_with_def_symbols(
+                bank,
+                formula.formula(),
+                &definitions,
+                &mut used_defs,
+                &mut max_steps,
+            )?;
+            if rewritten != *formula.formula() {
+                let rewritten = unencode_eqns(bank, &rewritten)?;
+                formula.set_formula(rewritten);
+                result.formulas_def_symbols_unfolded += 1;
+                result.definition_symbol_applications += usize_to_i64(used_defs.len());
+                result
+                    .formula_derivation_ops
+                    .extend(std::iter::repeat_n(DC_APPLY_DEF, used_defs.len()));
+            }
+        }
+
+        for definition in definitions.into_values() {
+            archive.insert(definition);
+            result.unfolded_definitions_archived += 1;
+        }
+
+        for entry_id in recognized_entry_ids {
+            if let Some(original) = self.extract_entry(entry_id) {
+                archive.insert(original);
+                result.unfolded_original_definitions_archived += 1;
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Applies C `TFormulaSetLambdaNormalize` in insertion order.
     ///
     /// This is gated to higher-order problems and mirrors C's
@@ -1828,9 +2206,9 @@ impl FormulaSet {
     /// This preserves the supported C phase order: supported higher-order
     /// preprocessing, optional set-level FOOL unrolling, formula
     /// simplification, definition introduction, then the archive/copy/CNF
-    /// drain loop. Higher-order unfold/lift-lambda set preprocessing,
-    /// post-CNF clause lambda lifting, proof-document output, and term-bank GC
-    /// side effects from full `FormulaSetCNF2` are still deferred.
+    /// drain loop. Higher-order lift-lambda set preprocessing, post-CNF clause
+    /// lambda lifting, proof-document output, and term-bank GC side effects
+    /// from full `FormulaSetCNF2` are still deferred.
     ///
     /// # Errors
     ///
@@ -1870,6 +2248,23 @@ impl FormulaSet {
         result
             .formula_derivation_ops
             .extend(lift_let_result.formula_derivation_ops);
+
+        let unfold_def_result = self.unfold_def_symbols(
+            archive,
+            bank,
+            options.problem_type,
+            options.unfold_only_forms,
+        )?;
+        result.formulas_def_symbols_unfolded = unfold_def_result.formulas_def_symbols_unfolded;
+        result.unfolded_definition_rhs_rewritten =
+            unfold_def_result.unfolded_definition_rhs_rewritten;
+        result.unfolded_definitions_archived = unfold_def_result.unfolded_definitions_archived;
+        result.unfolded_original_definitions_archived =
+            unfold_def_result.unfolded_original_definitions_archived;
+        result.definition_symbol_applications = unfold_def_result.definition_symbol_applications;
+        result
+            .formula_derivation_ops
+            .extend(unfold_def_result.formula_derivation_ops);
 
         if options.lambda_to_forall {
             let normalize_result = self.lambda_normalize_forall(bank, options.problem_type)?;
@@ -2384,6 +2779,24 @@ mod tests {
         term.set_type(Some(ret_type.clone()));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_unary_predicate(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let arg_type = arg.type_().expect("predicate argument must have a type");
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type.clone()]));
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, predicate_type)
+            .unwrap();
+        bank.signature_mut().declare_is_predicate(f_code).unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(bool_type));
+        term.set_argument(0, arg.clone());
+        bank.term_top_insert(term).unwrap()
     }
 
     fn typed_predicate_const(bank: &mut TermBank, name: &str) -> Term {
@@ -3922,6 +4335,112 @@ mod tests {
                     .argument(0)
                     .is_none_or(|argument| argument.f_code() != SIG_LET_CODE)
         }));
+        assert_eq!(clauses.members(), result.clauses_generated);
+        assert!(result.clauses_generated > 0);
+    }
+
+    #[test]
+    fn formula_set_unfold_def_symbols_rewrites_and_archives_definitions() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -71);
+        let a = typed_const(&mut bank, "set_unfold_def_a");
+        let p_x = typed_unary_predicate(&mut bank, "set_unfold_def_p", &x);
+        let q_x = typed_unary_predicate(&mut bank, "set_unfold_def_q", &x);
+        let p_a = typed_unary_predicate(&mut bank, "set_unfold_def_p", &a);
+        let q_a = typed_unary_predicate(&mut bank, "set_unfold_def_q", &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equiv_code = bank.signature().equiv_code();
+        let true_term = bank.true_term().clone();
+        let lhs_formula = bool_binary_with_code(&mut bank, eqn_code, &p_x, &true_term);
+        let definition_formula = bool_binary_with_code(&mut bank, equiv_code, &lhs_formula, &q_x);
+        let mut definition = WrappedFormula::wt_formula_alloc(definition_formula.clone());
+        definition.set_prop(CP_IS_LAMBDA_DEF);
+        let definition_entry = definition.entry_id();
+
+        let mut first_order = FormulaSet::new();
+        first_order.insert(definition.flat_copy());
+        first_order.insert(WrappedFormula::wt_formula_alloc(p_a.clone()));
+        let mut first_order_archive = FormulaSet::new();
+        let first_order_result = first_order
+            .unfold_def_symbols(
+                &mut first_order_archive,
+                &mut bank,
+                ProblemType::FirstOrder,
+                true,
+            )
+            .unwrap();
+        assert_eq!(first_order_result.formulas_def_symbols_unfolded, 0);
+        assert!(first_order_archive.is_empty());
+
+        let mut set = FormulaSet::new();
+        set.insert(definition);
+        set.insert(WrappedFormula::wt_formula_alloc(p_a));
+        let mut archive = FormulaSet::new();
+
+        let result = set
+            .unfold_def_symbols(&mut archive, &mut bank, ProblemType::HigherOrder, true)
+            .unwrap();
+
+        assert_eq!(result.formulas_def_symbols_unfolded, 1);
+        assert_eq!(result.unfolded_definitions_archived, 1);
+        assert_eq!(result.unfolded_original_definitions_archived, 1);
+        assert_eq!(result.definition_symbol_applications, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_FOF_QUOTE));
+        assert!(result.formula_derivation_ops.contains(&DC_APPLY_DEF));
+        assert_eq!(set.cardinality(), 1);
+        assert_eq!(set.iter().next().unwrap().formula(), &q_a);
+        assert_eq!(archive.cardinality(), 2);
+        assert!(archive.get(definition_entry).is_some());
+        assert_eq!(archive.iter().next().unwrap().formula().f_code(), eqn_code);
+        assert_eq!(
+            archive.iter().nth(1).unwrap().formula(),
+            &definition_formula
+        );
+    }
+
+    #[test]
+    fn formula_set_cnf2_unfolds_def_symbols_before_archive_drain() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -72);
+        let a = typed_const(&mut bank, "set_cnf_unfold_def_a");
+        let p_x = typed_unary_predicate(&mut bank, "set_cnf_unfold_def_p", &x);
+        let q_x = typed_unary_predicate(&mut bank, "set_cnf_unfold_def_q", &x);
+        let p_a = typed_unary_predicate(&mut bank, "set_cnf_unfold_def_p", &a);
+        let q_a = typed_unary_predicate(&mut bank, "set_cnf_unfold_def_q", &a);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let equiv_code = bank.signature().equiv_code();
+        let true_term = bank.true_term().clone();
+        let lhs_formula = bool_binary_with_code(&mut bank, eqn_code, &p_x, &true_term);
+        let definition_formula = bool_binary_with_code(&mut bank, equiv_code, &lhs_formula, &q_x);
+        let mut definition = WrappedFormula::wt_formula_alloc(definition_formula.clone());
+        definition.set_prop(CP_IS_LAMBDA_DEF);
+        let definition_entry = definition.entry_id();
+        let mut set = FormulaSet::new();
+        set.insert(definition);
+        set.insert(WrappedFormula::wt_formula_alloc(p_a));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::HigherOrder)
+                    .with_lambda_to_forall(false),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.formulas_def_symbols_unfolded, 1);
+        assert_eq!(result.unfolded_definitions_archived, 1);
+        assert_eq!(result.unfolded_original_definitions_archived, 1);
+        assert_eq!(result.definition_symbol_applications, 1);
+        assert_eq!(result.original_formulas_archived, 1);
+        assert!(archive.get(definition_entry).is_some());
+        assert!(archive.iter().any(|formula| formula.formula() == &q_a));
         assert_eq!(clauses.members(), result.clauses_generated);
         assert!(result.clauses_generated > 0);
     }
