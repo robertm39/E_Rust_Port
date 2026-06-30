@@ -14,7 +14,7 @@ use crate::clauses::derivation::{
     DC_FLEX_RESOLVE, DC_FNNF, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INV_REC, DC_NORMALIZE,
     DC_PRUNE_ARG, DC_SHIFT_QUANTORS, DC_SKOLEMIZE, DC_SPLIT_CONJUNCT, DC_VAR_RENAME,
 };
-use crate::clauses::eqn::{eqn_write_app_encode, Eqn};
+use crate::clauses::eqn::{eqn_write_app_encode, eqn_write_fof, Eqn, EqnFofPrintOptions};
 use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
@@ -27,7 +27,7 @@ use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::signature::{
     FP_FOF_OP, FP_IS_INJ_DEF_SKOLEM, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE,
-    SIG_NAMED_LAMBDA_CODE, SIG_TRUE_CODE,
+    SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
 };
 use crate::terms::simpletypes::{
     arrow_type_flattened, type_app_encoded_name, type_get_max_arity, type_is_predicate, Type,
@@ -114,6 +114,32 @@ impl TFormulaCnfResult {
     #[must_use]
     pub fn derivation_ops(&self) -> &[i64] {
         &self.derivation_ops
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TFormulaTptpPrintOptions {
+    pub problem_type: ProblemType,
+    pub eqn_options: EqnFofPrintOptions,
+}
+
+impl TFormulaTptpPrintOptions {
+    #[must_use]
+    pub const fn new(problem_type: ProblemType, eqn_options: EqnFofPrintOptions) -> Self {
+        Self {
+            problem_type,
+            eqn_options,
+        }
+    }
+
+    #[must_use]
+    pub const fn tptp(problem_type: ProblemType) -> Self {
+        Self::new(problem_type, EqnFofPrintOptions::tptp())
+    }
+
+    #[must_use]
+    pub const fn tstp(problem_type: ProblemType) -> Self {
+        Self::new(problem_type, EqnFofPrintOptions::tstp())
     }
 }
 
@@ -1932,6 +1958,266 @@ pub fn tformula_expand_distinct(bank: &mut TermBank, distinct: &Term) -> Result<
 #[must_use]
 pub fn tformula_is_untyped(form: &Term) -> bool {
     term_is_untyped(form)
+}
+
+/// Writes the C `TFormulaTPTPPrint` rendering for a term-encoded formula.
+///
+/// This covers the direct term-formula printer used for TPTP/TSTP-style
+/// formula output: literals delegate to `EqnFOFPrint`, left-spine
+/// disjunctions are flattened, repeated adjacent quantifiers are coalesced,
+/// `$ite`/`$let` and phony applications are printed through the term printer,
+/// and malformed quantified cells fall back to debug term output.
+///
+/// # Errors
+///
+/// Returns a diagnostic if temporary equation allocation, term/type rendering,
+/// or output formatting fails.
+///
+/// # Panics
+///
+/// Panics if a formula cell has the C-required shape but uninitialized child
+/// arguments, or if a binary connective has an unexpected operator.
+pub fn tformula_write_tptp(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+    full_terms: bool,
+    options: TFormulaTptpPrintOptions,
+) -> Result<(), Diagnostic> {
+    if tformula_is_literal(bank, form) {
+        let literal = Eqn::alloc(
+            formula_argument(form, 0),
+            formula_argument(form, 1),
+            bank,
+            true,
+        )?;
+        return eqn_write_fof(
+            output,
+            bank,
+            &literal,
+            form.f_code() == bank.signature().neqn_code(),
+            full_terms,
+            options.eqn_options,
+        )
+        .map_err(tformula_write_error);
+    }
+
+    if form.is_free_var() {
+        return tformula_write_term_print(output, bank, form, options);
+    }
+
+    if form.f_code() == SIG_PHONY_APP_CODE {
+        output.write_char('(').map_err(tformula_write_error)?;
+        tformula_write_term_print(output, bank, form, options)?;
+        output.write_char(')').map_err(tformula_write_error)?;
+        return Ok(());
+    }
+
+    if tformula_is_quantified(bank, form) {
+        return tformula_write_tptp_quantifier(output, bank, form, full_terms, options);
+    }
+
+    if form.arity() == 1 {
+        output.write_str("~(").map_err(tformula_write_error)?;
+        tformula_write_tptp(
+            output,
+            bank,
+            &formula_argument(form, 0),
+            full_terms,
+            options,
+        )?;
+        output.write_char(')').map_err(tformula_write_error)?;
+        return Ok(());
+    }
+
+    if form.arity() == 0 {
+        let name = bank.signature().find_name(form.f_code()).ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "TFormulaTPTPPrint arity-zero formula symbol has no name",
+            )
+        })?;
+        output.write_str(name).map_err(tformula_write_error)?;
+        return Ok(());
+    }
+
+    if form.f_code() == bank.signature().distinct_code() {
+        return bank
+            .write_term_with_type_suffixes(
+                output,
+                form,
+                full_terms,
+                options.eqn_options.print_types,
+            )
+            .map_err(tformula_write_error);
+    }
+
+    assert!(
+        matches!(form.f_code(), SIG_LET_CODE | SIG_ITE_CODE) || form.arity() == 2,
+        "TFormulaTPTPPrint expects $let, $ite, or a binary formula"
+    );
+    output.write_char('(').map_err(tformula_write_error)?;
+    if matches!(form.f_code(), SIG_LET_CODE | SIG_ITE_CODE) {
+        tformula_write_term_print(output, bank, form, options)?;
+    } else if form.f_code() == bank.signature().or_code() {
+        tformula_write_tptp_or_chain(output, bank, form, full_terms, options)?;
+    } else {
+        tformula_write_tptp(
+            output,
+            bank,
+            &formula_argument(form, 0),
+            full_terms,
+            options,
+        )?;
+        let operator = tformula_app_encoded_binary_operator(bank, form.f_code())
+            .unwrap_or_else(|| panic!("TFormulaTPTPPrint binary formula has the wrong operator"));
+        output.write_str(operator).map_err(tformula_write_error)?;
+        tformula_write_tptp(
+            output,
+            bank,
+            &formula_argument(form, 1),
+            full_terms,
+            options,
+        )?;
+    }
+    output.write_char(')').map_err(tformula_write_error)?;
+    Ok(())
+}
+
+/// Returns the C `TFormulaTPTPPrint` rendering for a term-encoded formula.
+///
+/// # Errors
+///
+/// Returns a diagnostic under the same conditions as [`tformula_write_tptp`].
+pub fn tformula_tptp_string(
+    bank: &mut TermBank,
+    form: &Term,
+    full_terms: bool,
+    options: TFormulaTptpPrintOptions,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    tformula_write_tptp(&mut output, bank, form, full_terms, options)?;
+    Ok(output)
+}
+
+fn tformula_write_tptp_quantifier(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+    full_terms: bool,
+    options: TFormulaTptpPrintOptions,
+) -> Result<(), Diagnostic> {
+    if form.arity() != 2 {
+        return bank
+            .write_term_debug(output, form, options.problem_type)
+            .map_err(tformula_write_error);
+    }
+
+    let quantifier = form.f_code();
+    output
+        .write_str(if quantifier == bank.signature().qex_code() {
+            "?["
+        } else if quantifier == bank.signature().qall_code() {
+            "!["
+        } else {
+            "^["
+        })
+        .map_err(tformula_write_error)?;
+
+    let mut current = form.clone();
+    loop {
+        let variable = formula_argument(&current, 0);
+        tformula_write_quantified_variable(output, bank, &variable, options)?;
+
+        let body = formula_argument(&current, 1);
+        if body.f_code() != quantifier {
+            output.write_str("]:(").map_err(tformula_write_error)?;
+            tformula_write_tptp(output, bank, &body, full_terms, options)?;
+            output.write_char(')').map_err(tformula_write_error)?;
+            return Ok(());
+        }
+
+        output.write_str(", ").map_err(tformula_write_error)?;
+        current = body;
+    }
+}
+
+fn tformula_write_quantified_variable(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    variable: &Term,
+    options: TFormulaTptpPrintOptions,
+) -> Result<(), Diagnostic> {
+    tformula_write_term_print(output, bank, variable, options)?;
+    let type_ = variable.type_().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::TYPE_ERROR,
+            "TFormulaTPTPPrint quantified variable has no type",
+        )
+    })?;
+    if options.problem_type == ProblemType::HigherOrder || !type_.is_individual() {
+        output.write_char(':').map_err(tformula_write_error)?;
+        tformula_write_tstp_type(output, bank, &type_, options.problem_type)?;
+    }
+    Ok(())
+}
+
+fn tformula_write_tptp_or_chain(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+    full_terms: bool,
+    options: TFormulaTptpPrintOptions,
+) -> Result<(), Diagnostic> {
+    if form.f_code() != bank.signature().or_code() {
+        return tformula_write_tptp(output, bank, form, full_terms, options);
+    }
+
+    tformula_write_tptp_or_chain(
+        output,
+        bank,
+        &formula_argument(form, 0),
+        full_terms,
+        options,
+    )?;
+    output.write_char('|').map_err(tformula_write_error)?;
+    tformula_write_tptp(
+        output,
+        bank,
+        &formula_argument(form, 1),
+        full_terms,
+        options,
+    )
+}
+
+fn tformula_write_term_print(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    term: &Term,
+    options: TFormulaTptpPrintOptions,
+) -> Result<(), Diagnostic> {
+    if options.problem_type == ProblemType::FirstOrder && options.eqn_options.print_types {
+        bank.write_term_with_type_suffixes(output, term, true, true)
+    } else {
+        bank.write_term_deref_for_problem(output, term, options.problem_type, DerefType::Never)
+    }
+    .map_err(tformula_write_error)
+}
+
+fn tformula_write_tstp_type(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    type_: &Type,
+    problem_type: ProblemType,
+) -> Result<(), Diagnostic> {
+    let mut rendered = Vec::new();
+    bank.signature()
+        .type_bank()
+        .print_tstp(&mut rendered, type_, problem_type)
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write type"))?;
+    let rendered = String::from_utf8(rendered)
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write type"))?;
+    output.write_str(&rendered).map_err(tformula_write_error)
 }
 
 /// Writes the C `TFormulaAppEncode` rendering for a term-encoded formula.
@@ -4964,8 +5250,8 @@ mod tests {
         tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
         tformula_quantor_alloc, tformula_shift_quantors, tformula_shift_quantors2,
         tformula_simplify, tformula_simplify_decoded, tformula_skolemize_outermost,
-        tformula_stack_to_form, tformula_to_cnf, tformula_unroll_fool, tformula_var_rename,
-        TFormulaDefinitions, TFORM_MANY_CLAUSES,
+        tformula_stack_to_form, tformula_to_cnf, tformula_tptp_string, tformula_unroll_fool,
+        tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -7333,6 +7619,69 @@ mod tests {
         );
         assert_ne!(bank.signature().find_f_code(&inner_app), 0);
         assert_ne!(bank.signature().find_f_code(&outer_app), 0);
+    }
+
+    #[test]
+    fn tformula_tptp_print_renders_literals_and_left_or_chain_like_c() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "print_form_a");
+        let b = typed_const(&mut bank, "print_form_b");
+        let c = typed_const(&mut bank, "print_form_c");
+        let f_code = typed_binary_code(&mut bank, "print_form_f");
+        let f_ab = typed_binary_with_code(&mut bank, f_code, &a, &b);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let neqn_code = bank.signature_mut().get_eqn_code(false);
+        let first = bool_binary_with_code(&mut bank, eqn_code, &f_ab, &a);
+        let second = bool_binary_with_code(&mut bank, neqn_code, &a, &b);
+        let third = bool_binary_with_code(&mut bank, eqn_code, &b, &c);
+        let or_code = bank.signature().or_code();
+        let left = bool_binary_with_code(&mut bank, or_code, &first, &second);
+        let formula = bool_binary_with_code(&mut bank, or_code, &left, &third);
+
+        let rendered = tformula_tptp_string(
+            &mut bank,
+            &formula,
+            true,
+            TFormulaTptpPrintOptions::tstp(ProblemType::FirstOrder),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            "(print_form_f(print_form_a,print_form_b)=print_form_a|\
+             print_form_a!=print_form_b|print_form_b=print_form_c)"
+        );
+    }
+
+    #[test]
+    fn tformula_tptp_print_coalesces_quantifiers_and_prints_ho_types() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -2);
+        let y = typed_var(&bank, -4);
+        let a = typed_const(&mut bank, "print_quant_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let qall_code = bank.signature().qall_code();
+        let inner = tformula_quantor_alloc(&mut bank, qall_code, &y, &body).unwrap();
+        let outer = tformula_quantor_alloc(&mut bank, qall_code, &x, &inner).unwrap();
+
+        let first_order = tformula_tptp_string(
+            &mut bank,
+            &outer,
+            true,
+            TFormulaTptpPrintOptions::tstp(ProblemType::FirstOrder),
+        )
+        .unwrap();
+        let higher_order = tformula_tptp_string(
+            &mut bank,
+            &outer,
+            true,
+            TFormulaTptpPrintOptions::tstp(ProblemType::HigherOrder),
+        )
+        .unwrap();
+
+        assert_eq!(first_order, "![X1, X2]:(X1=print_quant_a)");
+        assert_eq!(higher_order, "![X1:$i, X2:$i]:(X1=print_quant_a)");
     }
 
     #[test]
