@@ -31,8 +31,8 @@ use crate::clauses::inferencedoc::{
     ProofDocWriteResult,
 };
 use crate::terms::functypes::FunCode;
-use crate::terms::lambda::lambda_normalize_db;
-use crate::terms::signature::Signature;
+use crate::terms::lambda::{beta_normalize_db, lambda_normalize_db, lambda_to_forall, named_to_db};
+use crate::terms::signature::{Signature, SIG_NAMED_LAMBDA_CODE};
 use crate::terms::simpletypes::type_is_predicate;
 use crate::terms::termbanks::tb_term_collect_subterms;
 use crate::terms::termbanks::TermBank;
@@ -121,6 +121,8 @@ pub struct FormulaSetCnfResult {
     pub cnf_formulas_archived: i64,
     pub term_garbage_collections: i64,
     pub terms_recovered_by_gc: i64,
+    pub formulas_named_to_db: i64,
+    pub formulas_lambda_normalized: i64,
     pub formulas_simplified: i64,
     pub boolean_equalities_replaced: i64,
     pub formulas_fool_unrolled: i64,
@@ -138,6 +140,7 @@ pub struct FormulaSetCnfOptions {
     pub miniscope_limit: i64,
     pub def_limit: i64,
     pub fool_unroll: bool,
+    pub lambda_to_forall: bool,
     pub problem_type: ProblemType,
 }
 
@@ -148,6 +151,7 @@ impl FormulaSetCnfOptions {
             miniscope_limit,
             def_limit: 0,
             fool_unroll,
+            lambda_to_forall: true,
             problem_type,
         }
     }
@@ -157,10 +161,25 @@ impl FormulaSetCnfOptions {
         self.def_limit = def_limit;
         self
     }
+
+    #[must_use]
+    pub const fn with_lambda_to_forall(mut self, lambda_to_forall: bool) -> Self {
+        self.lambda_to_forall = lambda_to_forall;
+        self
+    }
 }
 
 const fn formula_set_gc_threshold(old_nodes: i64) -> i64 {
     old_nodes.saturating_mul(TFORMULA_GC_LIMIT_NUMERATOR) / TFORMULA_GC_LIMIT_DENOMINATOR
+}
+
+fn term_has_named_lambda(term: &Term) -> bool {
+    term.f_code() == SIG_NAMED_LAMBDA_CODE
+        || term
+            .argument_clones()
+            .into_iter()
+            .flatten()
+            .any(|arg| term_has_named_lambda(&arg))
 }
 
 fn collect_formula_set_cnf_garbage(
@@ -215,6 +234,13 @@ pub struct FormulaSetIntroduceDefsResult {
     pub active_definitions_inserted: i64,
     pub formulas_rewritten: i64,
     pub definition_applications: i64,
+    pub formula_derivation_ops: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FormulaSetHigherOrderPreprocessResult {
+    pub formulas_named_to_db: i64,
+    pub formulas_lambda_normalized: i64,
     pub formula_derivation_ops: Vec<i64>,
 }
 
@@ -497,6 +523,56 @@ impl WrappedFormula {
             self.set_formula(result.formula().clone());
         }
         Ok(result.fool_unrolled())
+    }
+
+    /// Applies C `NamedToDB` as used by `TFormulaSetNamedToDBLambdas`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if converting or beta-normalizing named lambdas
+    /// cannot rebuild a shared term.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if a named lambda cell is
+    /// malformed.
+    pub fn named_to_db_lambdas(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let original = self.formula().clone();
+        if !term_has_named_lambda(&original) {
+            return Ok(false);
+        }
+        let converted = named_to_db(bank, &original)?;
+        if converted == original {
+            return Ok(false);
+        }
+        self.set_formula(converted);
+        Ok(true)
+    }
+
+    /// Applies C `TFormulaSetLambdaNormalize` to this wrapper's formula term.
+    ///
+    /// C beta-normalizes DB lambdas and then turns lambda equalities into
+    /// quantified formulas through `LambdaToForall`; it records
+    /// `DCFofSimplify` when the final formula differs from the original.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if beta normalization, lambda-to-forall conversion,
+    /// or formula rebuilding fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this wrapper has no formula term or if lambda/formula cells are
+    /// malformed.
+    pub fn lambda_normalize_forall(&mut self, bank: &mut TermBank) -> Result<bool, Diagnostic> {
+        let original = self.formula().clone();
+        let beta_normal = beta_normalize_db(bank, &original)?;
+        let normalized = lambda_to_forall(bank, &beta_normal)?;
+        if normalized == original {
+            return Ok(false);
+        }
+        self.set_formula(normalized);
+        Ok(true)
     }
 
     /// Applies C `TFormulaApplyDefs` to this wrapper.
@@ -1448,6 +1524,74 @@ impl FormulaSet {
         Ok(result)
     }
 
+    /// Applies C `TFormulaSetNamedToDBLambdas` in insertion order.
+    ///
+    /// This is gated to higher-order problems, matching the `FormulaSetCNF2`
+    /// `ENABLE_LFHO` branch. Formula-level derivation storage and proof output
+    /// are deferred, so this returns the `DCFofSimplify` opcodes that should be
+    /// attached by a future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if named-lambda conversion or beta normalization
+    /// fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or a malformed
+    /// named-lambda payload.
+    pub fn named_to_db_lambdas(
+        &mut self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+        for formula in &mut self.formulas {
+            if formula.named_to_db_lambdas(bank)? {
+                result.formulas_named_to_db += 1;
+                result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Applies C `TFormulaSetLambdaNormalize` in insertion order.
+    ///
+    /// This is gated to higher-order problems and mirrors C's
+    /// `BetaNormalizeDB` followed by `LambdaToForall`. Formula-level
+    /// derivation storage and proof output are deferred, so this returns the
+    /// `DCFofSimplify` opcodes that should be attached by a future owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if beta normalization or lambda-to-forall
+    /// conversion fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any processed wrapper has no formula term or a malformed
+    /// lambda/formula payload.
+    pub fn lambda_normalize_forall(
+        &mut self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<FormulaSetHigherOrderPreprocessResult, Diagnostic> {
+        let mut result = FormulaSetHigherOrderPreprocessResult::default();
+        if problem_type != ProblemType::HigherOrder {
+            return Ok(result);
+        }
+        for formula in &mut self.formulas {
+            if formula.lambda_normalize_forall(bank)? {
+                result.formulas_lambda_normalized += 1;
+                result.formula_derivation_ops.push(DC_FOF_SIMPLIFY);
+            }
+        }
+        Ok(result)
+    }
+
     /// Applies C `TFormulaSetIntroduceDefs`.
     ///
     /// This stages the set-level definition introduction pipeline: clear the
@@ -1550,11 +1694,12 @@ impl FormulaSet {
     /// Drains this set into CNF clauses using the staged core of C
     /// `FormulaSetCNF2`.
     ///
-    /// This preserves the supported C phase order: optional set-level FOOL
-    /// unrolling, formula simplification, definition introduction, then the
-    /// archive/copy/CNF drain loop. Higher-order set preprocessing, post-CNF
-    /// clause lambda lifting, proof-document output, and term-bank GC side
-    /// effects from full `FormulaSetCNF2` are still deferred.
+    /// This preserves the supported C phase order: supported higher-order
+    /// preprocessing, optional set-level FOOL unrolling, formula
+    /// simplification, definition introduction, then the archive/copy/CNF
+    /// drain loop. Higher-order ITE/LET/unfold/lift-lambda set preprocessing,
+    /// post-CNF clause lambda lifting, proof-document output, and term-bank GC
+    /// side effects from full `FormulaSetCNF2` are still deferred.
     ///
     /// # Errors
     ///
@@ -1576,6 +1721,20 @@ impl FormulaSet {
         let mut result = FormulaSetCnfResult::default();
         let mut old_nodes = bank.non_var_term_nodes();
         let mut gc_threshold = formula_set_gc_threshold(old_nodes);
+
+        let named_result = self.named_to_db_lambdas(bank, options.problem_type)?;
+        result.formulas_named_to_db = named_result.formulas_named_to_db;
+        result
+            .formula_derivation_ops
+            .extend(named_result.formula_derivation_ops);
+
+        if options.lambda_to_forall {
+            let normalize_result = self.lambda_normalize_forall(bank, options.problem_type)?;
+            result.formulas_lambda_normalized = normalize_result.formulas_lambda_normalized;
+            result
+                .formula_derivation_ops
+                .extend(normalize_result.formula_derivation_ops);
+        }
 
         if options.fool_unroll {
             let unroll_result = self.unroll_fool(bank)?;
@@ -2005,7 +2164,9 @@ mod tests {
         CP_IGNORE_PROPS, CP_INPUT_FORMULA, CP_IS_LAMBDA_DEF, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
         CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION,
     };
-    use crate::clauses::clausefunc::{tformula_clause_encode, tformula_decode_polarity};
+    use crate::clauses::clausefunc::{
+        tformula_clause_encode, tformula_decode_polarity, tformula_quantor_alloc,
+    };
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
@@ -2018,9 +2179,9 @@ mod tests {
     use crate::clauses::inferencedoc::{
         ProofDocOutputFormat, ProofDocSession, ProofDocWriteResult,
     };
-    use crate::terms::lambda::close_with_db_var;
+    use crate::terms::lambda::{apply_terms as lambda_apply_terms, close_with_db_var};
     use crate::terms::signature::{
-        Signature, SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
+        Signature, SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE, SIG_TRUE_CODE,
     };
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type, ST_INTEGER};
     use crate::terms::termbanks::TermBank;
@@ -2098,6 +2259,18 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.term_top_insert(term).unwrap()
+    }
+
+    fn db_lambda_equality(bank: &mut TermBank, prefix: &str) -> Term {
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(bank, &format!("{prefix}_f"), &unary_type);
+        let g = typed_const_with_type(bank, &format!("{prefix}_g"), &unary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let left_body = lambda_apply_terms(bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let left_lambda = close_with_db_var(bank, &i_type, &left_body).unwrap();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        bool_binary_with_code(bank, eqn_code, &left_lambda, &g)
     }
 
     fn c_complex_bool_shape(bank: &mut TermBank, name: &str) -> Term {
@@ -3194,6 +3367,70 @@ mod tests {
     }
 
     #[test]
+    fn formula_set_named_to_db_lambdas_is_higher_order_gated() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -501);
+        let a = typed_const(&mut bank, "set_named_db_a");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let body = bool_binary_with_code(&mut bank, eqn_code, &x, &a);
+        let named_lambda =
+            tformula_quantor_alloc(&mut bank, SIG_NAMED_LAMBDA_CODE, &x, &body).unwrap();
+        let mut first_order = FormulaSet::new();
+        first_order.insert(WrappedFormula::wt_formula_alloc(named_lambda.clone()));
+
+        let first_order_result = first_order
+            .named_to_db_lambdas(&mut bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(first_order_result.formulas_named_to_db, 0);
+        assert!(first_order_result.formula_derivation_ops.is_empty());
+        assert_eq!(first_order.iter().next().unwrap().formula(), &named_lambda);
+
+        let mut higher_order = FormulaSet::new();
+        higher_order.insert(WrappedFormula::wt_formula_alloc(named_lambda));
+
+        let result = higher_order
+            .named_to_db_lambdas(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_named_to_db, 1);
+        assert_eq!(result.formula_derivation_ops, vec![DC_FOF_SIMPLIFY]);
+        let converted = higher_order.iter().next().unwrap().formula();
+        assert_eq!(converted.f_code(), SIG_DB_LAMBDA_CODE);
+        let matrix = converted.argument(1).unwrap();
+        assert_eq!(matrix.f_code(), eqn_code);
+        assert!(matrix.argument(0).unwrap().is_db_var());
+        assert_eq!(matrix.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn formula_set_lambda_normalize_forall_is_higher_order_gated() {
+        let mut bank = test_bank();
+        let formula = db_lambda_equality(&mut bank, "set_lambda_norm");
+        let eqn_code = bank.signature().eqn_code();
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula.clone()));
+
+        let first_order_result = set
+            .lambda_normalize_forall(&mut bank, ProblemType::FirstOrder)
+            .unwrap();
+
+        assert_eq!(first_order_result.formulas_lambda_normalized, 0);
+        assert!(first_order_result.formula_derivation_ops.is_empty());
+        assert_eq!(set.iter().next().unwrap().formula(), &formula);
+
+        let result = set
+            .lambda_normalize_forall(&mut bank, ProblemType::HigherOrder)
+            .unwrap();
+
+        assert_eq!(result.formulas_lambda_normalized, 1);
+        assert_eq!(result.formula_derivation_ops, vec![DC_FOF_SIMPLIFY]);
+        let normalized = set.iter().next().unwrap().formula();
+        assert_eq!(normalized.f_code(), bank.signature().qall_code());
+        assert_eq!(normalized.argument(1).unwrap().f_code(), eqn_code);
+    }
+
+    #[test]
     fn wrapped_formula_cnf2_quotes_clause_wrappers_directly() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "wf_cnf_clause_a");
@@ -3315,6 +3552,39 @@ mod tests {
             }
         }
         (split_clauses, quoted_clauses)
+    }
+
+    #[test]
+    fn formula_set_cnf2_runs_supported_ho_preprocessing_before_archive_drain() {
+        let mut bank = test_bank();
+        let formula = db_lambda_equality(&mut bank, "set_cnf_ho_lambda");
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::wt_formula_alloc(formula));
+        let mut archive = FormulaSet::new();
+        let mut clauses = ClauseSet::new();
+        let fresh_vars = VarBank::new(bank.signature().type_bank());
+
+        let result = set
+            .cnf2_into(
+                &mut archive,
+                &mut clauses,
+                &mut bank,
+                &fresh_vars,
+                FormulaSetCnfOptions::new(100, false, ProblemType::HigherOrder),
+            )
+            .unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(result.formulas_named_to_db, 0);
+        assert_eq!(result.formulas_lambda_normalized, 1);
+        assert!(result.formula_derivation_ops.contains(&DC_FOF_SIMPLIFY));
+        assert_eq!(result.original_formulas_archived, 1);
+        assert_eq!(result.cnf_formulas_archived, 1);
+        assert!(result.clauses_generated > 0);
+        assert_eq!(
+            archive.iter().next().unwrap().formula().f_code(),
+            bank.signature().qall_code()
+        );
     }
 
     #[test]
