@@ -15,10 +15,12 @@ use crate::basics::os_wrapper::set_memory_limit;
 use crate::basics::os_wrapper::RLIMIT_DATA_COMPAT;
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_core_number, get_system_phys_memory,
-    RLimResult,
+    resource_limit_error_message, RLimResult, RLimitOutcome,
 };
 #[cfg(all(target_os = "linux", not(test)))]
-use crate::basics::os_wrapper::{set_soft_rlimit, RLIMIT_CORE_COMPAT, RLIMIT_CPU_COMPAT};
+use crate::basics::os_wrapper::{
+    set_soft_rlimit, set_soft_rlimit_with_error, RLIMIT_CORE_COMPAT, RLIMIT_CPU_COMPAT,
+};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{
@@ -2348,8 +2350,8 @@ fn apply_os_resource_limit_state(config: &EProverConfig) -> Vec<Diagnostic> {
         #[cfg(target_os = "linux")]
         {
             if let Some(cpu_limit) = cpu_rlimit_to_apply(config) {
-                if let Some(warning) = rlimit_warning_from_result(
-                    set_soft_rlimit(RLIMIT_CPU_COMPAT, cpu_limit),
+                if let Some(warning) = rlimit_warning_from_outcome(
+                    set_soft_rlimit_with_error(RLIMIT_CPU_COMPAT, cpu_limit),
                     RLIMIT_CPU_COMPAT,
                     cpu_limit,
                     cpu_rlimit_desc(config),
@@ -2422,16 +2424,26 @@ fn rlimit_warning_from_result(
     limit: u64,
     desc: &str,
 ) -> Option<Diagnostic> {
+    rlimit_warning_from_outcome(RLimitOutcome::new(result, None), resource, limit, desc)
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn rlimit_warning_from_outcome(
+    outcome: RLimitOutcome,
+    resource: i32,
+    limit: u64,
+    desc: &str,
+) -> Option<Diagnostic> {
     #[cfg(target_os = "linux")]
     let data_resource = RLIMIT_DATA_COMPAT;
     #[cfg(not(target_os = "linux"))]
     let data_resource = 2;
 
-    if result == RLimResult::Failed && resource == data_resource {
+    if outcome.result() == RLimResult::Failed && resource == data_resource {
         return None;
     }
 
-    resource_limit_warning_from_result(result, limit, desc)
+    resource_limit_warning_from_outcome(outcome, limit, desc)
 }
 
 fn resource_limit_warning_from_result(
@@ -2439,16 +2451,32 @@ fn resource_limit_warning_from_result(
     limit: u64,
     desc: &str,
 ) -> Option<Diagnostic> {
-    match result {
+    resource_limit_warning_from_outcome(RLimitOutcome::new(result, None), limit, desc)
+}
+
+fn resource_limit_warning_from_outcome(
+    outcome: RLimitOutcome,
+    limit: u64,
+    desc: &str,
+) -> Option<Diagnostic> {
+    match outcome.result() {
         RLimResult::Failed => Some(Diagnostic::new(
             ErrorCode::SYSTEM_ERROR,
-            format!("Could not set limit {desc} to {limit}"),
+            resource_limit_failed_warning_message(desc, limit, outcome.os_error()),
         )),
         RLimResult::Reduced => Some(Diagnostic::new(
             ErrorCode::SYSTEM_ERROR,
             format!("Had to reduce limit {desc}"),
         )),
         RLimResult::Success => None,
+    }
+}
+
+fn resource_limit_failed_warning_message(desc: &str, limit: u64, os_error: Option<i32>) -> String {
+    let base = format!("Could not set limit {desc} to {limit}");
+    match os_error {
+        Some(error) => format!("{base} ({})", resource_limit_error_message(error)),
+        None => base,
     }
 }
 
@@ -9621,16 +9649,17 @@ mod tests {
         auto_memory_limit_from_system_mb, cpu_rlimit_to_apply, fv_index_params_from_config,
         heuristic_parms_from_config, native_hard_cpu_limit_to_apply, order_parms_from_config,
         preprocessing_config_debug_line, process_options, proof_control_from_config,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        temporary_executable_term_bank, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
-        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
-        PrimEnumMode, TermOrdering, UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING,
-        MEGA, THF_REQUIRES_HOL_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, temporary_executable_term_bank,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, TermOrdering, UnificationMode,
+        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
+        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
-    use crate::basics::os_wrapper::RLimResult;
+    use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::ProblemType;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
@@ -9806,6 +9835,20 @@ mod tests {
         assert_eq!(
             failed.message(),
             "Could not set limit RLIMIT_CPU (E-Hard) to 100"
+        );
+
+        let errno_failed = resource_limit_warning_from_outcome(
+            RLimitOutcome::new(RLimResult::Failed, Some(22)),
+            100,
+            "RLIMIT_CPU (E-Hard)",
+        )
+        .unwrap();
+        assert_eq!(
+            errno_failed.message(),
+            format!(
+                "Could not set limit RLIMIT_CPU (E-Hard) to 100 ({})",
+                resource_limit_error_message(22)
+            )
         );
 
         let reduced =

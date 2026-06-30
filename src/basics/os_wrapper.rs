@@ -16,6 +16,12 @@ pub enum RLimResult {
     Success = 2,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RLimitOutcome {
+    result: RLimResult,
+    os_error: Option<i32>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResourceUsage {
     pub user_time_seconds: f64,
@@ -30,6 +36,23 @@ impl RLimResult {
     }
 }
 
+impl RLimitOutcome {
+    #[must_use]
+    pub const fn new(result: RLimResult, os_error: Option<i32>) -> Self {
+        Self { result, os_error }
+    }
+
+    #[must_use]
+    pub const fn result(self) -> RLimResult {
+        self.result
+    }
+
+    #[must_use]
+    pub const fn os_error(self) -> Option<i32> {
+        self.os_error
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub const RLIMIT_CPU_COMPAT: i32 = linux_rlimit::RLIMIT_CPU;
 #[cfg(target_os = "linux")]
@@ -40,13 +63,25 @@ pub const RLIMIT_DATA_COMPAT: i32 = linux_rlimit::RLIMIT_DATA;
 #[cfg(target_os = "linux")]
 #[must_use]
 pub fn set_soft_rlimit(resource: i32, limit: u64) -> RLimResult {
-    linux_rlimit::set_soft_rlimit(resource, limit)
+    set_soft_rlimit_with_error(resource, limit).result()
 }
 
 #[cfg(not(target_os = "linux"))]
 #[must_use]
 pub const fn set_soft_rlimit(_resource: i32, _limit: u64) -> RLimResult {
     RLimResult::Failed
+}
+
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn set_soft_rlimit_with_error(resource: i32, limit: u64) -> RLimitOutcome {
+    linux_rlimit::set_soft_rlimit_with_error(resource, limit)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn set_soft_rlimit_with_error(_resource: i32, _limit: u64) -> RLimitOutcome {
+    RLimitOutcome::new(RLimResult::Failed, None)
 }
 
 #[cfg(target_os = "linux")]
@@ -289,6 +324,19 @@ pub fn get_system_phys_memory() -> i64 {
 #[must_use]
 pub const fn get_system_phys_memory() -> i64 {
     -1
+}
+
+#[must_use]
+pub fn resource_limit_error_message(error_code: i32) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        linux_rlimit::strerror_message(error_code)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::io::Error::from_raw_os_error(error_code).to_string()
+    }
 }
 
 pub fn stride_memory(memory: &mut [u8]) {
@@ -844,7 +892,9 @@ mod windows_kernel32 {
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod linux_rlimit {
-    use super::RLimResult;
+    use super::{RLimResult, RLimitOutcome};
+    use std::ffi::{c_char, CStr};
+    use std::io;
     use std::mem::MaybeUninit;
 
     pub(super) const RLIMIT_CPU: i32 = 0;
@@ -860,11 +910,13 @@ mod linux_rlimit {
     extern "C" {
         fn getrlimit(resource: i32, limit: *mut RLimit) -> i32;
         fn setrlimit(resource: i32, limit: *const RLimit) -> i32;
+        fn strerror(errnum: i32) -> *mut c_char;
     }
 
-    pub(super) fn set_soft_rlimit(resource: i32, mut limit: u64) -> RLimResult {
-        let Some(mut rlimit) = get_rlimit(resource) else {
-            return RLimResult::Failed;
+    pub(super) fn set_soft_rlimit_with_error(resource: i32, mut limit: u64) -> RLimitOutcome {
+        let mut rlimit = match get_rlimit(resource) {
+            Ok(rlimit) => rlimit,
+            Err(error) => return RLimitOutcome::new(RLimResult::Failed, error),
         };
 
         let mut result = RLimResult::Success;
@@ -877,14 +929,14 @@ mod linux_rlimit {
         // SAFETY: rlimit is a valid pointer to an initialized rlimit struct
         // whose layout matches Linux's two-rlim_t struct rlimit ABI.
         if unsafe { setrlimit(resource, &raw const rlimit) } == -1 {
-            return RLimResult::Failed;
+            return RLimitOutcome::new(RLimResult::Failed, last_os_error_code());
         }
-        result
+        RLimitOutcome::new(result, None)
     }
 
     pub(super) fn set_rlimit(resource: i32, current: u64, maximum: u64) -> RLimResult {
         let rlimit = RLimit { current, maximum };
-        set_rlimit_raw(resource, &rlimit)
+        set_rlimit_raw(resource, &rlimit).result()
     }
 
     pub(super) fn get_soft_rlimit(resource: i32) -> u64 {
@@ -895,26 +947,44 @@ mod linux_rlimit {
         get_rlimit(resource).map_or(0, |limit| limit.maximum)
     }
 
-    fn get_rlimit(resource: i32) -> Option<RLimit> {
+    pub(super) fn strerror_message(error_code: i32) -> String {
+        // SAFETY: strerror returns a pointer to a nul-terminated C string for
+        // the supplied errno value. The string is copied immediately.
+        let message = unsafe { strerror(error_code) };
+        if message.is_null() {
+            return format!("Unknown error {error_code}");
+        }
+        // SAFETY: strerror returned a non-null pointer to a nul-terminated C
+        // string that remains valid long enough for this immediate copy.
+        unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn get_rlimit(resource: i32) -> Result<RLimit, Option<i32>> {
         let mut rlimit = MaybeUninit::<RLimit>::uninit();
         // SAFETY: rlimit points to writable, properly aligned storage for the
         // C library to initialize on success.
         if unsafe { getrlimit(resource, rlimit.as_mut_ptr()) } == -1 {
-            return None;
+            return Err(last_os_error_code());
         }
         // SAFETY: getrlimit returned success, so the rlimit buffer is
         // initialized by the C library.
-        Some(unsafe { rlimit.assume_init() })
+        Ok(unsafe { rlimit.assume_init() })
     }
 
-    fn set_rlimit_raw(resource: i32, rlimit: &RLimit) -> RLimResult {
+    fn set_rlimit_raw(resource: i32, rlimit: &RLimit) -> RLimitOutcome {
         // SAFETY: rlimit is a valid pointer to an initialized rlimit struct
         // whose layout matches Linux's two-rlim_t struct rlimit ABI.
         if unsafe { setrlimit(resource, rlimit) } == -1 {
-            RLimResult::Failed
+            RLimitOutcome::new(RLimResult::Failed, last_os_error_code())
         } else {
-            RLimResult::Success
+            RLimitOutcome::new(RLimResult::Success, None)
         }
+    }
+
+    fn last_os_error_code() -> Option<i32> {
+        io::Error::last_os_error().raw_os_error()
     }
 }
 
@@ -1092,8 +1162,9 @@ mod tests {
         combine_rlimit_results, current_resource_usage, format_resource_usage, get_core_number,
         get_msec_time, get_sec_time, get_sec_time_mod, get_system_page_size,
         get_system_phys_memory, get_usec_clock, get_usec_time, parse_linux_stat_cpu_ticks,
-        parse_linux_status_vm_hwm_kib, resource_usage_from_linux_rusage, secure_fclose,
-        secure_fopen, set_memory_limit, stride_memory, RLimResult, ResourceUsage,
+        parse_linux_status_vm_hwm_kib, resource_limit_error_message,
+        resource_usage_from_linux_rusage, secure_fclose, secure_fopen, set_memory_limit,
+        stride_memory, RLimResult, RLimitOutcome, ResourceUsage,
     };
     use crate::basics::error::ErrorCode;
     use std::io::Write;
@@ -1103,6 +1174,15 @@ mod tests {
         assert_eq!(RLimResult::Failed.c_value(), 0);
         assert_eq!(RLimResult::Reduced.c_value(), 1);
         assert_eq!(RLimResult::Success.c_value(), 2);
+    }
+
+    #[test]
+    fn rlimit_outcome_preserves_result_and_errno() {
+        let outcome = RLimitOutcome::new(RLimResult::Failed, Some(22));
+
+        assert_eq!(outcome.result(), RLimResult::Failed);
+        assert_eq!(outcome.os_error(), Some(22));
+        assert!(!resource_limit_error_message(22).is_empty());
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
@@ -1164,9 +1244,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_rlimit_boundary_reports_invalid_resource_like_c() {
-        use super::{get_hard_rlimit, get_soft_rlimit, set_rlimit, set_soft_rlimit};
+        use super::{
+            get_hard_rlimit, get_soft_rlimit, set_rlimit, set_soft_rlimit,
+            set_soft_rlimit_with_error,
+        };
 
         assert_eq!(set_soft_rlimit(-1, 1), RLimResult::Failed);
+        let detailed = set_soft_rlimit_with_error(-1, 1);
+        assert_eq!(detailed.result(), RLimResult::Failed);
+        assert!(detailed.os_error().is_some());
         assert_eq!(set_rlimit(-1, 1, 1), RLimResult::Failed);
         assert_eq!(get_soft_rlimit(-1), 0);
         assert_eq!(get_hard_rlimit(-1), 0);
