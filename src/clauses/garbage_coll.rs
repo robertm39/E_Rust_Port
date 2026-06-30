@@ -1,5 +1,6 @@
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::FormulaSet;
 use crate::terms::termbanks::TermBank;
 
 pub trait ClauseSetMarker {
@@ -15,6 +16,18 @@ pub struct EmptyFormulaSet;
 
 impl FormulaSetMarker for EmptyFormulaSet {
     fn mark_formula_cells(&self, _bank: &TermBank) {}
+}
+
+impl FormulaSetMarker for FormulaSet {
+    fn mark_formula_cells(&self, bank: &TermBank) {
+        self.gc_mark_cells(bank);
+    }
+}
+
+impl FormulaSetMarker for &FormulaSet {
+    fn mark_formula_cells(&self, bank: &TermBank) {
+        (*self).gc_mark_cells(bank);
+    }
 }
 
 impl ClauseSetMarker for Vec<Clause> {
@@ -71,6 +84,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -195,6 +209,24 @@ mod tests {
         assert_eq!(tb_gc_collect(&mut bank, &clause_sets, &formula_sets), 1);
         assert!(bank.find(&kept).is_some());
         assert!(bank.find(&right).is_some());
+        assert!(bank.find(&dropped).is_none());
+    }
+
+    #[test]
+    fn collection_accepts_plain_formula_sets() {
+        let mut bank = test_bank();
+        let formula_arg = typed_const(&mut bank, "plain_formula_arg");
+        let formula_term = typed_unary(&mut bank, "plain_formula", &formula_arg);
+        let dropped = typed_const(&mut bank, "plain_formula_dropped");
+        let mut set = FormulaSet::new();
+        set.insert(WrappedFormula::default_alloc());
+        set.insert(WrappedFormula::wt_formula_alloc(formula_term.clone()));
+        let clause_sets: [Vec<Clause>; 0] = [];
+        let formula_sets = [&set];
+
+        assert_eq!(tb_gc_collect(&mut bank, &clause_sets, &formula_sets), 1);
+        assert!(bank.find(&formula_term).is_some());
+        assert!(bank.find(&formula_arg).is_some());
         assert!(bank.find(&dropped).is_none());
     }
 }

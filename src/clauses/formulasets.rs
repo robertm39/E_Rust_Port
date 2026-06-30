@@ -4,6 +4,7 @@ use crate::clauses::clause_props::{
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
     term_compute_order, term_has_f_code, term_is_untyped, term_standard_weight,
 };
@@ -135,6 +136,12 @@ impl WrappedFormula {
 
     pub fn set_formula(&mut self, formula: Term) {
         self.formula = Some(formula);
+    }
+
+    pub fn gc_mark_cells(&self, bank: &TermBank) {
+        if let Some(formula) = &self.formula {
+            bank.gc_mark_term(formula);
+        }
     }
 
     #[must_use]
@@ -339,6 +346,12 @@ impl FormulaSet {
                 .map(WrappedFormula::entry_id),
         );
         usize_to_i64(result.len() - start)
+    }
+
+    pub fn gc_mark_cells(&self, bank: &TermBank) {
+        for formula in &self.formulas {
+            formula.gc_mark_cells(bank);
+        }
     }
 }
 
