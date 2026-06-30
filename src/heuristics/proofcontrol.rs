@@ -5599,7 +5599,7 @@ pub fn proof_state_process_clause(
     control: &mut ProofControl,
     answer_limit: i64,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    proof_state_process_clause_impl::<String>(state, control, answer_limit, None, None)
+    proof_state_process_clause_impl::<String>(state, control, answer_limit, None, None, None)
 }
 
 /// Processes one selected clause while emitting represented C proof output.
@@ -5628,6 +5628,32 @@ pub fn proof_state_process_clause_with_docs(
         answer_limit,
         None,
         Some((output, session, output_level)),
+        None,
+    )
+}
+
+/// Processes one selected clause while rendering only C's dynamic AC
+/// `OutputLevel` status text.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_process_clause`], plus any
+/// dynamic AC status output diagnostic.
+pub fn proof_state_process_clause_with_ac_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    let ac_output = output as &mut dyn std::io::Write;
+    proof_state_process_clause_impl::<String>(
+        state,
+        control,
+        answer_limit,
+        None,
+        None,
+        Some((ac_output, output_level)),
     )
 }
 
@@ -5650,7 +5676,41 @@ pub fn proof_state_process_clause_with_global_indices(
     answer_limit: i64,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
-    proof_state_process_clause_impl::<String>(state, control, answer_limit, Some(indices), None)
+    proof_state_process_clause_impl::<String>(
+        state,
+        control,
+        answer_limit,
+        Some(indices),
+        None,
+        None,
+    )
+}
+
+/// Processes one selected clause using caller-owned global indices while
+/// rendering only C's dynamic AC `OutputLevel` status text.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_process_clause_with_global_indices`], plus any dynamic AC
+/// status output diagnostic.
+pub fn proof_state_process_clause_with_global_indices_and_ac_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    let ac_output = output as &mut dyn std::io::Write;
+    proof_state_process_clause_impl::<String>(
+        state,
+        control,
+        answer_limit,
+        Some(indices),
+        None,
+        Some((ac_output, output_level)),
+    )
 }
 
 /// Processes one selected clause with caller-owned global indices while
@@ -5676,6 +5736,7 @@ pub fn proof_state_process_clause_with_global_indices_and_docs(
         answer_limit,
         Some(indices),
         Some((output, session, output_level)),
+        None,
     )
 }
 
@@ -5689,6 +5750,7 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
     mut doc_context: Option<(&mut W, &mut ProofDocSession, i64)>,
+    mut ac_output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<ProcessClauseOutcome, Diagnostic> {
     let Some(mut clause) = proof_state_select_unprocessed_clause(state, control)? else {
         return Ok(ProcessClauseOutcome::NoClause);
@@ -5751,6 +5813,14 @@ fn proof_state_process_clause_impl<W: fmt::Write>(
     debug_assert!(packed.clause().weight() == packed.clause().standard_weight());
     let ac_activated = if let Some((output, _session, output_level)) = doc_context.as_mut() {
         proof_state_check_ac_status_with_fmt_output(
+            &mut **output,
+            *output_level,
+            state,
+            control,
+            packed.clause(),
+        )?
+    } else if let Some((output, output_level)) = ac_output_context.as_mut() {
+        proof_state_check_ac_status_with_output(
             &mut **output,
             *output_level,
             state,
@@ -6066,6 +6136,47 @@ pub fn proof_state_saturate(
         tb_insert_limit,
         answer_limit,
         None,
+        None,
+    )
+}
+
+/// Runs the ported C `Saturate` loop while rendering only dynamic AC
+/// `OutputLevel` status text from selected-clause processing.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as [`proof_state_saturate`], plus any dynamic
+/// AC status output diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+pub fn proof_state_saturate_with_ac_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+) -> Result<SaturateOutcome, Diagnostic> {
+    let ac_output = output as &mut dyn std::io::Write;
+    proof_state_saturate_impl(
+        state,
+        control,
+        step_limit,
+        proc_limit,
+        unproc_limit,
+        total_limit,
+        generated_limit,
+        tb_insert_limit,
+        answer_limit,
+        None,
+        Some((ac_output, output_level)),
     )
 }
 
@@ -6108,6 +6219,50 @@ pub fn proof_state_saturate_with_global_indices(
         tb_insert_limit,
         answer_limit,
         Some(indices),
+        None,
+    )
+}
+
+/// Runs the ported C `Saturate` loop using caller-owned global indices while
+/// rendering only dynamic AC `OutputLevel` status text from selected-clause
+/// processing.
+///
+/// # Errors
+///
+/// Returns the same diagnostics as
+/// [`proof_state_saturate_with_global_indices`], plus any dynamic AC status
+/// output diagnostic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible Saturate bridge keeps the original limit arguments visible"
+)]
+pub fn proof_state_saturate_with_global_indices_and_ac_output(
+    output: &mut impl std::io::Write,
+    output_level: i64,
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    step_limit: i64,
+    proc_limit: i64,
+    unproc_limit: i64,
+    total_limit: i64,
+    generated_limit: i64,
+    tb_insert_limit: i64,
+    answer_limit: i64,
+    indices: &mut GlobalIndices<'_>,
+) -> Result<SaturateOutcome, Diagnostic> {
+    let ac_output = output as &mut dyn std::io::Write;
+    proof_state_saturate_impl(
+        state,
+        control,
+        step_limit,
+        proc_limit,
+        unproc_limit,
+        total_limit,
+        generated_limit,
+        tb_insert_limit,
+        answer_limit,
+        Some(indices),
+        Some((ac_output, output_level)),
     )
 }
 
@@ -6172,6 +6327,7 @@ fn proof_state_saturate_impl(
     tb_insert_limit: i64,
     answer_limit: i64,
     mut indices: Option<&mut GlobalIndices<'_>>,
+    mut ac_output_context: Option<(&mut dyn std::io::Write, i64)>,
 ) -> Result<SaturateOutcome, Diagnostic> {
     let mut processed_steps = 0_i64;
     let mut sat_check_thresholds = SatCheckThresholds::new(control.heuristic_parms());
@@ -6194,11 +6350,13 @@ fn proof_state_saturate_impl(
         }
 
         processed_steps = processed_steps.saturating_add(1);
-        let process_outcome = if let Some(indices) = indices.as_deref_mut() {
-            proof_state_process_clause_with_global_indices(state, control, answer_limit, indices)?
-        } else {
-            proof_state_process_clause(state, control, answer_limit)?
-        };
+        let process_outcome = proof_state_process_clause_for_saturate(
+            state,
+            control,
+            answer_limit,
+            indices.as_deref_mut(),
+            ac_output_context.as_mut(),
+        )?;
         match process_outcome {
             ProcessClauseOutcome::NoClause => {
                 return Ok(SaturateOutcome::Stopped {
@@ -6258,6 +6416,37 @@ fn proof_state_saturate_impl(
                 processed_steps,
             ));
         }
+    }
+}
+
+fn proof_state_process_clause_for_saturate(
+    state: &mut ProofState,
+    control: &mut ProofControl,
+    answer_limit: i64,
+    indices: Option<&mut GlobalIndices<'_>>,
+    ac_output_context: Option<&mut (&mut dyn std::io::Write, i64)>,
+) -> Result<ProcessClauseOutcome, Diagnostic> {
+    match (indices, ac_output_context) {
+        (Some(indices), Some((output, output_level))) => proof_state_process_clause_impl::<String>(
+            state,
+            control,
+            answer_limit,
+            Some(indices),
+            None,
+            Some((&mut **output, *output_level)),
+        ),
+        (Some(indices), None) => {
+            proof_state_process_clause_with_global_indices(state, control, answer_limit, indices)
+        }
+        (None, Some((output, output_level))) => proof_state_process_clause_impl::<String>(
+            state,
+            control,
+            answer_limit,
+            None,
+            None,
+            Some((&mut **output, *output_level)),
+        ),
+        (None, None) => proof_state_process_clause(state, control, answer_limit),
     }
 }
 
@@ -7097,7 +7286,7 @@ pub fn proof_state_check_ac_status(
 /// Returns a diagnostic if the output sink fails while printing the signature
 /// AC status or activation line.
 pub fn proof_state_check_ac_status_with_output(
-    output: &mut impl std::io::Write,
+    output: &mut (impl std::io::Write + ?Sized),
     output_level: i64,
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -7422,14 +7611,14 @@ mod tests {
         proof_state_replacing_inferences, proof_state_replacing_inferences_with_docs,
         proof_state_reset_processed, proof_state_reset_processed_with_docs,
         proof_state_reset_processed_with_global_indices, proof_state_saturate,
-        proof_state_saturate_with_global_indices, proof_state_simplify_watchlist,
-        proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
-        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
-        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
-        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        proof_state_saturate_with_ac_output, proof_state_saturate_with_global_indices,
+        proof_state_simplify_watchlist, proof_state_simplify_watchlist_with_docs,
+        proof_state_storage_estimate, select_inherited_literal, BackwardSimplificationOutcome,
+        ForwardContractCounts, ForwardContractOptions, GenerateNewClausesOutcome,
+        LiteralSelectionOutcome, ParentLivenessSnapshot, ProcessClauseOutcome,
+        ProcessClauseReturnReason, ProcessedClauseClass, ProofStateWatchlistOutcome,
+        ReplacingInferenceOutcome, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -12889,6 +13078,50 @@ mod tests {
         assert_eq!(state.processed_cardinality(), 1);
         assert_eq!(state.unprocessed().members(), 1);
         assert!(indices.find_pm_from_occurrence(&source).is_some());
+    }
+
+    #[test]
+    fn proof_state_saturate_with_ac_output_reports_dynamic_activation() {
+        let _guard = global_state_lock();
+        let _time_limits =
+            configure_time_limits_for_test(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let (clause, f_code) =
+            commutativity_axiom(state.terms_mut(), "pc_saturate_dynamic_ac_f", 4_156);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.heuristic_parms_mut().selection_strategy = NO_GENERATION.to_owned();
+        queue_unprocessed_for_process(&mut state, &mut control, clause);
+        let mut output = Vec::new();
+
+        let outcome = proof_state_saturate_with_ac_output(
+            &mut output,
+            1,
+            &mut state,
+            &mut control,
+            1,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            outcome,
+            SaturateOutcome::Stopped {
+                reason: SaturateStopReason::Saturated,
+                processed_steps: 1,
+            }
+        );
+        assert!(control.ac_handling_active());
+        assert!(state.terms().signature().query_prop(f_code, FP_COMMUTATIVE));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% pc_saturate_dynamic_ac_f is commutative\n% AC handling enabled dynamically\n"
+        );
     }
 
     #[test]

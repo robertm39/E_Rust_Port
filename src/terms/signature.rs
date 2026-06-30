@@ -876,7 +876,7 @@ impl Signature {
         Ok(())
     }
 
-    pub fn print_ac_status(&self, output: &mut impl Write) -> io::Result<()> {
+    pub fn print_ac_status(&self, output: &mut (impl Write + ?Sized)) -> io::Result<()> {
         for f_code in 1..=self.f_count {
             let fun = self.func(f_code);
             if fun.properties.contains_all(FP_IS_AC) {

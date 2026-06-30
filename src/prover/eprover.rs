@@ -80,8 +80,9 @@ use crate::heuristics::new_autoschedule::{
 };
 use crate::heuristics::proofcontrol::{
     proof_control_init, proof_state_filter_unprocessed, proof_state_init_with_ac_output,
-    proof_state_reset_processed_with_global_indices, proof_state_saturate_with_global_indices,
-    ProofControl, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+    proof_state_reset_processed_with_global_indices,
+    proof_state_saturate_with_global_indices_and_ac_output, ProofControl, SaturateOutcome,
+    SaturateReturnReason, SaturateStopReason,
 };
 use crate::heuristics::rawspecfeatures::{
     raw_spec_features_classify, raw_spec_features_compute, RawSpecFeatureCell, RAW_DEFAULT_MASK,
@@ -5379,14 +5380,26 @@ fn run_proof_search<W: Write + ?Sized>(
     let index_signature = state.terms().signature().clone();
     let mut global_indices = proof_search_global_indices(&index_signature, &control);
     let presat_outcome = if control.heuristic_parms().presat_interreduction {
-        run_presaturation_interreduction(output, &mut state, &mut control, &mut global_indices)?
+        run_presaturation_interreduction(
+            output,
+            config.output_level,
+            &mut state,
+            &mut control,
+            &mut global_indices,
+        )?
     } else {
         None
     };
     let mut outcome = if let Some(outcome) = presat_outcome {
         outcome
     } else {
-        run_main_saturation(config, &mut state, &mut control, &mut global_indices)?
+        run_main_saturation(
+            output,
+            config,
+            &mut state,
+            &mut control,
+            &mut global_indices,
+        )?
     };
     if let Some(filtered_empty) = filter_saturated_unprocessed(config, &mut state, &mut control)? {
         outcome = SaturateOutcome::Returned {
@@ -5437,13 +5450,16 @@ fn run_proof_search<W: Write + ?Sized>(
     ))
 }
 
-fn run_main_saturation(
+fn run_main_saturation<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<SaturateOutcome, EProverError> {
-    Ok(proof_state_saturate_with_global_indices(
+    Ok(proof_state_saturate_with_global_indices_and_ac_output(
+        output,
+        config.output_level,
         state,
         control,
         config.step_limit,
@@ -5905,13 +5921,16 @@ fn write_sat_check_success_output(
 
 fn run_presaturation_interreduction(
     output: &mut impl Write,
+    output_level: i64,
     state: &mut crate::clauses::proofstate::ProofState,
     control: &mut ProofControl,
     indices: &mut GlobalIndices<'_>,
 ) -> Result<Option<SaturateOutcome>, EProverError> {
     let selection_strategy = control.heuristic_parms().selection_strategy.clone();
     NO_GENERATION.clone_into(&mut control.heuristic_parms_mut().selection_strategy);
-    let outcome = proof_state_saturate_with_global_indices(
+    let outcome = proof_state_saturate_with_global_indices_and_ac_output(
+        output,
+        output_level,
         state,
         control,
         i64::MAX,
