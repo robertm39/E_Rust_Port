@@ -212,8 +212,13 @@ pub fn sat_check_proof_state(
     let mut satset = SatClauseSet::default();
     {
         let bank = state.terms_mut();
-        let mut substitution =
-            pseudo_ground_substitution(bank, grounding, norm_const, &conj_dist_array, &dist_array)?;
+        let mut substitution = pseudo_ground_substitution(
+            bank,
+            grounding,
+            norm_const,
+            &mut conj_dist_array,
+            &dist_array,
+        )?;
         for clause in &source_clauses {
             satset.import_clause(bank, clause)?;
         }
@@ -262,7 +267,7 @@ fn pseudo_ground_substitution(
     bank: &mut TermBank,
     grounding: GroundingStrategy,
     norm_const: bool,
-    conj_dist_array: &[i64],
+    conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> Result<Substitution, Diagnostic> {
     let varstacks = bank.vars().normal_variables_by_sort();
@@ -364,7 +369,7 @@ fn maybe_follow_rw(term: Term, norm_const: bool) -> Term {
 fn prefer_conj_min_max_freq(
     left: FunCode,
     right: FunCode,
-    conj_dist_array: &[i64],
+    conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> bool {
     let left_conj = dist_at(conj_dist_array, left);
@@ -376,25 +381,27 @@ fn prefer_conj_min_max_freq(
         return false;
     }
     left_conj < right_conj
-        || (left_conj == right_conj && dist_at(dist_array, left) > dist_at(dist_array, right))
+        || (assign_conj_dist(conj_dist_array, left, right_conj) != 0
+            && dist_at(dist_array, left) > dist_at(dist_array, right))
 }
 
 fn prefer_conj_max_max_freq(
     left: FunCode,
     right: FunCode,
-    conj_dist_array: &[i64],
+    conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> bool {
     let left_conj = dist_at(conj_dist_array, left);
     let right_conj = dist_at(conj_dist_array, right);
     left_conj > right_conj
-        || (left_conj == right_conj && dist_at(dist_array, left) > dist_at(dist_array, right))
+        || (assign_conj_dist(conj_dist_array, left, right_conj) != 0
+            && dist_at(dist_array, left) > dist_at(dist_array, right))
 }
 
 fn prefer_conj_min_min_freq(
     left: FunCode,
     right: FunCode,
-    conj_dist_array: &[i64],
+    conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> bool {
     let left_conj = dist_at(conj_dist_array, left);
@@ -406,25 +413,27 @@ fn prefer_conj_min_min_freq(
         return false;
     }
     left_conj < right_conj
-        || (left_conj == right_conj && dist_at(dist_array, left) < dist_at(dist_array, right))
+        || (assign_conj_dist(conj_dist_array, left, right_conj) != 0
+            && dist_at(dist_array, left) < dist_at(dist_array, right))
 }
 
 fn prefer_conj_max_min_freq(
     left: FunCode,
     right: FunCode,
-    conj_dist_array: &[i64],
+    conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> bool {
     let left_conj = dist_at(conj_dist_array, left);
     let right_conj = dist_at(conj_dist_array, right);
     left_conj > right_conj
-        || (left_conj == right_conj && dist_at(dist_array, left) < dist_at(dist_array, right))
+        || (assign_conj_dist(conj_dist_array, left, right_conj) != 0
+            && dist_at(dist_array, left) < dist_at(dist_array, right))
 }
 
 fn prefer_global_max_freq(
     left: FunCode,
     right: FunCode,
-    _conj_dist_array: &[i64],
+    _conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> bool {
     dist_at(dist_array, left) > dist_at(dist_array, right)
@@ -433,7 +442,7 @@ fn prefer_global_max_freq(
 fn prefer_global_min_freq(
     left: FunCode,
     right: FunCode,
-    _conj_dist_array: &[i64],
+    _conj_dist_array: &mut [i64],
     dist_array: &[i64],
 ) -> bool {
     dist_at(dist_array, left) < dist_at(dist_array, right)
@@ -445,6 +454,17 @@ fn dist_at(dist_array: &[i64], f_code: FunCode) -> i64 {
         .and_then(|index| dist_array.get(index))
         .copied()
         .unwrap_or(0)
+}
+
+fn assign_conj_dist(dist_array: &mut [i64], f_code: FunCode, value: i64) -> i64 {
+    let Some(slot) = usize::try_from(f_code)
+        .ok()
+        .and_then(|index| dist_array.get_mut(index))
+    else {
+        return 0;
+    };
+    *slot = value;
+    *slot
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -576,7 +596,11 @@ fn usize_to_u64(value: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{sat_check_proof_state, solve_sat, SatClause, SatClauseSet, SolverStatus};
+    use super::{
+        prefer_conj_max_max_freq, prefer_conj_max_min_freq, prefer_conj_min_max_freq,
+        prefer_conj_min_min_freq, sat_check_proof_state, solve_sat, SatClause, SatClauseSet,
+        SolverStatus,
+    };
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
     use crate::clauses::derivation::{
@@ -660,6 +684,49 @@ mod tests {
             SolverStatus::GaveUp
         );
         assert_eq!(solve_sat(&[vec![], vec![1]], 1, 0), SolverStatus::Unsat);
+    }
+
+    #[test]
+    fn conjecture_frequency_comparators_preserve_c_assignment_tie_breaks() {
+        let mut min_max_conj = vec![0, 0, 7, 5];
+        let min_max_dist = vec![0, 0, 30, 20];
+        assert!(prefer_conj_min_max_freq(
+            2,
+            3,
+            &mut min_max_conj,
+            &min_max_dist
+        ));
+        assert_eq!(min_max_conj[2], 5);
+
+        let mut min_min_conj = vec![0, 0, 7, 5];
+        let min_min_dist = vec![0, 0, 10, 20];
+        assert!(prefer_conj_min_min_freq(
+            2,
+            3,
+            &mut min_min_conj,
+            &min_min_dist
+        ));
+        assert_eq!(min_min_conj[2], 5);
+
+        let mut max_max_conj = vec![0, 0, 5, 7];
+        let max_max_dist = vec![0, 0, 30, 20];
+        assert!(prefer_conj_max_max_freq(
+            2,
+            3,
+            &mut max_max_conj,
+            &max_max_dist
+        ));
+        assert_eq!(max_max_conj[2], 7);
+
+        let mut max_min_conj = vec![0, 0, 5, 7];
+        let max_min_dist = vec![0, 0, 10, 20];
+        assert!(prefer_conj_max_min_freq(
+            2,
+            3,
+            &mut max_min_conj,
+            &max_min_dist
+        ));
+        assert_eq!(max_min_conj[2], 7);
     }
 
     #[test]

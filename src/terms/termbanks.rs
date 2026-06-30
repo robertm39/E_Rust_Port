@@ -2605,12 +2605,12 @@ impl TermBank {
     pub fn get_freq_const_term<F>(
         &mut self,
         sort: &Type,
-        conj_dist_array: &[i64],
+        conj_dist_array: &mut [i64],
         dist_array: &[i64],
         mut is_better: F,
     ) -> Result<Option<Term>, Diagnostic>
     where
-        F: FnMut(FunCode, FunCode, &[i64], &[i64]) -> bool,
+        F: FnMut(FunCode, FunCode, &mut [i64], &[i64]) -> bool,
     {
         let candidates = self.sig.collect_sort_consts(sort);
         let Some((&first, rest)) = candidates.split_first() else {
@@ -5133,7 +5133,7 @@ mod tests {
         assert!(bank.get_first_const_term(&mineral).unwrap().is_none());
 
         let len = usize::try_from(bank.signature().f_count()).unwrap() + 1;
-        let conj_dist_array = vec![0; len];
+        let mut conj_dist_array = vec![0; len];
         let mut dist_array = vec![0; len];
         dist_array[usize::try_from(first_individual).unwrap()] = 7;
         dist_array[usize::try_from(second_individual).unwrap()] = 2;
@@ -5141,7 +5141,7 @@ mod tests {
         let selected = bank
             .get_freq_const_term(
                 &individual,
-                &conj_dist_array,
+                &mut conj_dist_array,
                 &dist_array,
                 |candidate, best, _, dist| {
                     dist[usize::try_from(candidate).unwrap()] < dist[usize::try_from(best).unwrap()]
