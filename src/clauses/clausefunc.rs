@@ -21,8 +21,8 @@ use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
-use crate::inout::scanner::{Scanner, TokenType};
-use crate::terms::functypes::func_symb_start_token;
+use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::terms::functypes::{func_symb_start_token, FunCode};
 use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
     decode_formulas_for_cnf, lambda_eta_reduce_db, post_cnf_encode_formulas,
@@ -1759,9 +1759,10 @@ pub fn tformula_tptp_parse(scanner: &mut Scanner, bank: &mut TermBank) -> Result
 
 /// Parses a TCF formula in TSTP syntax.
 ///
-/// This matches C `TcfTSTPParse` for unquantified clause bodies by folding
-/// `EqnFOFParse` literals over `|`. Quantified TCF formulas reuse the general
-/// term-bank TSTP formula parser.
+/// This matches C `TcfTSTPParse`: unquantified clause bodies fold
+/// `EqnFOFParse` literals over `|`, while leading universal quantifiers use the
+/// TCF-specific quantified parser that gives parenthesized bodies the same
+/// clause-only treatment and unparenthesized bodies a single atom.
 pub fn tcf_tstp_parse(
     scanner: &mut Scanner,
     bank: &mut TermBank,
@@ -1781,7 +1782,10 @@ pub fn tcf_tstp_parse(
     }
 
     let formula = if scanner.test_tok(TokenType::UNIV_QUANTOR) {
-        bank.parse_tformula_tstp(scanner)?
+        scanner.accept_tok(TokenType::UNIV_QUANTOR)?;
+        scanner.accept_tok(TokenType::OPEN_SQUARE)?;
+        let quantor = bank.signature().qall_code();
+        tcf_quantified_tform_tstp_parse(scanner, bank, quantor, problem_type)?
     } else {
         tcf_clause_tform_tstp_parse(scanner, bank, problem_type)?
     };
@@ -1790,6 +1794,54 @@ pub fn tcf_tstp_parse(
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     }
     Ok(formula)
+}
+
+fn tcf_quantified_tform_tstp_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    quantor: FunCode,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let variable_position = token_pos_rep(scanner.current_token());
+    bank.vars().push_env();
+    let parsed = (|| {
+        let variable = bank.parse_term_with_distinct_checks(scanner)?;
+        if !variable.is_free_var() {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!("{variable_position} Variable expected, non-variable term found"),
+            ));
+        }
+
+        let rest = if scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            tcf_quantified_tform_tstp_parse(scanner, bank, quantor, problem_type)?
+        } else {
+            scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+            scanner.accept_tok(TokenType::COLON)?;
+            if scanner.test_tok(TokenType::OPEN_BRACKET) {
+                scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+                let rest = tcf_clause_tform_tstp_parse(scanner, bank, problem_type)?;
+                scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+                rest
+            } else {
+                tcf_atom_tform_tstp_parse(scanner, bank, problem_type)?
+            }
+        };
+
+        tformula_fcode_alloc(bank, quantor, variable, Some(rest))
+    })();
+    bank.vars().pop_env();
+    parsed
+}
+
+fn tcf_atom_tform_tstp_parse(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Term, Diagnostic> {
+    let atom = eqn_fof_parse(scanner, bank, problem_type)?;
+    tformula_lit_alloc(bank, &atom, problem_type)
 }
 
 fn tcf_clause_tform_tstp_parse(
@@ -7535,6 +7587,44 @@ mod tests {
         assert_eq!(formula.f_code(), bank.signature().qall_code());
         let body = formula.argument(1).unwrap();
         assert_eq!(body.f_code(), bank.signature().or_code());
+    }
+
+    #[test]
+    fn tcf_tstp_parse_nests_comma_separated_universal_variables() {
+        let mut bank = test_bank();
+        let mut scanner =
+            Scanner::from_user_string("![X,Y]:(tcf_quant2_p(X)|tcf_quant2_q(Y))", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let formula = tcf_tstp_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().qall_code());
+        let inner = formula.argument(1).unwrap();
+        assert_eq!(inner.f_code(), bank.signature().qall_code());
+        let body = inner.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().or_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(body.argument(0).unwrap().argument(0).unwrap().f_code()),
+            Some("tcf_quant2_p")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(body.argument(1).unwrap().argument(0).unwrap().f_code()),
+            Some("tcf_quant2_q")
+        );
+    }
+
+    #[test]
+    fn tcf_tstp_parse_rejects_parenthesized_non_clause_quantified_body() {
+        let mut bank = test_bank();
+        let mut scanner =
+            Scanner::from_user_string("![X]:(tcf_bad_p(X)&tcf_bad_q(X))", false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+
+        let error = tcf_tstp_parse(&mut scanner, &mut bank, ProblemType::FirstOrder).unwrap_err();
+
+        assert_eq!(error.code(), crate::basics::error::ErrorCode::SYNTAX_ERROR);
     }
 
     #[test]
