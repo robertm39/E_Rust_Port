@@ -35,7 +35,8 @@ use crate::terms::simpletypes::{
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{
-    term_app_encode, term_is_db_closed, term_is_ground, term_is_untyped, term_standard_weight,
+    term_app_encode, term_find_max_var_code, term_is_db_closed, term_is_ground, term_is_untyped,
+    term_standard_weight,
 };
 use crate::terms::termpos::TermPos;
 use crate::terms::termtypes::{
@@ -1810,6 +1811,51 @@ pub fn tformula_is_closed(bank: &TermBank, form: &Term) -> bool {
 #[must_use]
 pub fn tformula_has_free_vars(bank: &TermBank, form: &Term) -> Option<Term> {
     tformula_collect_free_vars(bank, form).into_iter().next()
+}
+
+/// Returns whether two term-encoded formula handles are identical.
+///
+/// This matches C `TFormulaEqual`, which is a pointer-identity macro rather
+/// than structural equality.
+#[must_use]
+pub fn tformula_equal(left: &Term, right: &Term) -> bool {
+    left == right
+}
+
+/// Copies a term-encoded formula through the term bank without copied
+/// top-cell properties.
+///
+/// This matches C `TFormulaCopy`, which expands to
+/// `TBInsertNoPropsCached(bank, form, DEREF_ALWAYS)`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if the copied formula cannot be inserted.
+///
+/// # Panics
+///
+/// Panics if a free or DB variable lacks a type, matching the C term-bank
+/// preconditions.
+pub fn tformula_copy(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> {
+    bank.insert_no_props_cached(form, DerefType::Always)
+}
+
+/// Marks every term cell reachable from a term-encoded formula for term-bank
+/// garbage collection.
+///
+/// This matches C `TFormulaGCMarkCells`.
+pub fn tformula_gc_mark_cells(bank: &TermBank, form: &Term) {
+    bank.gc_mark_term(form);
+}
+
+/// Returns the maximum variable code used by a term-encoded formula.
+///
+/// This matches C `TFormulaFindMaxVarCode`, including E's negative free
+/// variable-code convention where the most negative code is the maximum used
+/// variable index.
+#[must_use]
+pub fn tformula_find_max_var_code(form: &Term) -> i64 {
+    term_find_max_var_code(form)
 }
 
 /// Returns whether `var` occurs free in a term-encoded formula.
@@ -5249,10 +5295,11 @@ mod tests {
         tformula_add_quantor, tformula_app_encode_string, tformula_clause_closed_encode,
         tformula_clause_encode, tformula_closure, tformula_collect_clause,
         tformula_collect_free_vars, tformula_conjunctive_nf, tformula_conjunctive_nf3,
-        tformula_copy_def, tformula_create_def, tformula_decode_polarity, tformula_def_rename,
-        tformula_distribute_disjunctions, tformula_encode_predicate_as_eqn,
-        tformula_estimate_clauses, tformula_expand_distinct, tformula_expand_literals,
-        tformula_find_defs, tformula_has_free_vars, tformula_is_closed, tformula_is_prop_const,
+        tformula_copy, tformula_copy_def, tformula_create_def, tformula_decode_polarity,
+        tformula_def_rename, tformula_distribute_disjunctions, tformula_encode_predicate_as_eqn,
+        tformula_equal, tformula_estimate_clauses, tformula_expand_distinct,
+        tformula_expand_literals, tformula_find_defs, tformula_find_max_var_code,
+        tformula_gc_mark_cells, tformula_has_free_vars, tformula_is_closed, tformula_is_prop_const,
         tformula_is_prop_false, tformula_is_prop_true, tformula_is_untyped, tformula_lit_alloc,
         tformula_mark_polarity, tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc,
         tformula_negate, tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc,
@@ -5288,7 +5335,7 @@ mod tests {
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{
-        DerefType, Term, TP_CHECK_FLAG, TP_NEG_POLARITY, TP_POS_POLARITY,
+        DerefType, Term, TP_CHECK_FLAG, TP_GARBAGE_FLAG, TP_NEG_POLARITY, TP_POS_POLARITY,
     };
     use crate::terms::termvars::VarBank;
     use crate::terms::typebanks::TypeBank;
@@ -7274,6 +7321,53 @@ mod tests {
         assert_eq!(decoded.f_code(), equiv_code);
         assert_ne!(decoded.argument(0).unwrap(), true_term);
         assert_ne!(decoded.argument(1).unwrap(), false_term);
+    }
+
+    #[test]
+    fn tformula_macro_wrappers_use_identity_and_term_bank_copying() {
+        let mut bank = test_bank();
+        let x = typed_var(&bank, -294);
+        let a = typed_const(&mut bank, "formula_macro_a");
+        let b = typed_const(&mut bank, "formula_macro_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &x, &b);
+        let unshared_same_shape = Term::top_alloc(eqn_code, 2);
+        unshared_same_shape.set_type(formula.type_());
+        unshared_same_shape.set_argument(0, x.clone());
+        unshared_same_shape.set_argument(1, b.clone());
+
+        assert!(tformula_equal(&formula, &formula));
+        assert!(!tformula_equal(&formula, &unshared_same_shape));
+        assert_eq!(tformula_find_max_var_code(&formula), -294);
+
+        x.set_binding(Some(a.clone()));
+        let copied = tformula_copy(&mut bank, &formula).unwrap();
+        x.set_binding(None);
+
+        assert!(!tformula_equal(&formula, &copied));
+        assert_eq!(copied.f_code(), eqn_code);
+        assert_eq!(copied.argument(0).as_ref(), Some(&a));
+        assert_eq!(copied.argument(1).as_ref(), Some(&b));
+        assert_eq!(tformula_find_max_var_code(&copied), 0);
+    }
+
+    #[test]
+    fn tformula_gc_mark_cells_marks_reachable_formula_terms() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "formula_gc_a");
+        let b = typed_const(&mut bank, "formula_gc_b");
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let formula = bool_binary_with_code(&mut bank, eqn_code, &a, &b);
+
+        assert!(!formula.query_prop(TP_GARBAGE_FLAG));
+        assert!(!a.query_prop(TP_GARBAGE_FLAG));
+        assert!(!b.query_prop(TP_GARBAGE_FLAG));
+
+        tformula_gc_mark_cells(&bank, &formula);
+
+        assert!(formula.query_prop(TP_GARBAGE_FLAG));
+        assert!(a.query_prop(TP_GARBAGE_FLAG));
+        assert!(b.query_prop(TP_GARBAGE_FLAG));
     }
 
     #[test]
