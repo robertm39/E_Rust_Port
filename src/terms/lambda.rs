@@ -1,6 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::terms::functypes::FunCode;
-use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_PHONY_APP_CODE};
+use crate::terms::signature::{SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE, SIG_PHONY_APP_CODE};
 use crate::terms::simpletypes::{
     arrow_type_flattened, type_drop_first_arg, type_get_max_arity, Type,
 };
@@ -570,6 +570,124 @@ pub fn lambda_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Dia
     get_eta_normalizer()(bank, &beta_normal)
 }
 
+fn do_named_to_db(
+    bank: &mut TermBank,
+    term: &Term,
+    bindings: &mut BTreeMap<FunCode, (FunCode, Type)>,
+    depth: FunCode,
+) -> Result<Term, Diagnostic> {
+    if term.is_lambda() {
+        assert_eq!(
+            term.f_code(),
+            SIG_NAMED_LAMBDA_CODE,
+            "NamedToDB expects named lambda input"
+        );
+
+        let mut current = term.clone();
+        let mut vars = Vec::new();
+        while current.is_lambda() {
+            assert_eq!(
+                current.f_code(),
+                SIG_NAMED_LAMBDA_CODE,
+                "NamedToDB expects named lambda prefixes"
+            );
+            let binder = current
+                .argument(0)
+                .expect("named lambda binder is uninitialized");
+            assert!(
+                binder.is_free_var(),
+                "named lambda binder must be a free variable"
+            );
+            vars.push(binder);
+            current = current
+                .argument(1)
+                .expect("named lambda body is uninitialized");
+        }
+
+        let mut saved = Vec::with_capacity(vars.len());
+        let mut next_depth = depth;
+        for var in &vars {
+            let var_type = var.type_().expect("named lambda binder must have a type");
+            saved.push((
+                var.f_code(),
+                bindings.insert(var.f_code(), (next_depth, var_type)),
+            ));
+            next_depth += 1;
+        }
+
+        let mut result = do_named_to_db(bank, &current, bindings, next_depth)?;
+
+        for var in vars.into_iter().rev() {
+            let (f_code, previous) = saved
+                .pop()
+                .expect("saved named-lambda binding stack is balanced");
+            assert_eq!(f_code, var.f_code());
+            if let Some(previous) = previous {
+                bindings.insert(f_code, previous);
+            } else {
+                bindings.remove(&f_code);
+            }
+
+            let var_type = var.type_().expect("named lambda binder must have a type");
+            result = close_with_db_var(bank, &var_type, &result)?;
+        }
+
+        return Ok(result);
+    }
+
+    if term.is_free_var() {
+        if let Some((binding_depth, type_)) = bindings.get(&term.f_code()) {
+            assert_eq!(
+                term.type_(),
+                Some(type_.clone()),
+                "named lambda binding type must match variable type"
+            );
+            let db_index = depth - binding_depth - 1;
+            return Ok(bank.request_db_var(type_, db_index));
+        }
+        return Ok(term.clone());
+    }
+
+    let copy = Term::top_copy_without_args(term);
+    let mut changed = false;
+    for (index, arg) in term.argument_clones().into_iter().enumerate() {
+        let arg = arg.unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
+        let converted = do_named_to_db(bank, &arg, bindings, depth)?;
+        if converted != arg {
+            changed = true;
+        }
+        copy.set_argument(index, converted);
+    }
+
+    if changed {
+        bank.term_top_insert(copy)
+    } else {
+        Ok(term.clone())
+    }
+}
+
+/// Converts closed named-lambda terms to DB-lambda terms and beta-normalizes them.
+///
+/// This matches C `NamedToDB`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if conversion or beta normalization rebuilds a term
+/// that cannot be inserted into the term bank.
+///
+/// # Panics
+///
+/// Panics if a lambda cell is malformed, if a named-lambda binder is not a
+/// typed free variable, or if a named binder is encountered outside its scope.
+pub fn named_to_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let converted = if term.has_lambda_subterm() {
+        do_named_to_db(bank, term, &mut BTreeMap::new(), 0)?
+    } else {
+        term.clone()
+    };
+    beta_normalize_db(bank, &converted)
+}
+
 /// Builds a DB lambda with one binder, matching C `CloseWithDBVar`.
 ///
 /// # Errors
@@ -1106,10 +1224,10 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 mod tests {
     use super::{
         apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, lambda_eta_expand_db,
-        lambda_eta_expand_db_top_level, lambda_eta_reduce_db, lambda_normalize_db, shift_db,
-        unfold_lambda, whnf_deref,
+        lambda_eta_expand_db_top_level, lambda_eta_reduce_db, lambda_normalize_db, named_to_db,
+        shift_db, unfold_lambda, whnf_deref,
     };
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_DB_LAMBDA_CODE, SIG_NAMED_LAMBDA_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -1140,6 +1258,13 @@ mod tests {
                 .unwrap();
         }
         bank.create_const_term(f_code).unwrap()
+    }
+
+    fn close_with_named_var(bank: &mut TermBank, binder: &Term, body: &Term) -> Term {
+        let lambda = Term::top_alloc(SIG_NAMED_LAMBDA_CODE, 2);
+        lambda.set_argument(0, binder.clone());
+        lambda.set_argument(1, body.clone());
+        bank.term_top_insert(lambda).unwrap()
     }
 
     #[test]
@@ -1395,6 +1520,43 @@ mod tests {
 
         assert!(reduced.is_lambda());
         assert_eq!(reduced.argument(1).as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn named_to_db_converts_nested_named_binders_to_db_indexes() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let binary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "named_to_db_f", binary_type);
+        let x = bank.vars().get_fresh_var(&i_type);
+        let y = bank.vars().get_fresh_var(&i_type);
+        let matrix = apply_terms(&mut bank, &f, &[x.clone(), y.clone()]).unwrap();
+        let inner = close_with_named_var(&mut bank, &y, &matrix);
+        let named = close_with_named_var(&mut bank, &x, &inner);
+
+        let converted = named_to_db(&mut bank, &named).unwrap();
+
+        assert_eq!(converted.f_code(), SIG_DB_LAMBDA_CODE);
+        let inner = converted.argument(1).unwrap();
+        assert_eq!(inner.f_code(), SIG_DB_LAMBDA_CODE);
+        let body = inner.argument(1).unwrap();
+        assert_eq!(body.f_code(), f.f_code());
+        assert_eq!(body.argument(0).unwrap().f_code(), 1);
+        assert_eq!(body.argument(1).unwrap().f_code(), 0);
+    }
+
+    #[test]
+    fn named_to_db_beta_normalizes_applied_named_lambda() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let x = bank.vars().get_fresh_var(&i_type);
+        let named = close_with_named_var(&mut bank, &x, &x);
+        let a = typed_const(&mut bank, "named_to_db_a");
+        let applied = apply_terms(&mut bank, &named, std::slice::from_ref(&a)).unwrap();
+
+        let converted = named_to_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(converted, a);
     }
 
     #[test]
