@@ -6,7 +6,7 @@ use crate::terms::simpletypes::{
 };
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::{term_is_db_closed, term_is_ground};
-use crate::terms::termtypes::Term;
+use crate::terms::termtypes::{term_deref, DerefType, Term};
 use std::collections::BTreeMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -901,6 +901,48 @@ pub fn whnf_step(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
     Ok(new_matrix)
 }
 
+/// Dereferences and weak-head beta-normalizes until the head is known.
+///
+/// This mirrors C `WHNF_deref`, but takes the owning `TermBank` explicitly
+/// because Rust term handles do not yet retain owner-bank metadata.
+///
+/// # Errors
+///
+/// Returns a diagnostic if weak-head reduction or lambda-prefix rebuilding
+/// fails.
+///
+/// # Panics
+///
+/// Panics if lambda/application cells are malformed or if required term types
+/// are missing.
+pub fn whnf_deref(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
+    let mut deref = DerefType::Always;
+    let term = term_deref(term, &mut deref);
+
+    if term.is_phony_app() && term.argument(0).is_some_and(|head| head.is_lambda()) {
+        let reduced = whnf_step(bank, &term)?;
+        return whnf_deref(bank, &reduced);
+    }
+
+    if term.is_lambda() {
+        let mut dbvars = Vec::new();
+        let matrix = unfold_lambda(&term, &mut dbvars);
+        let new_matrix = whnf_deref(bank, &matrix)?;
+        if matrix == new_matrix {
+            return Ok(term);
+        }
+
+        let mut result = new_matrix;
+        while let Some(dbvar) = dbvars.pop() {
+            let binder_type = dbvar.type_().expect("lambda binder must have a type");
+            result = close_with_db_var(bank, &binder_type, &result)?;
+        }
+        return Ok(result);
+    }
+
+    Ok(term)
+}
+
 fn replace_bound_vars(
     bank: &mut TermBank,
     term: &Term,
@@ -1065,7 +1107,7 @@ mod tests {
     use super::{
         apply_terms, beta_normalize_db, close_with_type_prefix, flatten_apps, lambda_eta_expand_db,
         lambda_eta_expand_db_top_level, lambda_eta_reduce_db, lambda_normalize_db, shift_db,
-        unfold_lambda,
+        unfold_lambda, whnf_deref,
     };
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
@@ -1314,6 +1356,45 @@ mod tests {
         let normalized = lambda_normalize_db(&mut bank, &applied).unwrap();
 
         assert_eq!(normalized, f);
+    }
+
+    #[test]
+    fn whnf_deref_reduces_nested_lambda_application_to_known_head() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let a = typed_const(&mut bank, "whnf_deref_a");
+        let db0 = bank.request_db_var(&i_type, 0);
+        let inner_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &db0).unwrap();
+        let outer_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &inner_lambda)
+                .unwrap();
+        let applied = apply_terms(&mut bank, &outer_lambda, std::slice::from_ref(&a)).unwrap();
+
+        let reduced = whnf_deref(&mut bank, &applied).unwrap();
+
+        assert!(reduced.is_lambda());
+        assert_eq!(reduced.argument(1).unwrap().f_code(), 0);
+    }
+
+    #[test]
+    fn whnf_deref_rebuilds_lambda_when_matrix_reduces() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let a = typed_const(&mut bank, "whnf_deref_matrix_a");
+        let db0 = bank.request_db_var(&i_type, 0);
+        let inner_lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &db0).unwrap();
+        let applied_inner =
+            apply_terms(&mut bank, &inner_lambda, std::slice::from_ref(&a)).unwrap();
+        let wrapped =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &applied_inner)
+                .unwrap();
+
+        let reduced = whnf_deref(&mut bank, &wrapped).unwrap();
+
+        assert!(reduced.is_lambda());
+        assert_eq!(reduced.argument(1).as_ref(), Some(&a));
     }
 
     #[test]
