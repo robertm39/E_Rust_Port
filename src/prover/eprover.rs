@@ -2626,6 +2626,29 @@ fn auto_memory_limit_from_system_mb(system_memory_mb: i64) -> Result<(u64, i64),
     Ok((memory_limit_bytes_from_mb(memory_mb), delete_bad_limit))
 }
 
+struct ProcessedOptions {
+    action: EProverAction,
+    warnings: Vec<Diagnostic>,
+}
+
+struct OptionProcessingError {
+    diagnostic: Diagnostic,
+    warnings: Vec<Diagnostic>,
+}
+
+impl OptionProcessingError {
+    fn new(diagnostic: Diagnostic, warnings: Vec<Diagnostic>) -> Self {
+        Self {
+            diagnostic,
+            warnings,
+        }
+    }
+
+    fn into_diagnostic(self) -> Diagnostic {
+        self.diagnostic
+    }
+}
+
 pub fn run<I, S>(
     argv: I,
     stdout: &mut impl Write,
@@ -2639,12 +2662,21 @@ where
     let _io_guard = IoRunGuard;
     let _problem_type_guard = ProblemTypeRunGuard::new();
     setup_signal_handlers()?;
-    match process_options(argv)? {
+    let processed_options = match process_options_for_run(argv) {
+        Ok(processed_options) => processed_options,
+        Err(error) => {
+            write_warnings(stderr, &error.warnings)?;
+            return Err(error.into_diagnostic().into());
+        }
+    };
+    match processed_options.action {
         EProverAction::Help => {
+            write_warnings(stderr, &processed_options.warnings)?;
             stdout.write_all(print_help().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
         EProverAction::Version => {
+            write_warnings(stderr, &processed_options.warnings)?;
             stdout.write_all(version::version_line().as_bytes())?;
             Ok(ErrorCode::NO_ERROR.exit_status())
         }
@@ -2685,11 +2717,38 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    process_options_for_run(argv)
+        .map(|processed| processed.action)
+        .map_err(OptionProcessingError::into_diagnostic)
+}
+
+fn process_options_for_run<I, S>(argv: I) -> Result<ProcessedOptions, OptionProcessingError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     let mut state = CommandLineState::new(argv);
     let mut config = EProverConfig::default();
-    while let Some(parsed) = state.next_opt(EPROVER_OPTIONS)? {
-        if let Some(action) = apply_parsed_option(&mut config, &parsed)? {
-            return Ok(action);
+    loop {
+        let Some(parsed) = (match state.next_opt(EPROVER_OPTIONS) {
+            Ok(parsed) => parsed,
+            Err(diagnostic) => {
+                return Err(OptionProcessingError::new(diagnostic, config.warnings));
+            }
+        }) else {
+            break;
+        };
+        match apply_parsed_option(&mut config, &parsed) {
+            Ok(Some(action)) => {
+                return Ok(ProcessedOptions {
+                    action,
+                    warnings: std::mem::take(&mut config.warnings),
+                });
+            }
+            Ok(None) => {}
+            Err(diagnostic) => {
+                return Err(OptionProcessingError::new(diagnostic, config.warnings));
+            }
         }
     }
 
@@ -2697,7 +2756,10 @@ where
     if config.files.is_empty() {
         config.files.push("-".to_owned());
     }
-    Ok(EProverAction::Run(Box::new(config)))
+    Ok(ProcessedOptions {
+        action: EProverAction::Run(Box::new(config)),
+        warnings: Vec::new(),
+    })
 }
 
 fn apply_parsed_option(
@@ -21385,6 +21447,35 @@ mod tests {
 
         set_lpo_recursion_depth_limit(old_limit);
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_keeps_lpo_recursion_limit_warning_before_later_option_error() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--lpo-recursion-limit=20001",
+                "--literal-comparison=Bad",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Wrong argument to --literal-comparison (valid: None, Normal, TFOEqMax, TFOEqMin)."
+        );
+        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            format!("eprover: Warning: {LPO_RECURSION_LIMIT_WARNING}\n")
+        );
     }
 
     #[test]
