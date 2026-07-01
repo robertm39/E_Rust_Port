@@ -164,6 +164,21 @@ pub struct BatchProcessProblemConfig<'a> {
     pub interactive: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchProcessFileConfig<'a> {
+    pub wct_limit: i64,
+    pub default_dir: Option<&'a str>,
+    pub source: &'a str,
+    pub dest: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchProblemLoadRequest<'a> {
+    pub source: &'a str,
+    pub default_dir: Option<&'a str>,
+    pub format: IoFormat,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BatchProcessProblemsReport {
     pub solved: i64,
@@ -214,6 +229,19 @@ pub struct BatchProcessProblemReport {
 pub struct BatchProcessProblemOutputs<'a, WGlobal: Write + ?Sized, WExternal: Write + ?Sized> {
     pub global_output: &'a mut WGlobal,
     pub external_output: Option<&'a mut WExternal>,
+}
+
+pub struct BatchProcessFileOutputs<'a, WGlobal: Write + ?Sized, WDest: Write + ?Sized> {
+    pub global_output: &'a mut WGlobal,
+    pub dest_output: &'a mut WDest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchProcessFileReport {
+    pub source: String,
+    pub dest: String,
+    pub solved: bool,
+    pub problem: BatchProcessProblemReport,
 }
 
 impl BatchProcessProblemsReport {
@@ -436,6 +464,60 @@ impl BatchSpec {
         }
 
         Ok(report)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The staged BatchProcessFile port keeps parser, clock, and runner hooks injectable"
+    )]
+    pub fn process_file_with<WGlobal, WDest, L, C, S, P>(
+        &self,
+        signature: &Signature,
+        ctrl: &mut StructFofSpec,
+        config: BatchProcessFileConfig<'_>,
+        outputs: &mut BatchProcessFileOutputs<'_, WGlobal, WDest>,
+        mut load_problem: L,
+        clock_seconds: C,
+        spawn_runner: S,
+        poll_runners: P,
+    ) -> Result<BatchProcessFileReport, Diagnostic>
+    where
+        WGlobal: Write + ?Sized,
+        WDest: Write + ?Sized,
+        L: FnMut(BatchProblemLoadRequest<'_>) -> Result<BatchProblemData, Diagnostic>,
+        C: FnMut() -> i64,
+        S: FnMut(BatchRunnerRequest) -> Result<BatchSpawnedRunner, Diagnostic>,
+        P: FnMut(&mut Vec<BatchSpawnedRunner>) -> Result<Option<BatchCompletedRunner>, Diagnostic>,
+    {
+        let problem = load_problem(BatchProblemLoadRequest {
+            source: config.source,
+            default_dir: config.default_dir,
+            format: IoFormat::Tstp,
+        })?;
+        let problem = self.process_problem_with(
+            signature,
+            ctrl,
+            problem,
+            BatchProcessProblemConfig {
+                wct_limit: config.wct_limit,
+                jobname: config.source,
+                interactive: false,
+            },
+            BatchProcessProblemOutputs {
+                global_output: &mut *outputs.global_output,
+                external_output: Some(&mut *outputs.dest_output),
+            },
+            clock_seconds,
+            spawn_runner,
+            poll_runners,
+        )?;
+
+        Ok(BatchProcessFileReport {
+            source: config.source.to_owned(),
+            dest: config.dest.to_owned(),
+            solved: problem.solved,
+            problem,
+        })
     }
 
     pub fn create_runner_request_with<W, C>(
@@ -814,10 +896,10 @@ const fn batch_runner_cpu_time(wct_limit: i64, used: i64) -> i64 {
 mod tests {
     use super::{
         abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchCompletedRunner,
-        BatchOutputType, BatchProblemData, BatchProcessProblemConfig, BatchProcessProblemJob,
-        BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchRunnerCreateConfig,
-        BatchSpawnedRunner, BatchSpec, BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES,
-        BATCH_STRATEGIES_DIV,
+        BatchOutputType, BatchProblemData, BatchProcessFileConfig, BatchProcessFileOutputs,
+        BatchProcessProblemConfig, BatchProcessProblemJob, BatchProcessProblemOutputs,
+        BatchProcessProblemsConfig, BatchRunnerCreateConfig, BatchSpawnedRunner, BatchSpec,
+        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
@@ -1171,6 +1253,117 @@ mod tests {
             String::from_utf8(external).unwrap(),
             "% SZS status GaveUp for late.p\n"
         );
+    }
+
+    #[test]
+    fn process_file_loads_tstp_problem_and_writes_destination_output() {
+        let signature = test_signature();
+        let mut ctrl = shared_spec(&signature);
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut dest = Vec::new();
+        let mut load_requests = Vec::new();
+        let mut runner_requests = Vec::new();
+        let report = {
+            let mut outputs = BatchProcessFileOutputs {
+                global_output: &mut global,
+                dest_output: &mut dest,
+            };
+            spec.process_file_with(
+                &signature,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: Some("Problems"),
+                    source: "SET001+1.p",
+                    dest: "out/SET001+1.p",
+                },
+                &mut outputs,
+                |request| {
+                    load_requests.push((
+                        request.source.to_owned(),
+                        request.default_dir.map(str::to_owned),
+                        request.format,
+                    ));
+                    Ok(one_empty_clause_problem())
+                },
+                || 200,
+                |request| {
+                    runner_requests.push(request.clone());
+                    Ok(BatchSpawnedRunner {
+                        name: request.name,
+                        start_time: 200,
+                        prob_time: request.cpu_time,
+                    })
+                },
+                |active| {
+                    Ok(Some(BatchCompletedRunner {
+                        runner: active[0].clone(),
+                        result: ProverResult::Theorem,
+                        output: "% destination proof\n".to_owned(),
+                    }))
+                },
+            )
+            .unwrap()
+        };
+
+        assert!(report.solved);
+        assert_eq!(report.source, "SET001+1.p");
+        assert_eq!(report.dest, "out/SET001+1.p");
+        assert!(report.problem.solved);
+        assert_eq!(report.problem.backtrack.removed_clause_sets, 1);
+        assert_eq!(load_requests.len(), 1);
+        assert_eq!(load_requests[0].0, "SET001+1.p");
+        assert_eq!(load_requests[0].1.as_deref(), Some("Problems"));
+        assert_eq!(load_requests[0].2, IoFormat::Tstp);
+        assert_eq!(runner_requests.len(), MAX_CORES);
+        assert_eq!(runner_requests[0].cpu_time, 6);
+        assert!(runner_requests[0].extra_options.is_empty());
+
+        let global = String::from_utf8(global).unwrap();
+        assert!(global.contains("% SZS status Theorem for SET001+1.p\n"));
+        assert!(!global.contains("% destination proof\n"));
+        assert_eq!(
+            String::from_utf8(dest).unwrap(),
+            "% SZS status Theorem for SET001+1.p\n% destination proof\n"
+        );
+    }
+
+    #[test]
+    fn process_file_propagates_load_error_without_mutating_shared_spec() {
+        let signature = test_signature();
+        let mut ctrl = shared_spec(&signature);
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut dest = Vec::new();
+        let error = {
+            let mut outputs = BatchProcessFileOutputs {
+                global_output: &mut global,
+                dest_output: &mut dest,
+            };
+            spec.process_file_with(
+                &signature,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: None,
+                    source: "bad.p",
+                    dest: "bad.out",
+                },
+                &mut outputs,
+                |_| Err(super::batch_process_error("loader failed")),
+                || 200,
+                |_| panic!("no runner should be spawned after a load error"),
+                |_| panic!("no runner set should be polled after a load error"),
+            )
+            .unwrap_err()
+        };
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert!(global.is_empty());
+        assert!(dest.is_empty());
     }
 
     #[test]
