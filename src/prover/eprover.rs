@@ -19274,6 +19274,41 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_uses_generated_ordering_options() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-generated-ordering-options");
+        std::fs::write(&path, "a=b.\nf(a)!=f(b).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--term-ordering=KBO",
+                "--order-weight-generation=arity",
+                "--order-precedence-generation=arity",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                default_proof_search_prefix()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_prints_saturated_success_clause_like_c() {
         let _guard = global_state_lock();
         let path = temp_path("proof-print-saturated-success");
