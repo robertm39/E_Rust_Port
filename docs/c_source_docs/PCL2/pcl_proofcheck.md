@@ -122,4 +122,16 @@ Source files reviewed: `PCL2/pcl_proofcheck.h`, `PCL2/pcl_proofcheck.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial proofcheck support is ported as `src/pcl2/proofcheck.rs`, including `PCLCheckType`/`ProverType` equivalents, clausal precondition collection through full PCL references, copied parent-clause insertion into a check `ClauseSet`, negated skolemized unit generation for the target clause, check-problem construction, split-step unchecked classification, assumption classification for steps without clausal preconditions, and protocol-level checked/unchecked counting.
+
+### Change Later
+
+- `pcl_run_prover` constructs shell command strings and passes them to `popen`, including caller-provided executable text. Rust has not ported external prover execution in the initial slice; when it is ported, use argument-vector process spawning and make any shell compatibility mode explicit.
+- `PCLCollectPreconds` only copies clausal parents and prints a warning for full first-order formula parents, so proofcheck silently weakens checks involving FOF parents. Rust preserves the clausal-only generated problem shape and should revisit formula-to-clause handling when full formula proof objects are integrated.
+- `PCLNegSkolemizeClause` negates each literal of the skolemized target into a separate unit clause, which is correct for checking clause implication but loses any source metadata on those generated units. Rust mirrors the unit-generation shape and marks them as hypotheses; a later proofcheck problem owner should decide whether generated check clauses need explicit provenance.
+- `PCLStepCheck` returns `CheckNotImplemented` for split clauses, and `PCLProtCheck` reports that as "assuming true" while incrementing `unchecked` rather than `res`. Rust keeps split and currently unported external prover checks in the unchecked bucket; once prover execution is wired, only genuine unimplemented inference checks should use that path.
+- The C Otter and SPASS printers force LOP-oriented global output assumptions (`OutputFormat == LOPFormat`, `!EqnUseInfix`) and use ad hoc `$T`/`$F` and `spass_hack` encodings. Port these as explicit renderer options rather than hidden process-global state.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -11,6 +11,7 @@ pub mod miniclauses;
 pub mod miniprotocol;
 pub mod ministeps;
 pub mod positions;
+pub mod proofcheck;
 pub mod propanalysis;
 pub mod protocol;
 pub mod steps;
