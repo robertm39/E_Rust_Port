@@ -99,7 +99,7 @@ Source files reviewed: `ORDERINGS/cto_orderings.h`, `ORDERINGS/cto_orderings.c`.
 
 ### Compatibility Notes
 
-- `TOGreater` and `TOCompare` are pure dispatchers over the concrete ordering implementation selected in `ocb->type`. Rust now covers KBO, KBO6, standard LPO, LPOCopy, LPO4, LPO4Copy, and Empty dispatch; RPO is present in the option/name surfaces but should remain an explicit panic until its concrete algorithm is ported, matching the C dispatch assertion.
+- `TOGreater` and `TOCompare` are pure dispatchers over the concrete ordering implementation selected in `ocb->type`. Rust now covers KBO, KBO6, standard LPO, LPOCopy, LPO4, LPO4Copy, and Empty dispatch; RPO is present in the enum/name-table and strategy-parameter surfaces but should remain an explicit panic until its concrete algorithm is ported, matching the C dispatch assertion.
 - `TOGreater` has no explicit `EMPTY` switch case in C. In release builds this effectively returns the initialized `false` value after the default assertion path; Rust returns `false` directly for Empty.
 - `TOPrecedenceParse` and `TOWeightsParse` only start parsing when the first token is `Identifier`, even though `SigParseKnownOperator`/`FuncSymbParse` can parse quoted, string, or numeric function symbols. Later symbols inside a comparison chain or weight assignment still go through the broader known-operator parser.
 - `TOSymbolComparisonChainParse` reports precedence conflicts at the position of the left/previous symbol in the conflicting pair, not at the relation token or right symbol. Rust preserves that diagnostic anchor.

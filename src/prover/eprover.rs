@@ -3455,11 +3455,10 @@ fn set_term_ordering(config: &mut EProverConfig, value: &str) -> Result<(), Diag
         "LPO4Copy" => TermOrdering::Lpo4Copy,
         "KBO" => TermOrdering::Kbo,
         "KBO6" => TermOrdering::Kbo6,
-        "RPO" => TermOrdering::Rpo,
         _ => {
             return Err(Diagnostic::new(
                 ErrorCode::USAGE_ERROR,
-                "Option -t (--term-ordering) requires LPO, LPO4, KBO, KBO6 or RPO as an argument",
+                "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument",
             ));
         }
     };
@@ -13778,12 +13777,6 @@ mod tests {
         assert_eq!(ordering.db_weight, 10);
         assert!(!ordering.rewrite_strong_rhs_inst);
 
-        let action = process_options(["eprover", "--term-ordering=RPO"]).unwrap();
-        let EProverAction::Run(config) = action else {
-            panic!("expected run config");
-        };
-        assert_eq!(config.search.ordering.ordering, TermOrdering::Rpo);
-
         let action = process_options([
             "eprover",
             "-t",
@@ -13885,7 +13878,8 @@ mod tests {
         assert!(params.rewrite_strong_rhs_inst);
         assert_eq!(params.ho_order_kind, HoOrderKind::LambdaOrder);
 
-        let rpo_config = run_config_from(["eprover", "--term-ordering=RPO"]);
+        let mut rpo_config = EProverConfig::default();
+        rpo_config.search.ordering.ordering = TermOrdering::Rpo;
         let rpo_params = order_parms_from_config(&rpo_config.search.ordering)
             .unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(rpo_params.ordertype, to_params::TermOrdering::Rpo);
@@ -14163,7 +14157,14 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(
             error.message(),
-            "Option -t (--term-ordering) requires LPO, LPO4, KBO, KBO6 or RPO as an argument"
+            "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
+        );
+
+        let error = process_options(["eprover", "--term-ordering=RPO"]).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "Option -t (--term-ordering) requires LPO, LPO4, KBO or KBO6 as an argument"
         );
 
         let error = process_options(["eprover", "-w", "none"]).unwrap_err();
