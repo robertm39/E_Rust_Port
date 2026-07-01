@@ -1913,9 +1913,19 @@ impl TermBank {
         scanner: &mut Scanner,
         expected_type: &Type,
     ) -> Result<Term, Diagnostic> {
+        self.parse_tformula_application_arg_with_tail(scanner, expected_type, false)
+    }
+
+    fn parse_tformula_application_arg_with_tail(
+        &mut self,
+        scanner: &mut Scanner,
+        expected_type: &Type,
+        allow_application_tail: bool,
+    ) -> Result<Term, Diagnostic> {
         if scanner.test_tok(TokenType::OPEN_BRACKET) && !expected_type.is_bool() {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-            let arg = self.parse_tformula_application_arg(scanner, expected_type)?;
+            let arg =
+                self.parse_tformula_application_arg_with_tail(scanner, expected_type, true)?;
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             return Ok(arg);
         }
@@ -1923,7 +1933,7 @@ impl TermBank {
         let arg = if expected_type.is_bool() || scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
             self.parse_literal_tformula_tstp_with_applications(scanner)?
         } else {
-            self.parse_tformula_application_term_arg(scanner)?
+            self.parse_tformula_application_term_arg(scanner, allow_application_tail)?
         };
         Self::require_term_sort(&arg, expected_type, "formula application argument")?;
         Ok(arg)
@@ -1932,10 +1942,14 @@ impl TermBank {
     fn parse_tformula_application_term_arg(
         &mut self,
         scanner: &mut Scanner,
+        allow_application_tail: bool,
     ) -> Result<Term, Diagnostic> {
         let mut term = self.parse_term_real(scanner, true)?;
-        if scanner.test_tok(TokenType::APPLICATION) {
+        if !term.is_any_var() {
             term = self.prepare_tformula_application_head(term);
+            term = self.term_top_insert(term)?;
+        }
+        if allow_application_tail && scanner.test_tok(TokenType::APPLICATION) {
             term = self.parse_applied_tformula_term_tstp_subset(scanner, &term)?;
         }
         Ok(term)
@@ -4735,6 +4749,60 @@ mod tests {
         assert_eq!(bank.signature().find_name(nested.f_code()), Some("f"));
         assert_eq!(nested.arity(), 1);
         assert_eq!(nested.type_(), nested.argument(0).unwrap().type_());
+    }
+
+    #[test]
+    fn tstp_formula_application_preserves_left_association_for_arrow_arguments() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. b: person. f: person > person. appfun: (person > person) > person > person.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("appfun @ f @ a = b", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        let left = formula.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(left.f_code()), Some("appfun"));
+        assert_eq!(left.arity(), 2);
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("f")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(1).unwrap().f_code()),
+            Some("a")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(1).unwrap().f_code()),
+            Some("b")
+        );
     }
 
     #[test]

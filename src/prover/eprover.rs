@@ -22891,6 +22891,39 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_left_associative_thf_application_with_arrow_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("left-associative-thf-application-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(app_type, type, appfun: (person > person) > person > person).\n\
+             thf(fact, axiom, appfun @ f @ a = b).\n\
+             thf(goal, conjecture, appfun @ f @ a = b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_tff_typed_quantifier_variables() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-tff-typed-quantifiers");
