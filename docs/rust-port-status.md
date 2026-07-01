@@ -312,7 +312,7 @@ Pending:
 
 - Exact C `popen` shell-command semantics for `ECtrlCreate`/`ECtrlCreateGeneric`; Rust spawns with structured arguments while preserving the exact command-string helper for compatibility audits.
 - Exact kernel-level `select` timeout/error behavior for `EPCtrlSetGetResult`; Rust now exposes both the descriptor-ready core and a portable channel-backed timeout poll, but exact fd/handle readiness remains an event-loop compatibility item.
-- Scheduler/server call-site integration, signal termination policy beyond ordinary child kill/wait cleanup, and byte-compatible process-output routing through the executable's selected global output.
+- Main `eprover` scheduler/server call-site integration, signal termination policy beyond ordinary child kill/wait cleanup, and byte-compatible process-output routing through the executable's selected global output.
 
 Change-later notes:
 
@@ -321,6 +321,33 @@ Change-later notes:
 - `ECtrlCreateGeneric` builds one shell command by string concatenation without quoting `prover`, options, or file names. Rust preserves exact command construction in the helper but uses structured process arguments for safe spawning; reserve shell concatenation for compatibility mode if scheduler reference tests require it.
 - `EPCtrlSetGetResult` ignores `select` errors, scans integer descriptors from `0..=maxfd`, and asserts on impossible result states. Rust keeps the deterministic polling behavior explicit; the later event-loop adapter should decide which of these artifacts are compatibility requirements.
 - Rust's portable process-set timeout poll uses per-child reader threads and channels rather than blocking the main thread in OS `select`, because Windows child stdout handles are not `select`-compatible sockets. Keep exact descriptor readiness as a compatibility adapter concern if byte-level scheduler tests require it.
+
+## e_stratpar Executable
+
+Rust files:
+
+- `src/prover/e_stratpar.rs`
+- `src/bin/e_stratpar.rs`
+
+C source references:
+
+- `eprover/PROVER/e_stratpar.c`
+- `eprover/CONTROL/cco_proc_ctrl.c`
+
+Implemented:
+
+- The `e_stratpar` binary wrapper and library run path now parse C-shaped `-h`/`--help`, `-V`/`--version`, and optional-argument `--cpu-limit[=300]`, default the hard time limit to 3600 seconds, require one or two positional arguments, launch eight `eprover` children with `AutoSched0` through `AutoSched7` `-x`/`-t` strategy options plus `--sine`, pass half the hard time limit to each child, stream C-shaped no-proof child messages through the process-control writer, print the first proof-producing child output, emit `% SZS status GaveUp` if no child proves the problem, and clean up remaining child processes through `EPCtrlSet`.
+
+Pending:
+
+- Runtime reference tests against the C `e_stratpar` executable on real problem files, including output ordering when several children terminate in the same polling window.
+- Exact `select`-level polling parity remains tied to the process-control compatibility adapter rather than this executable wrapper.
+
+Change-later notes:
+
+- C accepts an optional `<path-to-eprover>` argument in the usage text but keeps `prover = "eprover"` and never reads that positional argument. Rust preserves the ignored argument for drop-in compatibility; later, decide whether a cleaned interface should either remove it or honor it.
+- The C usage error says `e_ltb_runner` even though the executable is `e_stratpar`. Rust preserves that message in diagnostics for now; revise only after compatibility tests say user-facing typo compatibility is unnecessary.
+- The eight strategies and `HardTimeLimit/2` child limit are hard-coded for the CASC-2017 SLB hack. Keep this as a compatibility executable, but a future scheduler-facing interface should share configurable process orchestration with the main auto-schedule machinery.
 
 ## Initial Crate And CLI Foundation
 

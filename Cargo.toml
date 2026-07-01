@@ -13,4 +13,8 @@ path = "src/bin/eprover.rs"
 name = "CSSCPA_filter"
 path = "src/bin/csscpa_filter.rs"
 
+[[bin]]
+name = "e_stratpar"
+path = "src/bin/e_stratpar.rs"
+
 [dependencies]

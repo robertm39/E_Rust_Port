@@ -90,4 +90,10 @@ Source files reviewed: `PROVER/e_stratpar.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- The optional `<path-to-eprover>` positional argument is advertised and accepted, but the C implementation leaves `prover` fixed to `"eprover"` and never reads the second positional argument. Preserve this until drop-in tests are stable, then either honor the argument or remove it from the cleaned interface.
+- The usage error reports `e_ltb_runner` instead of `e_stratpar`. Keep the typo visible for compatibility audits, but treat it as a candidate for a future user-facing cleanup.
+- The executable is intentionally hard-coded to eight `AutoSched` children and halves the global hard time limit for each child. That matches the CASC-2017 SLB hack, but later process scheduling should share configuration and orchestration with the normal auto-schedule path.
 <!-- END MANUAL REVIEW: c_source_docs -->
