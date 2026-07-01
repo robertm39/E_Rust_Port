@@ -98,14 +98,14 @@ Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 ### Rust Port Status Notes
 
 - `src/clauses/bce.rs` ports the clause-level blocked-clause elimination helper over the current Rust `ClauseSet` owner, including predicate occurrence maps with C's max-occurrence cutoff behavior, per-literal BCE tasks over disjoint parent copies, minimum-remaining-candidate task scheduling, blocker resumption after archive moves, non-equational L-resolvent checks through first-order MGU plus complementary-literal closure, equational same-head L-resolvent construction through generated argument disequalities, and the C-shaped `% BCE start` / `% BCE eliminated` output wrapper.
-- Supported executable `--bce` preprocessing now calls the helper for first-order prune/proof-search clause-list paths after represented SInE/relevance pruning and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. It moves eliminated clauses to the represented proof-state archive and writes progress through the executable stdout side channel.
-- Full formula-owner preprocessing, pointer-stable proof-state handles, and the C TODO for detecting first-order problems written in higher-order syntax remain pending integration points.
+- Supported executable `--bce` preprocessing now calls the helper for first-order prune/proof-search clause-list paths after represented SInE/relevance pruning and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. It also covers supported first-order-shaped THF formula fragments after the temporary formula bridge lowers them to represented clauses. It moves eliminated clauses to the represented proof-state archive and writes progress through the executable stdout side channel.
+- Full formula-owner preprocessing and pointer-stable proof-state handles remain pending integration points.
 
 ### Change-Later Observations
 
 - C stores BCE tasks, blockers, and occurrence maps through raw clause pointers, so duplicate identifiers and archive/requeue aliases are still distinct. Rust currently uses compact clause identifiers for the clause-level helper because stable clause handles are not represented across `ClauseSet` moves yet; replace this with stable handles before extending BCE to full formula/proof-state preprocessing where duplicate identifiers can be observable.
 - `EliminateBlockedClauses` writes progress directly to `stdout` rather than the prover's main output stream. Rust preserves that visible behavior through the executable stdout side channel; keep this isolated if the eventual output layer stops mirroring C's global stream leakage.
-- C gates BCE on `PROBLEM_FO` and comments that higher-order syntax may still contain first-order problems. Rust matches the represented first-order path for now; revisit this once higher-order parsing and problem classification are complete.
+- C gates BCE on `PROBLEM_FO` and comments that higher-order syntax may still contain first-order problems. Rust covers supported first-order-shaped THF fragments after clause lowering, but full formula-owner classification should keep this boundary explicit once the temporary formula bridge is replaced.
 
 ### Porting Focus
 

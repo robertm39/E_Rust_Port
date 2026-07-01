@@ -15938,6 +15938,97 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_bce_to_first_order_shaped_thf() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-thf-bce");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(left, axiom, ((p @ a) | (q @ a))).\n\
+             thf(right, axiom, (~(p @ a) | (q @ a))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--bce=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
+        assert!(!printed.contains(&format!("file('{path_arg}', left)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', right)")));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_applies_pred_elim_to_first_order_shaped_thf() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-thf-pred-elim");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(c_type, type, c: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(s_type, type, s: person > $o).\n\
+             thf(pos, axiom, ((p @ a) | (s @ a))).\n\
+             thf(neg, axiom, ~(p @ a)).\n\
+             thf(s_offending, axiom, ((s @ b) | (s @ c))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--pred-elim=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
+        assert!(!printed.contains(&format!("file('{path_arg}', pos)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', neg)")));
+        assert!(printed.contains(&format!("file('{path_arg}', s_offending)")));
+        assert!(printed.contains(", plain, s(a), "));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_no_preprocessing_preserves_tautologies() {
         let _guard = global_state_lock();
         let path = temp_path("prune-no-clause-preprocess");
