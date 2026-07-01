@@ -133,4 +133,17 @@ Source files reviewed: `PCL2/pcl_expressions.h`, `PCL2/pcl_expressions.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/pcl2/expressions.rs` ports the core `PCLExprAlloc`, `PCLExprParse`, `PCLExprPrint`, `PCLExprPrintTSTP`, and `PCLStepExtract` behavior for quote, initial, and operator expression trees.
+- The Rust representation stores expression arguments as typed child expressions plus optional `PCL2` positions instead of the C two-slot `PDArray` layout, while preserving the opcode discriminants, mini/full quote distinction, fixed-arity checks, variable-arity one-or-more operators, and PCL/TSTP rendering spellings.
+- Initial source-info expressions reuse the ported `ClauseInfo` renderer; source strings are stored without the surrounding double quotes while the name field preserves the scanner literal, matching the C `DStrCopyCore`/`DStrCopy` split.
+
+### Change Later
+
+- `PCLExprParse` tests for `OpenBracket` before calling `PCL2PosParse`, but `PCL2PosParse` itself expects a positive integer as the current token and does not consume the opening bracket. Rust preserves this parser mismatch, so expression-level positions are still not accepted through this path. Revisit only after reference PCL traces clarify whether this is dead code, a C bug, or a syntax expectation hidden elsewhere.
+- `PCLExprPrintTSTP` ignores stored argument/quote positions even though PCL rendering prints them. Rust mirrors that split; cleaned proof-object APIs should decide whether position metadata belongs in TSTP annotations or only in PCL syntax.
+- `PCLOpURewrite` exists in the opcode enum and has a weight constant, but this unit neither parses nor prints it. Rust keeps the discriminant for compatibility and leaves behavior absent until a caller or source trace requires it.
+- Variable-arity operators such as `cdclpropres` and `ar` still require at least one child because the C parser enters the argument parser whenever `arg_no` is `PCL_VAR_ARG` (`-1`). If empty argument lists should be legal, change that only after proof-output compatibility is established.
 <!-- END MANUAL REVIEW: c_source_docs -->
