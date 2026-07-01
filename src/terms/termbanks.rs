@@ -1823,7 +1823,7 @@ impl TermBank {
             if scanner.test_tok(TokenType::APPLICATION) {
                 scanner.accept_tok(TokenType::APPLICATION)?;
             }
-            let child = self.parse_literal_tformula_tstp_subset(scanner)?;
+            let child = self.parse_literal_tformula_tstp_with_applications(scanner)?;
             self.tformula_fcode_alloc(
                 Self::require_formula_op_code(self.sig.not_code())?,
                 child,
@@ -4622,6 +4622,37 @@ mod tests {
         );
         let body = formula.argument(1).unwrap();
         assert_eq!(body.f_code(), bank.signature().eqn_code());
+    }
+
+    #[test]
+    fn tstp_negated_formula_application_binds_application_before_negation() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("person: $tType. a: person. p: person > $o.", false).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("~ p @ a", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().not_code());
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let child = formula.argument(0).unwrap();
+        assert_eq!(child.f_code(), bank.signature().eqn_code());
     }
 
     #[test]
