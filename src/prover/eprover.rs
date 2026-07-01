@@ -36,6 +36,9 @@ use crate::clauses::clause_props::{
     CP_IS_LAMBDA_DEF, CP_SUBSUMES_WATCH, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
     CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
+use crate::clauses::clausefunc::{
+    tformula_fcode_alloc, tformula_lit_alloc, tformula_prop_constant_alloc,
+};
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
@@ -47,6 +50,7 @@ use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOpti
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::freqvectors::FvIndexType;
 use crate::clauses::gd_transformation::clause_set_gd_transform;
 use crate::clauses::global_indices::GlobalIndices;
@@ -4680,6 +4684,212 @@ fn write_app_encoded_formula_set<W: Write + ?Sized>(
         return Ok(());
     }
 
+    if let Some(formula_set) = simple_app_encoded_formula_set(formulas, bank)? {
+        let rendered = formula_set.app_encode_string(bank, ProblemType::FirstOrder, true)?;
+        output.write_stdout_side_channel(rendered.as_bytes())?;
+        return Ok(());
+    }
+
+    write_simple_app_encoded_formula_set(output, bank, formulas)
+}
+
+fn simple_app_encoded_formula_set(
+    formulas: &[SimpleAppEncodedFormula],
+    bank: &mut TermBank,
+) -> Result<Option<FormulaSet>, Diagnostic> {
+    let mut set = FormulaSet::new();
+    for formula in formulas {
+        if formula
+            .formulas
+            .iter()
+            .any(|formula| simple_fof_formula_needs_app_encode_bridge(formula, bank))
+        {
+            return Ok(None);
+        }
+        let Some(term_formula) = simple_fof_formulas_to_tformula(&formula.formulas, bank)? else {
+            return Ok(None);
+        };
+        let mut wrapped = WrappedFormula::wt_formula_alloc(term_formula);
+        wrapped.set_properties(formula.type_);
+        wrapped.set_info(Some(ClauseInfo::new(Some(&formula.name), None, -1, -1)));
+        set.insert(wrapped);
+    }
+    Ok(Some(set))
+}
+
+fn simple_fof_formulas_to_tformula(
+    formulas: &[SimpleFofFormula],
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    simple_fof_formula_chain_to_tformula(formulas, bank.signature().and_code(), bank)
+}
+
+fn simple_fof_formula_chain_to_tformula(
+    formulas: &[SimpleFofFormula],
+    op: i64,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let Some((first, rest)) = formulas.split_first() else {
+        return tformula_prop_constant_alloc(bank, true).map(Some);
+    };
+    let Some(mut current) = simple_fof_formula_to_tformula(first, bank)? else {
+        return Ok(None);
+    };
+    for formula in rest {
+        let Some(next) = simple_fof_formula_to_tformula(formula, bank)? else {
+            return Ok(None);
+        };
+        current = tformula_fcode_alloc(bank, op, current, Some(next))?;
+    }
+    Ok(Some(current))
+}
+
+fn simple_fof_formula_to_tformula(
+    formula: &SimpleFofFormula,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    match formula {
+        SimpleFofFormula::Truth(value) => tformula_prop_constant_alloc(bank, *value).map(Some),
+        SimpleFofFormula::Literal(literal) => {
+            tformula_lit_alloc(bank, literal, ProblemType::FirstOrder).map(Some)
+        }
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        } => simple_fof_binary_formula_to_tformula(
+            antecedents,
+            bank.signature().impl_code(),
+            consequents,
+            bank,
+        ),
+        SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => simple_fof_binary_formula_to_tformula(
+            consequents,
+            bank.signature().bimpl_code(),
+            antecedents,
+            bank,
+        ),
+        SimpleFofFormula::Equivalence { left, right } => {
+            simple_fof_binary_formula_to_tformula(left, bank.signature().equiv_code(), right, bank)
+        }
+        SimpleFofFormula::Xor { left, right } => {
+            simple_fof_binary_formula_to_tformula(left, bank.signature().xor_code(), right, bank)
+        }
+        SimpleFofFormula::Nand { left, right } => {
+            simple_fof_binary_formula_to_tformula(left, bank.signature().nand_code(), right, bank)
+        }
+        SimpleFofFormula::Nor { left, right } => {
+            simple_fof_binary_formula_to_tformula(left, bank.signature().nor_code(), right, bank)
+        }
+        SimpleFofFormula::Conjunction(formulas) => {
+            simple_fof_formula_chain_to_tformula(formulas, bank.signature().and_code(), bank)
+        }
+        SimpleFofFormula::Disjunction(formulas) => {
+            simple_fof_formula_chain_to_tformula(formulas, bank.signature().or_code(), bank)
+        }
+        SimpleFofFormula::Negation(formulas) => {
+            let Some(term) = simple_fof_formulas_to_tformula(formulas, bank)? else {
+                return Ok(None);
+            };
+            tformula_fcode_alloc(bank, bank.signature().not_code(), term, None).map(Some)
+        }
+        SimpleFofFormula::Universal { bound, formulas } => {
+            simple_fof_quantified_formula_to_tformula(bound, formulas, true, bank)
+        }
+        SimpleFofFormula::Existential { bound, formulas } => {
+            simple_fof_quantified_formula_to_tformula(bound, formulas, false, bank)
+        }
+    }
+}
+
+fn simple_fof_binary_formula_to_tformula(
+    left: &[SimpleFofFormula],
+    op: i64,
+    right: &[SimpleFofFormula],
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let Some(left) = simple_fof_formulas_to_tformula(left, bank)? else {
+        return Ok(None);
+    };
+    let Some(right) = simple_fof_formulas_to_tformula(right, bank)? else {
+        return Ok(None);
+    };
+    tformula_fcode_alloc(bank, op, left, Some(right)).map(Some)
+}
+
+fn simple_fof_quantified_formula_to_tformula(
+    bound: &[Term],
+    formulas: &[SimpleFofFormula],
+    is_universal: bool,
+    bank: &mut TermBank,
+) -> Result<Option<Term>, Diagnostic> {
+    let Some(mut body) = simple_fof_formulas_to_tformula(formulas, bank)? else {
+        return Ok(None);
+    };
+    let quantifier = if is_universal {
+        bank.signature().qall_code()
+    } else {
+        bank.signature().qex_code()
+    };
+    for variable in bound.iter().rev() {
+        body = tformula_fcode_alloc(bank, quantifier, variable.clone(), Some(body))?;
+    }
+    Ok(Some(body))
+}
+
+fn simple_fof_formula_needs_app_encode_bridge(formula: &SimpleFofFormula, bank: &TermBank) -> bool {
+    match formula {
+        SimpleFofFormula::Truth(_) => false,
+        SimpleFofFormula::Literal(literal) => {
+            (literal.right() == bank.true_term()
+                && matches!(literal.left().f_code(), SIG_ITE_CODE | SIG_LET_CODE))
+                || (literal.is_equ_lit(bank)
+                    && simple_fof_term_contains_fool(&[literal.left(), literal.right()]))
+        }
+        SimpleFofFormula::Implication {
+            antecedents,
+            consequents,
+        }
+        | SimpleFofFormula::ReverseImplication {
+            antecedents,
+            consequents,
+        } => {
+            simple_fof_formulas_need_app_encode_bridge(antecedents, bank)
+                || simple_fof_formulas_need_app_encode_bridge(consequents, bank)
+        }
+        SimpleFofFormula::Equivalence { left, right }
+        | SimpleFofFormula::Xor { left, right }
+        | SimpleFofFormula::Nand { left, right }
+        | SimpleFofFormula::Nor { left, right } => {
+            simple_fof_formulas_need_app_encode_bridge(left, bank)
+                || simple_fof_formulas_need_app_encode_bridge(right, bank)
+        }
+        SimpleFofFormula::Conjunction(formulas)
+        | SimpleFofFormula::Disjunction(formulas)
+        | SimpleFofFormula::Negation(formulas)
+        | SimpleFofFormula::Universal { formulas, .. }
+        | SimpleFofFormula::Existential { formulas, .. } => {
+            simple_fof_formulas_need_app_encode_bridge(formulas, bank)
+        }
+    }
+}
+
+fn simple_fof_formulas_need_app_encode_bridge(
+    formulas: &[SimpleFofFormula],
+    bank: &TermBank,
+) -> bool {
+    formulas
+        .iter()
+        .any(|formula| simple_fof_formula_needs_app_encode_bridge(formula, bank))
+}
+
+fn write_simple_app_encoded_formula_set<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    bank: &mut TermBank,
+    formulas: &[SimpleAppEncodedFormula],
+) -> Result<(), EProverError> {
     for formula in formulas {
         simple_fof_preload_app_encoded_formulas(&formula.formulas, bank)?;
     }
@@ -11936,10 +12146,11 @@ mod tests {
     use super::{
         auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
         fv_index_params_from_config, heuristic_parms_from_config, order_parms_from_config,
-        preprocessing_config_debug_line, process_options, proof_control_from_config,
-        proof_object_list_display_clauses, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        schedule_heuristic_selection, simple_fof_bool_term_to_formulas,
+        parse_app_encode_file, preprocessing_config_debug_line, process_options,
+        proof_control_from_config, proof_object_list_display_clauses,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
+        simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
         temporary_executable_term_bank, write_resource_setup_messages,
         write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
         DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
@@ -14175,6 +14386,39 @@ mod tests {
         assert!(output.starts_with("{\n"));
         assert!(output.contains("selection_strategy:             PSelectComplexExceptUniqMaxHorn"));
         assert!(output.contains("pm_type:                        ParamodSim"));
+    }
+
+    #[test]
+    fn app_encode_formula_set_conversion_uses_owner_for_plain_formulas() {
+        let _guard = global_state_lock();
+        let plain_path = temp_path("app-encode-owner-plain");
+        let bridge_path = temp_path("app-encode-owner-bridge");
+        std::fs::write(&plain_path, "fof(owner_plain, axiom, (p(a)&q(a))).\n").unwrap();
+        std::fs::write(
+            &bridge_path,
+            "fof(owner_bridge, axiom, $ite(p(a), q(a), r(a))).\n",
+        )
+        .unwrap();
+        let plain_arg = plain_path.to_string_lossy().into_owned();
+        let bridge_arg = bridge_path.to_string_lossy().into_owned();
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+
+        let plain = parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank).unwrap();
+        let plain_set = simple_app_encoded_formula_set(&plain.formulas, &mut bank)
+            .unwrap()
+            .expect("plain formula should use FormulaSetAppEncode");
+        let rendered = plain_set
+            .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
+            .unwrap();
+        assert!(rendered.contains("tff(owner_plain, axiom, "));
+        assert!(rendered.contains('&'));
+
+        let bridge = parse_app_encode_file(&bridge_arg, IoFormat::Auto, &mut bank).unwrap();
+        assert!(simple_app_encoded_formula_set(&bridge.formulas, &mut bank)
+            .unwrap()
+            .is_none());
+        std::fs::remove_file(&plain_path).unwrap();
+        std::fs::remove_file(&bridge_path).unwrap();
     }
 
     #[test]
