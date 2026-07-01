@@ -1923,10 +1923,54 @@ impl TermBank {
         let arg = if expected_type.is_bool() || scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
             self.parse_literal_tformula_tstp_with_applications(scanner)?
         } else {
-            self.parse_term_real(scanner, true)?
+            self.parse_tformula_application_term_arg(scanner)?
         };
         Self::require_term_sort(&arg, expected_type, "formula application argument")?;
         Ok(arg)
+    }
+
+    fn parse_tformula_application_term_arg(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let mut term = self.parse_term_real(scanner, true)?;
+        if scanner.test_tok(TokenType::APPLICATION) {
+            term = self.prepare_tformula_application_head(term);
+            term = self.parse_applied_tformula_term_tstp_subset(scanner, &term)?;
+        }
+        Ok(term)
+    }
+
+    fn parse_applied_tformula_term_tstp_subset(
+        &mut self,
+        scanner: &mut Scanner,
+        head: &Term,
+    ) -> Result<Term, Diagnostic> {
+        let head_type = self.tformula_head_type(head)?;
+        let max_args = type_get_max_arity(&head_type);
+        let mut args = Vec::new();
+
+        while scanner.test_tok(TokenType::APPLICATION) {
+            if args.len() >= max_args {
+                return Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "Too many arguments applied to the term",
+                ));
+            }
+            let expected_type = head_type.args().get(args.len()).ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "Applied formula head type is missing an argument sort",
+                )
+            })?;
+
+            scanner.accept_tok(TokenType::APPLICATION)?;
+            let arg = self.parse_tformula_application_arg(scanner, expected_type)?;
+            Self::require_term_sort(&arg, expected_type, "formula application argument")?;
+            args.push(arg);
+        }
+
+        lambda_apply_terms(self, head, &args)
     }
 
     fn make_logical_tformula_head(&mut self, op: FunCode) -> Result<Term, Diagnostic> {
@@ -4653,6 +4697,44 @@ mod tests {
         );
         let child = formula.argument(0).unwrap();
         assert_eq!(child.f_code(), bank.signature().eqn_code());
+    }
+
+    #[test]
+    fn tstp_formula_application_accepts_nested_non_boolean_application_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. f: person > person. p: person > $o.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("p @ (f @ a)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        let predicate = formula.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(predicate.f_code()), Some("p"));
+        let nested = predicate.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(nested.f_code()), Some("f"));
+        assert_eq!(nested.arity(), 1);
+        assert_eq!(nested.type_(), nested.argument(0).unwrap().type_());
     }
 
     #[test]

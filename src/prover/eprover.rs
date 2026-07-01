@@ -22859,6 +22859,38 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_nested_thf_application_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("nested-thf-application-argument-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p @ (f @ a)).\n\
+             thf(goal, conjecture, p @ (f @ a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_tff_typed_quantifier_variables() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-tff-typed-quantifiers");
