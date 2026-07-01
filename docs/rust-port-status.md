@@ -350,6 +350,33 @@ Change-later notes:
 - `EGPCtrlGetResult` reads arbitrary byte chunks and only scans for SZS status strings after EOF, unlike the E-specific line scanner. Rust preserves this so partial output does not affect the result state, but scheduler tests should confirm this is required.
 - C `EGPCtrlSetFree(..., false)` can free control records without calling cleanup on still-running children. Rust `Drop` cleans up owned children to avoid orphan processes; keep that divergence documented if exact parent/child lifetime tests appear.
 
+## Multicore Schedule Execution
+
+Rust files:
+
+- `src/control/scheduling.rs`
+- `src/heuristics/new_autoschedule.rs`
+
+C source references:
+
+- `eprover/CONTROL/cco_scheduling.c`
+- `eprover/CONTROL/cco_scheduling.h`
+- `eprover/CONTROL/cco_gproc_ctrl.c`
+
+Implemented:
+
+- A reusable `ExecuteScheduleMultiCore`-style coordinator over owned Rust schedules, including multicore time/core initialization through the ported pure helper, C-shaped schedule summary output, max-core reservation checks, injected child-process spawning through `EGPCtrlSet`, descriptor-to-schedule-index tracking, concurrent spawning while enough cores are free, generic process polling, first-success result reporting with `% Result found by ...` plus accumulated child output, schedule-exhaustion reporting, explicit C-return-value mapping for success and `SCHEDULE_DONE`, and tests for first success, core-capacity sequencing, exhaustion, and the unschedulable-core edge case.
+
+Pending:
+
+- Main `eprover` integration that uses this coordinator for `--auto-schedule`/`--satauto-schedule` instead of selecting only the first scheduled preprocessing/search cell in-process.
+- Exact C fork child return semantics, parent `exit(handle->exit_status)` replay, SIGTERM `PARENT_REQUEST` handling, optional resource-usage printing after result/exhaustion, and default-schedule retry after schedule exhaustion.
+
+Change-later notes:
+
+- C `ExecuteScheduleMultiCore` can spin if the next schedule cell requires more cores than the total available and no subprocess is running to free capacity. Rust returns an explicit diagnostic for that state; revisit only if reference traces prove the hang is observable compatibility.
+- The C API returns a schedule index only in the forked child and exits the parent on result. Rust exposes an explicit report so callers can decide whether to replay C parent-exit behavior or compose schedule execution into a larger workflow.
+
 ## e_stratpar Executable
 
 Rust files:

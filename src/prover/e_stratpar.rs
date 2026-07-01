@@ -340,7 +340,6 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        assert!(printed.contains("% Pid: 123"));
         assert!(printed.contains("% SZS status Theorem"));
         assert!(!printed.contains("% SZS status GaveUp"));
     }

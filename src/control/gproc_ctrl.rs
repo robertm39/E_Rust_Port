@@ -73,12 +73,12 @@ impl EGPCtrl {
         Self::spawn_command_reporting(command, name, cores, cpu_limit, &mut std::io::sink())
     }
 
-    pub fn spawn_command_reporting(
+    pub fn spawn_command_reporting<W: Write + ?Sized>(
         mut command: Command,
         name: impl Into<String>,
         cores: usize,
         cpu_limit: u64,
-        startup_output: &mut impl Write,
+        startup_output: &mut W,
     ) -> Result<Self, Diagnostic> {
         let name = name.into();
         writeln!(
