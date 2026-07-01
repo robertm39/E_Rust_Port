@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 pub const EPCTRL_BUFSIZE: usize = 200;
 pub const MAX_CORES: usize = 8;
@@ -21,6 +24,13 @@ pub const SZS_FAILURE_STR: &str = "% Failure:";
 
 pub const E_OPTIONS_BASE: &str = " --print-pid -s -R  --memory-limit=2048 --proof-object ";
 pub const E_OPTIONS: &str = "--satauto-schedule --assume-incompleteness";
+
+#[derive(Debug)]
+enum ProcessOutputMessage {
+    Line(String),
+    Eof,
+    Error(String),
+}
 
 #[must_use]
 pub const fn prover_result_table_entry(result: ProverResult) -> Option<&'static str> {
@@ -40,7 +50,9 @@ pub struct EPCtrl {
     pid: Option<u32>,
     descriptor: Option<Descriptor>,
     child: Option<Child>,
-    stdout: Option<BufReader<ChildStdout>>,
+    output_rx: Option<Receiver<ProcessOutputMessage>>,
+    output_thread: Option<JoinHandle<()>>,
+    output_eof: bool,
     input_file: Option<PathBuf>,
     name: String,
     start_time: i64,
@@ -56,7 +68,9 @@ impl EPCtrl {
             pid: None,
             descriptor: None,
             child: None,
-            stdout: None,
+            output_rx: None,
+            output_thread: None,
+            output_eof: false,
             input_file: None,
             name: name.into(),
             start_time: 0,
@@ -119,7 +133,13 @@ impl EPCtrl {
             cleanup_child(&mut child);
             return Err(proc_ctrl_error("Cannot capture eprover subprocess output"));
         };
-        let descriptor = descriptor_from_child_stdout(&stdout)?;
+        let descriptor = match descriptor_from_child_stdout(&stdout) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                cleanup_child(&mut child);
+                return Err(error);
+            }
+        };
         let mut stdout = BufReader::new(stdout);
         let mut pid_line = String::new();
         let read = stdout
@@ -141,7 +161,9 @@ impl EPCtrl {
         control.pid = Some(pid);
         control.descriptor = Some(descriptor);
         control.child = Some(child);
-        control.stdout = Some(stdout);
+        let (output_rx, output_thread) = spawn_output_reader(stdout);
+        control.output_rx = Some(output_rx);
+        control.output_thread = Some(output_thread);
         control.input_file = input_file;
         control.start_time = current_sec_time();
         control.prob_time = prob_time;
@@ -215,10 +237,14 @@ impl EPCtrl {
     }
 
     pub fn cleanup(&mut self, delete_file: bool) -> Result<(), Diagnostic> {
-        self.stdout = None;
         if let Some(mut child) = self.child.take() {
             cleanup_child(&mut child);
         }
+        if let Some(output_thread) = self.output_thread.take() {
+            let _join_result = output_thread.join();
+        }
+        self.output_rx = None;
+        self.output_eof = false;
         self.pid = None;
         self.descriptor = None;
         if delete_file {
@@ -244,19 +270,61 @@ impl EPCtrl {
     }
 
     pub fn read_result_line(&mut self, buffer: &mut String) -> Result<bool, Diagnostic> {
+        if self.output_eof {
+            buffer.clear();
+            return Ok(self.get_result_from_optional_line(None));
+        }
         buffer.clear();
-        let read = {
-            let stdout = self.stdout.as_mut().ok_or_else(|| {
-                proc_ctrl_error("Cannot read from closed eprover subprocess pipe")
-            })?;
-            stdout.read_line(buffer).map_err(|error| {
-                proc_ctrl_error(format!("Cannot read eprover subprocess output: {error}"))
-            })?
+        let message = self
+            .output_rx
+            .as_ref()
+            .ok_or_else(|| proc_ctrl_error("Cannot read from closed eprover subprocess pipe"))?
+            .recv()
+            .map_err(|_| proc_ctrl_error("Eprover subprocess output reader closed"))?;
+        self.apply_output_message(message, buffer)
+    }
+
+    pub fn try_read_result_line(
+        &mut self,
+        buffer: &mut String,
+    ) -> Result<Option<bool>, Diagnostic> {
+        if self.output_eof {
+            buffer.clear();
+            return Ok(Some(self.get_result_from_optional_line(None)));
+        }
+        let message = match self
+            .output_rx
+            .as_ref()
+            .ok_or_else(|| proc_ctrl_error("Cannot read from closed eprover subprocess pipe"))?
+            .try_recv()
+        {
+            Ok(message) => message,
+            Err(TryRecvError::Empty) => return Ok(None),
+            Err(TryRecvError::Disconnected) => {
+                return Err(proc_ctrl_error("Eprover subprocess output reader closed"));
+            }
         };
-        if read == 0 {
-            Ok(self.get_result_from_optional_line(None))
-        } else {
-            Ok(self.get_result_from_optional_line(Some(buffer)))
+        self.apply_output_message(message, buffer).map(Some)
+    }
+
+    fn apply_output_message(
+        &mut self,
+        message: ProcessOutputMessage,
+        buffer: &mut String,
+    ) -> Result<bool, Diagnostic> {
+        buffer.clear();
+        match message {
+            ProcessOutputMessage::Line(line) => {
+                buffer.push_str(&line);
+                Ok(self.get_result_from_optional_line(Some(buffer)))
+            }
+            ProcessOutputMessage::Eof => {
+                self.output_eof = true;
+                Ok(self.get_result_from_optional_line(None))
+            }
+            ProcessOutputMessage::Error(error) => Err(proc_ctrl_error(format!(
+                "Cannot read eprover subprocess output: {error}"
+            ))),
         }
     }
 
@@ -381,32 +449,10 @@ impl EPCtrlSet {
                 read_result(proc, &mut self.buffer)?
             };
             if eof {
-                match self
-                    .procs
-                    .get(&descriptor)
-                    .map_or(ProverResult::NoResult, EPCtrl::result)
+                if let Some(descriptor) =
+                    self.handle_eof_result(descriptor, delete_files, output)?
                 {
-                    ProverResult::NoResult => {}
-                    ProverResult::Theorem | ProverResult::Unsatisfiable => {
-                        proof_descriptor = Some(descriptor);
-                    }
-                    ProverResult::Satisfiable
-                    | ProverResult::CounterSatisfiable
-                    | ProverResult::Failure => {
-                        let name = self
-                            .procs
-                            .get(&descriptor)
-                            .map(|proc| proc.name().to_owned())
-                            .unwrap_or_default();
-                        writeln!(output, "% No proof found by {name}")
-                            .map_err(|error| output_error(&error))?;
-                        let _deleted = self.delete_proc(descriptor, delete_files)?;
-                    }
-                    ProverResult::GaveUp => {
-                        return Err(proc_ctrl_error(
-                            "Process control reached impossible GaveUp result state",
-                        ));
-                    }
+                    proof_descriptor = Some(descriptor);
                 }
             }
         }
@@ -420,6 +466,95 @@ impl EPCtrlSet {
         output: &mut impl Write,
     ) -> Result<Option<Descriptor>, Diagnostic> {
         self.get_result_from_ready(ready, delete_files, output, EPCtrl::read_result_line)
+    }
+
+    pub fn get_result_from_available_pipes(
+        &mut self,
+        delete_files: bool,
+        output: &mut impl Write,
+    ) -> Result<(Option<Descriptor>, bool), Diagnostic> {
+        let descriptors = self.procs.keys().copied().collect::<Vec<_>>();
+        let mut proof_descriptor = None;
+        let mut saw_output = false;
+
+        for descriptor in descriptors {
+            self.buffer.clear();
+            let Some(eof) = ({
+                let Some(proc) = self.procs.get_mut(&descriptor) else {
+                    continue;
+                };
+                proc.try_read_result_line(&mut self.buffer)?
+            }) else {
+                continue;
+            };
+            saw_output = true;
+            if eof {
+                if let Some(descriptor) =
+                    self.handle_eof_result(descriptor, delete_files, output)?
+                {
+                    proof_descriptor = Some(descriptor);
+                }
+            }
+        }
+
+        Ok((proof_descriptor, saw_output))
+    }
+
+    pub fn get_result_from_pipes_timeout(
+        &mut self,
+        timeout: Duration,
+        delete_files: bool,
+        output: &mut impl Write,
+    ) -> Result<Option<Descriptor>, Diagnostic> {
+        let start = Instant::now();
+        loop {
+            let (proof_descriptor, saw_output) =
+                self.get_result_from_available_pipes(delete_files, output)?;
+            if proof_descriptor.is_some() || saw_output || self.is_empty() {
+                return Ok(proof_descriptor);
+            }
+
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
+                return Ok(None);
+            }
+            let Some(remaining) = timeout.checked_sub(elapsed) else {
+                return Ok(None);
+            };
+            thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
+    }
+
+    fn handle_eof_result(
+        &mut self,
+        descriptor: Descriptor,
+        delete_files: bool,
+        output: &mut impl Write,
+    ) -> Result<Option<Descriptor>, Diagnostic> {
+        match self
+            .procs
+            .get(&descriptor)
+            .map_or(ProverResult::NoResult, EPCtrl::result)
+        {
+            ProverResult::NoResult => Ok(None),
+            ProverResult::Theorem | ProverResult::Unsatisfiable => Ok(Some(descriptor)),
+            ProverResult::Satisfiable
+            | ProverResult::CounterSatisfiable
+            | ProverResult::Failure => {
+                let name = self
+                    .procs
+                    .get(&descriptor)
+                    .map(|proc| proc.name().to_owned())
+                    .unwrap_or_default();
+                writeln!(output, "% No proof found by {name}")
+                    .map_err(|error| output_error(&error))?;
+                let _deleted = self.delete_proc(descriptor, delete_files)?;
+                Ok(None)
+            }
+            ProverResult::GaveUp => Err(proc_ctrl_error(
+                "Process control reached impossible GaveUp result state",
+            )),
+        }
     }
 }
 
@@ -474,6 +609,31 @@ fn cleanup_child(child: &mut Child) {
     let _wait_result = child.wait();
 }
 
+fn spawn_output_reader(
+    mut stdout: BufReader<ChildStdout>,
+) -> (Receiver<ProcessOutputMessage>, JoinHandle<()>) {
+    let (sender, receiver) = mpsc::channel();
+    let handle = thread::spawn(move || loop {
+        let mut line = String::new();
+        match stdout.read_line(&mut line) {
+            Ok(0) => {
+                let _send_result = sender.send(ProcessOutputMessage::Eof);
+                break;
+            }
+            Ok(_) => {
+                if sender.send(ProcessOutputMessage::Line(line)).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                let _send_result = sender.send(ProcessOutputMessage::Error(error.to_string()));
+                break;
+            }
+        }
+    });
+    (receiver, handle)
+}
+
 fn parse_pid_line(line: &str) -> Result<u32, Diagnostic> {
     if !line.contains("% Pid: ") {
         return Err(proc_ctrl_error("Cannot get eprover PID"));
@@ -526,6 +686,7 @@ mod tests {
     use crate::basics::simple_stuff::ProverResult;
     use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
     use std::process::Command;
+    use std::time::Duration;
 
     #[test]
     fn result_table_matches_c_surface() {
@@ -712,6 +873,44 @@ mod tests {
             crate::basics::error::ErrorCode::INTERFACE_ERROR
         );
         assert_eq!(error.message(), "Cannot get eprover PID");
+    }
+
+    #[test]
+    fn process_set_timeout_poll_reads_children_and_deletes_no_proof() {
+        let no_proof = EPCtrl::spawn_command(
+            pid_status_command("% SZS status Satisfiable"),
+            "no_proof",
+            None,
+            3,
+        )
+        .unwrap();
+        let proof =
+            EPCtrl::spawn_command(pid_status_command("% SZS status Theorem"), "proof", None, 3)
+                .unwrap();
+        let no_proof_descriptor = no_proof.descriptor().unwrap();
+        let proof_descriptor = proof.descriptor().unwrap();
+        let mut set = EPCtrlSet::new();
+        set.add_proc(no_proof).unwrap();
+        set.add_proc(proof).unwrap();
+        let mut output = Vec::new();
+        let mut result = None;
+
+        for _ in 0..10 {
+            result = set
+                .get_result_from_pipes_timeout(Duration::from_millis(500), false, &mut output)
+                .unwrap();
+            if result.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(result, Some(proof_descriptor));
+        assert!(set.find_proc(no_proof_descriptor).is_none());
+        assert!(set.find_proc(proof_descriptor).is_some());
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% No proof found by no_proof\n"
+        );
     }
 
     #[cfg(windows)]
