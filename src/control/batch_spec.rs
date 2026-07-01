@@ -302,6 +302,7 @@ pub struct BatchProcessProblemReport {
 pub struct BatchProcessProblemOutputs<'a, WGlobal: Write + ?Sized, WExternal: Write + ?Sized> {
     pub global_output: &'a mut WGlobal,
     pub external_output: Option<&'a mut WExternal>,
+    pub socket_output: Option<&'a mut (dyn Write + 'a)>,
 }
 
 pub struct BatchProcessFileOutputs<'a, WGlobal: Write + ?Sized, WDest: Write + ?Sized> {
@@ -802,6 +803,7 @@ impl BatchSpec {
             BatchProcessProblemOutputs {
                 global_output: &mut *outputs.global_output,
                 external_output: Some(&mut *outputs.dest_output),
+                socket_output: None,
             },
             clock_seconds,
             spawn_runner,
@@ -920,6 +922,7 @@ impl BatchSpec {
             BatchProcessProblemOutputs {
                 global_output,
                 external_output: Some(&mut dest),
+                socket_output: None,
             },
             clock_seconds,
             backend,
@@ -1573,7 +1576,13 @@ where
     )
     .map_err(|error| batch_process_output_error(&error))?;
 
-    if let Some(external_output) = outputs.external_output.as_deref_mut() {
+    if let Some(socket_output) = outputs.socket_output.as_deref_mut() {
+        write!(socket_output, "{}", completed.output)
+            .map_err(|error| batch_process_output_error(&error))?;
+        socket_output
+            .flush()
+            .map_err(|error| batch_process_output_error(&error))?;
+    } else if let Some(external_output) = outputs.external_output.as_deref_mut() {
         writeln!(external_output, "{result} for {}", config.jobname)
             .map_err(|error| batch_process_output_error(&error))?;
         write!(external_output, "{}", completed.output)
@@ -1604,13 +1613,16 @@ where
         config.jobname
     )
     .map_err(|error| batch_process_output_error(&error))?;
-    if let Some(external_output) = outputs.external_output.as_deref_mut() {
-        writeln!(
-            external_output,
-            "% SZS status GaveUp for {}",
-            config.jobname
-        )
-        .map_err(|error| batch_process_output_error(&error))?;
+    let external_status = format!("% SZS status GaveUp for {}\n", config.jobname);
+    if let Some(socket_output) = outputs.socket_output.as_deref_mut() {
+        write!(socket_output, "{external_status}")
+            .map_err(|error| batch_process_output_error(&error))?;
+        socket_output
+            .flush()
+            .map_err(|error| batch_process_output_error(&error))?;
+    } else if let Some(external_output) = outputs.external_output.as_deref_mut() {
+        write!(external_output, "{external_status}")
+            .map_err(|error| batch_process_output_error(&error))?;
         external_output
             .flush()
             .map_err(|error| batch_process_output_error(&error))?;
@@ -2486,6 +2498,7 @@ mod tests {
                 BatchProcessProblemOutputs {
                     global_output: &mut global,
                     external_output: Some(&mut external),
+                    socket_output: None,
                 },
                 || 100,
                 &mut backend,
@@ -2520,6 +2533,48 @@ mod tests {
     }
 
     #[test]
+    fn process_problem_with_runner_backend_mirrors_success_to_socket_only() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut external = Vec::new();
+        let mut socket = Vec::new();
+        let mut backend = FakeRunnerBackend::new(Some(theorem_completion("% socket proof\n")));
+
+        let report = spec
+            .process_problem_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                one_empty_clause_problem(),
+                BatchProcessProblemConfig {
+                    wct_limit: 20,
+                    jobname: "socket.p",
+                    interactive: false,
+                },
+                BatchRunnerProblemConfig::default(),
+                BatchProcessProblemOutputs {
+                    global_output: &mut global,
+                    external_output: Some(&mut external),
+                    socket_output: Some(&mut socket),
+                },
+                || 100,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(report.solved);
+        let global = String::from_utf8(global).unwrap();
+        assert!(global.contains("% SZS status Theorem for socket.p\n"));
+        assert!(global.contains("% Solution found by "));
+        assert_eq!(String::from_utf8(external).unwrap(), "");
+        assert_eq!(String::from_utf8(socket).unwrap(), "% socket proof\n");
+    }
+
+    #[test]
     fn process_problem_with_runner_backend_reports_gave_up_after_expired_limit() {
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
@@ -2542,6 +2597,7 @@ mod tests {
                 BatchProcessProblemOutputs {
                     global_output: &mut global,
                     external_output: Some(&mut external),
+                    socket_output: None,
                 },
                 || 50,
                 &mut backend,
@@ -2559,6 +2615,49 @@ mod tests {
         assert_eq!(
             String::from_utf8(external).unwrap(),
             "% SZS status GaveUp for late.p\n"
+        );
+    }
+
+    #[test]
+    fn process_problem_with_runner_backend_mirrors_gave_up_to_socket_only() {
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut external = Vec::new();
+        let mut socket = Vec::new();
+        let mut backend = FakeRunnerBackend::new(None);
+
+        let report = spec
+            .process_problem_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                one_empty_clause_problem(),
+                BatchProcessProblemConfig {
+                    wct_limit: -1,
+                    jobname: "socket-late.p",
+                    interactive: false,
+                },
+                BatchRunnerProblemConfig::default(),
+                BatchProcessProblemOutputs {
+                    global_output: &mut global,
+                    external_output: Some(&mut external),
+                    socket_output: Some(&mut socket),
+                },
+                || 50,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(!report.solved);
+        assert_eq!(
+            String::from_utf8(global).unwrap(),
+            "% SZS status GaveUp for socket-late.p\n"
+        );
+        assert_eq!(String::from_utf8(external).unwrap(), "");
+        assert_eq!(
+            String::from_utf8(socket).unwrap(),
+            "% SZS status GaveUp for socket-late.p\n"
         );
     }
 
@@ -2585,6 +2684,7 @@ mod tests {
                 BatchProcessProblemOutputs {
                     global_output: &mut global,
                     external_output: Some(&mut external),
+                    socket_output: None,
                 },
                 || 100,
                 |request| {
@@ -2653,6 +2753,7 @@ mod tests {
                 BatchProcessProblemOutputs {
                     global_output: &mut global,
                     external_output: Some(&mut external),
+                    socket_output: None,
                 },
                 || 50,
                 |_| panic!("no runner should be spawned after an expired time limit"),
