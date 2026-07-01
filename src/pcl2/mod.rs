@@ -5,6 +5,7 @@ use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 
 pub mod expressions;
 pub mod idents;
+pub mod miniclauses;
 pub mod positions;
 
 pub(crate) fn parse_pos_int_as_long(scanner: &mut Scanner) -> Result<i64, Diagnostic> {

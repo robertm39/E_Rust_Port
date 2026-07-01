@@ -105,4 +105,19 @@ Source files reviewed: `PCL2/pcl_miniclauses.h`, `PCL2/pcl_miniclauses.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/miniclauses.rs`, covering compact literal snapshots, conversion from and back to ordinary clauses, owned minify/unminify wrappers, and LOP/PCL/TSTP-core rendering through temporary rebuilt clauses.
+- Rust stores cloned `Term` handles for each literal side rather than raw borrowed `Term_p` values. This preserves term-bank sharing and identity semantics for represented terms while keeping ownership safe.
+- Mini clauses capture only literal signs and term pairs. Clause-level properties are not preserved because the C `properties` field is commented out and `MiniClauseToClause` creates a fresh `ClauseAlloc` result.
+- The Rust printer methods intentionally rebuild a full `Clause` before calling the already-ported clause printers, matching the C implementation's simple temporary-clause strategy.
+
+### Change Later
+
+- `MiniClauseCell.literal_no` is a C `short` even though it is assigned from `ClauseLiteralNumber`; very large clauses can truncate or overflow. Rust uses `usize`, but compatibility-sensitive C-facing code should audit any serialized or external assumptions about this width.
+- The compact C representation has a commented-out `ClauseProperties properties` field, so converting through `MiniClauseToClause` silently drops role/source/indexing metadata. That may be intentional for compact proof listings, but later proof-output integration should verify no caller expects properties to survive minification.
+- The compact C representation borrows raw `Term_p` pointers and relies on the surrounding term bank outliving every mini clause. Rust's safe `Term` handles make that ownership explicit, but future executable integration should still document which proof/protocol owners keep the relevant term bank alive.
+- `MiniClausePrint`, `MiniClausePCLPrint`, and `MiniClauseTSTPCorePrint` rebuild a complete `Clause` just to print it. This is useful for compatibility, but direct compact rendering may be worth revisiting after profiling proof-output-heavy runs.
+- `MiniClauseAddTerms` duplicates most of `ClauseToMiniClause` but is not declared in the header. Rust does not expose this helper separately; if later C audits find internal callers depending on it, prefer factoring the shared literal-copy path rather than adding a second public Rust API.
 <!-- END MANUAL REVIEW: c_source_docs -->
