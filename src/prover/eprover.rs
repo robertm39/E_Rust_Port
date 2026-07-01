@@ -58,6 +58,10 @@ use crate::clauses::inferencedoc::{
     pcl_print_end, pcl_print_start, ClauseCreationInference, ClauseCreationParents,
     PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
 };
+use crate::clauses::pred_elim::{
+    eliminate_predicates_singular_with_output,
+    PredicateEliminationConfig as ClausePredicateEliminationConfig,
+};
 use crate::clauses::proofstate::{
     proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
     WatchlistSource as ProofStateWatchlistSource,
@@ -601,6 +605,13 @@ impl Default for PredicateEliminationConfig {
             flags: PredicateEliminationFlags::default(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PredicateEliminationPreprocessingConfig {
+    enabled: bool,
+    recognize_gates: bool,
+    clause_config: ClausePredicateEliminationConfig,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5633,6 +5644,27 @@ fn run_prune_only<W: Write + ?Sized>(
         bce_max_occs,
         &mut state,
     )?;
+    let pred_elim = &config.preprocessing.predicate_elimination;
+    apply_predicate_elimination(
+        output,
+        PredicateEliminationPreprocessingConfig {
+            enabled: pred_elim.enabled,
+            recognize_gates: pred_elim
+                .flags
+                .contains(PredicateEliminationFlag::RecognizeGates),
+            clause_config: ClausePredicateEliminationConfig {
+                max_occs: pred_elim.max_occs,
+                tolerance: pred_elim.tolerance,
+                force_mu_decrease: pred_elim
+                    .flags
+                    .contains(PredicateEliminationFlag::ForceMuDecrease),
+                ignore_conj_syms: pred_elim
+                    .flags
+                    .contains(PredicateEliminationFlag::IgnoreConjectureSymbols),
+            },
+        },
+        &mut state,
+    )?;
     apply_goal_definition_transformation(
         &mut state,
         config.preprocessing.goal_definitions.positive,
@@ -5675,6 +5707,20 @@ fn run_proof_search<W: Write + ?Sized>(
         output,
         heuristic_params.bce,
         heuristic_params.bce_max_occs,
+        &mut state,
+    )?;
+    apply_predicate_elimination(
+        output,
+        PredicateEliminationPreprocessingConfig {
+            enabled: heuristic_params.pred_elim,
+            recognize_gates: heuristic_params.pred_elim_gates,
+            clause_config: ClausePredicateEliminationConfig {
+                max_occs: i64::from(heuristic_params.pred_elim_max_occs),
+                tolerance: i64::from(heuristic_params.pred_elim_tolerance),
+                force_mu_decrease: heuristic_params.pred_elim_force_mu_decrease,
+                ignore_conj_syms: heuristic_params.pred_elim_ignore_conj_syms,
+            },
+        },
         &mut state,
     )?;
     apply_goal_definition_transformation(
@@ -6725,6 +6771,41 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
         )?
     };
     output.write_stdout_side_channel(bce_output.as_bytes())?;
+    Ok(result.eliminated_count)
+}
+
+fn apply_predicate_elimination<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: PredicateEliminationPreprocessingConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<i64, EProverError> {
+    if !config.enabled || problem_type() != ProblemType::FirstOrder {
+        return Ok(0);
+    }
+    if config.recognize_gates {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "Predicate elimination gate recognition is not yet ported",
+        )
+        .into());
+    }
+
+    let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
+    let fresh_vars = state.fresh_vars().clone();
+    let mut pred_elim_output = String::new();
+    let result = {
+        let (bank, axioms, archive) = state.terms_axioms_archive_mut();
+        eliminate_predicates_singular_with_output(
+            axioms,
+            archive,
+            bank,
+            &mut tmp_bank,
+            &fresh_vars,
+            config.clause_config,
+            &mut pred_elim_output,
+        )?
+    };
+    output.write_stdout_side_channel(pred_elim_output.as_bytes())?;
     Ok(result.eliminated_count)
 }
 
@@ -15815,6 +15896,48 @@ mod tests {
     }
 
     #[test]
+    fn run_prune_only_applies_pred_elim_before_initial_docs() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-pred-elim");
+        std::fs::write(
+            &path,
+            "cnf(pos, axiom, (p(a)|s(a))).\n\
+             cnf(neg, axiom, (~p(a))).\n\
+             cnf(s_offending, axiom, (s(b)|s(c))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--pred-elim=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
+        assert!(!printed.contains(&format!("file('{path_arg}', pos)")));
+        assert!(!printed.contains(&format!("file('{path_arg}', neg)")));
+        assert!(printed.contains(&format!("file('{path_arg}', s_offending)")));
+        assert!(printed.contains(", plain, (s(a)), "));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_prune_only_no_preprocessing_preserves_tautologies() {
         let _guard = global_state_lock();
         let path = temp_path("prune-no-clause-preprocess");
@@ -19625,6 +19748,43 @@ mod tests {
         assert!(printed.contains("% BCE start: 2\n% BCE eliminated: 2.\n"));
         assert!(printed.contains("% Parsed axioms                        : 2\n"));
         assert!(printed.contains("% Initial clauses                      : 2\n"));
+        assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_applies_selected_pred_elim_preprocessing() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-pred-elim");
+        std::fs::write(
+            &path,
+            "cnf(pos, axiom, (p(a)|s(a))).\n\
+             cnf(neg, axiom, (~p(a))).\n\
+             cnf(s_offending, axiom, (s(b)|s(c))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--pred-elim=true",
+                "--print-statistics",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
+        assert!(printed.contains("% Parsed axioms                        : 3\n"));
+        assert!(printed.contains("% Initial clauses                      : 3\n"));
         assert!(printed.contains("\n% No proof found!\n% SZS status Satisfiable\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
