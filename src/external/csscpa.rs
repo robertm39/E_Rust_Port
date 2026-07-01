@@ -84,7 +84,7 @@ impl CsscpaProcessResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CsscpaLoopResult {
-    output_level: bool,
+    output_level: i64,
     processed: usize,
     accepted: usize,
     trace: String,
@@ -92,7 +92,7 @@ pub struct CsscpaLoopResult {
 
 impl CsscpaLoopResult {
     #[must_use]
-    pub const fn output_level(&self) -> bool {
+    pub const fn output_level(&self) -> i64 {
         self.output_level
     }
 
@@ -200,7 +200,7 @@ impl CsscpaState {
         weight_delta: f32,
         average_delta: f32,
     ) -> Result<bool, Diagnostic> {
-        self.process_clause_with_trace(clause, accept, weight_delta, average_delta, false)
+        self.process_clause_with_trace(clause, accept, weight_delta, average_delta, 0)
             .map(|result| result.accepted)
     }
 
@@ -210,7 +210,7 @@ impl CsscpaState {
         accept: bool,
         weight_delta: f32,
         average_delta: f32,
-        output_level: bool,
+        output_level: i64,
     ) -> Result<CsscpaProcessResult, Diagnostic> {
         let mut trace = String::new();
         let mut status = if accept {
@@ -221,7 +221,7 @@ impl CsscpaState {
 
         if self.clause_is_tautology(&clause)? {
             status = CsscpaClauseStatus::Rejected;
-            if output_level {
+            if output_level_is_enabled(output_level) {
                 let _ = writeln!(
                     trace,
                     "{DEFAULT_COMCHAR_RAW} Clause {} rejected (Tautology)",
@@ -234,7 +234,7 @@ impl CsscpaState {
             prepare_clause_for_subsumption(&mut clause, &self.terms);
             if let Some(handle_id) = self.subsuming_clause_id(&clause) {
                 status = CsscpaClauseStatus::Rejected;
-                if output_level {
+                if output_level_is_enabled(output_level) {
                     let _ = writeln!(
                         trace,
                         "{DEFAULT_COMCHAR_RAW} Clause {} rejected (subsumed by {handle_id})",
@@ -259,7 +259,7 @@ impl CsscpaState {
                 status = CsscpaClauseStatus::Improved;
             } else if clause.is_unit() && self.find_unit_contradiction(&clause).is_some() {
                 status = CsscpaClauseStatus::Contradicts;
-                if output_level {
+                if output_level_allows(output_level, 1) {
                     let _ = writeln!(trace, "{DEFAULT_COMCHAR_RAW} Unit contradiction found!");
                 }
             }
@@ -270,7 +270,7 @@ impl CsscpaState {
                         self.clauses -= 1;
                         self.literals -= usize_to_i64(removed.literal_number());
                         self.weight -= removed.weight();
-                        if output_level {
+                        if output_level_is_enabled(output_level) {
                             let _ = writeln!(
                                 trace,
                                 "{DEFAULT_COMCHAR_RAW} Clause {} removed from list (subsumed by {})",
@@ -284,7 +284,7 @@ impl CsscpaState {
                 self.literals += usize_to_i64(clause.literal_number());
                 self.weight += clause.weight();
 
-                if output_level {
+                if output_level_is_enabled(output_level) {
                     let _ = writeln!(
                         trace,
                         "{DEFAULT_COMCHAR_RAW} Clause {} accepted from {} ({})",
@@ -297,13 +297,13 @@ impl CsscpaState {
                 if matches!(
                     status,
                     CsscpaClauseStatus::Contradicts | CsscpaClauseStatus::Improved
-                ) && output_level
+                ) && output_level_is_enabled(output_level)
                 {
                     trace.push_str(&self.state_line_for_source(status, accepted_source));
                 }
             } else {
                 status = CsscpaClauseStatus::Rejected;
-                if output_level {
+                if output_level_is_enabled(output_level) {
                     let _ = writeln!(
                         trace,
                         "{DEFAULT_COMCHAR_RAW} Clause {} rejected (weighty)",
@@ -323,7 +323,7 @@ impl CsscpaState {
     pub fn process_loop(
         &mut self,
         scanner: &mut Scanner,
-        initial_output_level: bool,
+        initial_output_level: i64,
     ) -> Result<CsscpaLoopResult, Diagnostic> {
         let mut output_level = initial_output_level;
         let mut processed = 0;
@@ -462,7 +462,7 @@ impl CsscpaState {
 pub fn csscpa_loop(
     scanner: &mut Scanner,
     state: &mut CsscpaState,
-    initial_output_level: bool,
+    initial_output_level: i64,
 ) -> Result<CsscpaLoopResult, Diagnostic> {
     state.process_loop(scanner, initial_output_level)
 }
@@ -545,16 +545,24 @@ fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+const fn output_level_is_enabled(output_level: i64) -> bool {
+    output_level != 0
+}
+
+const fn output_level_allows(output_level: i64, required_level: i64) -> bool {
+    required_level <= output_level
+}
+
 fn parse_csscpa_output_level(
     scanner: &mut Scanner,
-    current_output_level: bool,
-) -> Result<bool, Diagnostic> {
+    current_output_level: i64,
+) -> Result<i64, Diagnostic> {
     scanner.check_tok(TokenType::POS_INT)?;
     let parsed = scanner.current_token().numval();
     scanner.accept_tok(TokenType::POS_INT)?;
     Ok(match parsed {
-        0 => false,
-        1 => true,
+        0 => 0,
+        1 => 1,
         _ => current_output_level,
     })
 }
@@ -696,7 +704,7 @@ mod tests {
         let ident = clause.ident();
 
         let result = state
-            .process_clause_with_trace(clause, true, 0.0, 0.0, true)
+            .process_clause_with_trace(clause, true, 0.0, 0.0, 1)
             .expect("forced processing succeeds");
 
         assert!(result.accepted());
@@ -721,7 +729,7 @@ mod tests {
         let candidate = parse_clause(&mut state, "cnf(csscpa_candidate,axiom,(p(a)|q(a))).");
         let candidate_ident = candidate.ident();
         let result = state
-            .process_clause_with_trace(candidate, false, 0.0, 0.0, true)
+            .process_clause_with_trace(candidate, false, 0.0, 0.0, 1)
             .expect("subsumed check succeeds");
 
         assert!(!result.accepted());
@@ -746,7 +754,7 @@ mod tests {
         let narrow = parse_clause(&mut state, "p(a).");
         let narrow_ident = narrow.ident();
         let result = state
-            .process_clause_with_trace(narrow, false, 0.0, 0.0, true)
+            .process_clause_with_trace(narrow, false, 0.0, 0.0, 1)
             .expect("improving check succeeds");
 
         assert!(result.accepted());
@@ -771,7 +779,7 @@ mod tests {
         let positive = parse_clause(&mut state, "p(a).");
         let positive_ident = positive.ident();
         let result = state
-            .process_clause_with_trace(positive, false, 1.0, 0.0, true)
+            .process_clause_with_trace(positive, false, 1.0, 0.0, 1)
             .expect("contradiction check succeeds");
 
         assert!(result.accepted());
@@ -780,6 +788,29 @@ mod tests {
         assert!(state.pos_units().find_by_id(positive_ident).is_some());
         assert!(result.trace().contains("% Unit contradiction found!\n"));
         assert!(result.trace().contains("% CSSCPAState: contradicts"));
+    }
+
+    #[test]
+    fn unit_contradiction_level_minus_one_matches_c_output_gates() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let negative = parse_clause(&mut state, "~p(a).");
+        assert!(state
+            .process_clause(negative, true, 0.0, 0.0)
+            .expect("negative unit accepted"));
+
+        let positive = parse_clause(&mut state, "p(a).");
+        let positive_ident = positive.ident();
+        let result = state
+            .process_clause_with_trace(positive, false, 1.0, 0.0, -1)
+            .expect("contradiction check succeeds");
+
+        assert!(result.accepted());
+        assert_eq!(result.status(), CsscpaClauseStatus::Contradicts);
+        assert!(result.trace().contains(&format!(
+            "% Clause {positive_ident} accepted from 0 (contradicts)\n"
+        )));
+        assert!(result.trace().contains("% CSSCPAState: contradicts"));
+        assert!(!result.trace().contains("% Unit contradiction found!\n"));
     }
 
     #[test]
@@ -800,9 +831,9 @@ state:",
         .expect("CSSCPA loop scanner allocation");
         scanner.set_format(IoFormat::Tstp);
 
-        let result = csscpa_loop(&mut scanner, &mut state, true).expect("CSSCPA loop parses");
+        let result = csscpa_loop(&mut scanner, &mut state, 1).expect("CSSCPA loop parses");
 
-        assert!(result.output_level());
+        assert_eq!(result.output_level(), 1);
         assert_eq!(result.processed(), 2);
         assert_eq!(result.accepted(), 1);
         assert_eq!(state.clauses(), 1);
@@ -829,10 +860,10 @@ accept: cnf(csscpa_hidden,axiom,p(a)).",
         scanner.set_format(IoFormat::Tstp);
 
         let result = state
-            .process_loop(&mut scanner, false)
+            .process_loop(&mut scanner, 0)
             .expect("CSSCPA loop parses output_level command");
 
-        assert!(!result.output_level());
+        assert_eq!(result.output_level(), 0);
         assert_eq!(result.processed(), 1);
         assert_eq!(result.accepted(), 1);
         assert!(result.trace().is_empty());
@@ -846,7 +877,7 @@ accept: cnf(csscpa_hidden,axiom,p(a)).",
                 .expect("CSSCPA loop scanner allocation");
         scanner.set_format(IoFormat::Tstp);
 
-        let error = state.process_loop(&mut scanner, true).unwrap_err();
+        let error = state.process_loop(&mut scanner, 1).unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error
@@ -863,7 +894,7 @@ accept: cnf(csscpa_hidden,axiom,p(a)).",
         scanner.set_format(IoFormat::Tptp);
 
         let result = state
-            .process_loop(&mut scanner, true)
+            .process_loop(&mut scanner, 1)
             .expect("CSSCPA loop parses old TPTP input clause");
 
         assert_eq!(result.processed(), 1);
@@ -881,7 +912,7 @@ accept: cnf(csscpa_hidden,axiom,p(a)).",
         scanner.set_format(IoFormat::Tstp);
 
         let result = state
-            .process_loop(&mut scanner, true)
+            .process_loop(&mut scanner, 1)
             .expect("CSSCPA loop parses old TPTP input clause under filter mode");
 
         assert_eq!(scanner.format(), IoFormat::Tstp);

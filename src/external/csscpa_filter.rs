@@ -90,7 +90,7 @@ const OPTIONS: &[OptCell<OptionCode>] = &[
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FilterConfig {
     output_file: Option<PathBuf>,
-    output_level: bool,
+    output_level: i64,
     files: Vec<String>,
 }
 
@@ -98,7 +98,7 @@ impl Default for FilterConfig {
     fn default() -> Self {
         Self {
             output_file: None,
-            output_level: true,
+            output_level: 1,
             files: Vec::new(),
         }
     }
@@ -172,7 +172,7 @@ where
                 config.output_file = parsed.arg().map(PathBuf::from);
             }
             OptionCode::Silent => {
-                config.output_level = false;
+                config.output_level = 0;
             }
             OptionCode::OutputLevel => {
                 let level = get_int_arg(parsed.option(), parsed.arg().unwrap_or(""))?;
@@ -182,7 +182,7 @@ where
                         "Option -l (--output-level) accepts only 0 or 1for CSSCPA_filter",
                     ));
                 }
-                config.output_level = level != 0;
+                config.output_level = level;
             }
             OptionCode::Rant => {
                 let intensity = get_int_arg_check_range(
@@ -536,6 +536,35 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("accepts only 0 or 1"));
+    }
+
+    #[test]
+    fn negative_output_level_keeps_c_truthy_trace_but_not_outprint_line() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(
+            b"accept: cnf(csscpa_neg,axiom,~p(a)).\n\
+check improve(1.0,0.0): cnf(csscpa_pos,axiom,p(a)).\n"
+                .to_vec(),
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [PROGRAM_NAME, "--output-level=-1"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("negative output level run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("output is utf8");
+        assert!(output.contains("accepted from 0 (forced)"));
+        assert!(output.contains("accepted from 0 (contradicts)"));
+        assert!(output.contains("% CSSCPAState: contradicts"));
+        assert!(!output.contains("% Unit contradiction found!"));
+        assert!(output.contains("% Resulting clause set:"));
     }
 
     #[test]

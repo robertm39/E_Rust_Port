@@ -104,8 +104,8 @@ Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
 ### Rust Port Notes
 
 - `src/external/csscpa.rs` ports the `ClauseStatusType` discriminants/string rendering, CSSCPA state counters and three clause buckets, state-line rendering, and the core `CSSCPAProcessClause` forced/check acceptance path over the current Rust clause-set and subsumption APIs.
-- The current Rust slice covers tautology rejection, unit/full subsumption rejection, improvement by subsumed-weight and average-weight gates, unit contradiction detection, subsumed-clause removal, CSSCPA source propagation, and `OutputLevel`-style trace text.
-- `CSSCPALoop` command parsing is represented as an explicit Rust loop result that preserves `output_level`, `state:`, the exact buffering-plea token sequence, `accept`/`check`, optional `from` source validation, optional `improve(weight_delta, average_delta)`, current scanner-format clause parsing, and process-clause dispatch. The standalone `CSSCPA_filter` wrapper now uses this loop.
+- The current Rust slice covers tautology rejection, unit/full subsumption rejection, improvement by subsumed-weight and average-weight gates, unit contradiction detection, subsumed-clause removal, CSSCPA source propagation, and numeric `OutputLevel`-style trace text, including C's distinction between truthy `if(OutputLevel)` traces and the `OUTPRINT(1)` unit-contradiction banner.
+- `CSSCPALoop` command parsing is represented as an explicit Rust loop result that preserves numeric `output_level`, `state:`, the exact buffering-plea token sequence, `accept`/`check`, optional `from` source validation, optional `improve(weight_delta, average_delta)`, current scanner-format clause parsing, and process-clause dispatch. The standalone `CSSCPA_filter` wrapper now uses this loop.
 
 ### Change Later
 
@@ -113,7 +113,7 @@ Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
 - `collect_subsumed` stores raw clause pointers on a stack and deletes those entries later. Rust collects clause identifiers plus the owning bucket because `ClauseSet` owns clauses by value; a future pointer-stable clause handle could restore direct handle deletion if CSSCPA becomes a hot executable path.
 - `CSSCPAProcessClause` mixes state transitions with `GlobalOut` printing and unconditional `fflush(GlobalOut)`. Rust returns trace text from the core state operation so output routing stays explicit; executable integration should decide exactly where to preserve C's flush points.
 - `ClauseStatusType` includes `requested`, which is only used by `CSSCPALoop` state requests and never returned by `CSSCPAProcessClause`. A later typed API can keep requested-state reporting separate from clause-processing results after parser compatibility is covered.
-- `CSSCPALoop` accepts any positive integer after `output_level` but mutates the global flag only for `0` and `1`; other values are silently consumed and leave the prior level in place. Rust preserves that command behavior in the loop result, but a later user-facing CLI could report unsupported levels after compatibility tests are fixed.
+- `CSSCPALoop` accepts any positive integer after `output_level` but mutates the global flag only for `0` and `1`; other values are silently consumed and leave the prior level in place. Separately, the wrapper can seed a negative CLI `OutputLevel`, which remains truthy for direct `if(OutputLevel)` traces but does not satisfy `OUTPRINT(1)`. Rust preserves those numeric gate behaviors, but a later user-facing CLI could report unsupported levels after compatibility tests are fixed.
 - `CSSCPALoop` prints `state:` requests regardless of the current `OutputLevel`, while clause-level traces are gated. Keep this split visible when the executable wrapper moves from returned trace text to real output and flush calls.
 
 ### Porting Focus
