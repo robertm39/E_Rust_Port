@@ -11208,6 +11208,48 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_process_clause_does_not_resplit_split_children() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let x = typed_var(terms, -72);
+            let y = typed_var(terms, -74);
+            let p_code = unary_predicate_code(terms, "pc_process_split_child_p");
+            let q_code = unary_predicate_code(terms, "pc_process_split_child_q");
+            let p_x = unary_predicate(terms, p_code, &x);
+            let q_y = unary_predicate(terms, q_code, &y);
+            let true_term = terms.true_term().clone();
+            let first = Eqn::alloc(p_x, true_term.clone(), terms, true).unwrap();
+            let second = Eqn::alloc(q_y, true_term, terms, true).unwrap();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+            clause.set_ident(4_089);
+            clause
+        };
+        let packed = fv_index_pack_clause(clause, None);
+        let mut control = proof_control_alloc();
+        init_process_clause_control(&mut control, &state);
+        control.heuristic_parms_mut().split_clauses = SplitClassType::ALL;
+        control.heuristic_parms_mut().split_method = SplitType::GroundFull;
+
+        let outcome = proof_state_replacing_inferences(&mut state, &mut control, packed)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(outcome, ReplacingInferenceOutcome::Replaced { empty: None });
+        assert_eq!(state.unprocessed().members(), 3);
+        let generated_count = state.statistics().generated_count;
+        for _ in 0..3 {
+            let outcome = proof_state_process_clause(&mut state, &mut control, 1)
+                .unwrap_or_else(|err| panic!("{err}"));
+            assert!(
+                matches!(outcome, ProcessClauseOutcome::Processed { .. }),
+                "split child should be processed without another split: {outcome:?}"
+            );
+        }
+        assert_eq!(state.unprocessed().members(), 0);
+        assert_eq!(state.statistics().generated_count, generated_count);
+    }
+
+    #[test]
     fn proof_state_process_clause_returns_no_clause_for_empty_unprocessed() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut control = proof_control_alloc();

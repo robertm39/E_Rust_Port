@@ -109,7 +109,7 @@ Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 
 ### Rust Port Status Notes
 
-- Rust now ports the `ClauseSplit` and `ClauseSplitGeneral` paths for represented clauses: literal partitioning by shared variables, `SplitGroundNone`/`SplitGroundOne`/`SplitGroundFull` ground handling, split-literal detection through `EPIsSplitLit`, fresh arity-zero and split-variable-parameterized predicate generation, creation of definition clauses plus the residual negative split-literal clause, increasing-cardinality split-variable search, and C-style split-count reporting.
+- Rust now ports the `ClauseSplit` and `ClauseSplitGeneral` paths for represented clauses: literal partitioning by shared variables, `SplitGroundNone`/`SplitGroundOne`/`SplitGroundFull` ground handling, split-literal detection through the C `EPIsSplitLit` marker plus the generated split-predicate flag in proof-search split guards, fresh arity-zero and split-variable-parameterized predicate generation, creation of definition clauses plus the residual negative split-literal clause, increasing-cardinality split-variable search, and C-style split-count reporting.
 - Non-fresh arity-zero splitting now uses the proof-state definition store to reuse variant definition predicates and suppress duplicate definition clauses, matching C's `GetDefinitions(fresh=false)` clause-side behavior. Parameterized `ClauseSplitGeneral` attempts still create fresh definitions, as in C.
 - Rust also ports the `ClauseSetSplitClauses` and `ClauseSetSplitClausesGeneral` extraction/insertion loops, including C-style return counts when non-fresh definition reuse suppresses duplicate definition clauses. Split-definition formula/archive output and derivation/proof-documentation pushes remain pending.
 
@@ -120,6 +120,7 @@ Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 - C `ClauseSplitGeneral` uses `TPCheckFlag` as temporary term-cell state to ignore selected split variables during partitioning and does not locally clear every touched flag. Rust uses explicit split-variable identity exclusion instead; revisit only if reference tests show the flag leakage is externally observable.
 - Fresh splitting in C still creates and archives a formula definition even when definition reuse is disabled. Rust currently creates the clause-level split definitions only because formula sets and proof documentation are not yet owned by proof state.
 - `clause_split_general` returns `part+1` even when definition reuse suppresses one or more duplicate definition clauses. Rust carries this C-style split count separately from the actual queued clause vector; keep the distinction visible in future APIs.
+- C `ClauseHasSplitLiteral` checks the full `EPIsSplitLit` property mask, but that value overlaps maximality/cache flags such as `EPIsStrictlyMaximal`, `EPMaxIsUpToDate`, and `EPHasEquiv`. Later ordering work can disturb those bits on generated split predicates. Rust keeps the raw property helper but uses a bank-aware proof-search split guard that also recognizes `FPClSplitDef` predicates to avoid recursively splitting split-definition clauses; revisit the C property encoding after compatibility is secured.
 
 ### Porting Focus
 

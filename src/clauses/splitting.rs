@@ -91,6 +91,21 @@ pub fn clause_has_split_literal(clause: &Clause) -> bool {
         .any(|literal| literal.query_prop(EP_IS_SPLIT_LIT))
 }
 
+/// Returns whether the clause contains a literal that should block another split.
+///
+/// The C property value for `EPIsSplitLit` overlaps maximality/cache flags. The
+/// proof-control path can legitimately disturb those flags after a generated
+/// split clause is evaluated and later selected, so the Rust split guard also
+/// recognizes the generated split predicate marker.
+#[must_use]
+pub fn clause_has_split_guard_literal(clause: &Clause, bank: &TermBank) -> bool {
+    clause
+        .literals()
+        .as_slice()
+        .iter()
+        .any(|literal| literal.query_prop(EP_IS_SPLIT_LIT) || literal.is_split_lit(bank))
+}
+
 /// Generates a C `GenDefLit`-style split definition literal.
 ///
 /// This is the arity-zero convenience wrapper used by ordinary `ClauseSplit`.
@@ -247,7 +262,7 @@ pub fn clause_split_general(
     split_vars: &[Term],
 ) -> Result<ClauseSplitOutcome, Diagnostic> {
     let lit_no = clause.literal_number();
-    if lit_no <= 1 || clause_has_split_literal(&clause) {
+    if lit_no <= 1 || clause_has_split_guard_literal(&clause, bank) {
         return Ok(ClauseSplitOutcome::Unsplit(Box::new(clause)));
     }
 
