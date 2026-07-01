@@ -1,11 +1,15 @@
 //! Port of `PCL2/pcl_miniclauses`.
 
 use crate::basics::error::Diagnostic;
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
-    clause_pcl_string, clause_print_lop_format_string, clause_print_tstp_core_string, Clause,
+    clause_pcl_string, clause_print_lop_format_string, clause_print_lop_format_string_with_options,
+    clause_print_tptp_format_string_with_options, clause_print_tstp_core_string,
+    clause_write_tstp_with_type_suffixes, Clause,
 };
-use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn::{Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
+use crate::inout::scanner::IoFormat;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 
@@ -130,10 +134,8 @@ impl MiniClause {
         self.to_clause(bank)
     }
 
-    /// Renders through a temporary ordinary clause, matching C
-    /// `MiniClausePrint`. Rust currently exposes the LOP branch explicitly
-    /// because the process-global output-format dispatcher is not part of this
-    /// PCL2 slice.
+    /// Renders through a temporary ordinary clause, matching the default LOP
+    /// branch of C `MiniClausePrint`.
     ///
     /// # Errors
     ///
@@ -145,6 +147,57 @@ impl MiniClause {
     ) -> Result<String, Diagnostic> {
         let clause = self.to_clause(bank)?;
         Ok(clause_print_lop_format_string(bank, &clause, full_terms))
+    }
+
+    /// C `MiniClausePrint` with explicit `ClausePrint` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if allocating any rebuilt literal fails, or if TSTP
+    /// rendering rejects the rebuilt clause.
+    pub fn print_format_string(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let options = match output_format {
+            IoFormat::Tptp => EqnPrintOptions::tptp(),
+            IoFormat::Lop | IoFormat::Tstp | IoFormat::Auto => EqnPrintOptions::lop(),
+        };
+        self.print_format_string_with_options(
+            bank,
+            full_terms,
+            output_format,
+            problem_type,
+            options,
+        )
+    }
+
+    /// C `MiniClausePrint` with caller-provided equation options.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if allocating any rebuilt literal fails, or if TSTP
+    /// rendering rejects the rebuilt clause.
+    pub fn print_format_string_with_options(
+        &self,
+        bank: &mut TermBank,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+        options: EqnPrintOptions,
+    ) -> Result<String, Diagnostic> {
+        let clause = self.to_clause(bank)?;
+        mini_clause_render_clause_string(
+            bank,
+            &clause,
+            full_terms,
+            output_format,
+            problem_type,
+            options,
+        )
     }
 
     /// C `MiniClausePCLPrint`.
@@ -168,15 +221,48 @@ impl MiniClause {
     }
 }
 
+fn mini_clause_render_clause_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string_with_options(
+            bank, clause, options,
+        )),
+        IoFormat::Tstp => {
+            let mut output = String::new();
+            clause_write_tstp_with_type_suffixes(
+                &mut output,
+                bank,
+                clause,
+                full_terms,
+                true,
+                problem_type,
+                options.print_types,
+            )?;
+            Ok(output)
+        }
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
+            bank, clause, full_terms, options,
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MiniClause, MiniLiteral};
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::{
         clause_pcl_string, clause_print_lop_format_string, clause_print_tstp_core_string, Clause,
     };
     use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
-    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqnlist::EqnList;
+    use crate::inout::scanner::IoFormat;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -314,6 +400,55 @@ mod tests {
         assert_eq!(
             mini.print_tstp_core_string(&mut bank).unwrap(),
             clause_print_tstp_core_string(&bank, &clause, true, false)
+        );
+    }
+
+    #[test]
+    fn print_format_string_dispatches_rebuilt_clause_output() {
+        let mut bank = test_bank();
+        let clause = sample_clause(&mut bank);
+        let mini = MiniClause::from_clause(&clause);
+
+        let input_clause = mini
+            .print_format_string(&mut bank, true, IoFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(input_clause.starts_with("input_clause("));
+        assert!(input_clause.contains("++equal(mini_a, mini_b)"));
+        assert!(input_clause.contains("--equal(mini_b, mini_a)"));
+        assert!(!input_clause.contains("<-"));
+
+        let wrapped_clause = mini
+            .print_format_string(&mut bank, true, IoFormat::Tstp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(wrapped_clause.starts_with("cnf(") || wrapped_clause.starts_with("tcf("));
+        assert!(wrapped_clause.contains("mini_a"));
+        assert!(!wrapped_clause.contains("<-"));
+
+        assert_eq!(
+            mini.print_format_string(&mut bank, true, IoFormat::Auto, ProblemType::FirstOrder)
+                .unwrap_or_else(|err| panic!("{err}")),
+            mini.print_lop_string(&mut bank, true)
+                .unwrap_or_else(|err| panic!("{err}"))
+        );
+    }
+
+    #[test]
+    fn print_format_string_with_options_uses_caller_equation_options() {
+        let mut bank = test_bank();
+        let clause = sample_clause(&mut bank);
+        let mini = MiniClause::from_clause(&clause);
+
+        assert_eq!(
+            mini.print_format_string_with_options(
+                &mut bank,
+                true,
+                IoFormat::Lop,
+                ProblemType::FirstOrder,
+                EqnPrintOptions::lop()
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            mini.print_lop_string(&mut bank, true)
+                .unwrap_or_else(|err| panic!("{err}"))
         );
     }
 
