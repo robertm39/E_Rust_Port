@@ -14061,6 +14061,39 @@ mod tests {
     }
 
     #[test]
+    fn run_app_encode_accepts_thf_type_declarations() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-thf-types");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             fof(ax, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("%-- person."));
+        assert!(printed.contains("tff(ax, axiom, "));
+        assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_ignores_includes_and_skips_top_level_true() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-ignore-include");
