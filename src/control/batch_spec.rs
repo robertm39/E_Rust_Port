@@ -1,7 +1,14 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::{ProblemType, ProverResult};
+use crate::basics::simple_stuff::{set_problem_type, ProblemType, ProverResult};
+use crate::basics::stringtrees::StrTree;
+use crate::clauses::clause::{clause_parse, Clause};
+use crate::clauses::clause_props::{
+    clause_type_from_identifier, CP_INITIAL, CP_INPUT_FORMULA, CP_TYPE_WATCH_CLAUSE,
+};
+use crate::clauses::clausefunc::{tcf_tstp_parse, tformula_has_free_vars};
+use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::formulasets::FormulaSet;
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::sine::{pstack_clause_write_tstp, pstack_formula_write_tstp};
 use crate::control::esession::{Descriptor, DescriptorInterestSet};
 use crate::control::proc_ctrl::{prover_result_table_entry, EPCtrl, EPCtrlSet, MAX_CORES};
@@ -9,14 +16,17 @@ use crate::control::sine::{StructFofSpec, StructFofSpecSelection};
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
     accept_dotted_id, parse_basic_include, parse_continuous, parse_dotted_id, parse_filename,
-    parse_int,
+    parse_int, parse_skip_parenthesized_expr,
 };
-use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
+use crate::inout::scanner::{
+    token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
+};
 use crate::inout::tempfile::temp_file_create;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
+use std::fs::File;
 use std::io::{self, Cursor, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const BATCH_FILTERS: &[&str] = &[
@@ -707,6 +717,51 @@ impl BatchSpec {
         Ok(report)
     }
 
+    pub fn init_struct_fof_spec_from_files<W: Write + ?Sized>(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        default_dir: Option<&str>,
+        output: &mut W,
+    ) -> Result<i64, Diagnostic> {
+        let mut parsed = 0;
+        for include in &self.includes {
+            if ctrl.has_parsed_include(include) {
+                continue;
+            }
+            let request = BatchProblemLoadRequest {
+                source: include,
+                default_dir,
+                format: self.format,
+            };
+            let Some(problem) = load_include_problem_from_file(bank, ctrl, request, output)? else {
+                continue;
+            };
+            if !problem.clauses.is_empty() {
+                return Err(batch_process_error(format!(
+                    "Batch include '{include}' produced {} watchlist clauses",
+                    problem.clauses.len()
+                )));
+            }
+            parsed += problem.formulas.cardinality();
+            ctrl.add_problem(bank.signature(), problem.clauses, problem.formulas, false);
+            ctrl.mark_include_parsed(include);
+        }
+        ctrl.mark_shared_axioms(bank.signature());
+        ctrl.init_distrib(bank.signature(), false);
+        Ok(parsed)
+    }
+
+    pub fn load_problem_from_file(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &StructFofSpec,
+        request: BatchProblemLoadRequest<'_>,
+    ) -> Result<BatchProblemData, Diagnostic> {
+        let mut scanner = open_batch_problem_scanner(request)?;
+        parse_batch_problem_entries(&mut scanner, bank, ctrl, None)
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "The staged BatchProcessFile port keeps parser, clock, and runner hooks injectable"
@@ -751,6 +806,56 @@ impl BatchSpec {
             clock_seconds,
             spawn_runner,
             poll_runners,
+        )?;
+
+        Ok(BatchProcessFileReport {
+            source: config.source.to_owned(),
+            dest: config.dest.to_owned(),
+            solved: problem.solved,
+            problem,
+        })
+    }
+
+    pub fn process_file_with_runner_backend<WGlobal, C, B>(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        config: BatchProcessFileConfig<'_>,
+        global_output: &mut WGlobal,
+        clock_seconds: C,
+        backend: &mut B,
+    ) -> Result<BatchProcessFileReport, Diagnostic>
+    where
+        WGlobal: Write,
+        C: FnMut() -> i64,
+        B: BatchRunnerBackend,
+    {
+        let problem = self.load_problem_from_file(
+            bank,
+            ctrl,
+            BatchProblemLoadRequest {
+                source: config.source,
+                default_dir: config.default_dir,
+                format: IoFormat::Tstp,
+            },
+        )?;
+        let mut dest = open_batch_dest_file(config.dest)?;
+        let problem = self.process_problem_with_runner_backend(
+            bank,
+            ctrl,
+            problem,
+            BatchProcessProblemConfig {
+                wct_limit: config.wct_limit,
+                jobname: config.source,
+                interactive: false,
+            },
+            BatchRunnerProblemConfig::default(),
+            BatchProcessProblemOutputs {
+                global_output,
+                external_output: Some(&mut dest),
+            },
+            clock_seconds,
+            backend,
         )?;
 
         Ok(BatchProcessFileReport {
@@ -1482,6 +1587,302 @@ pub fn abstract_to_concrete(name: &str, variant: &str, postfix: &str) -> String 
     result
 }
 
+fn open_batch_problem_scanner(request: BatchProblemLoadRequest<'_>) -> Result<Scanner, Diagnostic> {
+    let mut scanner =
+        Scanner::from_file_with_default_dir(Path::new(request.source), true, request.default_dir)?;
+    scanner.set_format(request.format);
+    Ok(scanner)
+}
+
+fn open_batch_dest_file(dest: &str) -> Result<File, Diagnostic> {
+    let path = Path::new(dest);
+    File::create(path).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::FILE_ERROR,
+            format!("Cannot open file {}: {error}", path.display()),
+        )
+    })
+}
+
+fn load_include_problem_from_file<W: Write + ?Sized>(
+    bank: &mut TermBank,
+    ctrl: &StructFofSpec,
+    request: BatchProblemLoadRequest<'_>,
+    output: &mut W,
+) -> Result<Option<BatchProblemData>, Diagnostic> {
+    let mut scanner = match open_batch_problem_scanner(request) {
+        Ok(scanner) => scanner,
+        Err(error) if error.code() == ErrorCode::FILE_ERROR => {
+            writeln!(output, "% Could not find {}", request.source)
+                .map_err(|error| batch_process_output_error(&error))?;
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    writeln!(output, "% Parsing {}", request.source)
+        .map_err(|error| batch_process_output_error(&error))?;
+    parse_batch_problem_entries(&mut scanner, bank, ctrl, None).map(Some)
+}
+
+fn parse_batch_problem_entries(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    ctrl: &StructFofSpec,
+    mut selectors: Option<&mut StrTree<i64, i64>>,
+) -> Result<BatchProblemData, Diagnostic> {
+    set_problem_type(ProblemType::FirstOrder)?;
+    let mut clauses = ClauseSet::new();
+    let mut formulas = FormulaSet::new();
+
+    while !scanner.test_tok(TokenType::NO_TOKEN) {
+        if scanner.test_id("cnf") {
+            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            if batch_entry_selected(
+                clause.info().and_then(ClauseInfo::name),
+                selectors.as_deref_mut(),
+            ) {
+                insert_batch_clause(bank, &mut clauses, &mut formulas, clause)?;
+            }
+        } else if scanner.test_id("fof|tff|tcf") {
+            let parsed = parse_batch_tstp_formula(scanner, bank)?;
+            if batch_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
+                insert_batch_formula(bank, &mut clauses, &mut formulas, parsed.formula)?;
+            }
+        } else if scanner.test_id("include") {
+            let mut include_selectors = StrTree::new();
+            let skip_includes = parsed_include_skip_tree(ctrl);
+            if let Some(mut included) =
+                scanner.parse_include(&mut include_selectors, &skip_includes)?
+            {
+                let mut included_data = parse_batch_problem_entries(
+                    &mut included,
+                    bank,
+                    ctrl,
+                    Some(&mut include_selectors),
+                )?;
+                clauses.insert_set(&mut included_data.clauses);
+                formulas.insert_set(&mut included_data.formulas);
+            }
+        } else if scanner.test_id("thf") {
+            return Err(batch_thf_requires_hol_error(scanner));
+        } else {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{}(just read '{}'): LTB batch input currently supports cnf clauses, first-order fof/tff/tcf formula entries, and include directives",
+                    token_pos_rep(scanner.current_token()),
+                    scanner.current_token().literal()
+                ),
+            ));
+        }
+    }
+
+    if let Some(selector_tree) = selectors.as_ref() {
+        check_batch_include_selectors_found(scanner, selector_tree)?;
+    }
+
+    Ok(BatchProblemData { clauses, formulas })
+}
+
+fn insert_batch_clause(
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+    formulas: &mut FormulaSet,
+    clause: Clause,
+) -> Result<(), Diagnostic> {
+    if clause.query_tptp_type() == CP_TYPE_WATCH_CLAUSE {
+        clauses.insert(clause);
+    } else {
+        formulas.insert(WrappedFormula::form_clause_alloc(
+            bank,
+            clause,
+            ProblemType::FirstOrder,
+        )?);
+    }
+    Ok(())
+}
+
+fn insert_batch_formula(
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+    formulas: &mut FormulaSet,
+    formula: WrappedFormula,
+) -> Result<(), Diagnostic> {
+    if formula.query_tptp_type() == CP_TYPE_WATCH_CLAUSE {
+        if !formula.is_clause() {
+            return Err(batch_process_error(
+                "LTB watchlist formula is not clause-backed like C FormulaAndClauseSetParse expects",
+            ));
+        }
+        clauses.insert(formula.form_clause_to_clause(bank)?);
+    } else {
+        formulas.insert(formula);
+    }
+    Ok(())
+}
+
+struct ParsedBatchFormula {
+    name: String,
+    formula: WrappedFormula,
+}
+
+fn parse_batch_tstp_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<ParsedBatchFormula, Diagnostic> {
+    bank.vars().clear_ext_names();
+    let start_source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
+    let start_line = usize_to_i64_c(scanner.current_token().line());
+    let start_column = usize_to_i64_c(scanner.current_token().column());
+    let is_tcf = scanner.test_id("tcf");
+
+    scanner.accept_id("fof|tff|tcf")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let name = scanner.current_token().literal();
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    let (formula, type_) = if scanner.test_id("type") {
+        scanner.accept_id("type")?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        bank.signature_mut()
+            .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+        (
+            bank.true_term().clone(),
+            clause_type_from_identifier("axiom", ProblemType::FirstOrder),
+        )
+    } else {
+        let roles = if is_tcf {
+            "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question|watchlist"
+        } else {
+            "axiom|definition|theorem|assumption|hypothesis|conjecture|negated_conjecture|lemma|unknown|plain|question"
+        };
+        scanner.check_id(roles)?;
+        let role = scanner.current_token().literal();
+        scanner.accept_tok(TokenType::IDENT)?;
+        scanner.accept_tok(TokenType::COMMA)?;
+        let type_ = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+        let formula_position = token_pos_rep(scanner.current_token());
+        let formula = if scanner.test_id("$distinct") {
+            bank.parse_tstp_distinct(scanner)?
+        } else if is_tcf {
+            tcf_tstp_parse(scanner, bank, ProblemType::FirstOrder)?
+        } else {
+            bank.parse_tformula_tstp(scanner)?
+        };
+        if tformula_has_free_vars(bank, &formula).is_some() {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                format!(
+                    "{formula_position} Formula has free variables (check parentheses and quantifier precedence)"
+                ),
+            ));
+        }
+        (formula, type_)
+    };
+
+    parse_batch_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    let mut formula = WrappedFormula::wt_formula_alloc(formula);
+    formula.set_tptp_type(type_);
+    formula.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+    formula.set_info(Some(ClauseInfo::new(
+        Some(name.as_str()),
+        Some(start_source.as_str()),
+        start_line,
+        start_column,
+    )));
+    Ok(ParsedBatchFormula { name, formula })
+}
+
+fn parse_batch_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    if scanner.test_tok(TokenType::COMMA) {
+        scanner.accept_tok(TokenType::COMMA)?;
+        batch_tstp_skip_source(scanner)?;
+        if scanner.test_tok(TokenType::COMMA) {
+            scanner.accept_tok(TokenType::COMMA)?;
+            scanner.check_tok(TokenType::OPEN_SQUARE)?;
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+    }
+    Ok(())
+}
+
+fn batch_tstp_skip_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    if scanner.test_tok(TokenType::OPEN_SQUARE) {
+        parse_skip_parenthesized_expr(scanner)
+    } else {
+        scanner.accept_tok(TokenType::IDENTIFIER | TokenType::POS_INT)?;
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            parse_skip_parenthesized_expr(scanner)?;
+        }
+        Ok(())
+    }
+}
+
+fn parsed_include_skip_tree(ctrl: &StructFofSpec) -> StrTree<i64, i64> {
+    let mut skip = StrTree::new();
+    for include in ctrl.parsed_includes() {
+        skip.store(include, 1, 0);
+    }
+    skip
+}
+
+fn batch_entry_selected(name: Option<&str>, selectors: Option<&mut StrTree<i64, i64>>) -> bool {
+    let Some(selectors) = selectors else {
+        return true;
+    };
+    if selectors.is_empty() {
+        return true;
+    }
+    if selectors.find(EMPTY_INCLUDE_SELECTOR_SENTINEL).is_some() {
+        return false;
+    }
+    let Some(name) = name else {
+        return false;
+    };
+    let Some(entry) = selectors.find_mut(name) else {
+        return false;
+    };
+    entry.val1 = 1;
+    true
+}
+
+fn check_batch_include_selectors_found(
+    scanner: &Scanner,
+    selectors: &StrTree<i64, i64>,
+) -> Result<(), Diagnostic> {
+    let missing = selectors
+        .iter()
+        .filter(|(name, entry)| *name != EMPTY_INCLUDE_SELECTOR_SENTINEL && entry.val1 == 0)
+        .map(|(name, _)| name.to_owned())
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut message = String::new();
+    if let Some(include_pos) = scanner.include_pos() {
+        message.push_str(include_pos);
+    }
+    message.push_str("\"include\" statement cannot find requested clauses/formulae: ");
+    message.push_str(&missing.join(", "));
+    Err(Diagnostic::new(ErrorCode::SYNTAX_ERROR, message))
+}
+
+fn batch_thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::SYNTAX_ERROR,
+        format!(
+            "{}(just read '{}'): To support HOL reasoning, rebuild with higher-order support",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal()
+        ),
+    )
+}
+
 fn parse_output_line(
     scanner: &mut Scanner,
     spec: &mut BatchSpec,
@@ -1575,16 +1976,18 @@ const fn batch_runner_cpu_time(wct_limit: i64, used: i64) -> i64 {
 mod tests {
     use super::{
         abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchCompletedRunner,
-        BatchOutputType, BatchProblemData, BatchProcCtrlRunnerSet, BatchProcessFileConfig,
-        BatchProcessFileOutputs, BatchProcessProblemConfig, BatchProcessProblemJob,
-        BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchProcessVariantsConfig,
-        BatchRunnerBackend, BatchRunnerCreateConfig, BatchRunnerProblemConfig, BatchRunnerRequest,
-        BatchRunnerTempRequest, BatchSpawnedRunner, BatchSpec, BatchVariantProblemOutcome,
-        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
+        BatchOutputType, BatchProblemData, BatchProblemLoadRequest, BatchProcCtrlRunnerSet,
+        BatchProcessFileConfig, BatchProcessFileOutputs, BatchProcessProblemConfig,
+        BatchProcessProblemJob, BatchProcessProblemOutputs, BatchProcessProblemsConfig,
+        BatchProcessVariantsConfig, BatchRunnerBackend, BatchRunnerCreateConfig,
+        BatchRunnerProblemConfig, BatchRunnerRequest, BatchRunnerTempRequest, BatchSpawnedRunner,
+        BatchSpec, BatchVariantProblemOutcome, BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES,
+        BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::simple_stuff::{ProblemType, ProverResult};
     use crate::clauses::clause::Clause;
+    use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
     use crate::control::esession::{Descriptor, DescriptorInterestSet};
@@ -2314,6 +2717,172 @@ mod tests {
     }
 
     #[test]
+    fn load_problem_from_file_keeps_c_formula_and_watchlist_split() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let source = test_path("batch-load-split.p");
+        fs::write(
+            &source,
+            "cnf(ax_clause, axiom, p(a)).\n\
+             cnf(watch_clause, watchlist, q(a)).\n\
+             fof(goal_formula, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let mut bank = test_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let source_name = source.to_string_lossy().into_owned();
+
+        let problem = spec
+            .load_problem_from_file(
+                &mut bank,
+                &ctrl,
+                BatchProblemLoadRequest {
+                    source: &source_name,
+                    default_dir: None,
+                    format: IoFormat::Tstp,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(problem.clauses.len(), 1);
+        assert_eq!(problem.formulas.cardinality(), 2);
+        let formulas = problem.formulas.iter().collect::<Vec<_>>();
+        assert!(formulas[0].is_clause());
+        assert_eq!(
+            formulas[0].info().and_then(ClauseInfo::name),
+            Some("ax_clause")
+        );
+        assert!(!formulas[1].is_clause());
+        assert_eq!(
+            formulas[1].info().and_then(ClauseInfo::name),
+            Some("goal_formula")
+        );
+    }
+
+    #[test]
+    fn init_struct_fof_spec_from_files_parses_includes_and_reports_missing() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let include = test_path("batch-include.ax");
+        fs::write(&include, "fof(shared_formula, axiom, p(a)).\n").unwrap();
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let include_name = include.file_name().unwrap().to_string_lossy().into_owned();
+        spec.includes = vec![include_name.clone(), "definitely-missing.ax".to_owned()];
+        let mut output = Vec::new();
+        let default_dir = format!("{}/", dir.to_string_lossy().replace('\\', "/"));
+
+        let parsed = spec
+            .init_struct_fof_spec_from_files(&mut bank, &mut ctrl, Some(&default_dir), &mut output)
+            .unwrap();
+
+        assert_eq!(parsed, 1);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+        assert!(ctrl.has_parsed_include(&include_name));
+        assert!(!ctrl.has_parsed_include("definitely-missing.ax"));
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(&format!("% Parsing {include_name}\n")));
+        assert!(output.contains("% Could not find definitely-missing.ax\n"));
+    }
+
+    #[test]
+    fn process_file_with_runner_backend_parses_file_and_writes_destination() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let source = test_path("batch-real-process.p");
+        let dest = test_path("batch-real-process.out");
+        let _ = fs::remove_file(&dest);
+        fs::write(&source, "cnf(goal_clause, axiom, $false).\n").unwrap();
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut backend = FakeRunnerBackend::new(Some(BatchCompletedRunner {
+            runner: BatchSpawnedRunner {
+                name: "Threshold(10000) => --satauto-schedule --assume-incompleteness".to_owned(),
+                start_time: 100,
+                prob_time: 6,
+            },
+            result: ProverResult::Theorem,
+            output: "% real destination proof\n".to_owned(),
+        }));
+        let source_name = source.to_string_lossy().into_owned();
+        let dest_name = dest.to_string_lossy().into_owned();
+
+        let report = spec
+            .process_file_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: None,
+                    source: &source_name,
+                    dest: &dest_name,
+                },
+                &mut global,
+                || 100,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(report.solved);
+        assert_eq!(report.source, source_name);
+        assert_eq!(report.dest, dest_name);
+        assert_eq!(report.problem.backtrack.removed_clause_sets, 1);
+        assert_eq!(backend.requests.len(), MAX_CORES);
+        assert!(backend.payloads[0].contains("goal_clause"));
+        assert_eq!(
+            fs::read_to_string(&dest).unwrap(),
+            format!(
+                "% SZS status Theorem for {}\n% real destination proof\n",
+                source.to_string_lossy()
+            )
+        );
+    }
+
+    #[test]
+    fn process_file_with_runner_backend_does_not_create_dest_after_parse_error() {
+        let source = test_path("batch-real-parse-error.p");
+        let dest = test_path("batch-real-parse-error.out");
+        let _ = fs::remove_file(&dest);
+        fs::write(&source, "not_a_tstp_entry.\n").unwrap();
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut backend = FakeRunnerBackend::new(None);
+        let source_name = source.to_string_lossy().into_owned();
+        let dest_name = dest.to_string_lossy().into_owned();
+
+        let error = spec
+            .process_file_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: None,
+                    source: &source_name,
+                    dest: &dest_name,
+                },
+                &mut global,
+                || 100,
+                &mut backend,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(!dest.exists());
+        assert_eq!(backend.requests.len(), 0);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert!(global.is_empty());
+    }
+
+    #[test]
     fn batch_problem_dest_name_preserves_c_dest_dir_joining() {
         assert_eq!(batch_problem_dest_name(None, "out.p"), "out.p");
         assert_eq!(
@@ -2692,6 +3261,12 @@ mod tests {
             .unwrap()
             .join("target")
             .join("batch-spec-temp")
+    }
+
+    fn test_path(name: &str) -> PathBuf {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        dir.join(format!("{name}-{}", std::process::id()))
     }
 
     fn shared_spec(signature: &Signature) -> StructFofSpec {

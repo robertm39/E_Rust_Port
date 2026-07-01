@@ -12,14 +12,15 @@ use crate::clauses::clause_props::{
 };
 use crate::clauses::clausefunc::{
     post_cnf_encode_clause_terms, tformula_add_quantor, tformula_app_encode_string,
-    tformula_clause_closed_encode, tformula_closure, tformula_collect_clause,
-    tformula_collect_free_vars, tformula_conjunctive_nf3, tformula_copy_def, tformula_create_def,
-    tformula_decode_polarity, tformula_encode_predicate_as_eqn, tformula_fcode_alloc,
-    tformula_find_defs, tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal,
-    tformula_is_prop_true, tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity,
-    tformula_preload_types, tformula_simplify, tformula_to_cnf, tformula_tptp_string,
-    tformula_unencode_root_eqn, tformula_unroll_fool_result, tformula_var_rename,
-    TFormulaDefinitions, TFormulaTptpPrintOptions,
+    tformula_clause_closed_encode, tformula_clause_encode, tformula_closure,
+    tformula_collect_clause, tformula_collect_free_vars, tformula_conjunctive_nf3,
+    tformula_copy_def, tformula_create_def, tformula_decode_polarity,
+    tformula_encode_predicate_as_eqn, tformula_fcode_alloc, tformula_find_defs,
+    tformula_has_free_vars, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_true,
+    tformula_lift_ite, tformula_lift_lets, tformula_mark_polarity, tformula_preload_types,
+    tformula_simplify, tformula_to_cnf, tformula_tptp_string, tformula_unencode_root_eqn,
+    tformula_unroll_fool_result, tformula_var_rename, TFormulaDefinitions,
+    TFormulaTptpPrintOptions,
 };
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
@@ -1430,6 +1431,25 @@ impl WrappedFormula {
         clause.set_properties(self.properties);
         clause.set_info(self.info.clone());
         Ok(clause)
+    }
+
+    /// Encodes a parsed clause as a clause-backed wrapped formula, matching C
+    /// `WFormClauseParse`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if the clause cannot be encoded as a formula.
+    pub fn form_clause_alloc(
+        bank: &mut TermBank,
+        mut clause: Clause,
+        problem_type: ProblemType,
+    ) -> Result<Self, Diagnostic> {
+        let formula = tformula_clause_encode(bank, &clause, problem_type)?;
+        let mut wrapped = Self::wt_formula_alloc(formula);
+        wrapped.is_clause = true;
+        wrapped.properties = clause.properties();
+        wrapped.info = clause.take_info();
+        Ok(wrapped)
     }
 
     /// Renders the formula body used by C formula proof documentation.
@@ -3876,6 +3896,40 @@ mod tests {
         assert_eq!(converted.literal_number(), 2);
         assert_eq!(converted.positive_literal_count(), 1);
         assert_eq!(converted.negative_literal_count(), 1);
+    }
+
+    #[test]
+    fn wrapped_formula_form_clause_alloc_preserves_clause_shape_and_metadata() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_alloc_clause_a");
+        let b = typed_const(&mut bank, "wf_alloc_clause_b");
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![eqn(&mut bank, &a, &b, true)]));
+        clause.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        clause.set_prop(CP_INPUT_FORMULA);
+        clause.set_info(Some(ClauseInfo::new(
+            Some("allocated_clause"),
+            Some("input.p"),
+            8,
+            5,
+        )));
+
+        let wrapped =
+            WrappedFormula::form_clause_alloc(&mut bank, clause, ProblemType::FirstOrder).unwrap();
+        let converted = wrapped.form_clause_to_clause(&mut bank).unwrap();
+
+        assert!(wrapped.is_clause());
+        assert_eq!(wrapped.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert!(wrapped.query_prop(CP_INPUT_FORMULA));
+        assert_eq!(
+            wrapped.info().and_then(ClauseInfo::name),
+            Some("allocated_clause")
+        );
+        assert_eq!(converted.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            converted.info().and_then(ClauseInfo::source),
+            Some("input.p")
+        );
+        assert_eq!(converted.literal_number(), 1);
     }
 
     #[test]

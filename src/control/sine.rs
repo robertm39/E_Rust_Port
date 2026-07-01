@@ -80,6 +80,10 @@ impl StructFofSpec {
         self.parsed_includes.contains(include)
     }
 
+    pub fn parsed_includes(&self) -> impl Iterator<Item = &str> {
+        self.parsed_includes.iter().map(String::as_str)
+    }
+
     pub fn mark_include_parsed(&mut self, include: impl Into<String>) -> bool {
         self.parsed_includes.insert(include.into())
     }
