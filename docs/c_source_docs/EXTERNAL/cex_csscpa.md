@@ -105,7 +105,7 @@ Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
 
 - `src/external/csscpa.rs` ports the `ClauseStatusType` discriminants/string rendering, CSSCPA state counters and three clause buckets, state-line rendering, and the core `CSSCPAProcessClause` forced/check acceptance path over the current Rust clause-set and subsumption APIs.
 - The current Rust slice covers tautology rejection, unit/full subsumption rejection, improvement by subsumed-weight and average-weight gates, unit contradiction detection, subsumed-clause removal, CSSCPA source propagation, and `OutputLevel`-style trace text.
-- `CSSCPALoop` command parsing is represented as an explicit Rust loop result that preserves `output_level`, `state:`, the exact buffering-plea token sequence, `accept`/`check`, optional `from` source validation, optional `improve(weight_delta, average_delta)`, current scanner-format clause parsing, and process-clause dispatch. The standalone filter executable remains pending.
+- `CSSCPALoop` command parsing is represented as an explicit Rust loop result that preserves `output_level`, `state:`, the exact buffering-plea token sequence, `accept`/`check`, optional `from` source validation, optional `improve(weight_delta, average_delta)`, current scanner-format clause parsing, and process-clause dispatch. The standalone `CSSCPA_filter` wrapper now uses this loop.
 
 ### Change Later
 

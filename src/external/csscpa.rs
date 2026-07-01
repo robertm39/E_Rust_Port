@@ -9,7 +9,7 @@ use crate::clauses::subsumption::{
 };
 use crate::clauses::tautologies::clause_is_tautology;
 use crate::inout::basicparser::parse_float;
-use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
@@ -354,7 +354,7 @@ impl CsscpaState {
             let (weight_delta, average_delta) = parse_optional_improve(scanner)?;
             scanner.accept_tok(TokenType::COLON)?;
 
-            let mut clause = clause_parse(scanner, self.terms_mut(), ProblemType::FirstOrder)?;
+            let mut clause = parse_csscpa_loop_clause(scanner, self.terms_mut())?;
             clause.set_csscpa_source(source);
             let result = self.process_clause_with_trace(
                 clause,
@@ -593,6 +593,20 @@ fn parse_optional_improve(scanner: &mut Scanner) -> Result<(f32, f32), Diagnosti
     let average_delta = f64_to_f32(parse_float(scanner)?);
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     Ok((weight_delta, average_delta))
+}
+
+fn parse_csscpa_loop_clause(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Clause, Diagnostic> {
+    let saved_format = scanner.format();
+    if saved_format == IoFormat::Tstp && scanner.test_id("input_clause") {
+        scanner.set_format(IoFormat::Tptp);
+        let result = clause_parse(scanner, bank, ProblemType::FirstOrder);
+        scanner.set_format(saved_format);
+        return result;
+    }
+    clause_parse(scanner, bank, ProblemType::FirstOrder)
 }
 
 fn accept_please_sequence(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -854,6 +868,24 @@ accept: cnf(csscpa_hidden,axiom,p(a)).",
 
         assert_eq!(result.processed(), 1);
         assert_eq!(result.accepted(), 1);
+        assert_eq!(state.clauses(), 1);
+        assert!(result.trace().contains("accepted from 0 (forced)"));
+    }
+
+    #[test]
+    fn loop_accepts_old_tptp_input_clause_under_tstp_filter_mode() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let mut scanner =
+            Scanner::from_user_string("accept: input_clause(c_0_1,axiom,[++p(a)]).", false)
+                .expect("CSSCPA loop scanner allocation");
+        scanner.set_format(IoFormat::Tstp);
+
+        let result = state
+            .process_loop(&mut scanner, true)
+            .expect("CSSCPA loop parses old TPTP input clause under filter mode");
+
+        assert_eq!(scanner.format(), IoFormat::Tstp);
+        assert_eq!(result.processed(), 1);
         assert_eq!(state.clauses(), 1);
         assert!(result.trace().contains("accepted from 0 (forced)"));
     }
