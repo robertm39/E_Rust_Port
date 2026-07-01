@@ -2371,7 +2371,7 @@ impl TermBank {
                 left = self.encode_equality_term(left, self.true_term.clone(), true)?;
                 right
             } else {
-                self.parse_term_real(scanner, true)?
+                self.parse_tformula_application_term_arg(scanner, true)?
             };
             self.encode_equality_term(left, right, positive)
         } else {
@@ -4653,6 +4653,45 @@ mod tests {
         let left = formula.argument(0).unwrap();
         assert_eq!(left.arity(), 1);
         assert_eq!(bank.signature().find_name(left.f_code()), Some("f"));
+    }
+
+    #[test]
+    fn tstp_formula_application_can_be_right_equality_operand() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. b: person. f: person > person.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("b = f @ a", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let right = formula.argument(1).unwrap();
+        assert_eq!(right.arity(), 1);
+        assert_eq!(bank.signature().find_name(right.f_code()), Some("f"));
     }
 
     #[test]

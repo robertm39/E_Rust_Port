@@ -22764,6 +22764,38 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_simple_thf_application_rhs_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("simple-thf-application-rhs-equality-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(fact, axiom, b = f @ a).\n\
+             thf(goal, conjecture, b = f @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_simple_thf_application_conjunction() {
         let _guard = global_state_lock();
         let path = temp_path("simple-thf-application-conjunction-proof");
