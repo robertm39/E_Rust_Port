@@ -179,6 +179,34 @@ pub struct BatchProblemLoadRequest<'a> {
     pub format: IoFormat,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchProcessVariantsConfig<'a> {
+    pub variants: &'a [&'a str],
+    pub provers: &'a [&'a str],
+    pub start: i64,
+    pub default_dir: Option<&'a str>,
+    pub outdir: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchVariantProblemJob {
+    pub variant_index: usize,
+    pub problem_index: usize,
+    pub variant: String,
+    pub prover: String,
+    pub abstract_source: String,
+    pub concrete_source: String,
+    pub dest: String,
+    pub wct_limit: i64,
+    pub default_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchVariantProblemOutcome {
+    pub solved: bool,
+    pub output: String,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BatchProcessProblemsReport {
     pub solved: i64,
@@ -242,6 +270,26 @@ pub struct BatchProcessFileReport {
     pub dest: String,
     pub solved: bool,
     pub problem: BatchProcessProblemReport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchVariantProblemRecord {
+    pub variant_index: usize,
+    pub problem_index: usize,
+    pub variant: String,
+    pub prover: String,
+    pub abstract_source: String,
+    pub concrete_source: String,
+    pub dest: String,
+    pub wct_limit: i64,
+    pub solved: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BatchProcessVariantsReport {
+    pub solved: i64,
+    pub attempted: usize,
+    pub records: Vec<BatchVariantProblemRecord>,
 }
 
 impl BatchProcessProblemsReport {
@@ -520,6 +568,146 @@ impl BatchSpec {
         })
     }
 
+    pub fn process_variants_with<W, C, F>(
+        &self,
+        config: BatchProcessVariantsConfig<'_>,
+        output: &mut W,
+        mut clock_seconds: C,
+        mut process_problem: F,
+    ) -> Result<BatchProcessVariantsReport, Diagnostic>
+    where
+        W: Write + ?Sized,
+        C: FnMut() -> i64,
+        F: FnMut(BatchVariantProblemJob) -> Result<BatchVariantProblemOutcome, Diagnostic>,
+    {
+        self.validate_process_variants_config(&config)?;
+
+        let problem_count = self.source_files.len();
+        let variant_count = config.variants.len();
+        let problem_count_i64 = usize_to_i64_c(problem_count);
+        let variant_count_i64 = usize_to_i64_c(variant_count);
+        let mut solved = vec![false; problem_count];
+        let mut solved_count = 0;
+        let initial_concrete_count = problem_count_i64 * variant_count_i64;
+        let mut report = BatchProcessVariantsReport::default();
+
+        write_variant_initial(
+            output,
+            problem_count_i64,
+            variant_count_i64,
+            initial_concrete_count,
+        )?;
+
+        for (variant_index, (&variant, &prover)) in
+            config.variants.iter().zip(config.provers).enumerate()
+        {
+            let now = clock_seconds();
+            let remaining = self.total_wtc_limit - (now - config.start);
+            let remaining_variant_count = variant_count_i64 - usize_to_i64_c(variant_index);
+            let mut concrete_prob_count =
+                (problem_count_i64 - solved_count) * remaining_variant_count;
+
+            write_variant_round(
+                output,
+                variant_index,
+                variant,
+                remaining,
+                problem_count_i64 - solved_count,
+                remaining_variant_count,
+                concrete_prob_count,
+            )?;
+
+            for (problem_index, (abstract_source, dest_file)) in
+                self.source_files.iter().zip(&self.dest_files).enumerate()
+            {
+                if solved[problem_index] {
+                    write_variant_already_solved(output, abstract_source)?;
+                    continue;
+                }
+
+                if concrete_prob_count == 0 {
+                    return Err(batch_process_error(
+                        "No concrete variant problems remain for an unsolved abstract problem",
+                    ));
+                }
+
+                let now = clock_seconds();
+                let remaining = self.total_wtc_limit - (now - config.start);
+                let per_prob_time = (remaining / concrete_prob_count) + 1;
+                let concrete_source = abstract_to_concrete(abstract_source, variant, ".p");
+                let dest = batch_problem_dest_name(config.outdir, dest_file);
+
+                write_variant_started(
+                    output,
+                    abstract_source,
+                    &concrete_source,
+                    &dest,
+                    per_prob_time,
+                )?;
+
+                let outcome = process_problem(BatchVariantProblemJob {
+                    variant_index,
+                    problem_index,
+                    variant: variant.to_owned(),
+                    prover: prover.to_owned(),
+                    abstract_source: abstract_source.clone(),
+                    concrete_source: concrete_source.clone(),
+                    dest: dest.clone(),
+                    wct_limit: per_prob_time,
+                    default_dir: config.default_dir.map(str::to_owned),
+                })?;
+
+                write!(output, "{}", outcome.output)
+                    .map_err(|error| batch_process_output_error(&error))?;
+                if outcome.solved {
+                    solved_count += 1;
+                    solved[problem_index] = true;
+                    concrete_prob_count -= remaining_variant_count;
+                } else {
+                    concrete_prob_count -= 1;
+                }
+                write_variant_ended(output, &concrete_source)?;
+
+                report.attempted += 1;
+                report.records.push(BatchVariantProblemRecord {
+                    variant_index,
+                    problem_index,
+                    variant: variant.to_owned(),
+                    prover: prover.to_owned(),
+                    abstract_source: abstract_source.clone(),
+                    concrete_source,
+                    dest,
+                    wct_limit: per_prob_time,
+                    solved: outcome.solved,
+                });
+            }
+        }
+
+        report.solved = solved_count;
+        Ok(report)
+    }
+
+    fn validate_process_variants_config(
+        &self,
+        config: &BatchProcessVariantsConfig<'_>,
+    ) -> Result<(), Diagnostic> {
+        if config.variants.len() != config.provers.len() {
+            return Err(batch_process_error(format!(
+                "Batch variant run has {} variants but {} prover commands",
+                config.variants.len(),
+                config.provers.len()
+            )));
+        }
+        if self.source_files.len() != self.dest_files.len() {
+            return Err(batch_process_error(format!(
+                "Batch spec has {} source files but {} destination files",
+                self.source_files.len(),
+                self.dest_files.len()
+            )));
+        }
+        Ok(())
+    }
+
     pub fn create_runner_request_with<W, C>(
         &self,
         ctrl: &mut StructFofSpec,
@@ -701,6 +889,83 @@ impl BatchSpec {
         }
         Ok(())
     }
+}
+
+fn write_variant_initial<W: Write + ?Sized>(
+    output: &mut W,
+    problem_count: i64,
+    variant_count: i64,
+    concrete_count: i64,
+) -> Result<(), Diagnostic> {
+    writeln!(
+        output,
+        "% Initial: {problem_count} abstract problems, {variant_count} variants, {concrete_count} concrete problems"
+    )
+    .map_err(|error| batch_process_output_error(&error))
+}
+
+fn write_variant_round<W: Write + ?Sized>(
+    output: &mut W,
+    variant_index: usize,
+    variant: &str,
+    remaining: i64,
+    unsolved_count: i64,
+    remaining_variant_count: i64,
+    concrete_prob_count: i64,
+) -> Result<(), Diagnostic> {
+    writeln!(
+        output,
+        "% Round {variant_index}, working on variant {variant}, remaining time {remaining}s"
+    )
+    .map_err(|error| batch_process_output_error(&error))?;
+    writeln!(
+        output,
+        "% {unsolved_count} unsolved abstract problems, {remaining_variant_count} remaining variants, {concrete_prob_count} concrete problems"
+    )
+    .map_err(|error| batch_process_output_error(&error))
+}
+
+fn write_variant_already_solved<W: Write + ?Sized>(
+    output: &mut W,
+    abstract_source: &str,
+) -> Result<(), Diagnostic> {
+    writeln!(
+        output,
+        "% Abstract problem {abstract_source} already solved"
+    )
+    .map_err(|error| batch_process_output_error(&error))
+}
+
+fn write_variant_started<W: Write + ?Sized>(
+    output: &mut W,
+    abstract_source: &str,
+    concrete_source: &str,
+    dest: &str,
+    per_prob_time: i64,
+) -> Result<(), Diagnostic> {
+    writeln!(
+        output,
+        "% Trying abstract problem {abstract_source} via {concrete_source} for {per_prob_time}s"
+    )
+    .map_err(|error| batch_process_output_error(&error))?;
+    writeln!(output, "\n% Processing {concrete_source} -> {dest}")
+        .map_err(|error| batch_process_output_error(&error))?;
+    writeln!(output, "% SZS status Started for {concrete_source}")
+        .map_err(|error| batch_process_output_error(&error))?;
+    output
+        .flush()
+        .map_err(|error| batch_process_output_error(&error))
+}
+
+fn write_variant_ended<W: Write + ?Sized>(
+    output: &mut W,
+    concrete_source: &str,
+) -> Result<(), Diagnostic> {
+    writeln!(output, "% SZS status Ended for {concrete_source}\n")
+        .map_err(|error| batch_process_output_error(&error))?;
+    output
+        .flush()
+        .map_err(|error| batch_process_output_error(&error))
 }
 
 fn write_problem_success<WGlobal, WExternal>(
@@ -898,8 +1163,9 @@ mod tests {
         abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchCompletedRunner,
         BatchOutputType, BatchProblemData, BatchProcessFileConfig, BatchProcessFileOutputs,
         BatchProcessProblemConfig, BatchProcessProblemJob, BatchProcessProblemOutputs,
-        BatchProcessProblemsConfig, BatchRunnerCreateConfig, BatchSpawnedRunner, BatchSpec,
-        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
+        BatchProcessProblemsConfig, BatchProcessVariantsConfig, BatchRunnerCreateConfig,
+        BatchSpawnedRunner, BatchSpec, BatchVariantProblemOutcome, BATCH_FILTERS,
+        BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
@@ -1378,6 +1644,111 @@ mod tests {
             "Results//out.p"
         );
         assert_eq!(batch_problem_dest_name(Some(""), "out.p"), "/out.p");
+    }
+
+    #[test]
+    fn process_variants_uses_c_round_time_accounting_and_skips_solved_abstracts() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.total_wtc_limit = 100;
+        spec.source_files = vec!["prob_*".to_owned(), "other_*suffix".to_owned()];
+        spec.dest_files = vec!["prob.out".to_owned(), "other.out".to_owned()];
+        let variants = ["A", "B"];
+        let provers = ["e-a", "e-b"];
+        let mut output = Vec::new();
+        let mut jobs = Vec::new();
+        let mut times = [10, 11, 12, 13, 14].into_iter();
+
+        let report = spec
+            .process_variants_with(
+                BatchProcessVariantsConfig {
+                    variants: &variants,
+                    provers: &provers,
+                    start: 0,
+                    default_dir: Some("Problems"),
+                    outdir: Some("Results"),
+                },
+                &mut output,
+                || times.next().unwrap(),
+                |job| {
+                    jobs.push((
+                        job.variant_index,
+                        job.problem_index,
+                        job.variant,
+                        job.prover,
+                        job.abstract_source,
+                        job.concrete_source,
+                        job.dest,
+                        job.wct_limit,
+                        job.default_dir,
+                    ));
+                    let solved = jobs.len() == 1 || jobs.len() == 3;
+                    Ok(BatchVariantProblemOutcome {
+                        solved,
+                        output: format!("% child output {}\n", jobs.len()),
+                    })
+                },
+            )
+            .unwrap();
+
+        assert_eq!(report.solved, 2);
+        assert_eq!(report.attempted, 3);
+        assert_eq!(report.records.len(), 3);
+        assert_eq!(report.records[0].wct_limit, 23);
+        assert_eq!(report.records[1].wct_limit, 45);
+        assert_eq!(report.records[2].wct_limit, 87);
+        assert!(report.records[0].solved);
+        assert!(!report.records[1].solved);
+        assert!(report.records[2].solved);
+        assert_eq!(jobs[0].0, 0);
+        assert_eq!(jobs[0].2, "A");
+        assert_eq!(jobs[0].3, "e-a");
+        assert_eq!(jobs[0].4, "prob_*");
+        assert_eq!(jobs[0].5, "prob_A.p");
+        assert_eq!(jobs[0].6, "Results/prob.out");
+        assert_eq!(jobs[0].7, 23);
+        assert_eq!(jobs[0].8.as_deref(), Some("Problems"));
+        assert_eq!(jobs[1].5, "other_A.p");
+        assert_eq!(jobs[2].0, 1);
+        assert_eq!(jobs[2].2, "B");
+        assert_eq!(jobs[2].3, "e-b");
+        assert_eq!(jobs[2].5, "other_B.p");
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("% Initial: 2 abstract problems, 2 variants, 4 concrete problems\n")
+        );
+        assert!(output.contains("% Round 0, working on variant A, remaining time 90s\n"));
+        assert!(output.contains("% Trying abstract problem prob_* via prob_A.p for 23s\n"));
+        assert!(output.contains("\n% Processing prob_A.p -> Results/prob.out\n"));
+        assert!(output.contains("% child output 1\n% SZS status Ended for prob_A.p\n\n"));
+        assert!(output.contains("% Abstract problem prob_* already solved\n"));
+        assert!(output.contains("% Trying abstract problem other_*suffix via other_B.p for 87s\n"));
+    }
+
+    #[test]
+    fn process_variants_rejects_mismatched_variant_prover_lists() {
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let variants = ["A", "B"];
+        let provers = ["e-a"];
+        let mut output = Vec::new();
+
+        let error = spec
+            .process_variants_with(
+                BatchProcessVariantsConfig {
+                    variants: &variants,
+                    provers: &provers,
+                    start: 0,
+                    default_dir: None,
+                    outdir: None,
+                },
+                &mut output,
+                || 0,
+                |_| panic!("no variant problem should be processed for mismatched inputs"),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(output.is_empty());
     }
 
     #[test]
