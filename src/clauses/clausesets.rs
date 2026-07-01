@@ -259,6 +259,88 @@ impl ClauseSet {
         output
     }
 
+    /// Returns the C `ClauseSetPrint` shape with explicit `ClausePrint` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects a stored clause.
+    pub fn print_format_string(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let options = match output_format {
+            IoFormat::Tptp => EqnPrintOptions::tptp(),
+            IoFormat::Lop | IoFormat::Tstp | IoFormat::Auto => EqnPrintOptions::lop(),
+        };
+        self.print_format_string_with_options(
+            bank,
+            full_terms,
+            output_format,
+            problem_type,
+            options,
+        )
+    }
+
+    /// Returns the C `ClauseSetPrint` shape with caller-provided equation options.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects a stored clause.
+    pub fn print_format_string_with_options(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+        options: EqnPrintOptions,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(&clause_set_render_clause_string(
+                bank,
+                clause,
+                full_terms,
+                output_format,
+                problem_type,
+                options,
+            )?);
+            output.push('\n');
+        }
+        Ok(output)
+    }
+
+    /// Returns the C `ClauseSetPrintPrefix` shape with explicit `ClausePrint` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects a stored clause.
+    pub fn print_prefix_format_string(
+        &self,
+        bank: &TermBank,
+        prefix: &str,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+        options: EqnPrintOptions,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(prefix);
+            output.push_str(&clause_set_render_clause_string(
+                bank,
+                clause,
+                true,
+                output_format,
+                problem_type,
+                options,
+            )?);
+            output.push('\n');
+        }
+        Ok(output)
+    }
+
     /// Writes the C `ClauseSetTSTPPrint` shape for the currently ported clause
     /// TSTP branches.
     ///
@@ -1126,6 +1208,37 @@ impl ClauseSet {
     }
 }
 
+fn clause_set_render_clause_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string_with_options(
+            bank, clause, options,
+        )),
+        IoFormat::Tstp => {
+            let mut output = String::new();
+            clause_write_tstp_with_type_suffixes(
+                &mut output,
+                bank,
+                clause,
+                full_terms,
+                true,
+                problem_type,
+                options.print_types,
+            )?;
+            Ok(output)
+        }
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
+            bank, clause, full_terms, options,
+        )),
+    }
+}
+
 fn indexed_clause_for_anchor(
     clause: Clause,
     fv_anchor: Option<&mut FvIndexAnchor>,
@@ -1492,7 +1605,7 @@ mod tests {
         CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED, CP_IS_SOS, CP_IS_S_INDEXED, CP_TYPE_AXIOM,
         CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS, CP_TYPE_NEG_CONJECTURE,
     };
-    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::fcvindexing::FvIndexAnchor;
@@ -1870,6 +1983,55 @@ mod tests {
         assert_eq!(
             set.print_lop_prefix_string(&bank, "# "),
             "# set_print_a=set_print_b <- .\n# set_print_b=set_print_c <- set_print_c=set_print_a.\n"
+        );
+    }
+
+    #[test]
+    fn format_print_helpers_dispatch_clause_output_in_set_order() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "set_format_a");
+        let b = typed_const(&mut bank, "set_format_b");
+        let c = typed_const(&mut bank, "set_format_c");
+        let mut first = clause_from(vec![literal(&mut bank, &a, &b, true)]);
+        first.set_ident(201);
+        let mut second = clause_from(vec![
+            literal(&mut bank, &b, &c, true),
+            literal(&mut bank, &c, &a, false),
+        ]);
+        second.set_ident(202);
+        let set = ClauseSet::from_clauses([first, second]);
+
+        let input_clause_set = set
+            .print_format_string(&bank, true, IoFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(input_clause_set.matches("input_clause(").count(), 2);
+        assert!(input_clause_set.contains("c_0_201"));
+        assert!(input_clause_set.contains("c_0_202"));
+        assert!(input_clause_set.contains("++equal(set_format_a, set_format_b)"));
+        assert!(input_clause_set.ends_with("]).\n"));
+        assert!(!input_clause_set.contains("<-"));
+
+        let wrapped_clause_set = set
+            .print_prefix_format_string(
+                &bank,
+                "# ",
+                IoFormat::Tstp,
+                ProblemType::FirstOrder,
+                EqnPrintOptions::lop(),
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            wrapped_clause_set.matches("# cnf(").count()
+                + wrapped_clause_set.matches("# tcf(").count(),
+            2
+        );
+        assert!(wrapped_clause_set.contains("set_format_a"));
+        assert!(!wrapped_clause_set.contains("<-"));
+
+        assert_eq!(
+            set.print_format_string(&bank, true, IoFormat::Auto, ProblemType::FirstOrder)
+                .unwrap_or_else(|err| panic!("{err}")),
+            set.print_lop_string(&bank, true)
         );
     }
 
