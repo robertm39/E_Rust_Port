@@ -23875,6 +23875,39 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_direct_fof_term_ite_argument() {
+        let _guard = global_state_lock();
+        let path = temp_path("direct-fof-term-ite-argument-proof");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $o).\n\
+             fof(cond, axiom, q).\n\
+             fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, p($ite(q, a, b))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_existential_fool_body() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-existential-fool-body");
