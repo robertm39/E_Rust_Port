@@ -106,7 +106,9 @@ use crate::inout::signals::{
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
 use crate::prover::version::{self, E_NICKNAME, PROGRAM_NAME, VERSION};
-use crate::terms::lambda::{lambda_eta_expand_db, lambda_eta_reduce_db, set_eta_normalizer};
+use crate::terms::lambda::{
+    lambda_eta_expand_db, lambda_eta_reduce_db, named_to_db, set_eta_normalizer,
+};
 use crate::terms::signature::{
     FunctionProperties, Signature, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT,
     FP_IS_RATIONAL, SIG_FALSE_CODE, SIG_ITE_CODE, SIG_LET_CODE, SIG_TRUE_CODE,
@@ -11839,10 +11841,15 @@ fn parse_simple_thf_term_formula(
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let formula = bank.parse_tformula_tstp(scanner)?;
+    let formula = if formula.has_lambda_subterm() {
+        named_to_db(bank, &formula)?
+    } else {
+        formula
+    };
     if !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
-    if formula.has_lambda_subterm() {
+    if formula.has_lambda_subterm() || formula.has_db_subterm() {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
     simple_fof_bool_term_to_formulas(
@@ -23217,33 +23224,32 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_applied_thf_lambda_until_full_formula_pipeline() {
+    fn run_proves_applied_thf_lambda_formula() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-thf-applied-lambda-requires-full-pipeline");
+        let path = temp_path("applied-thf-lambda-proof");
         std::fs::write(
             &path,
             "thf(person_type, type, person: $tType).\n\
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
-             thf(goal, conjecture, (^[X: person]:p(X)) @ a).\n",
+             thf(lambda_fact, axiom, (^[X: person]: p @ X) @ a).\n\
+             thf(goal, conjecture, p @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
-            ["eprover", "--syntax-only", path_arg.as_str()],
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error
-            .message()
-            .contains(THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE));
-        assert!(stdout.is_empty());
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
