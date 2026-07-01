@@ -1,6 +1,6 @@
 //! Port of `PCL2/pcl_steps`.
 
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
     clause_pcl_parse, clause_pcl_string, clause_print_lop_format_string,
@@ -20,12 +20,15 @@ use crate::pcl2::idents::PclId;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
 use std::fmt::Write as _;
+use std::io::Write as IoWrite;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 
 pub const PCL_PROOF_DIST_INFINITY: i64 = i64::MAX;
 pub const PCL_PROOF_DIST_DEFAULT: i64 = 10;
 pub const PCL_PROOF_DIST_UNKNOWN: i64 = -1;
 pub const PCL_NO_WEIGHT: i64 = -1;
+pub const SHELL_PCL_STEP_WARNING: &str =
+    "Shell PCL step encountered where full PCL step was required";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PclStepProperties(u64);
@@ -610,6 +613,22 @@ impl PclStep {
         }
     }
 
+    /// C `PCLStepPrintTPTP`, including the shell-step warning side channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from warning writes or temporary formula rendering.
+    pub fn print_tptp_with_warning_string(
+        &self,
+        warning: &mut (impl IoWrite + ?Sized),
+        program_name: &str,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        self.write_shell_pcl_warning(warning, program_name)?;
+        self.print_tptp_string(bank, problem_type)
+    }
+
     /// C `PCLStepPrintLOP`.
     ///
     /// # Errors
@@ -635,6 +654,22 @@ impl PclStep {
         }
     }
 
+    /// C `PCLStepPrintLOP`, including the shell-step warning side channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from warning writes or temporary formula rendering.
+    pub fn print_lop_with_warning_string(
+        &self,
+        warning: &mut (impl IoWrite + ?Sized),
+        program_name: &str,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        self.write_shell_pcl_warning(warning, program_name)?;
+        self.print_lop_string(bank, problem_type)
+    }
+
     /// C `PCLStepPrintFormat`.
     ///
     /// # Errors
@@ -656,6 +691,39 @@ impl PclStep {
             ProofDocOutputFormat::Pcl => self.print_extra_string(bank, problem_type, data),
             ProofDocOutputFormat::Lop => self.print_lop_string(bank, problem_type),
             ProofDocOutputFormat::Tptp => self.print_tptp_string(bank, problem_type),
+            ProofDocOutputFormat::Tstp => self.print_tstp_string(bank, problem_type),
+            _ => panic!("PCLStepPrintFormat supports only PCL, LOP, TPTP, and TSTP"),
+        }
+    }
+
+    /// C `PCLStepPrintFormat`, including shell-step warnings for formats that
+    /// route through `PCLStepPrintLOP` or `PCLStepPrintTPTP`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from warning writes or the selected printer.
+    ///
+    /// # Panics
+    ///
+    /// Panics for unsupported formats, matching the C assertion in the default
+    /// switch branch.
+    pub fn print_format_with_warning_string(
+        &self,
+        warning: &mut (impl IoWrite + ?Sized),
+        program_name: &str,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        data: bool,
+        format: ProofDocOutputFormat,
+    ) -> Result<String, Diagnostic> {
+        match format {
+            ProofDocOutputFormat::Pcl => self.print_extra_string(bank, problem_type, data),
+            ProofDocOutputFormat::Lop => {
+                self.print_lop_with_warning_string(warning, program_name, bank, problem_type)
+            }
+            ProofDocOutputFormat::Tptp => {
+                self.print_tptp_with_warning_string(warning, program_name, bank, problem_type)
+            }
             ProofDocOutputFormat::Tstp => self.print_tstp_string(bank, problem_type),
             _ => panic!("PCLStepPrintFormat supports only PCL, LOP, TPTP, and TSTP"),
         }
@@ -701,6 +769,52 @@ impl PclStep {
         )
     }
 
+    /// C `PCLStepPrintExample`, including the shell-step warning side channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from warning writes.
+    ///
+    /// # Panics
+    ///
+    /// Panics for FOF steps, matching the C assertion.
+    pub fn print_example_with_warning_string(
+        &self,
+        warning: &mut (impl IoWrite + ?Sized),
+        program_name: &str,
+        bank: &TermBank,
+        id: i64,
+        proof_steps: i64,
+        total_steps: i64,
+    ) -> Result<String, Diagnostic> {
+        self.write_shell_pcl_warning(warning, program_name)?;
+        Ok(self.print_example_string(bank, id, proof_steps, total_steps))
+    }
+
+    #[must_use]
+    pub fn shell_pcl_warning(&self) -> Option<Diagnostic> {
+        self.is_shell()
+            .then(|| Diagnostic::new(ErrorCode::OTHER_ERROR, SHELL_PCL_STEP_WARNING))
+    }
+
+    /// C `print_shell_pcl_warning` warning side effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns a file diagnostic if writing the warning fails.
+    pub fn write_shell_pcl_warning(
+        &self,
+        warning: &mut (impl IoWrite + ?Sized),
+        program_name: &str,
+    ) -> Result<(), Diagnostic> {
+        if let Some(diagnostic) = self.shell_pcl_warning() {
+            warning
+                .write_all(diagnostic.render_warning(program_name).as_bytes())
+                .map_err(|error| step_write_error(&error))?;
+        }
+        Ok(())
+    }
+
     #[must_use]
     fn shell_omitted_string(&self) -> String {
         format!("# Step {} omitted (Shell)\n", self.id.print_string())
@@ -719,6 +833,13 @@ fn c_example_ratio(numerator: i64, denominator: i64) -> f64 {
     f64::from(numerator as f32 / denominator as f32)
 }
 
+fn step_write_error(error: &std::io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("Error writing output: {error}"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -728,7 +849,7 @@ mod tests {
         PCL_IS_PROOF_STEP, PCL_IS_SHELL_STEP, PCL_NO_PROP, PCL_NO_WEIGHT, PCL_PROOF_DIST_DEFAULT,
         PCL_PROOF_DIST_INFINITY, PCL_PROOF_DIST_UNKNOWN, PCL_TYPE_1, PCL_TYPE_2, PCL_TYPE_3,
         PCL_TYPE_AXIOM, PCL_TYPE_CONJECTURE, PCL_TYPE_HYPOTHESIS, PCL_TYPE_MASK,
-        PCL_TYPE_NEG_CONJECTURE, PCL_TYPE_QUESTION, PCL_TYPE_UNKNOWN,
+        PCL_TYPE_NEG_CONJECTURE, PCL_TYPE_QUESTION, PCL_TYPE_UNKNOWN, SHELL_PCL_STEP_WARNING,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::inferencedoc::ProofDocOutputFormat;
@@ -1014,6 +1135,68 @@ mod tests {
             step.print_tptp_string(&mut bank, ProblemType::FirstOrder)
                 .unwrap(),
             "# Step 3 omitted (Shell)\n"
+        );
+        assert_eq!(
+            step.shell_pcl_warning().unwrap().message(),
+            SHELL_PCL_STEP_WARNING
+        );
+
+        let mut warning = Vec::new();
+        assert_eq!(
+            step.print_lop_with_warning_string(
+                &mut warning,
+                "eprover",
+                &mut bank,
+                ProblemType::FirstOrder
+            )
+            .unwrap(),
+            "# Step 3 omitted (Shell)\n"
+        );
+        assert_eq!(
+            String::from_utf8(warning).unwrap(),
+            "eprover: Warning: Shell PCL step encountered where full PCL step was required\n"
+        );
+
+        let mut warning = Vec::new();
+        assert_eq!(
+            step.print_tptp_with_warning_string(
+                &mut warning,
+                "eprover",
+                &mut bank,
+                ProblemType::FirstOrder
+            )
+            .unwrap(),
+            "# Step 3 omitted (Shell)\n"
+        );
+        assert_eq!(
+            String::from_utf8(warning).unwrap(),
+            "eprover: Warning: Shell PCL step encountered where full PCL step was required\n"
+        );
+
+        let mut warning = Vec::new();
+        assert_eq!(
+            step.print_format_with_warning_string(
+                &mut warning,
+                "eprover",
+                &mut bank,
+                ProblemType::FirstOrder,
+                false,
+                ProofDocOutputFormat::Tstp
+            )
+            .unwrap(),
+            "cnf(3,plain,,2,[final])."
+        );
+        assert!(warning.is_empty());
+
+        let mut warning = Vec::new();
+        assert_eq!(
+            step.print_example_with_warning_string(&mut warning, "eprover", &bank, 0, 0, 0)
+                .unwrap(),
+            "# Step 3 omitted (Shell)\n"
+        );
+        assert_eq!(
+            String::from_utf8(warning).unwrap(),
+            "eprover: Warning: Shell PCL step encountered where full PCL step was required\n"
         );
     }
 
