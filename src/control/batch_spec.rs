@@ -1,9 +1,12 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::control::sine::StructFofSpec;
+use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
     accept_dotted_id, parse_basic_include, parse_continuous, parse_dotted_id, parse_filename,
     parse_int,
 };
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
+use crate::terms::signature::Signature;
 use std::io::{self, Write};
 
 pub const BATCH_FILTERS: &[&str] = &[
@@ -150,6 +153,25 @@ pub struct BatchProcessProblemsReport {
     pub records: Vec<BatchProcessProblemRecord>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BatchRunnerCreateConfig<'a> {
+    pub options: &'a str,
+    pub extra_options: &'a str,
+    pub cpu_time: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchRunnerRequest {
+    pub executable: String,
+    pub name: String,
+    pub options: String,
+    pub extra_options: String,
+    pub cpu_time: i64,
+    pub selected_count: i64,
+    pub selected_clauses: usize,
+    pub selected_formulas: usize,
+}
+
 impl BatchProcessProblemsReport {
     #[must_use]
     pub const fn c_return_value(&self) -> i64 {
@@ -252,6 +274,15 @@ impl BatchSpec {
     #[must_use]
     pub fn problem_no(&self) -> usize {
         self.source_files.len()
+    }
+
+    #[must_use]
+    pub const fn answer_options(&self) -> &'static str {
+        if matches!(self.res_answer, BatchOutputType::NoOutput) {
+            ""
+        } else {
+            "--conjectures-are-questions"
+        }
     }
 
     pub fn write_to<W: Write + ?Sized>(&self, output: &mut W) -> Result<(), Diagnostic> {
@@ -361,6 +392,54 @@ impl BatchSpec {
         }
 
         Ok(report)
+    }
+
+    pub fn create_runner_request_with<W, C>(
+        &self,
+        ctrl: &mut StructFofSpec,
+        signature: &Signature,
+        filter: &AxFilter,
+        config: BatchRunnerCreateConfig<'_>,
+        output: &mut W,
+        mut clock_seconds_mod: C,
+    ) -> Result<BatchRunnerRequest, Diagnostic>
+    where
+        W: Write + ?Sized,
+        C: FnMut() -> i64,
+    {
+        let filter_text = batch_filter_print_string(filter)?;
+        writeln!(
+            output,
+            "% Filtering for {filter_text} ({})",
+            clock_seconds_mod()
+        )
+        .map_err(|error| batch_runner_output_error(&error))?;
+
+        let selection = ctrl.get_problem(signature, filter)?;
+        let selected_count = selection.selected_count;
+        let selected_clauses = selection.clauses.len();
+        let selected_formulas = selection.formulas.len();
+        drop(selection);
+
+        writeln!(
+            output,
+            "% Spec has {selected_clauses} clauses and {selected_formulas} formulas ({})",
+            clock_seconds_mod()
+        )
+        .map_err(|error| batch_runner_output_error(&error))?;
+        writeln!(output, "% Written new problem ({})", clock_seconds_mod())
+            .map_err(|error| batch_runner_output_error(&error))?;
+
+        Ok(BatchRunnerRequest {
+            executable: self.executable.clone(),
+            name: batch_filter_runner_name(filter)?,
+            options: config.options.to_owned(),
+            extra_options: config.extra_options.to_owned(),
+            cpu_time: config.cpu_time,
+            selected_count,
+            selected_clauses,
+            selected_formulas,
+        })
     }
 
     fn problem_wct_limit(
@@ -481,8 +560,30 @@ fn output_error(error: &io::Error) -> Diagnostic {
     )
 }
 
+fn batch_runner_output_error(error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("Could not write batch runner output: {error}"),
+    )
+}
+
 fn batch_process_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::INTERFACE_ERROR, message)
+}
+
+fn batch_filter_print_string(filter: &AxFilter) -> Result<String, Diagnostic> {
+    if matches!(filter.type_, AxFilterType::NoFilter) {
+        return Err(batch_process_error(
+            "Cannot create a batch runner without an axiom filter",
+        ));
+    }
+    Ok(filter.print_string())
+}
+
+fn batch_filter_runner_name(filter: &AxFilter) -> Result<String, Diagnostic> {
+    filter.print_buf_string(320).ok_or_else(|| {
+        batch_process_error("Batch runner filter name does not fit the C 320-byte buffer")
+    })
 }
 
 fn usize_to_i64_c(value: usize) -> i64 {
@@ -493,11 +594,18 @@ fn usize_to_i64_c(value: usize) -> i64 {
 mod tests {
     use super::{
         abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchOutputType,
-        BatchProcessProblemJob, BatchProcessProblemsConfig, BatchSpec, BATCH_FILTERS,
-        BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
+        BatchProcessProblemJob, BatchProcessProblemsConfig, BatchRunnerCreateConfig, BatchSpec,
+        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::ErrorCode;
+    use crate::clauses::clause::Clause;
+    use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::formulasets::FormulaSet;
+    use crate::control::sine::StructFofSpec;
+    use crate::heuristics::axfilter::AxFilter;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::terms::signature::Signature;
+    use crate::terms::typebanks::TypeBank;
 
     #[test]
     fn batch_spec_defaults_match_c_allocation_shape() {
@@ -645,6 +753,87 @@ mod tests {
         assert_eq!(BatchOutputType::NoOutput.c_value(), 0);
         assert_eq!(BatchOutputType::Desired.c_value(), 1);
         assert_eq!(BatchOutputType::Required.c_value(), 2);
+    }
+
+    #[test]
+    fn answer_options_match_batch_process_problem_switch() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+
+        assert_eq!(spec.answer_options(), "");
+        spec.res_answer = BatchOutputType::Desired;
+        assert_eq!(spec.answer_options(), "--conjectures-are-questions");
+        spec.res_answer = BatchOutputType::Required;
+        assert_eq!(spec.answer_options(), "--conjectures-are-questions");
+    }
+
+    #[test]
+    fn create_runner_request_logs_filtering_and_selected_problem_counts() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        ctrl.add_problem(
+            &signature,
+            ClauseSet::from_clauses([Clause::empty()]),
+            FormulaSet::new(),
+            false,
+        );
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut ticks = [11, 12, 13].into_iter();
+        let mut output = Vec::new();
+
+        let request = spec
+            .create_runner_request_with(
+                &mut ctrl,
+                &signature,
+                &AxFilter::threshold(10),
+                BatchRunnerCreateConfig {
+                    options: "--satauto-schedule --assume-incompleteness",
+                    extra_options: "--conjectures-are-questions",
+                    cpu_time: 7,
+                },
+                &mut output,
+                || ticks.next().unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Filtering for Threshold(10) (11)\n\
+             % Spec has 1 clauses and 0 formulas (12)\n\
+             % Written new problem (13)\n"
+        );
+        assert_eq!(request.executable, "eprover");
+        assert_eq!(request.name, "Threshold(10)");
+        assert_eq!(
+            request.options,
+            "--satauto-schedule --assume-incompleteness"
+        );
+        assert_eq!(request.extra_options, "--conjectures-are-questions");
+        assert_eq!(request.cpu_time, 7);
+        assert_eq!(request.selected_count, 1);
+        assert_eq!(request.selected_clauses, 1);
+        assert_eq!(request.selected_formulas, 0);
+    }
+
+    #[test]
+    fn create_runner_request_rejects_missing_filter_without_panicking() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut output = Vec::new();
+
+        let error = spec
+            .create_runner_request_with(
+                &mut ctrl,
+                &signature,
+                &AxFilter::new(),
+                BatchRunnerCreateConfig::default(),
+                &mut output,
+                || 0,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(output.is_empty());
     }
 
     #[test]
@@ -823,5 +1012,11 @@ mod tests {
             job.source.to_owned(),
             job.dest.to_owned(),
         )
+    }
+
+    fn test_signature() -> Signature {
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        signature
     }
 }
