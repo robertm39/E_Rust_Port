@@ -11,6 +11,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::sine::{pstack_clause_write_tstp, pstack_formula_write_tstp};
 use crate::control::esession::{Descriptor, DescriptorInterestSet};
+use crate::control::gproc_ctrl::EGPCtrl;
 use crate::control::proc_ctrl::{prover_result_table_entry, EPCtrl, EPCtrlSet, MAX_CORES};
 use crate::control::sine::{StructFofSpec, StructFofSpecSelection};
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
@@ -1055,6 +1056,23 @@ impl BatchSpec {
         Ok(report)
     }
 
+    pub fn process_variants_with_child_processes<W, C, S>(
+        &self,
+        config: BatchProcessVariantsConfig<'_>,
+        output: &mut W,
+        clock_seconds: C,
+        mut spawn_child: S,
+    ) -> Result<BatchProcessVariantsReport, Diagnostic>
+    where
+        W: Write + ?Sized,
+        C: FnMut() -> i64,
+        S: FnMut(&BatchVariantProblemJob, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
+    {
+        self.process_variants_with(config, output, clock_seconds, |job| {
+            run_variant_child_process(&job, &mut spawn_child)
+        })
+    }
+
     fn validate_process_variants_config(
         &self,
         config: &BatchProcessVariantsConfig<'_>,
@@ -1550,6 +1568,30 @@ fn write_variant_ended<W: Write + ?Sized>(
     output
         .flush()
         .map_err(|error| batch_process_output_error(&error))
+}
+
+fn run_variant_child_process<S>(
+    job: &BatchVariantProblemJob,
+    spawn_child: &mut S,
+) -> Result<BatchVariantProblemOutcome, Diagnostic>
+where
+    S: FnMut(&BatchVariantProblemJob, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
+{
+    let mut output = Vec::new();
+    let mut child = spawn_child(job, &mut output)?;
+    let mut buffer = Vec::new();
+    while !child.read_result_chunk(&mut buffer, &mut output)? {}
+    let solved = variant_child_result_is_success(child.result());
+    output.extend_from_slice(child.output().view_bytes());
+    child.cleanup()?;
+    Ok(BatchVariantProblemOutcome {
+        solved,
+        output: String::from_utf8_lossy(&output).into_owned(),
+    })
+}
+
+const fn variant_child_result_is_success(result: ProverResult) -> bool {
+    matches!(result, ProverResult::Theorem | ProverResult::Unsatisfiable)
 }
 
 fn write_problem_success<WGlobal, WExternal>(
@@ -2072,6 +2114,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
     use crate::control::esession::{Descriptor, DescriptorInterestSet};
+    use crate::control::gproc_ctrl::EGPCtrl;
     use crate::control::proc_ctrl::{EPCtrl, MAX_CORES};
     use crate::control::sine::StructFofSpec;
     use crate::heuristics::axfilter::AxFilter;
@@ -2085,6 +2128,7 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::path::PathBuf;
+    use std::process::Command;
 
     #[test]
     fn batch_spec_defaults_match_c_allocation_shape() {
@@ -3255,6 +3299,95 @@ mod tests {
     }
 
     #[test]
+    fn process_variants_with_child_processes_captures_generic_child_output() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.total_wtc_limit = 50;
+        spec.source_files = vec!["prob_*".to_owned()];
+        spec.dest_files = vec!["prob.out".to_owned()];
+        let variants = ["A"];
+        let provers = ["e-a"];
+        let mut output = Vec::new();
+        let mut times = [10, 11].into_iter();
+
+        let report = spec
+            .process_variants_with_child_processes(
+                BatchProcessVariantsConfig {
+                    variants: &variants,
+                    provers: &provers,
+                    start: 0,
+                    default_dir: Some("Problems"),
+                    outdir: Some("Results"),
+                },
+                &mut output,
+                || times.next().unwrap_or(12),
+                |job, startup_output| {
+                    assert_eq!(job.concrete_source, "prob_A.p");
+                    assert_eq!(job.prover, "e-a");
+                    assert_eq!(job.dest, "Results/prob.out");
+                    assert_eq!(job.wct_limit, 40);
+                    EGPCtrl::spawn_command_reporting(
+                        status_command("% SZS status Unsatisfiable", 0),
+                        "E-LTB wrapper",
+                        1,
+                        1_000_000,
+                        startup_output,
+                    )
+                },
+            )
+            .unwrap();
+
+        assert_eq!(report.solved, 1);
+        assert_eq!(report.attempted, 1);
+        assert!(report.records[0].solved);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("% Starting E-LTB wrapper with 1000000s (1) cores\n"));
+        assert!(output.contains("% E-LTB wrapper with pid "));
+        assert!(output.contains("% SZS status Unsatisfiable"));
+        assert!(output.contains("% SZS status Ended for prob_A.p\n\n"));
+    }
+
+    #[test]
+    fn process_variants_with_child_processes_uses_c_success_status_set() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.total_wtc_limit = 20;
+        spec.source_files = vec!["prob_*".to_owned()];
+        spec.dest_files = vec!["prob.out".to_owned()];
+        let variants = ["SAT"];
+        let provers = ["e-sat"];
+        let mut output = Vec::new();
+
+        let report = spec
+            .process_variants_with_child_processes(
+                BatchProcessVariantsConfig {
+                    variants: &variants,
+                    provers: &provers,
+                    start: 0,
+                    default_dir: None,
+                    outdir: None,
+                },
+                &mut output,
+                || 0,
+                |_job, startup_output| {
+                    EGPCtrl::spawn_command_reporting(
+                        status_command("% SZS status Satisfiable", 0),
+                        "E-LTB wrapper",
+                        1,
+                        1_000_000,
+                        startup_output,
+                    )
+                },
+            )
+            .unwrap();
+
+        assert_eq!(report.solved, 0);
+        assert_eq!(report.attempted, 1);
+        assert!(!report.records[0].solved);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("% SZS status Satisfiable"));
+        assert!(output.contains("% SZS status Ended for prob_SAT.p\n\n"));
+    }
+
+    #[test]
     fn process_variants_rejects_mismatched_variant_prover_lists() {
         let spec = BatchSpec::new("eprover", IoFormat::Tstp);
         let variants = ["A", "B"];
@@ -3582,5 +3715,26 @@ mod tests {
             clauses: ClauseSet::from_clauses([Clause::empty()]),
             formulas: FormulaSet::new(),
         }
+    }
+
+    #[cfg(windows)]
+    fn status_command(status: &str, exit_code: i32) -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", &format!("echo {status}& exit /B {exit_code}")]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn status_command(status: &str, exit_code: i32) -> Command {
+        let mut command = Command::new("sh");
+        let exit_code = exit_code.to_string();
+        command.args([
+            "-c",
+            "printf '%s\\n' \"$1\"; exit \"$2\"",
+            "sh",
+            status,
+            &exit_code,
+        ]);
+        command
     }
 }
