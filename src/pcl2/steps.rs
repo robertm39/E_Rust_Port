@@ -401,6 +401,19 @@ impl PclStep {
         self.properties.delete(properties);
     }
 
+    pub fn set_justification(&mut self, just: PclExpression) {
+        self.just = just;
+    }
+
+    pub fn reset_tree_data(&mut self, just_weights: bool) {
+        self.tree_data.reset(&mut self.properties, just_weights);
+    }
+
+    #[must_use]
+    pub fn is_empty_clause(&self) -> bool {
+        matches!(&self.logic, PclStepLogic::Clause(clause) if clause.is_empty())
+    }
+
     /// C `PCLStepParse`.
     ///
     /// # Errors

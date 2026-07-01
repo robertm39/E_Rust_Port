@@ -9,6 +9,7 @@ pub mod miniclauses;
 pub mod miniprotocol;
 pub mod ministeps;
 pub mod positions;
+pub mod protocol;
 pub mod steps;
 
 pub(crate) fn parse_pos_int_as_long(scanner: &mut Scanner) -> Result<i64, Diagnostic> {

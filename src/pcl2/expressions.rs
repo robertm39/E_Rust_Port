@@ -153,6 +153,14 @@ impl PclExpression {
         &self.data
     }
 
+    #[must_use]
+    pub fn initial(info: Option<ClauseInfo>) -> Self {
+        Self {
+            op: PclOpCode::Initial,
+            data: PclExpressionData::Initial(info),
+        }
+    }
+
     /// C `expr->arg_no`.
     #[must_use]
     pub fn arg_no(&self) -> usize {
