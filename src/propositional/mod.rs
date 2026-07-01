@@ -1,5 +1,6 @@
 //! Propositional reasoning support ported from E's `PROPOSITIONAL` units.
 
+pub mod dpll;
 pub mod dpllformula;
 pub mod propclauses;
 pub mod propsig;

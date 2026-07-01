@@ -95,4 +95,16 @@ Source files reviewed: `PROPOSITIONAL/cpr_dpll.h`, `PROPOSITIONAL/cpr_dpll.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/propositional/dpll.rs` ports the implemented `DPLLStateAlloc` and `DPLLAssignVar` state-shell behavior over the Rust `DpllFormula`, `DpllClause`, and `AtomSet` ports.
+- Rust stores assignments as signed literal codes, deactivation subset markers as `None` entries in a typed vector, unprocessed unit clauses as formula clause indices, and open atoms in the ported `AtomSet`. Open-atom insertion follows C's increasing atom scan plus front insertion, so iteration observes the same reversed order.
+- `DPLLAssignVar` pushes the assignment and a deactivation marker, then calls Rust equivalents of the currently stubbed C helpers. Since C `shorten_clauses` returns zero, the ported assignment currently returns `false` for allocated atoms, matching the observable implemented C body rather than a complete solver.
+
+### Change Later
+
+- `deactivate_clauses` and `shorten_clauses` are empty C stubs, so `DPLLAssignVar` cannot yet perform real propagation and reports failure after every allocated assignment. Replace these stubs only when the intended DPLL algorithm is ported and covered by reference tests.
+- `DPLLRetractLastAss` is declared in `cpr_dpll.h` but has no definition in `cpr_dpll.c`. Rust does not expose a working retraction method for this slice; future work should either find the intended implementation in upstream history or design one alongside the missing deactivate/shorten behavior.
+- The negative-assignment branch in `DPLLAssignVar` still deactivates positive clauses and shortens negative clauses after negating the assignment, the same branches used for positive assignments. With the helper stubs this has no effect today, but real propagation should verify whether negative assignments should swap those sets.
 <!-- END MANUAL REVIEW: c_source_docs -->
