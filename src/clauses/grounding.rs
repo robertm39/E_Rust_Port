@@ -919,8 +919,8 @@ fn grounding_write_error(error: &std::io::Error) -> Diagnostic {
 
 /// Creates unconstrained ground instances for a slice of clauses.
 ///
-/// This is the `ClauseSetCreateGroundInstances` loop shape without depending on
-/// the real C-style `ClauseSet` owner, which is not ported yet.
+/// This is the `ClauseSetCreateGroundInstances` loop shape for callers that
+/// operate on borrowed clause slices instead of a [`ClauseSet`] owner.
 ///
 /// # Errors
 ///
@@ -1028,6 +1028,65 @@ pub fn clause_set_create_ground_instances(
     )
 }
 
+/// C `ClauseSetCreateGroundInstances`, including per-clause `OutputLevel`
+/// progress through an explicit output owner.
+///
+/// # Errors
+///
+/// Returns a diagnostic if progress output, collecting default ground terms, or
+/// copying an instantiated literal into the term bank fails.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`clause_create_ground_instances`].
+pub fn clause_set_create_ground_instances_with_output(
+    output: &mut (impl IoWrite + ?Sized),
+    options: GroundInstancePrintOptions,
+    bank: &mut TermBank,
+    clauses: &ClauseSet,
+    groundset: &mut GroundSet,
+    give_up: Option<i64>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
+    let mut default_terms = Vec::new();
+    sig_collect_constant_terms(bank, &mut default_terms, None)?;
+
+    if give_up.is_some_and(|limit| {
+        limit != 0
+            && estimated_instances_exceed_limit(
+                clauses.max_var_number(),
+                default_terms.len(),
+                limit,
+            )
+    }) {
+        return Ok(GroundInstanceOutcome::EstimateLimitExceeded);
+    }
+
+    let mut outcome = GroundInstanceOutcome::Complete;
+    for clause in clauses.iter() {
+        if grounding_stop_state().is_some() {
+            break;
+        }
+        write_ground_instance_progress(output, options, bank, clause)?;
+        let mut inst = VarSetInst::alloc(clause);
+        inst.set_all_alternatives(&default_terms);
+        if !clause_create_ground_instances_with_stop(
+            bank,
+            clause,
+            &mut inst,
+            groundset,
+            options.subsume,
+            options.resolve,
+            options.taut_check,
+            grounding_stop_state,
+        )? {
+            outcome = GroundInstanceOutcome::EmptyClause;
+            break;
+        }
+    }
+    finish_groundset_completion(groundset, grounding_stop_state);
+    Ok(outcome)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
@@ -1076,8 +1135,8 @@ fn clause_set_create_ground_instances_with_stop(
 
 /// Creates constrained ground instances for a slice of clauses.
 ///
-/// This is the `ClauseSetCreateConstrGroundInstances` loop shape without
-/// depending on the real C-style `ClauseSet` owner, which is not ported yet.
+/// This is the `ClauseSetCreateConstrGroundInstances` loop shape for callers
+/// that operate on borrowed clause slices instead of a [`ClauseSet`] owner.
 ///
 /// # Errors
 ///
@@ -1205,6 +1264,74 @@ pub fn clause_set_create_constrained_ground_instances(
         just_one_instance,
         grounding_stop_state,
     )
+}
+
+/// C `ClauseSetCreateConstrGroundInstances`, including per-clause `OutputLevel`
+/// progress through an explicit output owner.
+///
+/// # Errors
+///
+/// Returns a diagnostic if progress output, collecting default ground terms, or
+/// copying an instantiated literal into the term bank fails.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`VarSetInst::constrained_alloc`] and
+/// [`clause_create_ground_instances`].
+pub fn clause_set_create_constrained_ground_instances_with_output(
+    output: &mut (impl IoWrite + ?Sized),
+    options: GroundInstancePrintOptions,
+    bank: &mut TermBank,
+    clauses: &ClauseSet,
+    groundset: &mut GroundSet,
+    give_up: Option<i64>,
+    just_one_instance: Option<i64>,
+) -> Result<GroundInstanceOutcome, Diagnostic> {
+    let mut default_terms = Vec::new();
+    sig_collect_constant_terms(
+        bank,
+        &mut default_terms,
+        just_one_instance.filter(|f_code| *f_code != 0),
+    )?;
+    let default_term_tree = term_identity_set_from_terms(&default_terms);
+    let mut positive_table = LitOccTable::alloc(bank.signature());
+    let mut negative_table = LitOccTable::alloc(bank.signature());
+    lit_occ_add_clause_set_alt(&mut positive_table, &mut negative_table, clauses);
+
+    let mut outcome = GroundInstanceOutcome::Complete;
+    for clause in clauses.iter() {
+        if grounding_stop_state().is_some() {
+            break;
+        }
+        let mut inst = VarSetInst::constrained_alloc(
+            &positive_table,
+            &negative_table,
+            clause,
+            &default_term_tree,
+        );
+        if give_up.is_some_and(|limit| {
+            limit != 0
+                && constrained_estimate_exceeds_limit(groundset.members(), inst.estimate(), limit)
+        }) {
+            return Ok(GroundInstanceOutcome::EstimateLimitExceeded);
+        }
+        write_ground_instance_progress(output, options, bank, clause)?;
+        if !clause_create_ground_instances_with_stop(
+            bank,
+            clause,
+            &mut inst,
+            groundset,
+            options.subsume,
+            options.resolve,
+            options.taut_check,
+            grounding_stop_state,
+        )? {
+            outcome = GroundInstanceOutcome::EmptyClause;
+            break;
+        }
+    }
+    finish_groundset_completion(groundset, grounding_stop_state);
+    Ok(outcome)
 }
 
 #[expect(
@@ -1454,7 +1581,9 @@ mod tests {
         clause_cmp_by_len, clause_create_ground_instances_with_output,
         clause_create_ground_instances_with_stop, clause_eqlit_recode, clause_get_max_lit,
         clause_print_dimacs_string, clause_print_dimacs_to_writers,
+        clause_set_create_constrained_ground_instances_with_output,
         clause_set_create_constrained_ground_instances_with_stop,
+        clause_set_create_ground_instances_with_output,
         clause_set_create_ground_instances_with_stop, clause_set_eqlit_recode,
         clause_set_print_dimacs_string, clause_set_print_dimacs_to_writers,
         clause_slice_create_constrained_ground_instances_with_stop,
@@ -2479,6 +2608,46 @@ mod tests {
     }
 
     #[test]
+    fn clause_set_grounding_with_output_writes_progress_for_each_clause() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "set_grounding_progress_p", &[]);
+        let second = predicate_atom(&mut bank, "set_grounding_progress_q", &[]);
+        let set = ClauseSet::from_clauses([
+            clause_from(vec![predicate_literal(&mut bank, &first, true)]),
+            clause_from(vec![predicate_literal(&mut bank, &second, true)]),
+        ]);
+        let mut groundset = GroundSet::new();
+        let mut output = Vec::new();
+
+        assert_eq!(
+            clause_set_create_ground_instances_with_output(
+                &mut output,
+                GroundInstancePrintOptions::new(
+                    2,
+                    ProofDocOutputFormat::Lop,
+                    ProblemType::FirstOrder,
+                    false,
+                    false,
+                    false,
+                ),
+                &mut bank,
+                &set,
+                &mut groundset,
+                None,
+            )
+            .unwrap(),
+            GroundInstanceOutcome::Complete
+        );
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% set_grounding_progress_p <- .\n% set_grounding_progress_q <- .\n"
+        );
+        assert_eq!(groundset.unit_no(), 2);
+        assert_eq!(groundset.complete(), GroundSetState::Complete);
+    }
+
+    #[test]
     fn constrained_clause_set_grounding_marks_low_memory_from_stop_state() {
         let mut bank = test_bank();
         let ground = typed_const(&mut bank, "a");
@@ -2660,5 +2829,59 @@ mod tests {
             Some(&GcuEncoding::Both)
         );
         assert!(!groundset.units().contains_key(&rejected_ground.entry_no()));
+    }
+
+    #[test]
+    fn constrained_clause_set_grounding_with_output_writes_progress_for_each_clause() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "a");
+        let x = typed_var(&bank, -2);
+        let negative_atom = predicate_atom(
+            &mut bank,
+            "set_constr_progress_p",
+            std::slice::from_ref(&first),
+        );
+        let query_atom =
+            predicate_atom(&mut bank, "set_constr_progress_p", std::slice::from_ref(&x));
+        let set = ClauseSet::from_clauses([
+            clause_from(vec![predicate_literal(&mut bank, &negative_atom, false)]),
+            clause_from(vec![predicate_literal(&mut bank, &query_atom, true)]),
+        ]);
+        let mut groundset = GroundSet::new();
+        let mut output = Vec::new();
+
+        assert_eq!(
+            clause_set_create_constrained_ground_instances_with_output(
+                &mut output,
+                GroundInstancePrintOptions::new(
+                    1,
+                    ProofDocOutputFormat::Lop,
+                    ProblemType::FirstOrder,
+                    false,
+                    false,
+                    false,
+                ),
+                &mut bank,
+                &set,
+                &mut groundset,
+                None,
+                None,
+            )
+            .unwrap(),
+            GroundInstanceOutcome::Complete
+        );
+
+        assert_eq!(String::from_utf8(output).unwrap(), "%%");
+        let allowed_ground = predicate_atom(
+            &mut bank,
+            "set_constr_progress_p",
+            std::slice::from_ref(&first),
+        );
+        assert_eq!(
+            groundset.units().get(&allowed_ground.entry_no()),
+            Some(&GcuEncoding::Both)
+        );
+        assert_eq!(groundset.complete(), GroundSetState::Complete);
+        assert_eq!(x.binding(), None);
     }
 }
