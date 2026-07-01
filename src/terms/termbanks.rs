@@ -1694,18 +1694,16 @@ impl TermBank {
     }
 
     fn parse_tformula_tstp_subset(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_literal_tformula_tstp_with_applications(scanner)?;
-        if scanner.test_tok(TokenType::FOF_ASSOC_OP) {
-            let op_token = scanner.current_token().kind();
-            let op = self.tptp_operator_convert(op_token)?;
-            while scanner.test_tok(op_token) {
-                scanner.accept_tok(op_token)?;
-                let right = self.parse_literal_tformula_tstp_with_applications(scanner)?;
-                formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
-            }
-        } else if scanner.test_tok(TokenType::FOF_BIN_OP) {
+        let mut formula = self.parse_tformula_tstp_disjunction(scanner)?;
+        if scanner.test_tok(TokenType::FOF_BIN_OP) && !scanner.test_tok(TokenType::FOF_ASSOC_OP) {
             let mut op = self.tptp_operator_parse(scanner)?;
-            let right = self.parse_literal_tformula_tstp_with_applications(scanner)?;
+            let right = if (op == self.sig.eqn_code() || op == self.sig.neqn_code())
+                && !formula.type_().as_ref().is_some_and(Type::is_bool)
+            {
+                self.parse_literal_tformula_tstp_with_applications(scanner)?
+            } else {
+                self.parse_tformula_tstp_disjunction(scanner)?
+            };
             if formula.type_().as_ref().is_some_and(Type::is_bool)
                 && (op == self.sig.eqn_code() || op == self.sig.neqn_code())
             {
@@ -1721,6 +1719,32 @@ impl TermBank {
                     self.sig.xor_code()
                 };
             }
+            formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+        }
+        Ok(formula)
+    }
+
+    fn parse_tformula_tstp_disjunction(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let mut formula = self.parse_tformula_tstp_conjunction(scanner)?;
+        while scanner.test_tok(TokenType::FOF_OR) {
+            let op = self.tptp_operator_parse(scanner)?;
+            let right = self.parse_tformula_tstp_conjunction(scanner)?;
+            formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+        }
+        Ok(formula)
+    }
+
+    fn parse_tformula_tstp_conjunction(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let mut formula = self.parse_literal_tformula_tstp_with_applications(scanner)?;
+        while scanner.test_tok(TokenType::FOF_AND) {
+            let op = self.tptp_operator_parse(scanner)?;
+            let right = self.parse_literal_tformula_tstp_with_applications(scanner)?;
             formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
         }
         Ok(formula)
@@ -4982,6 +5006,66 @@ mod tests {
         assert_eq!(right.f_code(), bank.signature().eqn_code());
         let applied_q = right.argument(0).unwrap();
         assert_eq!(bank.signature().find_name(applied_q.f_code()), Some("q"));
+    }
+
+    #[test]
+    fn tstp_formula_parser_accepts_mixed_application_conjunction_implication() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. p: person > $o. q: person > $o. r: person > $o.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("p @ a & q @ a => r @ a", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().impl_code());
+        let antecedent = formula.argument(0).unwrap();
+        assert_eq!(antecedent.f_code(), bank.signature().and_code());
+        let left = antecedent.argument(0).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("p")
+        );
+        let right = antecedent.argument(1).unwrap();
+        assert_eq!(right.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(0).unwrap().f_code()),
+            Some("q")
+        );
+        let consequent = formula.argument(1).unwrap();
+        assert_eq!(consequent.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(consequent.argument(0).unwrap().f_code()),
+            Some("r")
+        );
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]

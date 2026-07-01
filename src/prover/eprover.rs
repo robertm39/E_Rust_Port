@@ -22999,6 +22999,41 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_thf_application_conjunction_implication() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-application-conjunction-implication-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(r_type, type, r: person > $o).\n\
+             thf(p_fact, axiom, p @ a).\n\
+             thf(q_fact, axiom, q @ a).\n\
+             thf(rule, axiom, p @ a & q @ a => r @ a).\n\
+             thf(goal, conjecture, r @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_thf_applied_logical_conjunction_head() {
         let _guard = global_state_lock();
         let path = temp_path("thf-applied-logical-conjunction-head-proof");
