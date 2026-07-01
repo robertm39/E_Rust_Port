@@ -86,7 +86,7 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 ### Rust Port Notes
 
 - The core CSSCPA state/process-clause behavior and `CSSCPALoop` command parser from `cex_csscpa` are represented in `src/external/csscpa.rs`.
-- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: C-shaped option parsing for help/version/verbose/output/silent/output-level/rant, stdout or output-file routing, default `-` stdin handling, file scanner setup, sequential input processing over one CSSCPA state, final TSTP positive-unit/negative-unit/non-unit clause-set printing, and `InitIO`/`ExitIO` initialization.
+- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: C-shaped option parsing for help/version/verbose/output/silent/output-level/rant, stdout or output-file routing, default `-` stdin handling, file scanner setup, sequential input processing over one CSSCPA state, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `OutClose` output-stream error wording on flush failure, and `InitIO`/`ExitIO` initialization.
 
 ### Change Later
 
