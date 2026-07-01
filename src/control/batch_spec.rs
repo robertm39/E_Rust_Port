@@ -2,7 +2,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProverResult;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::FormulaSet;
-use crate::control::proc_ctrl::{prover_result_table_entry, MAX_CORES};
+use crate::control::esession::{Descriptor, DescriptorInterestSet};
+use crate::control::proc_ctrl::{prover_result_table_entry, EPCtrl, EPCtrlSet, MAX_CORES};
 use crate::control::sine::StructFofSpec;
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
@@ -12,6 +13,8 @@ use crate::inout::basicparser::{
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::terms::signature::Signature;
 use std::io::{self, Write};
+use std::path::PathBuf;
+use std::time::Duration;
 
 pub const BATCH_FILTERS: &[&str] = &[
     "threshold010000",
@@ -84,6 +87,8 @@ pub const BATCH_STRATEGIES_DIV: &[&str] = &[
     "-xAutoSched4 -tAutoSched4 --assume-incompleteness",
     "-xAutoSched5 -tAutoSched5 --assume-incompleteness",
 ];
+
+pub const BATCH_PROCESS_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(i32)]
@@ -290,6 +295,116 @@ pub struct BatchProcessVariantsReport {
     pub solved: i64,
     pub attempted: usize,
     pub records: Vec<BatchVariantProblemRecord>,
+}
+
+#[derive(Debug)]
+pub struct BatchProcCtrlRunnerSet {
+    controls: EPCtrlSet,
+    poll_timeout: Duration,
+}
+
+impl Default for BatchProcCtrlRunnerSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BatchProcCtrlRunnerSet {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            controls: EPCtrlSet::new(),
+            poll_timeout: BATCH_PROCESS_POLL_TIMEOUT,
+        }
+    }
+
+    #[must_use]
+    pub fn with_poll_timeout(poll_timeout: Duration) -> Self {
+        Self {
+            controls: EPCtrlSet::new(),
+            poll_timeout,
+        }
+    }
+
+    #[must_use]
+    pub fn active_count(&self) -> usize {
+        self.controls.cardinality()
+    }
+
+    pub fn add_control(&mut self, control: EPCtrl) -> Result<BatchSpawnedRunner, Diagnostic> {
+        let spawned = spawned_runner_from_control(&control);
+        let _previous = self.controls.add_proc(control)?;
+        Ok(spawned)
+    }
+
+    pub fn spawn_runner_from_file(
+        &mut self,
+        request: &BatchRunnerRequest,
+        input_file: impl Into<PathBuf>,
+    ) -> Result<BatchSpawnedRunner, Diagnostic> {
+        let control = EPCtrl::create_generic(
+            &request.executable,
+            &request.name,
+            &request.options,
+            &request.extra_options,
+            request.cpu_time,
+            input_file,
+        )?;
+        self.add_control(control)
+    }
+
+    pub fn poll_runners<W: Write>(
+        &mut self,
+        output: &mut W,
+    ) -> Result<Option<BatchCompletedRunner>, Diagnostic> {
+        let descriptor =
+            self.controls
+                .get_result_from_pipes_timeout(self.poll_timeout, true, output)?;
+        descriptor
+            .map(|descriptor| self.completed_runner(descriptor))
+            .transpose()
+    }
+
+    pub fn poll_runners_from_ready<W, F>(
+        &mut self,
+        ready: &DescriptorInterestSet,
+        delete_files: bool,
+        output: &mut W,
+        read_result: F,
+    ) -> Result<Option<BatchCompletedRunner>, Diagnostic>
+    where
+        W: Write,
+        F: FnMut(&mut EPCtrl, &mut String) -> Result<bool, Diagnostic>,
+    {
+        let descriptor =
+            self.controls
+                .get_result_from_ready(ready, delete_files, output, read_result)?;
+        descriptor
+            .map(|descriptor| self.completed_runner(descriptor))
+            .transpose()
+    }
+
+    pub fn clear(&mut self, delete_files: bool) -> Result<(), Diagnostic> {
+        self.controls.clear(delete_files)
+    }
+
+    fn completed_runner(&self, descriptor: Descriptor) -> Result<BatchCompletedRunner, Diagnostic> {
+        let control = self
+            .controls
+            .find_proc(descriptor)
+            .ok_or_else(|| batch_process_error("Missing completed batch runner"))?;
+        Ok(BatchCompletedRunner {
+            runner: spawned_runner_from_control(control),
+            result: control.result(),
+            output: control.output().view().into_owned(),
+        })
+    }
+}
+
+impl Drop for BatchProcCtrlRunnerSet {
+    fn drop(&mut self) {
+        let _cleanup_result = self.controls.clear(true);
+    }
 }
 
 impl BatchProcessProblemsReport {
@@ -891,6 +1006,14 @@ impl BatchSpec {
     }
 }
 
+fn spawned_runner_from_control(control: &EPCtrl) -> BatchSpawnedRunner {
+    BatchSpawnedRunner {
+        name: control.name().to_owned(),
+        start_time: control.start_time(),
+        prob_time: control.prob_time(),
+    }
+}
+
 fn write_variant_initial<W: Write + ?Sized>(
     output: &mut W,
     problem_count: i64,
@@ -1161,18 +1284,19 @@ const fn batch_runner_cpu_time(wct_limit: i64, used: i64) -> i64 {
 mod tests {
     use super::{
         abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchCompletedRunner,
-        BatchOutputType, BatchProblemData, BatchProcessFileConfig, BatchProcessFileOutputs,
-        BatchProcessProblemConfig, BatchProcessProblemJob, BatchProcessProblemOutputs,
-        BatchProcessProblemsConfig, BatchProcessVariantsConfig, BatchRunnerCreateConfig,
-        BatchSpawnedRunner, BatchSpec, BatchVariantProblemOutcome, BATCH_FILTERS,
-        BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
+        BatchOutputType, BatchProblemData, BatchProcCtrlRunnerSet, BatchProcessFileConfig,
+        BatchProcessFileOutputs, BatchProcessProblemConfig, BatchProcessProblemJob,
+        BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchProcessVariantsConfig,
+        BatchRunnerCreateConfig, BatchSpawnedRunner, BatchSpec, BatchVariantProblemOutcome,
+        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
-    use crate::control::proc_ctrl::MAX_CORES;
+    use crate::control::esession::{Descriptor, DescriptorInterestSet};
+    use crate::control::proc_ctrl::{EPCtrl, MAX_CORES};
     use crate::control::sine::StructFofSpec;
     use crate::heuristics::axfilter::AxFilter;
     use crate::inout::scanner::{IoFormat, Scanner};
@@ -1406,6 +1530,60 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn proc_ctrl_runner_set_reports_completed_proof_and_cleans_failed_runner() {
+        let mut runners = BatchProcCtrlRunnerSet::new();
+        let mut proof = EPCtrl::with_descriptor("proof => --auto", Descriptor::new(2));
+        proof.set_start_time(30);
+        proof.set_prob_time(40);
+        let failure = EPCtrl::with_descriptor("failure => --auto", Descriptor::new(5));
+
+        let spawned = runners.add_control(proof).unwrap();
+        let _failure_spawned = runners.add_control(failure).unwrap();
+        let mut ready = DescriptorInterestSet::default();
+        ready.set_read(Descriptor::new(2));
+        ready.set_read(Descriptor::new(5));
+        let mut output = Vec::new();
+
+        let completed = runners
+            .poll_runners_from_ready(&ready, false, &mut output, |control, _buffer| {
+                if control.name() == "proof => --auto" {
+                    let _done = control
+                        .get_result_from_optional_line(Some("% SZS status Theorem for job.p\n"));
+                }
+                Ok(control.get_result_from_optional_line(None))
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(spawned.name, "proof => --auto");
+        assert_eq!(spawned.start_time, 30);
+        assert_eq!(spawned.prob_time, 40);
+        assert_eq!(completed.runner, spawned);
+        assert_eq!(completed.result, ProverResult::Theorem);
+        assert_eq!(completed.output, "% SZS status Theorem for job.p\n");
+        assert_eq!(runners.active_count(), 1);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% No proof found by failure => --auto\n"
+        );
+        runners.clear(false).unwrap();
+        assert_eq!(runners.active_count(), 0);
+    }
+
+    #[test]
+    fn proc_ctrl_runner_set_rejects_control_without_descriptor() {
+        let mut runners = BatchProcCtrlRunnerSet::new();
+        let mut control = EPCtrl::new("missing descriptor");
+        control.set_start_time(7);
+        control.set_prob_time(11);
+
+        let error = runners.add_control(control).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert_eq!(runners.active_count(), 0);
     }
 
     #[test]
