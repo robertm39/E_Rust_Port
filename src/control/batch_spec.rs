@@ -1,18 +1,21 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::ProverResult;
+use crate::basics::simple_stuff::{ProblemType, ProverResult};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::formulasets::FormulaSet;
+use crate::clauses::sine::{pstack_clause_write_tstp, pstack_formula_write_tstp};
 use crate::control::esession::{Descriptor, DescriptorInterestSet};
 use crate::control::proc_ctrl::{prover_result_table_entry, EPCtrl, EPCtrlSet, MAX_CORES};
-use crate::control::sine::StructFofSpec;
+use crate::control::sine::{StructFofSpec, StructFofSpecSelection};
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
     accept_dotted_id, parse_basic_include, parse_continuous, parse_dotted_id, parse_filename,
     parse_int,
 };
 use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
+use crate::inout::tempfile::temp_file_create;
 use crate::terms::signature::Signature;
-use std::io::{self, Write};
+use crate::terms::termbanks::TermBank;
+use std::io::{self, Cursor, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -225,6 +228,21 @@ pub struct BatchRunnerCreateConfig<'a> {
     pub cpu_time: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchRunnerProblemConfig {
+    pub problem_type: ProblemType,
+    pub keep_input_names: bool,
+}
+
+impl Default for BatchRunnerProblemConfig {
+    fn default() -> Self {
+        Self {
+            problem_type: ProblemType::FirstOrder,
+            keep_input_names: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BatchRunnerRequest {
     pub executable: String,
@@ -235,6 +253,18 @@ pub struct BatchRunnerRequest {
     pub selected_count: i64,
     pub selected_clauses: usize,
     pub selected_formulas: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchRunnerPreparedRequest {
+    pub request: BatchRunnerRequest,
+    pub problem_tstp: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchRunnerTempRequest {
+    pub request: BatchRunnerRequest,
+    pub input_file: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -873,6 +903,98 @@ impl BatchSpec {
 
     #[expect(
         clippy::too_many_arguments,
+        reason = "The staged batch runner file emission mirrors C selection, logging, and TSTP rendering"
+    )]
+    pub fn create_runner_prepared_request_with<W, C>(
+        &self,
+        ctrl: &mut StructFofSpec,
+        bank: &mut TermBank,
+        filter: &AxFilter,
+        config: BatchRunnerCreateConfig<'_>,
+        problem_config: BatchRunnerProblemConfig,
+        output: &mut W,
+        mut clock_seconds_mod: C,
+    ) -> Result<BatchRunnerPreparedRequest, Diagnostic>
+    where
+        W: Write + ?Sized,
+        C: FnMut() -> i64,
+    {
+        let filter_text = batch_filter_print_string(filter)?;
+        writeln!(
+            output,
+            "% Filtering for {filter_text} ({})",
+            clock_seconds_mod()
+        )
+        .map_err(|error| batch_runner_output_error(&error))?;
+
+        let selection = ctrl.get_problem(bank.signature(), filter)?;
+        let selected_count = selection.selected_count;
+        let selected_clauses = selection.clauses.len();
+        let selected_formulas = selection.formulas.len();
+        let problem_tstp = render_batch_runner_problem_tstp(bank, &selection, problem_config)?;
+        drop(selection);
+
+        writeln!(
+            output,
+            "% Spec has {selected_clauses} clauses and {selected_formulas} formulas ({})",
+            clock_seconds_mod()
+        )
+        .map_err(|error| batch_runner_output_error(&error))?;
+        writeln!(output, "% Written new problem ({})", clock_seconds_mod())
+            .map_err(|error| batch_runner_output_error(&error))?;
+
+        Ok(BatchRunnerPreparedRequest {
+            request: BatchRunnerRequest {
+                executable: self.executable.clone(),
+                name: batch_filter_runner_name(filter)?,
+                options: config.options.to_owned(),
+                extra_options: config.extra_options.to_owned(),
+                cpu_time: config.cpu_time,
+                selected_count,
+                selected_clauses,
+                selected_formulas,
+            },
+            problem_tstp,
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The staged batch runner temp-file path keeps the C helper boundary explicit"
+    )]
+    pub fn create_runner_temp_request_with<W, C>(
+        &self,
+        ctrl: &mut StructFofSpec,
+        bank: &mut TermBank,
+        filter: &AxFilter,
+        config: BatchRunnerCreateConfig<'_>,
+        problem_config: BatchRunnerProblemConfig,
+        output: &mut W,
+        clock_seconds_mod: C,
+    ) -> Result<BatchRunnerTempRequest, Diagnostic>
+    where
+        W: Write + ?Sized,
+        C: FnMut() -> i64,
+    {
+        let prepared = self.create_runner_prepared_request_with(
+            ctrl,
+            bank,
+            filter,
+            config,
+            problem_config,
+            output,
+            clock_seconds_mod,
+        )?;
+        let mut source = Cursor::new(prepared.problem_tstp.into_bytes());
+        let input_file = temp_file_create(&mut source)?;
+        Ok(BatchRunnerTempRequest {
+            request: prepared.request,
+            input_file,
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
         reason = "The staged BatchProcessProblem port keeps C runner and clock seams injectable"
     )]
     pub fn process_problem_with<WGlobal, WExternal, C, S, P>(
@@ -1012,6 +1134,31 @@ fn spawned_runner_from_control(control: &EPCtrl) -> BatchSpawnedRunner {
         start_time: control.start_time(),
         prob_time: control.prob_time(),
     }
+}
+
+fn render_batch_runner_problem_tstp(
+    bank: &mut TermBank,
+    selection: &StructFofSpecSelection<'_>,
+    config: BatchRunnerProblemConfig,
+) -> Result<String, Diagnostic> {
+    let mut type_decls = Vec::new();
+    bank.signature()
+        .print_type_decls_tstp(&mut type_decls, config.problem_type)
+        .map_err(|error| batch_runner_problem_output_error(&error))?;
+    let mut output = String::from_utf8(type_decls).map_err(|error| {
+        batch_process_error(format!(
+            "Batch runner type declarations are not valid UTF-8: {error}"
+        ))
+    })?;
+    pstack_clause_write_tstp(&mut output, bank, &selection.clauses, config.problem_type)?;
+    pstack_formula_write_tstp(
+        &mut output,
+        bank,
+        &selection.formulas,
+        config.problem_type,
+        config.keep_input_names,
+    )?;
+    Ok(output)
 }
 
 fn write_variant_initial<W: Write + ?Sized>(
@@ -1240,6 +1387,13 @@ fn batch_runner_output_error(error: &io::Error) -> Diagnostic {
     )
 }
 
+fn batch_runner_problem_output_error(error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("Could not write batch runner problem output: {error}"),
+    )
+}
+
 fn batch_process_output_error(error: &io::Error) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::FILE_ERROR,
@@ -1287,11 +1441,12 @@ mod tests {
         BatchOutputType, BatchProblemData, BatchProcCtrlRunnerSet, BatchProcessFileConfig,
         BatchProcessFileOutputs, BatchProcessProblemConfig, BatchProcessProblemJob,
         BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchProcessVariantsConfig,
-        BatchRunnerCreateConfig, BatchSpawnedRunner, BatchSpec, BatchVariantProblemOutcome,
-        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
+        BatchRunnerCreateConfig, BatchRunnerProblemConfig, BatchSpawnedRunner, BatchSpec,
+        BatchVariantProblemOutcome, BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES,
+        BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::ErrorCode;
-    use crate::basics::simple_stuff::ProverResult;
+    use crate::basics::simple_stuff::{ProblemType, ProverResult};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
@@ -1300,8 +1455,13 @@ mod tests {
     use crate::control::sine::StructFofSpec;
     use crate::heuristics::axfilter::AxFilter;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::inout::tempfile::{temp_file_remove, temp_file_test_lock};
     use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
     use crate::terms::typebanks::TypeBank;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn batch_spec_defaults_match_c_allocation_shape() {
@@ -1530,6 +1690,100 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn create_runner_prepared_request_renders_selected_problem_tstp() {
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        ctrl.add_problem(
+            bank.signature(),
+            ClauseSet::from_clauses([Clause::empty()]),
+            FormulaSet::new(),
+            false,
+        );
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut ticks = [21, 22, 23].into_iter();
+        let mut output = Vec::new();
+
+        let prepared = spec
+            .create_runner_prepared_request_with(
+                &mut ctrl,
+                &mut bank,
+                &AxFilter::threshold(10),
+                BatchRunnerCreateConfig {
+                    options: "--auto",
+                    extra_options: "",
+                    cpu_time: 5,
+                },
+                BatchRunnerProblemConfig {
+                    problem_type: ProblemType::FirstOrder,
+                    keep_input_names: true,
+                },
+                &mut output,
+                || ticks.next().unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Filtering for Threshold(10) (21)\n\
+             % Spec has 1 clauses and 0 formulas (22)\n\
+             % Written new problem (23)\n"
+        );
+        assert_eq!(prepared.request.name, "Threshold(10)");
+        assert_eq!(prepared.request.options, "--auto");
+        assert_eq!(prepared.request.cpu_time, 5);
+        assert_eq!(prepared.request.selected_clauses, 1);
+        assert_eq!(prepared.request.selected_formulas, 0);
+        assert!(prepared.problem_tstp.contains("cnf("));
+        assert!(prepared.problem_tstp.contains("$false"));
+        assert!(prepared.problem_tstp.ends_with('\n'));
+    }
+
+    #[test]
+    fn create_runner_temp_request_writes_selected_problem_file() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        ctrl.add_problem(
+            bank.signature(),
+            ClauseSet::from_clauses([Clause::empty()]),
+            FormulaSet::new(),
+            false,
+        );
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut output = Vec::new();
+
+        let temp = spec
+            .create_runner_temp_request_with(
+                &mut ctrl,
+                &mut bank,
+                &AxFilter::threshold(10),
+                BatchRunnerCreateConfig {
+                    options: "--auto",
+                    extra_options: "",
+                    cpu_time: 5,
+                },
+                BatchRunnerProblemConfig::default(),
+                &mut output,
+                || 30,
+            )
+            .unwrap();
+
+        let payload = fs::read_to_string(&temp.input_file).unwrap();
+        assert_eq!(temp.request.name, "Threshold(10)");
+        assert!(payload.contains("cnf("));
+        assert!(payload.contains("$false"));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Filtering for Threshold(10) (30)\n\
+             % Spec has 1 clauses and 0 formulas (30)\n\
+             % Written new problem (30)\n"
+        );
+        assert!(temp_file_remove(&temp.input_file).unwrap());
     }
 
     #[test]
@@ -2097,6 +2351,39 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         signature
+    }
+
+    fn test_bank() -> TermBank {
+        TermBank::new(test_signature()).unwrap()
+    }
+
+    struct TmpDirGuard {
+        previous: Option<OsString>,
+    }
+
+    impl TmpDirGuard {
+        fn set(path: &PathBuf) -> Self {
+            fs::create_dir_all(path).unwrap();
+            let previous = std::env::var_os("TMPDIR");
+            std::env::set_var("TMPDIR", path);
+            Self { previous }
+        }
+    }
+
+    impl Drop for TmpDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("TMPDIR", value),
+                None => std::env::remove_var("TMPDIR"),
+            }
+        }
+    }
+
+    fn test_temp_dir() -> PathBuf {
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("batch-spec-temp")
     }
 
     fn shared_spec(signature: &Signature) -> StructFofSpec {

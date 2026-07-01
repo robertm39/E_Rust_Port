@@ -429,10 +429,11 @@ Implemented:
 - `BatchProcessFile` is staged over an injected problem loader and destination writer, preserving source/default-directory forwarding, forced TSTP problem format, source-name job labeling, non-interactive problem execution, destination-output routing, and source/destination reporting for later filesystem integration.
 - `BatchProcessVariants` is staged over injected concrete-problem execution, preserving variant/prover pairing, round status output, C proportional concrete-problem time allocation, abstract-to-concrete filename construction, raw output-directory joining, already-solved skipping, child-output passthrough, and per-attempt records.
 - The batch runner process-control adapter is staged as `BatchProcCtrlRunnerSet`, which launches a `BatchRunnerRequest` plus explicit input file through `EPCtrl::create_generic`, tracks active child count, polls `EPCtrlSet` into `BatchCompletedRunner`, preserves C no-proof child messages, and clears owned temporary files at the adapter boundary.
+- `batch_create_runner` temporary problem emission is staged as prepared/temp runner requests: selected problems now render C-ordered TSTP type declarations, selected clause stacks, and selected formula stacks, and can be written to a registered temporary file for later process-control handoff.
 
 Pending:
 
-- Actual parsing of include/problem files into `StructFOFSpec`, temporary TSTP file emission and file-path handoff into `BatchProcCtrlRunnerSet`, socket result mirroring, real destination-file opening, forked variant child execution, and the `e_ltb_runner` CLI wrapper remain pending.
+- Actual parsing of include/problem files into `StructFOFSpec`, direct `BatchProcessProblem` wiring from temp request into `BatchProcCtrlRunnerSet`, socket result mirroring, real destination-file opening, forked variant child execution, and the `e_ltb_runner` CLI wrapper remain pending.
 - Reference comparisons against real CASC LTB specs should be added once the runner can execute problems, because this grammar is intentionally loose and historically tied to specific competition file shapes.
 
 Change-later notes:
@@ -460,6 +461,7 @@ Change-later notes:
 - `BatchProcessVariants` contains a CASC-28/J10 hack that allocates and initializes a fresh `StructFOFSpec` for every concrete problem instead of sharing one initialized spec across the variant round. Rust stages only the orchestration now; real include/problem loading should preserve this no-shared-axioms behavior until variant traces prove it can be simplified.
 - `BatchProcessVariants` does not stop the outer variant loop when all abstract problems are solved; later rounds still print "already solved" lines. Rust preserves that loop shape in the staged scheduler, even though a cleaned scheduler would likely break early.
 - `BatchProcessProblem` relies on `EPCtrlSetGetResult(procs, true)` for failed child cleanup and `EPCtrlSetFree(procs, true)` for final cleanup, so temporary-file lifetime is coupled to process-set lifetime. Rust exposes that coupling in `BatchProcCtrlRunnerSet`; a later scheduler API can split process polling from temporary-file ownership after byte-compatible traces exist.
+- `batch_create_runner` writes type declarations for the whole signature before the filtered selected problem, not only declarations reachable from selected clauses/formulas. Rust preserves that broad declaration pass for now; a later minimized-problem writer should only be considered after child-runner compatibility tests cover typed LTB problems.
 
 ## Initial Crate And CLI Foundation
 
