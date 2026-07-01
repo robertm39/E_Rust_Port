@@ -322,6 +322,34 @@ Change-later notes:
 - `EPCtrlSetGetResult` ignores `select` errors, scans integer descriptors from `0..=maxfd`, and asserts on impossible result states. Rust keeps the deterministic polling behavior explicit; the later event-loop adapter should decide which of these artifacts are compatibility requirements.
 - Rust's portable process-set timeout poll uses per-child reader threads and channels rather than blocking the main thread in OS `select`, because Windows child stdout handles are not `select`-compatible sockets. Keep exact descriptor readiness as a compatibility adapter concern if byte-level scheduler tests require it.
 
+## Generic Process Control
+
+Rust files:
+
+- `src/control/gproc_ctrl.rs`
+
+C source references:
+
+- `eprover/CONTROL/cco_gproc_ctrl.c`
+- `eprover/CONTROL/cco_gproc_ctrl.h`
+- `eprover/CONTROL/cco_proc_ctrl.h`
+
+Implemented:
+
+- `cco_gproc_ctrl` state and set pieces, including `EGPCTRL_BUFSIZE`, allocation defaults, optional name/pid/descriptor fields, exit status, CPU-limit and core-reservation fields, accumulated output, safe child cleanup, descriptor-indexed process-set storage, core-reservation accounting, descriptor-interest registration for session/server readiness, process lookup/deletion/clear helpers, startup/completion status output with C-shaped comment text, chunk-oriented subprocess output pumping, result determination from the complete accumulated output at EOF, EOF-to-failure fallback, successful-result handling for theorem/unsatisfiable/satisfiable/counter-satisfiable, failure deletion, C-shaped first-success process-set scanning, and a portable timeout poll over available child output.
+
+Pending:
+
+- Exact C `fork()` semantics for `EGPCtrlCreate`, including the `NULL` child return path, `dup2` of the child stdout pipe, child-side `GlobalOut` mutation, SIGTERM reset, and child CPU-limit application.
+- Exact kernel-level `select` timeout/error behavior for `EGPCtrlSetGetResult`; Rust uses the same channel-backed timeout pattern as the E-specific controller until a platform event-loop adapter exists.
+- Integration with the multicore scheduler call sites that currently depend on forked in-process children.
+
+Change-later notes:
+
+- `EGPCtrlCreate` combines process creation, child control-flow selection, signal policy, stdout redirection, global-output mutation, and resource-limit setup in one function. Rust keeps those responsibilities separated behind a safe command-backed adapter for now; later, decide whether exact fork behavior belongs behind a narrowly documented platform boundary or should be replaced by explicit worker-process orchestration.
+- `EGPCtrlGetResult` reads arbitrary byte chunks and only scans for SZS status strings after EOF, unlike the E-specific line scanner. Rust preserves this so partial output does not affect the result state, but scheduler tests should confirm this is required.
+- C `EGPCtrlSetFree(..., false)` can free control records without calling cleanup on still-running children. Rust `Drop` cleans up owned children to avoid orphan processes; keep that divergence documented if exact parent/child lifetime tests appear.
+
 ## e_stratpar Executable
 
 Rust files:
