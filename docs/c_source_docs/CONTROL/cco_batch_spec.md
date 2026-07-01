@@ -131,6 +131,7 @@ Source files reviewed: `CONTROL/cco_batch_spec.h`, `CONTROL/cco_batch_spec.c`.
 
 - Rust support is in `src/control/batch_spec.rs`, covering the output-type enum values, batch filter/strategy tables, owned batch-spec state, scanner-backed config/include/problem-list parsing, C-shaped printing, `BatchSpecProblemNo`, `e_ltb_runner` header parsing, include acceptance notices, and abstract variant filename construction.
 - Shared-axiom and selected-problem support used by this unit is staged in `src/control/sine.rs`, covering `StructFOFSpecAddProblem`, `StructFOFSpecBacktrackToSpec`, and `StructFOFSpecGetProblem` behavior over already-parsed clause/formula sets.
+- `BatchProcessProblems` orchestration is now represented in `src/control/batch_spec.rs` with injected file-processing and clock hooks, preserving per-problem time allocation, destination-name construction, and solved-count behavior.
 
 ### Change Later
 
@@ -141,4 +142,7 @@ Source files reviewed: `CONTROL/cco_batch_spec.h`, `CONTROL/cco_batch_spec.c`.
 - `abstract_to_concrete` ignores everything after the first `*` in an abstract filename. If future variant specs need suffix preservation, change this only behind compatibility tests because the truncation is documented in the C function comment.
 - Training-directory values are parsed with the normal scanner's continuous-token behavior, so comment delimiters still have scanner semantics inside unquoted paths. Consider quoted or explicitly delimited fields only after matching existing LTB files.
 - This C file implements several `StructFOFSpec*` helpers declared in `cco_sine.h`, which obscures ownership boundaries between batch execution and SInE selection. Rust keeps those helpers in `control::sine`; if future callers need a different module split, prefer a caller-driven boundary rather than mirroring the C file layout.
+- `BatchProcessProblems` computes proportional limits as `rest/(sp-i)+1`, so it deliberately rounds upward and may yield negative per-problem limits if the total wall-clock budget is already exhausted. Keep this visible when wiring real timeout/resource-limit behavior.
+- Destination paths are formed with raw string concatenation: `dest_dir`, then `/`, then the spec destination. Empty `dest_dir` becomes `/dest`, and a trailing slash becomes a double slash. Rust preserves this for compatibility; a later cleaned API can use path-aware joining only behind tests.
+- The C loop indexes destination files by source-file stack length. Rust validates manually constructed mismatched specs and reports an interface diagnostic; parsed specs still preserve the C paired-push invariant.
 <!-- END MANUAL REVIEW: c_source_docs -->

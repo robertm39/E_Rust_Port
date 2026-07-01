@@ -423,10 +423,11 @@ Implemented:
 
 - Initial `cco_batch_spec` support includes the `BOOutputType` enum values, `BatchSpecCell`-shaped owned Rust state, C batch filter/strategy tables without NULL sentinels, `BatchSpecProblemNo` behavior, C-shaped batch-spec printing, scanner-backed `BatchSpecParse` control flow, `e_ltb_runner` header parsing for `division.category` plus optional `division.category.training_data`, include acceptance notices, and `abstract_to_concrete` prefix/variant/postfix construction.
 - Initial `StructFOFSpec` control-layer support includes owned clause/formula-set stacks, the parsed-include registry, shared-axiom stack/f-count markers, distribution initialization and problem-set insertion, formula f-code collection, threshold/LambdaDef/GSinE selected-problem extraction through the existing clause/formula SInE helpers, and C-shaped backtracking to the shared-axiom boundary with an explicit signature-backtrack report.
+- `BatchProcessProblems` orchestration is staged over injected file-processing and clock hooks, including per-problem wall-clock allocation, solved-count reporting, source/destination pairing, default-directory forwarding, `dest_dir` prefix construction, and per-problem execution records for later runner integration.
 
 Pending:
 
-- Actual parsing of include/problem files into `StructFOFSpec`, filter-specific child spawning, interactive mode, variant batch execution, output-directory handling, and the `e_ltb_runner` CLI wrapper remain pending.
+- Actual parsing of include/problem files into `StructFOFSpec`, filter-specific child spawning, writing destination files, interactive mode, variant batch execution, and the `e_ltb_runner` CLI wrapper remain pending.
 - Reference comparisons against real CASC LTB specs should be added once the runner can execute problems, because this grammar is intentionally loose and historically tied to specific competition file shapes.
 
 Change-later notes:
@@ -439,6 +440,9 @@ Change-later notes:
 - C declares `StructFOFSpec` in `cco_sine.h`, implements allocation/parsing/distribution in `cco_sine.c`, and implements add/backtrack/get-problem helpers in `cco_batch_spec.c`. Rust keeps a single `control::sine` owner API; future cleanup can make the C split irrelevant once callers are fully ported.
 - `StructFOFSpecBacktrackToSpec` subtracts formula-set distribution with the non-trimming path even when the problem was added with trimmed implication accounting. Rust preserves that by using untrimmed formula subtraction in backtracking; revisit only if full LTB/SInE traces prove this asymmetry is accidental and observable.
 - C backtracking also calls `SigBacktrack` and term-bank GC through global owner state. Rust currently reports the signature f-count target from the `StructFofSpecBacktrackReport`; wiring actual signature/term-bank backtracking belongs with the future file-parser/term-bank ownership integration.
+- `BatchProcessProblems` biases proportional total-time slices upward with `rest/(remaining)+1`, then caps by the per-problem limit only when that limit is nonzero. It can therefore pass negative wall-clock limits to `BatchProcessFile` after the total limit is already exceeded. Rust preserves this arithmetic for now.
+- `BatchProcessProblems` constructs `dest_dir` paths by appending a literal `/` before the destination file without normalizing empty strings or trailing slashes. Rust preserves this path construction; later platform-aware path joining should be considered only after LTB output compatibility is covered.
+- C assumes `source_files` and `dest_files` stacks have matching lengths because parsing pushes them in pairs. Rust reports an interface diagnostic for hand-built mismatched specs rather than indexing past the destination list.
 
 ## Initial Crate And CLI Foundation
 

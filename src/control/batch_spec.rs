@@ -119,6 +119,44 @@ pub struct BatchSpec {
     pub dest_files: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BatchProcessProblemsConfig<'a> {
+    pub total_wtc_limit: i64,
+    pub default_dir: Option<&'a str>,
+    pub dest_dir: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchProcessProblemJob<'a> {
+    pub index: usize,
+    pub wct_limit: i64,
+    pub default_dir: Option<&'a str>,
+    pub source: &'a str,
+    pub dest: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchProcessProblemRecord {
+    pub index: usize,
+    pub source: String,
+    pub dest: String,
+    pub wct_limit: i64,
+    pub solved: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BatchProcessProblemsReport {
+    pub solved: i64,
+    pub records: Vec<BatchProcessProblemRecord>,
+}
+
+impl BatchProcessProblemsReport {
+    #[must_use]
+    pub const fn c_return_value(&self) -> i64 {
+        self.solved
+    }
+}
+
 impl BatchSpec {
     #[must_use]
     pub fn new(executable: impl Into<String>, format: IoFormat) -> Self {
@@ -268,6 +306,84 @@ impl BatchSpec {
         })
     }
 
+    pub fn process_problems_with<F, C>(
+        &self,
+        config: BatchProcessProblemsConfig<'_>,
+        mut clock_seconds: C,
+        mut process_file: F,
+    ) -> Result<BatchProcessProblemsReport, Diagnostic>
+    where
+        F: for<'a> FnMut(BatchProcessProblemJob<'a>) -> Result<bool, Diagnostic>,
+        C: FnMut() -> i64,
+    {
+        if self.source_files.len() != self.dest_files.len() {
+            return Err(batch_process_error(format!(
+                "Batch spec has {} source files but {} destination files",
+                self.source_files.len(),
+                self.dest_files.len()
+            )));
+        }
+
+        let start = clock_seconds();
+        let mut report = BatchProcessProblemsReport::default();
+        let problem_count = self.source_files.len();
+
+        for (index, (source, dest)) in self.source_files.iter().zip(&self.dest_files).enumerate() {
+            let now = if config.total_wtc_limit != 0 {
+                clock_seconds()
+            } else {
+                start
+            };
+            let wct_limit = self.problem_wct_limit(
+                config.total_wtc_limit,
+                start,
+                now,
+                problem_count.saturating_sub(index),
+            );
+            let dest_name = batch_problem_dest_name(config.dest_dir, dest);
+            let solved = process_file(BatchProcessProblemJob {
+                index,
+                wct_limit,
+                default_dir: config.default_dir,
+                source,
+                dest: &dest_name,
+            })?;
+            if solved {
+                report.solved += 1;
+            }
+            report.records.push(BatchProcessProblemRecord {
+                index,
+                source: source.clone(),
+                dest: dest_name,
+                wct_limit,
+                solved,
+            });
+        }
+
+        Ok(report)
+    }
+
+    fn problem_wct_limit(
+        &self,
+        total_wtc_limit: i64,
+        start: i64,
+        now: i64,
+        remaining_problems: usize,
+    ) -> i64 {
+        if total_wtc_limit != 0 {
+            let used = now - start;
+            let rest = total_wtc_limit - used;
+            let prop_time = rest / usize_to_i64_c(remaining_problems) + 1;
+            if self.per_prob_limit != 0 {
+                prop_time.min(self.per_prob_limit)
+            } else {
+                prop_time
+            }
+        } else {
+            self.per_prob_limit
+        }
+    }
+
     fn write_output_line<W: Write + ?Sized>(
         &self,
         output: &mut W,
@@ -290,6 +406,18 @@ impl BatchSpec {
         }
         Ok(())
     }
+}
+
+#[must_use]
+pub fn batch_problem_dest_name(dest_dir: Option<&str>, dest_file: &str) -> String {
+    let Some(dest_dir) = dest_dir else {
+        return dest_file.to_owned();
+    };
+    let mut result = String::with_capacity(dest_dir.len() + 1 + dest_file.len());
+    result.push_str(dest_dir);
+    result.push('/');
+    result.push_str(dest_file);
+    result
 }
 
 pub fn parse_ltb_header(scanner: &mut Scanner) -> Result<BatchSpecHeader, Diagnostic> {
@@ -353,12 +481,22 @@ fn output_error(error: &io::Error) -> Diagnostic {
     )
 }
 
+fn batch_process_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(ErrorCode::INTERFACE_ERROR, message)
+}
+
+fn usize_to_i64_c(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        abstract_to_concrete, parse_ltb_header, BatchOutputType, BatchSpec, BATCH_FILTERS,
+        abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchOutputType,
+        BatchProcessProblemJob, BatchProcessProblemsConfig, BatchSpec, BATCH_FILTERS,
         BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
     };
+    use crate::basics::error::ErrorCode;
     use crate::inout::scanner::{IoFormat, Scanner};
 
     #[test]
@@ -507,5 +645,183 @@ mod tests {
         assert_eq!(BatchOutputType::NoOutput.c_value(), 0);
         assert_eq!(BatchOutputType::Desired.c_value(), 1);
         assert_eq!(BatchOutputType::Required.c_value(), 2);
+    }
+
+    #[test]
+    fn batch_problem_dest_name_preserves_c_dest_dir_joining() {
+        assert_eq!(batch_problem_dest_name(None, "out.p"), "out.p");
+        assert_eq!(
+            batch_problem_dest_name(Some("Results"), "out.p"),
+            "Results/out.p"
+        );
+        assert_eq!(
+            batch_problem_dest_name(Some("Results/"), "out.p"),
+            "Results//out.p"
+        );
+        assert_eq!(batch_problem_dest_name(Some(""), "out.p"), "/out.p");
+    }
+
+    #[test]
+    fn process_problems_uses_per_problem_limit_without_total_limit() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.per_prob_limit = 17;
+        spec.source_files = vec!["p1.p".to_owned(), "p2.p".to_owned()];
+        spec.dest_files = vec!["o1".to_owned(), "o2".to_owned()];
+        let mut jobs = Vec::new();
+
+        let report = spec
+            .process_problems_with(
+                BatchProcessProblemsConfig {
+                    default_dir: Some("Problems"),
+                    ..BatchProcessProblemsConfig::default()
+                },
+                || 100,
+                |job| {
+                    jobs.push(job_to_tuple(job));
+                    Ok(job.index == 1)
+                },
+            )
+            .unwrap();
+
+        assert_eq!(report.c_return_value(), 1);
+        assert_eq!(
+            jobs,
+            [
+                (
+                    0,
+                    17,
+                    Some("Problems".to_owned()),
+                    "p1.p".to_owned(),
+                    "o1".to_owned()
+                ),
+                (
+                    1,
+                    17,
+                    Some("Problems".to_owned()),
+                    "p2.p".to_owned(),
+                    "o2".to_owned()
+                )
+            ]
+        );
+        assert_eq!(report.records.len(), 2);
+        assert!(!report.records[0].solved);
+        assert!(report.records[1].solved);
+    }
+
+    #[test]
+    fn process_problems_biases_total_limit_up_and_caps_by_per_problem_limit() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.per_prob_limit = 20;
+        spec.source_files = vec!["p1.p".to_owned(), "p2.p".to_owned(), "p3.p".to_owned()];
+        spec.dest_files = vec!["o1".to_owned(), "o2".to_owned(), "o3".to_owned()];
+        let mut times = [100, 100, 110, 160].into_iter();
+        let mut limits = Vec::new();
+
+        let report = spec
+            .process_problems_with(
+                BatchProcessProblemsConfig {
+                    total_wtc_limit: 90,
+                    dest_dir: Some("Out"),
+                    ..BatchProcessProblemsConfig::default()
+                },
+                || times.next().unwrap(),
+                |job| {
+                    limits.push((job.wct_limit, job.dest.to_owned()));
+                    Ok(true)
+                },
+            )
+            .unwrap();
+
+        assert_eq!(report.solved, 3);
+        assert_eq!(
+            limits,
+            [
+                (20, "Out/o1".to_owned()),
+                (20, "Out/o2".to_owned()),
+                (20, "Out/o3".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn process_problems_uses_proportional_total_limit_without_per_problem_cap() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.source_files = vec!["p1.p".to_owned(), "p2.p".to_owned(), "p3.p".to_owned()];
+        spec.dest_files = vec!["o1".to_owned(), "o2".to_owned(), "o3".to_owned()];
+        let mut times = [100, 100, 110, 160].into_iter();
+        let mut limits = Vec::new();
+
+        let report = spec
+            .process_problems_with(
+                BatchProcessProblemsConfig {
+                    total_wtc_limit: 90,
+                    ..BatchProcessProblemsConfig::default()
+                },
+                || times.next().unwrap(),
+                |job| {
+                    limits.push(job.wct_limit);
+                    Ok(job.index != 1)
+                },
+            )
+            .unwrap();
+
+        assert_eq!(report.solved, 2);
+        assert_eq!(limits, [31, 41, 31]);
+        assert_eq!(
+            report
+                .records
+                .iter()
+                .map(|record| record.wct_limit)
+                .collect::<Vec<_>>(),
+            [31, 41, 31]
+        );
+    }
+
+    #[test]
+    fn process_problems_preserves_expired_total_limit_signed_arithmetic() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.source_files.push("late.p".to_owned());
+        spec.dest_files.push("late.out".to_owned());
+        let mut times = [10, 20].into_iter();
+        let mut limit = 0;
+
+        spec.process_problems_with(
+            BatchProcessProblemsConfig {
+                total_wtc_limit: 5,
+                ..BatchProcessProblemsConfig::default()
+            },
+            || times.next().unwrap(),
+            |job| {
+                limit = job.wct_limit;
+                Ok(false)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(limit, -4);
+    }
+
+    #[test]
+    fn process_problems_rejects_mismatched_source_and_dest_lists() {
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.source_files.push("p.p".to_owned());
+        let error = spec
+            .process_problems_with(BatchProcessProblemsConfig::default(), || 0, |_| Ok(false))
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(error.message().contains("source files"));
+    }
+
+    fn job_to_tuple(
+        job: BatchProcessProblemJob<'_>,
+    ) -> (usize, i64, Option<String>, String, String) {
+        (
+            job.index,
+            job.wct_limit,
+            job.default_dir.map(str::to_owned),
+            job.source.to_owned(),
+            job.dest.to_owned(),
+        )
     }
 }
