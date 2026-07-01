@@ -425,10 +425,11 @@ Implemented:
 - Initial `StructFOFSpec` control-layer support includes owned clause/formula-set stacks, the parsed-include registry, shared-axiom stack/f-count markers, distribution initialization and problem-set insertion, formula f-code collection, threshold/LambdaDef/GSinE selected-problem extraction through the existing clause/formula SInE helpers, and C-shaped backtracking to the shared-axiom boundary with an explicit signature-backtrack report.
 - `BatchProcessProblems` orchestration is staged over injected file-processing and clock hooks, including per-problem wall-clock allocation, solved-count reporting, source/destination pairing, default-directory forwarding, `dest_dir` prefix construction, and per-problem execution records for later runner integration.
 - `batch_create_runner` setup is staged as a testable runner request: it renders the C filtering/progress lines, selected problem clause/formula counts, answer-query extra option, fixed-buffer process name, executable/options, CPU limit, and selected-count metadata after `StructFOFSpecGetProblem`.
+- `BatchProcessProblem` orchestration is staged over injected runner spawn/poll hooks, including problem insertion, default filter lookup, max-core strategy launch, C child CPU-slice arithmetic, success/GaveUp status output, optional destination-output mirroring, interactive proof-output echoing, and backtracking after each problem attempt.
 
 Pending:
 
-- Actual parsing of include/problem files into `StructFOFSpec`, temporary TSTP file emission, filter-specific child spawning/result polling, writing destination files, interactive mode, variant batch execution, and the `e_ltb_runner` CLI wrapper remain pending.
+- Actual parsing of include/problem files into `StructFOFSpec`, temporary TSTP file emission, the real `EPCtrl` child-process adapter, socket result mirroring, destination-file opening from parsed specs, variant batch execution, and the `e_ltb_runner` CLI wrapper remain pending.
 - Reference comparisons against real CASC LTB specs should be added once the runner can execute problems, because this grammar is intentionally loose and historically tied to specific competition file shapes.
 
 Change-later notes:
@@ -446,6 +447,9 @@ Change-later notes:
 - `batch_create_runner` combines logging, SInE problem selection, temporary-file creation, type/axiom printing, process naming, and child-process creation in one helper routed through `GlobalOut`. Rust stages these as an explicit runner request for testability; later cleanup can split selection, rendering, temp-file ownership, and spawning once byte-compatible runner traces exist.
 - `batch_create_runner` calls `AxFilterPrintBuf(name, 320, ax_filter)` but ignores the boolean that reports buffer overflow, so an overlong filter name can feed a truncated process name into process-control naming. Rust keeps the fixed 320-byte boundary visible and reports overflow explicitly.
 - C assumes `source_files` and `dest_files` stacks have matching lengths because parsing pushes them in pairs. Rust reports an interface diagnostic for hand-built mismatched specs rather than indexing past the destination list.
+- `BatchProcessProblem` leaves `handle` uninitialized if the wall-clock limit is already expired before the outer loop first executes, then tests `if(handle)`. Rust treats that path as GaveUp and still backtracks; keep this documented as an intentional cleanup of accidental C undefined behavior.
+- `BatchProcessProblem` gives each child `MIN((wct_limit+1)/2, wct_limit-used)` seconds, so zero or negative per-problem limits can produce nonpositive child CPU budgets. Rust preserves the formula in the staged request path until real process-limit compatibility tests decide whether to clamp.
+- `BatchProcessProblem` interleaves status construction with `GlobalOut`, optional file output, optional socket output, and interactive proof echoing. Rust currently stages explicit global/external writers and leaves socket output pending; a later API should separate result synthesis from output transports once byte compatibility is covered.
 
 ## Initial Crate And CLI Foundation
 

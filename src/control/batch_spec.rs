@@ -1,4 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProverResult;
+use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::FormulaSet;
+use crate::control::proc_ctrl::{prover_result_table_entry, MAX_CORES};
 use crate::control::sine::StructFofSpec;
 use crate::heuristics::axfilter::{AxFilter, AxFilterType};
 use crate::inout::basicparser::{
@@ -147,6 +151,19 @@ pub struct BatchProcessProblemRecord {
     pub solved: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchProblemData {
+    pub clauses: ClauseSet,
+    pub formulas: FormulaSet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchProcessProblemConfig<'a> {
+    pub wct_limit: i64,
+    pub jobname: &'a str,
+    pub interactive: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BatchProcessProblemsReport {
     pub solved: i64,
@@ -170,6 +187,33 @@ pub struct BatchRunnerRequest {
     pub selected_count: i64,
     pub selected_clauses: usize,
     pub selected_formulas: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchSpawnedRunner {
+    pub name: String,
+    pub start_time: i64,
+    pub prob_time: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchCompletedRunner {
+    pub runner: BatchSpawnedRunner,
+    pub result: ProverResult,
+    pub output: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchProcessProblemReport {
+    pub solved: bool,
+    pub spawned: usize,
+    pub completed: Option<BatchCompletedRunner>,
+    pub backtrack: crate::control::sine::StructFofSpecBacktrackReport,
+}
+
+pub struct BatchProcessProblemOutputs<'a, WGlobal: Write + ?Sized, WExternal: Write + ?Sized> {
+    pub global_output: &'a mut WGlobal,
+    pub external_output: Option<&'a mut WExternal>,
 }
 
 impl BatchProcessProblemsReport {
@@ -442,6 +486,96 @@ impl BatchSpec {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The staged BatchProcessProblem port keeps C runner and clock seams injectable"
+    )]
+    pub fn process_problem_with<WGlobal, WExternal, C, S, P>(
+        &self,
+        signature: &Signature,
+        ctrl: &mut StructFofSpec,
+        problem: BatchProblemData,
+        config: BatchProcessProblemConfig<'_>,
+        mut outputs: BatchProcessProblemOutputs<'_, WGlobal, WExternal>,
+        mut clock_seconds: C,
+        mut spawn_runner: S,
+        mut poll_runners: P,
+    ) -> Result<BatchProcessProblemReport, Diagnostic>
+    where
+        WGlobal: Write + ?Sized,
+        WExternal: Write + ?Sized,
+        C: FnMut() -> i64,
+        S: FnMut(BatchRunnerRequest) -> Result<BatchSpawnedRunner, Diagnostic>,
+        P: FnMut(&mut Vec<BatchSpawnedRunner>) -> Result<Option<BatchCompletedRunner>, Diagnostic>,
+    {
+        let filters = crate::heuristics::axfilter::AxFilterSet::default_set()?;
+        let _pre_add_start = clock_seconds();
+        ctrl.add_problem(signature, problem.clauses, problem.formulas, false);
+
+        let mut active = Vec::new();
+        let mut spawn_count = 0;
+        let process_result = (|| {
+            let start = clock_seconds();
+            let end = start + config.wct_limit;
+            let mut filter_index = 0;
+            let mut completed = None;
+
+            while completed.is_none() && clock_seconds() <= end {
+                while filter_index < BATCH_FILTERS.len() && active.len() < MAX_CORES {
+                    let now = clock_seconds();
+                    if now > end {
+                        break;
+                    }
+                    let used = now - start;
+                    let filter_name = BATCH_FILTERS[filter_index];
+                    let filter = filters.find_filter(filter_name).ok_or_else(|| {
+                        batch_process_error(format!(
+                            "Batch filter '{filter_name}' is missing from the default filter set"
+                        ))
+                    })?;
+                    let request = self.create_runner_request_with(
+                        ctrl,
+                        signature,
+                        filter,
+                        BatchRunnerCreateConfig {
+                            options: BATCH_STRATEGIES[filter_index],
+                            extra_options: self.answer_options(),
+                            cpu_time: batch_runner_cpu_time(config.wct_limit, used),
+                        },
+                        &mut *outputs.global_output,
+                        || clock_seconds() % 1000,
+                    )?;
+                    active.push(spawn_runner(request)?);
+                    spawn_count += 1;
+                    filter_index += 1;
+                }
+
+                if let Some(done) = poll_runners(&mut active)? {
+                    completed = Some(done);
+                    break;
+                }
+            }
+
+            if let Some(completed_runner) = completed {
+                write_problem_success(config, &completed_runner, &mut outputs, clock_seconds())?;
+                Ok((true, Some(completed_runner)))
+            } else {
+                write_problem_gave_up(config, &mut outputs)?;
+                Ok((false, None))
+            }
+        })();
+
+        let backtrack = ctrl.backtrack_to_spec(signature);
+        let (solved, completed) = process_result?;
+
+        Ok(BatchProcessProblemReport {
+            solved,
+            spawned: spawn_count,
+            completed,
+            backtrack,
+        })
+    }
+
     fn problem_wct_limit(
         &self,
         total_wtc_limit: i64,
@@ -485,6 +619,75 @@ impl BatchSpec {
         }
         Ok(())
     }
+}
+
+fn write_problem_success<WGlobal, WExternal>(
+    config: BatchProcessProblemConfig<'_>,
+    completed: &BatchCompletedRunner,
+    outputs: &mut BatchProcessProblemOutputs<'_, WGlobal, WExternal>,
+    now: i64,
+) -> Result<(), Diagnostic>
+where
+    WGlobal: Write + ?Sized,
+    WExternal: Write + ?Sized,
+{
+    let result = prover_result_table_entry(completed.result).ok_or_else(|| {
+        batch_process_error("Completed batch runner has no printable prover result")
+    })?;
+    writeln!(outputs.global_output, "{result} for {}", config.jobname)
+        .map_err(|error| batch_process_output_error(&error))?;
+    let used = now - completed.runner.start_time;
+    let remaining = completed.runner.prob_time - used;
+    writeln!(
+        outputs.global_output,
+        "% Solution found by {} (started {}, remaining {})",
+        completed.runner.name, completed.runner.start_time, remaining
+    )
+    .map_err(|error| batch_process_output_error(&error))?;
+
+    if let Some(external_output) = outputs.external_output.as_deref_mut() {
+        writeln!(external_output, "{result} for {}", config.jobname)
+            .map_err(|error| batch_process_output_error(&error))?;
+        write!(external_output, "{}", completed.output)
+            .map_err(|error| batch_process_output_error(&error))?;
+        external_output
+            .flush()
+            .map_err(|error| batch_process_output_error(&error))?;
+    }
+
+    if config.interactive {
+        write!(outputs.global_output, "{}", completed.output)
+            .map_err(|error| batch_process_output_error(&error))?;
+    }
+    Ok(())
+}
+
+fn write_problem_gave_up<WGlobal, WExternal>(
+    config: BatchProcessProblemConfig<'_>,
+    outputs: &mut BatchProcessProblemOutputs<'_, WGlobal, WExternal>,
+) -> Result<(), Diagnostic>
+where
+    WGlobal: Write + ?Sized,
+    WExternal: Write + ?Sized,
+{
+    writeln!(
+        outputs.global_output,
+        "% SZS status GaveUp for {}",
+        config.jobname
+    )
+    .map_err(|error| batch_process_output_error(&error))?;
+    if let Some(external_output) = outputs.external_output.as_deref_mut() {
+        writeln!(
+            external_output,
+            "% SZS status GaveUp for {}",
+            config.jobname
+        )
+        .map_err(|error| batch_process_output_error(&error))?;
+        external_output
+            .flush()
+            .map_err(|error| batch_process_output_error(&error))?;
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -567,6 +770,13 @@ fn batch_runner_output_error(error: &io::Error) -> Diagnostic {
     )
 }
 
+fn batch_process_output_error(error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("Could not write batch process output: {error}"),
+    )
+}
+
 fn batch_process_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::INTERFACE_ERROR, message)
 }
@@ -590,17 +800,31 @@ fn usize_to_i64_c(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+const fn batch_runner_cpu_time(wct_limit: i64, used: i64) -> i64 {
+    let half_limit = (wct_limit + 1) / 2;
+    let remaining = wct_limit - used;
+    if half_limit < remaining {
+        half_limit
+    } else {
+        remaining
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchOutputType,
-        BatchProcessProblemJob, BatchProcessProblemsConfig, BatchRunnerCreateConfig, BatchSpec,
-        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
+        abstract_to_concrete, batch_problem_dest_name, parse_ltb_header, BatchCompletedRunner,
+        BatchOutputType, BatchProblemData, BatchProcessProblemConfig, BatchProcessProblemJob,
+        BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchRunnerCreateConfig,
+        BatchSpawnedRunner, BatchSpec, BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES,
+        BATCH_STRATEGIES_DIV,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::formulasets::FormulaSet;
+    use crate::control::proc_ctrl::MAX_CORES;
     use crate::control::sine::StructFofSpec;
     use crate::heuristics::axfilter::AxFilter;
     use crate::inout::scanner::{IoFormat, Scanner};
@@ -837,6 +1061,119 @@ mod tests {
     }
 
     #[test]
+    fn process_problem_spawns_up_to_max_cores_then_reports_success_and_backtracks() {
+        let signature = test_signature();
+        let mut ctrl = shared_spec(&signature);
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.res_answer = BatchOutputType::Desired;
+        let mut global = Vec::new();
+        let mut external = Vec::new();
+        let mut requests = Vec::new();
+
+        let report = spec
+            .process_problem_with(
+                &signature,
+                &mut ctrl,
+                one_empty_clause_problem(),
+                BatchProcessProblemConfig {
+                    wct_limit: 20,
+                    jobname: "job.p",
+                    interactive: true,
+                },
+                BatchProcessProblemOutputs {
+                    global_output: &mut global,
+                    external_output: Some(&mut external),
+                },
+                || 100,
+                |request| {
+                    requests.push(request.clone());
+                    Ok(BatchSpawnedRunner {
+                        name: request.name,
+                        start_time: 100,
+                        prob_time: request.cpu_time,
+                    })
+                },
+                |active| {
+                    assert_eq!(active.len(), MAX_CORES);
+                    Ok(Some(BatchCompletedRunner {
+                        runner: active[1].clone(),
+                        result: ProverResult::Theorem,
+                        output: "% proof object\n".to_owned(),
+                    }))
+                },
+            )
+            .unwrap();
+
+        assert!(report.solved);
+        assert_eq!(report.spawned, MAX_CORES);
+        assert_eq!(report.backtrack.removed_clause_sets, 1);
+        assert_eq!(report.backtrack.removed_formula_sets, 1);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert_eq!(requests.len(), MAX_CORES);
+        assert_eq!(requests[0].name, "Threshold(10000)");
+        assert_eq!(
+            requests[0].options,
+            "--satauto-schedule --assume-incompleteness"
+        );
+        assert_eq!(requests[0].extra_options, "--conjectures-are-questions");
+        assert_eq!(requests[0].cpu_time, 10);
+
+        let global = String::from_utf8(global).unwrap();
+        assert!(global.contains("% Filtering for Threshold(10000) (100)\n"));
+        assert!(global.contains("% SZS status Theorem for job.p\n"));
+        assert!(global.contains("% Solution found by "));
+        assert!(global.ends_with("% proof object\n"));
+        assert_eq!(
+            String::from_utf8(external).unwrap(),
+            "% SZS status Theorem for job.p\n% proof object\n"
+        );
+    }
+
+    #[test]
+    fn process_problem_reports_gave_up_when_time_expires_before_spawn() {
+        let signature = test_signature();
+        let mut ctrl = shared_spec(&signature);
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut external = Vec::new();
+
+        let report = spec
+            .process_problem_with(
+                &signature,
+                &mut ctrl,
+                one_empty_clause_problem(),
+                BatchProcessProblemConfig {
+                    wct_limit: -1,
+                    jobname: "late.p",
+                    interactive: false,
+                },
+                BatchProcessProblemOutputs {
+                    global_output: &mut global,
+                    external_output: Some(&mut external),
+                },
+                || 50,
+                |_| panic!("no runner should be spawned after an expired time limit"),
+                |_| panic!("no runner set should be polled after an expired time limit"),
+            )
+            .unwrap();
+
+        assert!(!report.solved);
+        assert_eq!(report.spawned, 0);
+        assert_eq!(report.completed, None);
+        assert_eq!(report.backtrack.removed_clause_sets, 1);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(
+            String::from_utf8(global).unwrap(),
+            "% SZS status GaveUp for late.p\n"
+        );
+        assert_eq!(
+            String::from_utf8(external).unwrap(),
+            "% SZS status GaveUp for late.p\n"
+        );
+    }
+
+    #[test]
     fn batch_problem_dest_name_preserves_c_dest_dir_joining() {
         assert_eq!(batch_problem_dest_name(None, "out.p"), "out.p");
         assert_eq!(
@@ -1018,5 +1355,24 @@ mod tests {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         signature
+    }
+
+    fn shared_spec(signature: &Signature) -> StructFofSpec {
+        let mut ctrl = StructFofSpec::new(signature);
+        ctrl.add_problem(
+            signature,
+            ClauseSet::from_clauses([Clause::empty()]),
+            FormulaSet::new(),
+            false,
+        );
+        ctrl.mark_shared_axioms(signature);
+        ctrl
+    }
+
+    fn one_empty_clause_problem() -> BatchProblemData {
+        BatchProblemData {
+            clauses: ClauseSet::from_clauses([Clause::empty()]),
+            formulas: FormulaSet::new(),
+        }
     }
 }
