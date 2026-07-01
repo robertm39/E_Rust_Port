@@ -85,4 +85,13 @@ Source files reviewed: `BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_ord
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Ported in `src/basics/partial_orderings.rs`, including exact `CompareResult` and `HoOrderKind` discriminants, quasi-order conversion, inverse relation handling, and comparison-symbol rendering.
+
+### Change Later
+
+- `POCompareSymbol` is an exported `char*` table whose order is coupled to the `CompareResult` discriminants. Rust preserves table-shaped rendering; a cleaned API should prefer an enum method while keeping the table only as a compatibility adapter.
+- `Q_TO_PART(res)` collapses arbitrary signed comparison integers into partial-ordering results. Rust preserves the sign-based conversion, but new callers should use typed comparison results directly once ordering backends no longer exchange raw `long` comparison values.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -93,4 +93,14 @@ Source files reviewed: `TERMS/cte_functypes.h`, `TERMS/cte_functypes.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Ported in `src/terms/functypes.rs`, including `FuncSymbType` discriminants, function-symbol token masks, identifier/free-function/interpreted/object classification, and integer/rational/float normalization used by term and sort parsers.
+
+### Change Later
+
+- `normalize_float_rep` delegates to C `sprintf("%g", ...)` and explicitly ignores over- and underflow. Rust preserves the C-shaped spelling for ordinary values, but extreme float literal compatibility should be checked against the reference before making parser diagnostics stricter.
+- `normalize_rational_rep` uses C integer conversion behavior where overflow can saturate and set `errno`, but this unit does not observe `errno`. Rust currently uses checked parsing; if huge rational literals become compatibility-relevant, add reference tests before deciding whether to emulate the ignored-overflow behavior.
+- `FuncSymbStartToken` and `FuncSymbToken` are exported mutable-looking token masks in C. Rust can keep them as immutable helper values, but parser APIs should avoid exposing global mutable token state once full `TBTermParse` parity is complete.
 <!-- END MANUAL REVIEW: c_source_docs -->

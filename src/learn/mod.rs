@@ -6,6 +6,7 @@ pub mod examplerep;
 pub mod flatannoterms;
 pub mod indexfunctions;
 pub mod kbdesc;
+pub mod kbinsert;
 pub mod numfeatures;
 pub mod patterns;
 pub mod termtops;
