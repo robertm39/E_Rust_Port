@@ -101,4 +101,10 @@ Source files reviewed: `CONTROL/cco_eserver.h`, `CONTROL/cco_eserver.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `EServerFree` and `EServerReset` are empty in this source snapshot despite comments promising to free/close server state. Rust should preserve the callable no-op surface where needed for compatibility, but ordinary owned server values should release listener/session resources on drop; revisit explicit close/drain APIs once server lifecycle call sites are ported.
+- `EServerInitFDSet` unconditionally applies `FD_SET(server->listening, rd_fds)` after maxing with `server->listening`. If a caller invokes it before `EServerListen`, the C code can operate on descriptor `-1`; Rust should keep this as an internal precondition or compatibility-shim concern rather than exposing invalid descriptor registration in safe APIs.
+- The C server queue stores raw `ESession_p` values in a generic `PQueue`. Rust can use an owned queue for now, but stale-session removal and active-session ordering should be reference-tested before replacing the queue policy with a higher-level event-loop abstraction.
 <!-- END MANUAL REVIEW: c_source_docs -->

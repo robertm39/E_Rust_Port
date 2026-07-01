@@ -100,4 +100,11 @@ Source files reviewed: `CONTROL/cco_esession.h`, `CONTROL/cco_esession.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `ESessionDoIO` registers descriptors for `running` subprocess controls through `EPCtrlSetFDSet`, but the actual subprocess I/O branch is still a TODO in this file. Rust should keep the descriptor-registration boundary visible and defer process-control I/O until `cco_proc_ctrl` ownership is ported.
+- After every successful channel read, the C code blindly queues the literal string `"wait"` before command processing. Preserve this handshake for compatibility, but a cleaned server protocol should make request parsing and reply policy explicit after reference tests cover the server mode.
+- `ESessionProcessCmds` drains queued messages by printing `Received: %s\n` directly to stdout and freeing the unpacked string; it does not update session state or dispatch commands. Rust should route this through explicit writers in reusable APIs, then reproduce direct stdout only in the executable compatibility layer if server mode needs it.
+- The C session owns a raw socket through `TCPChannel_p` and uses `fd_set` readiness directly. Rust safe APIs should keep descriptor readiness as an adapter boundary so socket ownership, close diagnostics, and platform event-loop behavior can be audited separately from the session state machine.
 <!-- END MANUAL REVIEW: c_source_docs -->

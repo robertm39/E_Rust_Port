@@ -6,6 +6,7 @@
 
 pub mod basics;
 pub mod clauses;
+pub mod control;
 pub mod external;
 pub mod heuristics;
 pub mod inout;
