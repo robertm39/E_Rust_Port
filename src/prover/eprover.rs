@@ -8241,7 +8241,7 @@ fn parse_tstp_app_encode_entry_list(
         } else if scanner.test_id("include") {
             parse_app_encode_ignored_include(scanner)?;
         } else if scanner.test_id("thf") {
-            return Err(thf_requires_hol_error(scanner));
+            parse_thf_type_declaration_or_hol_error(scanner, bank)?;
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
@@ -8375,12 +8375,12 @@ fn parse_tstp_entry_list(
                 )?);
             }
         } else if scanner.test_id("thf") {
-            return Err(thf_requires_hol_error(scanner));
+            parse_thf_type_declaration_or_hol_error(scanner, bank)?;
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order fof/tff/tcf type declarations, and the temporary atomic/connective-fragment fof/tff/tcf bridge",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order fof/tff/tcf type declarations, THF type declarations, and the temporary atomic/connective-fragment fof/tff/tcf bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -8405,14 +8405,36 @@ fn insert_input_or_watchlist_clause(
     }
 }
 
-fn thf_requires_hol_error(scanner: &Scanner) -> Diagnostic {
+fn parse_thf_type_declaration_or_hol_error(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    let thf_position = token_pos_rep(scanner.current_token());
+    let thf_literal = scanner.current_token().literal().clone();
+
+    scanner.accept_id("thf")?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
+    scanner.accept_tok(TokenType::COMMA)?;
+
+    if !scanner.test_id("type") {
+        return Err(thf_requires_hol_error_at(&thf_position, &thf_literal));
+    }
+
+    scanner.accept_id("type")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    bank.signature_mut()
+        .parse_tff_type_declaration(scanner, ProblemType::HigherOrder)?;
+    parse_simple_tstp_optional_source(scanner)?;
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+    Ok(())
+}
+
+fn thf_requires_hol_error_at(position: &str, literal: &str) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        format!(
-            "{}(just read '{}'): {THF_REQUIRES_HOL_MESSAGE}",
-            token_pos_rep(scanner.current_token()),
-            scanner.current_token().literal()
-        ),
+        format!("{position}(just read '{literal}'): {THF_REQUIRES_HOL_MESSAGE}"),
     )
 }
 
@@ -22551,6 +22573,37 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(error.message().contains(THF_REQUIRES_HOL_MESSAGE));
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_thf_type_declarations() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-type-declarations");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: person > $o, file('types.ax', p_type)).\n\
+             thf(lift_type, type, lift: (person > $o) > $o).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
