@@ -17,4 +17,8 @@ path = "src/bin/csscpa_filter.rs"
 name = "e_stratpar"
 path = "src/bin/e_stratpar.rs"
 
+[[bin]]
+name = "e_ltb_runner"
+path = "src/bin/e_ltb_runner.rs"
+
 [dependencies]

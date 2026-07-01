@@ -408,8 +408,11 @@ Change-later notes:
 
 Rust files:
 
+- `Cargo.toml`
 - `src/control/batch_spec.rs`
 - `src/control/sine.rs`
+- `src/prover/e_ltb_runner.rs`
+- `src/bin/e_ltb_runner.rs`
 
 C source references:
 
@@ -432,10 +435,12 @@ Implemented:
 - `batch_create_runner` temporary problem emission is staged as prepared/temp runner requests: selected problems now render C-ordered TSTP type declarations, selected clause stacks, and selected formula stacks, and can be written to a registered temporary file for later process-control handoff.
 - `BatchProcessProblem` now has a direct temp-file/process-backend path: it adds the problem to `StructFOFSpec`, creates C-shaped temp runner requests, launches them through a `BatchRunnerBackend` such as `BatchProcCtrlRunnerSet`, polls live backend activity for capacity, emits success/GaveUp output, and backtracks after completion.
 - `BatchStructFOFSpecInit`/`StructFOFSpecParseAxioms` and `BatchProcessFile` now have concrete filesystem-backed paths: shared includes are parsed with default-directory resolution and missing-include notices, parsed include names are registered only on success, ordinary `cnf` entries are preserved as clause-backed formulas, watchlist clauses remain in the clause set, problem files are forced to TSTP, and destination files are opened only after successful source parsing before running through the direct backend path.
+- The `e_ltb_runner` executable has a non-variant wrapper over the concrete batch backend: it parses the C option surface, applies verbosity and output-level globals, supports global output redirection and per-problem output-directory prefixes, accepts the optional prover path, parses the LTB header and repeated batch specs from a TSTP scanner, applies the global wall-clock fallback only when a spec omits a total limit, initializes shared axioms before problem execution, forwards scanner default directories, computes the post-initialization remaining total limit with C's `MAX(0, ...)` boundary, and emits the C-shaped non-variant batch summary.
+- The wrapper rejects variant and interactive execution modes explicitly until their exact worker semantics are connected to the executable surface; this prevents accepted-but-silent behavior while the lower-level variant scheduler is still staged.
 
 Pending:
 
-- The `e_ltb_runner` CLI wrapper and exact fork-return child mode for in-process variant workers remain pending.
+- `e_ltb_runner` variant-mode dispatch, exact fork-return child mode for in-process variant workers, and post-batch interactive mode remain pending.
 - Reference comparisons against real CASC LTB specs should be added once the runner can execute problems, because this grammar is intentionally loose and historically tied to specific competition file shapes.
 
 Change-later notes:
@@ -450,7 +455,12 @@ Change-later notes:
 - C backtracking also calls `SigBacktrack` and term-bank GC through global owner state. Rust currently reports the signature f-count target from the `StructFofSpecBacktrackReport`; wiring actual signature/term-bank backtracking belongs with the future file-parser/term-bank ownership integration.
 - `BatchProcessProblems` biases proportional total-time slices upward with `rest/(remaining)+1`, then caps by the per-problem limit only when that limit is nonzero. It can therefore pass negative wall-clock limits to `BatchProcessFile` after the total limit is already exceeded. Rust preserves this arithmetic for now.
 - `BatchProcessProblems` constructs `dest_dir` paths by appending a literal `/` before the destination file without normalizing empty strings or trailing slashes. Rust preserves this path construction; later platform-aware path joining should be considered only after LTB output compatibility is covered.
-- `e_ltb_runner` initializes shared axioms before calling `BatchProcessProblems`, then passes `MAX(0, spec->total_wtc_limit-(now-start))` so parsing/initialization consumes global time outside the per-problem loop. Rust's concrete `BatchProcessProblems` path expects an already-initialized `StructFofSpec` and preserves the caller-supplied remaining limit; the future CLI wrapper should keep that timing boundary explicit.
+- `e_ltb_runner` initializes shared axioms before calling `BatchProcessProblems`, then passes `MAX(0, spec->total_wtc_limit-(now-start))` so parsing/initialization consumes global time outside the per-problem loop. Rust's concrete `BatchProcessProblems` path expects an already-initialized `StructFofSpec`, and the executable wrapper now keeps that timing boundary explicit.
+- `e_ltb_runner` opens `GlobalOut` after option parsing but before validating the remaining positional argument count, so `-o file` can create or truncate the output file even for a usage error. Rust currently validates the arguments before opening the configured output; revisit only if compatibility tests cover this side effect.
+- `e_ltb_runner` carries enum values and globals for obsolete or unused hooks such as `OPT_NEWSCHEDULE`, `OPT_PRINT_STATISTICS`, and `app_encode`. Rust omits those dead hooks from the executable surface for now; add them only if a reference command line proves they are observable.
+- The C help text says `[Batchfile] [PATH_TO_EPROVER]`, while the fatal usage error says `<spec> [<path-to-eprover>]`. Rust keeps the fatal usage wording and uses a clearer help line; revise only if byte-for-byte CLI-help compatibility becomes a target.
+- C variant modes are hard-coded to historical CASC packaging details, including relative executable paths like `./eprover-ho` and `./eprover-25`. Rust keeps variant mode selection separate from execution until the exact child-worker and packaging behavior can be tested.
+- C interactive mode runs after a non-variant batch against the still-loaded shared axiom state and reads additional jobs from stdin. Rust rejects the flag for now; the eventual implementation should preserve that lifetime boundary rather than reparsing shared includes per interactive job.
 - `batch_create_runner` combines logging, SInE problem selection, temporary-file creation, type/axiom printing, process naming, and child-process creation in one helper routed through `GlobalOut`. Rust stages these as an explicit runner request for testability; later cleanup can split selection, rendering, temp-file ownership, and spawning once byte-compatible runner traces exist.
 - `batch_create_runner` calls `AxFilterPrintBuf(name, 320, ax_filter)` but ignores the boolean that reports buffer overflow, so an overlong filter name can feed a truncated process name into process-control naming. Rust keeps the fixed 320-byte boundary visible and reports overflow explicitly.
 - C assumes `source_files` and `dest_files` stacks have matching lengths because parsing pushes them in pairs. Rust reports an interface diagnostic for hand-built mismatched specs rather than indexing past the destination list.
