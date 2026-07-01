@@ -10,7 +10,7 @@ use crate::terms::functypes::FunCode;
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::simpletypes::{Type, TypeUniqueId};
 use crate::terms::termbanks::TermBank;
-use crate::terms::termtypes::{term_deref, DerefType, Term};
+use crate::terms::termtypes::{term_deref, term_identity_id, DerefType, Term};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -49,6 +49,7 @@ pub struct OrderControlBlock {
     pub max_var: i64,
     pub vb_size: usize,
     pub vb: Vec<i32>,
+    pub ho_vb: BTreeMap<usize, i64>,
     pub ho_order_kind: HoOrderKind,
     min_constants: BTreeMap<TypeUniqueId, FunCode>,
     state_stack: Vec<FunCode>,
@@ -91,6 +92,7 @@ impl OrderControlBlock {
             max_var: 0,
             vb_size,
             vb: vec![0; vb_size],
+            ho_vb: BTreeMap::new(),
             ho_order_kind,
             min_constants: BTreeMap::new(),
             state_stack: Vec::new(),
@@ -479,7 +481,31 @@ impl OrderControlBlock {
         result
     }
 
-    pub fn reset_ho_var_map(&mut self) {}
+    pub fn inc_ho_var_balance(&mut self, term: &Term) {
+        let balance = self.ho_vb.entry(term_identity_id(term)).or_insert(0);
+        if *balance == 0 {
+            self.pos_bal += 1;
+        } else if *balance == -1 {
+            self.neg_bal -= 1;
+        }
+        *balance += 1;
+        self.wb += self.var_weight;
+    }
+
+    pub fn dec_ho_var_balance(&mut self, term: &Term) {
+        let balance = self.ho_vb.entry(term_identity_id(term)).or_insert(0);
+        if *balance == 0 {
+            self.neg_bal += 1;
+        } else if *balance == 1 {
+            self.pos_bal -= 1;
+        }
+        *balance -= 1;
+        self.wb -= self.var_weight;
+    }
+
+    pub fn reset_ho_var_map(&mut self) {
+        self.ho_vb.clear();
+    }
 
     /// Print this OCB in C's debug-comment shape.
     ///

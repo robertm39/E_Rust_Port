@@ -3,9 +3,12 @@
 use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
-use crate::terms::signature::Signature;
+use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::simpletypes::Type;
-use crate::terms::termtypes::{term_deref, DerefType, Term, TP_IS_DB_VAR, TP_PRED_POS};
+use crate::terms::termfunc::term_is_ground;
+use crate::terms::termtypes::{
+    term_deref, term_identity_id, DerefType, Term, TP_IS_DB_VAR, TP_PRED_POS,
+};
 use std::cmp::Ordering;
 
 /// Compare two first-order terms with C `KBO6Compare`.
@@ -33,11 +36,17 @@ pub fn kbo6_compare(
 ) -> CompareResult {
     kbo6_reset(ocb);
     if problem_type() == ProblemType::HigherOrder {
-        assert!(
-            ocb.ho_order_kind == HoOrderKind::LfhoOrder,
-            "Lambda-order KBO6 term ordering is not ported yet"
-        );
-        return kbo_lin_cmp_lfho(ocb, signature, s, t, deref_s, deref_t);
+        return match ocb.ho_order_kind {
+            HoOrderKind::LfhoOrder => kbo_lin_cmp_lfho(ocb, signature, s, t, deref_s, deref_t),
+            HoOrderKind::LambdaOrder => {
+                assert!(
+                    kbo6_lambda_order_can_skip_bank_normalization(s, deref_s)
+                        && kbo6_lambda_order_can_skip_bank_normalization(t, deref_t),
+                    "Lambda-order KBO6 term ordering is not ported yet"
+                );
+                kbo_lin_cmp_lambda_no_bank(ocb, signature, s, t, deref_s, deref_t)
+            }
+        };
     }
     kbo_lin_cmp(ocb, signature, s, t, deref_s, deref_t)
 }
@@ -349,6 +358,325 @@ fn kbo_lin_cmp_lfho(
         };
     }
     res
+}
+
+/// Return whether Lambda-order KBO6 can compare `term` without the C
+/// owner-bank normalization path.
+///
+/// This is intentionally conservative: it accepts only terms whose exposed
+/// dereferenced shape has no DB variable, lambda, or phony-application ordering
+/// surface. The full C branch first inserts instantiated terms into the owner
+/// bank, beta-normalizes, and eta-reduces them; this predicate marks cases
+/// where that work is unnecessary for the current Rust subset.
+#[must_use]
+pub(crate) fn kbo6_lambda_order_can_skip_bank_normalization(term: &Term, deref: DerefType) -> bool {
+    let mut stack = vec![(term.clone(), deref)];
+    while let Some((candidate, mut current_deref)) = stack.pop() {
+        let current = term_deref(&candidate, &mut current_deref);
+        if current.is_db_var() || current.is_lambda() || current.is_phony_app() {
+            return false;
+        }
+        for arg in current.argument_clones().into_iter().flatten() {
+            stack.push((arg, current_deref));
+        }
+    }
+    true
+}
+
+fn kbo_lin_cmp_lambda_no_bank(
+    ocb: &mut OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> CompareResult {
+    let (s, deref_s) = lambda_deref_for_kbo(s, deref_s);
+    let (t, deref_t) = lambda_deref_for_kbo(t, deref_t);
+
+    if s.f_code() == SIG_TRUE_CODE {
+        if t.f_code() == SIG_TRUE_CODE {
+            CompareResult::Equal
+        } else {
+            CompareResult::Lesser
+        }
+    } else if t.f_code() == SIG_TRUE_CODE {
+        CompareResult::Greater
+    } else {
+        kbo_lin_cmp_lambda_driver_deref(ocb, signature, &s, &t, deref_s, deref_t)
+    }
+}
+
+fn lambda_deref_for_kbo(term: &Term, deref: DerefType) -> (Term, DerefType) {
+    let mut current_deref = deref;
+    let term = term_deref(term, &mut current_deref);
+    (term, current_deref)
+}
+
+fn mfy_vwb_lambda_lhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
+    mfy_vwb_lambda(ocb, term, deref, true);
+}
+
+fn mfy_vwb_lambda_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
+    mfy_vwb_lambda(ocb, term, deref, false);
+}
+
+fn mfy_vwb_lambda(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
+    let mut stack = vec![(term.clone(), deref)];
+    while let Some((candidate, mut current_deref)) = stack.pop() {
+        let current = term_deref(&candidate, &mut current_deref);
+        if is_fluid_lambda(&current) {
+            if lhs {
+                ocb.inc_ho_var_balance(&current);
+            } else {
+                ocb.dec_ho_var_balance(&current);
+            }
+        } else {
+            let weight = lambda_order_term_weight(ocb, &current);
+            if lhs {
+                ocb.wb += weight;
+            } else {
+                ocb.wb -= weight;
+            }
+
+            for index in usize::from(current.is_lambda())..current.arity() {
+                stack.push((initialized_arg(&current, index), current_deref));
+            }
+        }
+    }
+}
+
+fn lambda_order_term_weight(ocb: &OrderControlBlock, term: &Term) -> i64 {
+    if term.is_lambda() {
+        ocb.lam_weight
+    } else if term.is_db_var() {
+        ocb.db_weight
+    } else if term.is_phony_app() {
+        0
+    } else {
+        ocb.fun_weight(term.f_code())
+    }
+}
+
+fn kbo_lin_cmp_lambda_driver(
+    ocb: &mut OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> CompareResult {
+    let (s, deref_s) = lambda_deref_for_kbo(s, deref_s);
+    let (t, deref_t) = lambda_deref_for_kbo(t, deref_t);
+    kbo_lin_cmp_lambda_driver_deref(ocb, signature, &s, &t, deref_s, deref_t)
+}
+
+fn kbo_lin_cmp_lambda_driver_deref(
+    ocb: &mut OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> CompareResult {
+    if is_fluid_lambda(s) {
+        if is_fluid_lambda(t) {
+            ocb.inc_ho_var_balance(s);
+            ocb.dec_ho_var_balance(t);
+            if term_identity_id(s) == term_identity_id(t) {
+                CompareResult::Equal
+            } else {
+                CompareResult::Uncomparable
+            }
+        } else {
+            ocb.inc_ho_var_balance(s);
+            mfy_vwb_lambda_rhs(ocb, t, deref_t);
+            if ocb.pos_bal == 0 {
+                CompareResult::Lesser
+            } else {
+                CompareResult::Uncomparable
+            }
+        }
+    } else if is_fluid_lambda(t) {
+        ocb.dec_ho_var_balance(t);
+        mfy_vwb_lambda_lhs(ocb, s, deref_s);
+        if ocb.neg_bal == 0 {
+            CompareResult::Greater
+        } else {
+            CompareResult::Uncomparable
+        }
+    } else if heads_same_lambda(s, t) {
+        compare_lambda_same_heads(ocb, signature, s, t, deref_s, deref_t)
+    } else {
+        mfy_vwb_lambda_lhs(ocb, s, deref_s);
+        mfy_vwb_lambda_rhs(ocb, t, deref_t);
+        balance_lambda_result_after_heads(ocb, signature, s, t)
+    }
+}
+
+fn is_fluid_lambda(term: &Term) -> bool {
+    term.is_top_level_free_var() || (term.is_lambda() && !term_is_ground(term))
+}
+
+fn compare_lambda_same_heads(
+    ocb: &mut OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> CompareResult {
+    let mut res = CompareResult::Equal;
+    let mut index = 0;
+    let mut done = s.arity() == t.arity() && s.arity() == 0;
+
+    while !done {
+        res = if s.arity() == t.arity() {
+            kbo_lin_cmp_lambda_driver(
+                ocb,
+                signature,
+                &initialized_arg(s, index),
+                &initialized_arg(t, index),
+                deref_s,
+                deref_t,
+            )
+        } else {
+            cmp_arities(s, t)
+        };
+
+        if res == CompareResult::Equal {
+            assert_eq!(
+                s.arity(),
+                t.arity(),
+                "equal Lambda-order KBO6 recursive result requires matching arity"
+            );
+            index += 1;
+            done = index == s.arity();
+        } else {
+            if s.arity() == t.arity() {
+                index += 1;
+            }
+            res = balance_lambda_rest_after_difference(ocb, s, t, index, res, deref_s, deref_t);
+            done = true;
+        }
+    }
+
+    res
+}
+
+fn balance_lambda_rest_after_difference(
+    ocb: &mut OrderControlBlock,
+    s: &Term,
+    t: &Term,
+    index: usize,
+    res: CompareResult,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> CompareResult {
+    let left_start = lambda_rest_start(s, index);
+    let right_start = lambda_rest_start(t, index);
+    if left_start < s.arity() || right_start < t.arity() {
+        for rest in left_start..s.arity() {
+            mfy_vwb_lambda_lhs(ocb, &initialized_arg(s, rest), deref_s);
+        }
+        for rest in right_start..t.arity() {
+            mfy_vwb_lambda_rhs(ocb, &initialized_arg(t, rest), deref_t);
+        }
+        balance_result_after_lex(ocb, res)
+    } else {
+        res
+    }
+}
+
+fn lambda_rest_start(term: &Term, index: usize) -> usize {
+    if index == 0 && (term.is_phony_app() || term.is_lambda()) {
+        1
+    } else {
+        index
+    }
+}
+
+fn balance_lambda_result_after_heads(
+    ocb: &OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+) -> CompareResult {
+    match ocb.wb.cmp(&0) {
+        Ordering::Greater => greater_or_uncomparable(ocb),
+        Ordering::Less => lesser_or_uncomparable(ocb),
+        Ordering::Equal => match cmp_heads_lambda(ocb, signature, s, t) {
+            CompareResult::Greater => greater_or_uncomparable(ocb),
+            CompareResult::Lesser => lesser_or_uncomparable(ocb),
+            CompareResult::Equal
+            | CompareResult::Uncomparable
+            | CompareResult::Unknown
+            | CompareResult::NotGreaterEqual
+            | CompareResult::NotLessEqual => CompareResult::Uncomparable,
+        },
+    }
+}
+
+fn heads_same_lambda(s: &Term, t: &Term) -> bool {
+    if !s.is_phony_app() && !t.is_phony_app() {
+        s.f_code() == t.f_code()
+    } else {
+        s.is_phony_app()
+            && t.is_phony_app()
+            && term_identity_id(&initialized_arg(s, 0)) == term_identity_id(&initialized_arg(t, 0))
+    }
+}
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum LambdaHeadClass {
+    Symbol,
+    DbOrPhony,
+    Lambda,
+}
+
+fn classify_head_lambda(term: &Term) -> LambdaHeadClass {
+    if term.is_lambda() {
+        LambdaHeadClass::Lambda
+    } else if term.is_db_var() || term.is_phony_app() {
+        LambdaHeadClass::DbOrPhony
+    } else {
+        LambdaHeadClass::Symbol
+    }
+}
+
+fn cmp_heads_lambda(
+    ocb: &OrderControlBlock,
+    signature: &Signature,
+    s: &Term,
+    t: &Term,
+) -> CompareResult {
+    let s_class = classify_head_lambda(s);
+    let t_class = classify_head_lambda(t);
+    match s_class.cmp(&t_class) {
+        Ordering::Greater => CompareResult::Greater,
+        Ordering::Less => CompareResult::Lesser,
+        Ordering::Equal => {
+            if !s.is_top_level_any_var() && !t.is_top_level_any_var() && !s.is_lambda() {
+                ocb.fun_compare(signature, s.f_code(), t.f_code())
+            } else if s.is_top_level_any_var() && t.is_top_level_any_var() {
+                match lambda_top_level_var_code(s).cmp(&lambda_top_level_var_code(t)) {
+                    Ordering::Greater => CompareResult::Greater,
+                    Ordering::Less => CompareResult::Lesser,
+                    Ordering::Equal => CompareResult::Equal,
+                }
+            } else {
+                CompareResult::Uncomparable
+            }
+        }
+    }
+}
+
+fn lambda_top_level_var_code(term: &Term) -> i64 {
+    if term.is_applied_any_var() {
+        initialized_arg(term, 0).f_code()
+    } else {
+        term.f_code()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -815,7 +1143,7 @@ fn initialized_arg(term: &Term, index: usize) -> Term {
 
 #[cfg(test)]
 mod tests {
-    use super::{kbo6_compare, kbo6_greater};
+    use super::{kbo6_compare, kbo6_greater, kbo6_lambda_order_can_skip_bank_normalization};
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::heuristics::to_params::TermOrdering;
@@ -859,6 +1187,15 @@ mod tests {
 
     fn ocb(signature: &Signature) -> OrderControlBlock {
         OrderControlBlock::alloc(TermOrdering::Kbo6, true, signature, HoOrderKind::LfhoOrder)
+    }
+
+    fn lambda_ocb(signature: &Signature) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            signature,
+            HoOrderKind::LambdaOrder,
+        )
     }
 
     fn test_bank() -> TermBank {
@@ -1110,28 +1447,103 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Lambda-order KBO6 term ordering is not ported yet")]
-    fn kbo6_higher_order_lambda_order_reports_pending_for_first_order_terms() {
+    fn kbo6_higher_order_lambda_order_handles_first_order_terms() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut signature = signature();
         let a = symbol(&mut signature, "a", 0);
         let b = symbol(&mut signature, "b", 0);
-        let mut ocb = OrderControlBlock::alloc(
-            TermOrdering::Kbo6,
-            false,
-            &signature,
-            HoOrderKind::LambdaOrder,
+        let mut ocb = lambda_ocb(&signature);
+        ocb.set_fun_prec_weight(b, 30);
+        ocb.set_fun_prec_weight(a, 10);
+
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                &signature,
+                &Term::const_cell_alloc(b),
+                &Term::const_cell_alloc(a),
+                DerefType::Never,
+                DerefType::Never,
+            ),
+            CompareResult::Greater
         );
+    }
+
+    #[test]
+    fn kbo6_higher_order_lambda_order_tracks_fluid_variables_by_identity() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let signature = signature();
+        let mut ocb = lambda_ocb(&signature);
+        let x = Term::const_cell_alloc(-2);
+        let y = Term::const_cell_alloc(-2);
+
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                &signature,
+                &x,
+                &x,
+                DerefType::Never,
+                DerefType::Never,
+            ),
+            CompareResult::Equal
+        );
+        assert!(ocb.ho_vb.values().all(|balance| *balance == 0));
+
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                &signature,
+                &x,
+                &y,
+                DerefType::Never,
+                DerefType::Never,
+            ),
+            CompareResult::Uncomparable
+        );
+        assert_eq!(ocb.ho_vb.len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Lambda-order KBO6 term ordering is not ported yet")]
+    fn kbo6_higher_order_lambda_order_rejects_surface_terms_pending_bank_normalization() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let predicate = typed_unary_const(&mut bank, "kbo6_lambda_pending_pred");
+        let arg = typed_const(&mut bank, "kbo6_lambda_pending_arg");
+        let applied = app(SIG_PHONY_APP_CODE, &[predicate, arg]);
+        let mut ocb = lambda_ocb(bank.signature());
 
         let _ = kbo6_compare(
             &mut ocb,
-            &signature,
-            &Term::const_cell_alloc(a),
-            &Term::const_cell_alloc(b),
+            bank.signature(),
+            &applied,
+            bank.true_term(),
             DerefType::Never,
             DerefType::Never,
         );
+    }
+
+    #[test]
+    fn kbo6_lambda_order_support_check_rejects_dereferenced_higher_order_surface() {
+        let mut bank = test_bank();
+        let predicate = typed_unary_const(&mut bank, "kbo6_lambda_supported_pred");
+        let arg = typed_const(&mut bank, "kbo6_lambda_supported_arg");
+        let applied = app(SIG_PHONY_APP_CODE, &[predicate, arg]);
+        let variable = Term::const_cell_alloc(-4);
+        variable.set_binding(Some(applied));
+
+        assert!(!kbo6_lambda_order_can_skip_bank_normalization(
+            &variable,
+            DerefType::Always
+        ));
+        assert!(kbo6_lambda_order_can_skip_bank_normalization(
+            &variable,
+            DerefType::Never
+        ));
     }
 
     #[test]

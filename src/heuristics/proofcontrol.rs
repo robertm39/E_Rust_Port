@@ -96,6 +96,7 @@ use crate::heuristics::to_params::TermOrdering;
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::inout::signals::time_is_up;
+use crate::orderings::cto_kbolin::kbo6_lambda_order_can_skip_bank_normalization;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::init_unif_limits;
 use crate::terms::lambda::{
@@ -1823,8 +1824,8 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
 fn forward_modify_check_higher_order_ordering(
     higher_order: bool,
     ocb: &OrderControlBlock,
-    _clause: &Clause,
-    _demodulators: &[&ClauseSet],
+    clause: &Clause,
+    demodulators: &[&ClauseSet],
 ) -> Result<(), Diagnostic> {
     if !higher_order || ocb.ordering_type == TermOrdering::Empty {
         return Ok(());
@@ -1837,14 +1838,34 @@ fn forward_modify_check_higher_order_ordering(
         ));
     }
 
-    if ocb.ho_order_kind != HoOrderKind::LfhoOrder {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "ForwardModifyClause higher-order term ordering is not ported yet",
-        ));
+    if ocb.ho_order_kind == HoOrderKind::LfhoOrder {
+        return Ok(());
     }
 
-    Ok(())
+    if ocb.ho_order_kind == HoOrderKind::LambdaOrder
+        && clause_can_use_kbo6_lambda_order_without_bank(clause)
+        && demodulators
+            .iter()
+            .all(|set| clause_set_can_use_kbo6_lambda_order_without_bank(set))
+    {
+        return Ok(());
+    }
+
+    Err(Diagnostic::new(
+        ErrorCode::OTHER_ERROR,
+        "ForwardModifyClause higher-order term ordering is not ported yet",
+    ))
+}
+
+fn clause_can_use_kbo6_lambda_order_without_bank(clause: &Clause) -> bool {
+    !clause
+        .literals()
+        .exists_term(|term| !kbo6_lambda_order_can_skip_bank_normalization(term, DerefType::Always))
+}
+
+fn clause_set_can_use_kbo6_lambda_order_without_bank(set: &ClauseSet) -> bool {
+    set.iter()
+        .all(clause_can_use_kbo6_lambda_order_without_bank)
 }
 
 fn forward_modify_normalize_if_higher_order(
@@ -9212,7 +9233,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_ho_lambda_order_fo_subset_stays_diagnostic() {
+    fn proof_state_forward_modify_clause_ho_lambda_order_fo_subset_uses_ordering() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
@@ -9230,7 +9251,7 @@ mod tests {
             HoOrderKind::LambdaOrder,
         ));
 
-        let error = proof_state_forward_modify_clause_impl::<String>(
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
             &mut state,
             &mut control,
             &mut clause,
@@ -9239,10 +9260,10 @@ mod tests {
             ProblemType::HigherOrder,
             None,
         )
-        .unwrap_err();
+        .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("term ordering"));
+        assert!(!trivial);
+        assert!(clause.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
     }
 
     #[test]
