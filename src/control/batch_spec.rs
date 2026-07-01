@@ -778,7 +778,16 @@ impl BatchSpec {
         request: BatchProblemLoadRequest<'_>,
     ) -> Result<BatchProblemData, Diagnostic> {
         let mut scanner = open_batch_problem_scanner(request)?;
-        parse_batch_problem_entries(&mut scanner, bank, ctrl, None)
+        self.load_problem_from_scanner(bank, ctrl, &mut scanner)
+    }
+
+    pub fn load_problem_from_scanner(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &StructFofSpec,
+        scanner: &mut Scanner,
+    ) -> Result<BatchProblemData, Diagnostic> {
+        parse_batch_problem_entries(scanner, bank, ctrl, None)
     }
 
     #[expect(

@@ -1,8 +1,10 @@
+use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::{
-    parse_ltb_header, BatchProcCtrlRunnerSet, BatchProcessFileConfig, BatchProcessProblemsConfig,
-    BatchProcessVariantsConfig, BatchRunnerBackend, BatchSpec, BatchVariantProblemJob,
+    parse_ltb_header, BatchProcCtrlRunnerSet, BatchProcessFileConfig, BatchProcessProblemConfig,
+    BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchProcessVariantsConfig,
+    BatchRunnerBackend, BatchRunnerProblemConfig, BatchSpec, BatchVariantProblemJob,
 };
 use crate::control::gproc_ctrl::EGPCtrl;
 use crate::control::sine::StructFofSpec;
@@ -12,12 +14,13 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::inout::simplestuff::read_text_block;
 use crate::prover::version::{footer, E_NICKNAME, VERSION};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,6 +33,15 @@ const INTERNAL_VARIANT_CHILD_ARG: &str = "--internal-ltb-variant-child";
 const VARIANT_CHILD_NAME: &str = "E-LTB wrapper";
 const VARIANT_CHILD_CORES: usize = 1;
 const VARIANT_CHILD_CPU_LIMIT: u64 = 1_000_000;
+const INTERACTIVE_TERMINATOR: &[u8] = b"go.\n";
+const INTERACTIVE_HELP: &str = "\
+% Enter a job, 'help' or 'quit'. Finish any action with 'go.' on a line\n\
+% of its own. A job consists of an optional job name specifier of the\n\
+% form 'job <ident>.', followed by a specification of a first-order\n\
+% problem in TPTP-3 syntax (including any combination of 'cnf', 'fof' and\n\
+% 'include' statements. The system then tries to solve the specified\n\
+% problem (including the constant background theory) and prints the\n\
+% results of this attempt.\n";
 
 const VARIANTS27: &[&str] = &["+4", "+5", "_4", "_5"];
 const PROVERS27: &[&str] = &["./eprover", "./eprover", "./eprover", "./eprover"];
@@ -233,6 +245,7 @@ struct LtbBatchJob<'a> {
     batch_index: usize,
     default_dir: Option<&'a str>,
     output_dir: Option<&'a str>,
+    interactive: bool,
     start: i64,
 }
 
@@ -389,7 +402,7 @@ fn execute_config_with_processor<W, C, P>(
 where
     W: Write + ?Sized,
     C: FnMut() -> i64,
-    P: FnMut(&mut BatchSpec, LtbBatchJob<'_>, &mut C, &mut W) -> Result<i64, Diagnostic>,
+    P: FnMut(&mut BatchSpec, LtbBatchJob<'_>, &mut C, &mut W) -> Result<(), Diagnostic>,
 {
     execute_config_with_processors(
         config,
@@ -410,7 +423,7 @@ fn execute_config_with_processors<W, C, P, V>(
 where
     W: Write + ?Sized,
     C: FnMut() -> i64,
-    P: FnMut(&mut BatchSpec, LtbBatchJob<'_>, &mut C, &mut W) -> Result<i64, Diagnostic>,
+    P: FnMut(&mut BatchSpec, LtbBatchJob<'_>, &mut C, &mut W) -> Result<(), Diagnostic>,
     V: FnMut(
         &mut BatchSpec,
         LtbBatchJob<'_>,
@@ -420,13 +433,6 @@ where
     ) -> Result<(), Diagnostic>,
 {
     apply_global_options(config)?;
-
-    if config.interactive {
-        return Err(Diagnostic::new(
-            ErrorCode::INTERFACE_ERROR,
-            "e_ltb_runner interactive mode is not wired yet",
-        ));
-    }
 
     let mut scanner = Scanner::from_file(Path::new(&config.spec_file), true)?;
     scanner.set_format(IoFormat::Tstp);
@@ -459,14 +465,13 @@ where
             batch_index,
             default_dir: Some(default_dir.as_str()),
             output_dir: config.output_dir.as_deref(),
+            interactive: config.interactive,
             start,
         };
         if let Some(variant_mode) = config.variant_mode {
             process_variants(&mut spec, job, variant_mode, &mut clock_seconds, output)?;
         } else {
-            let solved = process_batch(&mut spec, job, &mut clock_seconds, output)?;
-            let elapsed = clock_seconds() - start;
-            write_batch_done(output, elapsed, solved, spec.problem_no())?;
+            process_batch(&mut spec, job, &mut clock_seconds, output)?;
         }
         batch_index += 1;
     }
@@ -479,7 +484,7 @@ fn process_non_variant_batch<W, C>(
     job: LtbBatchJob<'_>,
     clock_seconds: &mut C,
     output: &mut W,
-) -> Result<i64, Diagnostic>
+) -> Result<(), Diagnostic>
 where
     W: Write,
     C: FnMut() -> i64,
@@ -499,10 +504,121 @@ where
             dest_dir: job.output_dir,
         },
         output,
-        clock_seconds,
+        &mut *clock_seconds,
         &mut backend,
     )?;
-    Ok(report.c_return_value())
+    let elapsed = clock_seconds() - job.start;
+    write_batch_done(output, elapsed, report.c_return_value(), spec.problem_no())?;
+    if job.interactive {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        let mut interactive_backend = BatchProcCtrlRunnerSet::new();
+        process_interactive_batch_with_backend(
+            spec,
+            &mut bank,
+            &mut ctrl,
+            &mut input,
+            output,
+            clock_seconds,
+            &mut interactive_backend,
+        )?;
+    }
+    Ok(())
+}
+
+fn process_interactive_batch_with_backend<W, R, C, B>(
+    spec: &BatchSpec,
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    input: &mut R,
+    output: &mut W,
+    mut clock_seconds: C,
+    backend: &mut B,
+) -> Result<(), Diagnostic>
+where
+    W: Write,
+    R: BufRead,
+    C: FnMut() -> i64,
+    B: BatchRunnerBackend,
+{
+    let wct_limit = if spec.per_prob_limit != 0 {
+        spec.per_prob_limit
+    } else {
+        30
+    };
+
+    loop {
+        let mut block = DynamicString::new();
+        writeln!(
+            output,
+            "% Enter job, 'help' or 'quit', followed by 'go.' on a line of its own:"
+        )
+        .map_err(|error| io_diagnostic(format!("Cannot write interactive prompt: {error}")))?;
+        output
+            .flush()
+            .map_err(|error| io_diagnostic(format!("Cannot flush interactive prompt: {error}")))?;
+        if !read_text_block(&mut block, input, INTERACTIVE_TERMINATOR)
+            .map_err(|error| io_diagnostic(format!("Cannot read interactive job: {error}")))?
+        {
+            writeln!(output, "% Error: Read failed (probably EOF)").map_err(|error| {
+                io_diagnostic(format!("Cannot write interactive error: {error}"))
+            })?;
+            break;
+        }
+
+        let source = String::from_utf8_lossy(block.view_bytes());
+        let mut scanner = Scanner::from_user_string(&source, true)?;
+        scanner.set_format(IoFormat::Tstp);
+        if scanner.test_id("quit") {
+            break;
+        }
+        if scanner.test_id("help") {
+            write!(output, "{INTERACTIVE_HELP}").map_err(|error| {
+                io_diagnostic(format!("Cannot write interactive help: {error}"))
+            })?;
+            continue;
+        }
+
+        let jobname = parse_interactive_job_name(&mut scanner)?;
+        writeln!(output, "\n% Processing started for {jobname}")
+            .map_err(|error| io_diagnostic(format!("Cannot write interactive status: {error}")))?;
+        let problem = spec.load_problem_from_scanner(bank, ctrl, &mut scanner)?;
+        let report = spec.process_problem_with_runner_backend(
+            bank,
+            ctrl,
+            problem,
+            BatchProcessProblemConfig {
+                wct_limit,
+                jobname: &jobname,
+                interactive: true,
+            },
+            BatchRunnerProblemConfig::default(),
+            BatchProcessProblemOutputs {
+                global_output: output,
+                external_output: Option::<&mut std::io::Sink>::None,
+                socket_output: None,
+            },
+            &mut clock_seconds,
+            backend,
+        )?;
+        let _solved = report.solved;
+        writeln!(output, "\n% Processing finished for {jobname}\n")
+            .map_err(|error| io_diagnostic(format!("Cannot write interactive status: {error}")))?;
+    }
+
+    Ok(())
+}
+
+fn parse_interactive_job_name(scanner: &mut Scanner) -> Result<String, Diagnostic> {
+    if scanner.test_id("job") {
+        scanner.accept_id("job")?;
+        let jobname = scanner.current_token().literal();
+        scanner.accept_tok(TokenType::IDENTIFIER)?;
+        scanner.accept_tok(TokenType::FULLSTOP)?;
+        Ok(jobname)
+    } else {
+        Ok("unnamed_job".to_owned())
+    }
 }
 
 fn process_variant_batch<W, C>(
@@ -799,9 +915,10 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 mod tests {
     use super::{
         execute_config_with_processor, execute_config_with_processors,
-        execute_variant_child_with_backend, parse_variant_child_args, print_help, process_options,
-        remaining_total_wtc_limit, run, LtbBatchJob, LtbRunnerConfig, LtbVariantChildConfig,
-        LtbVariantMode, RunCommand, C_USAGE_ERROR, DEFAULT_PROVER, PROGRAM_NAME,
+        execute_variant_child_with_backend, new_term_bank, parse_variant_child_args, print_help,
+        process_interactive_batch_with_backend, process_options, remaining_total_wtc_limit, run,
+        LtbBatchJob, LtbRunnerConfig, LtbVariantChildConfig, LtbVariantMode, RunCommand,
+        C_USAGE_ERROR, DEFAULT_PROVER, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProverResult;
@@ -810,12 +927,14 @@ mod tests {
         BatchCompletedRunner, BatchRunnerBackend, BatchRunnerRequest, BatchRunnerTempRequest,
         BatchSpawnedRunner, BatchSpec,
     };
+    use crate::control::sine::StructFofSpec;
     use crate::inout::output::{output_level, set_output_level};
+    use crate::inout::scanner::IoFormat;
     use crate::inout::tempfile::{temp_file_remove, temp_file_test_lock};
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
     use std::fs;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
     use std::path::PathBuf;
 
     #[test]
@@ -968,7 +1087,7 @@ mod tests {
             &config,
             &mut output,
             || times.next().unwrap_or(105),
-            |spec: &mut BatchSpec, job: LtbBatchJob<'_>, _clock, _output| {
+            |spec: &mut BatchSpec, job: LtbBatchJob<'_>, clock, output| {
                 seen.push((
                     spec.executable.clone(),
                     spec.category.clone(),
@@ -981,7 +1100,8 @@ mod tests {
                     job.output_dir.map(str::to_owned),
                     job.start,
                 ));
-                Ok(1)
+                let elapsed = clock() - job.start;
+                super::write_batch_done(output, elapsed, 1, spec.problem_no())
             },
         )
         .unwrap();
@@ -1067,10 +1187,18 @@ mod tests {
     }
 
     #[test]
-    fn execute_rejects_interactive_mode_explicitly() {
+    fn execute_with_fake_processor_passes_interactive_mode_to_batch() {
+        let _guard = global_state_lock();
+        let path = write_temp_spec(
+            "runner-interactive-dispatch.spec",
+            "division.category LTB.SAT\n\
+             output.required Proof\n\
+             limit.time.problem.wc 7\n\
+             Problems/TSTP/prob1.p Results/prob1.out\n",
+        );
         let mut output = Vec::new();
         let config = LtbRunnerConfig {
-            spec_file: "missing.spec".to_owned(),
+            spec_file: path.to_string_lossy().into_owned(),
             prover: DEFAULT_PROVER.to_owned(),
             output_file: None,
             output_dir: None,
@@ -1080,19 +1208,61 @@ mod tests {
             interactive: true,
             variant_mode: None,
         };
+        let mut seen_interactive = None;
 
-        let interactive = execute_config_with_processor(
+        let status = execute_config_with_processor(
             &config,
             &mut output,
             || 0,
-            |_spec, _job, _clock, _output| Ok(0),
+            |_spec, job, _clock, _output| {
+                seen_interactive = Some(job.interactive);
+                Ok(())
+            },
         )
-        .unwrap_err();
-        assert_eq!(interactive.code(), ErrorCode::INTERFACE_ERROR);
-        assert_eq!(
-            interactive.message(),
-            "e_ltb_runner interactive mode is not wired yet"
-        );
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(seen_interactive, Some(true));
+    }
+
+    #[test]
+    fn interactive_batch_handles_help_job_and_quit() {
+        let _guard = global_state_lock();
+        let _temp_guard = temp_file_test_lock();
+        let dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&dir);
+        let mut bank = new_term_bank().unwrap();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let mut spec = BatchSpec::new("interactive-prover", IoFormat::Tstp);
+        spec.per_prob_limit = 7;
+        let mut output = Vec::new();
+        spec.init_struct_fof_spec_from_files(&mut bank, &mut ctrl, None, &mut output)
+            .unwrap();
+        let input = b"help\ngo.\njob myjob.\ncnf(goal_clause, axiom, $false).\ngo.\nquit\ngo.\n";
+        let mut reader = Cursor::new(&input[..]);
+        let mut backend = FakeRunnerBackend::new(ProverResult::Theorem, "% child proof\n");
+
+        process_interactive_batch_with_backend(
+            &spec,
+            &mut bank,
+            &mut ctrl,
+            &mut reader,
+            &mut output,
+            || 100,
+            &mut backend,
+        )
+        .unwrap();
+
+        assert_eq!(backend.requests.len(), 1);
+        assert_eq!(backend.requests[0].executable, "interactive-prover");
+        assert_eq!(backend.requests[0].cpu_time, 4);
+        assert!(!backend.payloads[0].is_empty());
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("% Enter a job, 'help' or 'quit'."));
+        assert!(printed.contains("% Processing started for myjob"));
+        assert!(printed.contains("% SZS status Theorem for myjob"));
+        assert!(printed.contains("% child proof"));
+        assert!(printed.contains("% Processing finished for myjob"));
     }
 
     #[test]
@@ -1122,7 +1292,7 @@ mod tests {
             &config,
             &mut output,
             || 0,
-            |_spec, _job, _clock, _output| Ok(0),
+            |_spec, _job, _clock, _output| Ok(()),
         )
         .unwrap_err();
 
@@ -1159,7 +1329,7 @@ mod tests {
             &config,
             &mut output,
             || 0,
-            |_spec, _job, _clock, _output| Ok(0),
+            |_spec, _job, _clock, _output| Ok(()),
         )
         .unwrap();
 
