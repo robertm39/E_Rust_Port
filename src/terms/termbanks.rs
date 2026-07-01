@@ -1806,13 +1806,13 @@ impl TermBank {
                 && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
             {
                 let op = self.tptp_operator_parse(scanner)?;
-                self.make_logical_tformula_head(op)?
+                self.make_logical_tformula_head(op)
             } else if scanner.test_tok(TokenType::TILDE_SIGN)
                 && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
             {
                 scanner.accept_tok(TokenType::TILDE_SIGN)?;
                 let op = Self::require_formula_op_code(self.sig.not_code())?;
-                self.make_logical_tformula_head(op)?
+                self.make_logical_tformula_head(op)
             } else {
                 self.parse_tformula_tstp_subset(scanner)?
             };
@@ -1946,7 +1946,10 @@ impl TermBank {
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
         if scanner.test_tok(TokenType::OPEN_BRACKET) {
-            self.parse_literal_tformula_tstp_with_applications(scanner)
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let arg = self.parse_tformula_tstp_subset(scanner)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            Ok(arg)
         } else {
             self.parse_literal_tformula_tstp_subset(scanner)
         }
@@ -2000,9 +2003,14 @@ impl TermBank {
         lambda_apply_terms(self, head, &args)
     }
 
-    fn make_logical_tformula_head(&mut self, op: FunCode) -> Result<Term, Diagnostic> {
+    fn make_logical_tformula_head(&mut self, op: FunCode) -> Term {
         let head = Term::top_alloc(op, 0);
-        self.term_top_insert(head)
+        if let Some(type_) = self.sig.get_type(op).cloned() {
+            head.set_type(Some(type_));
+        }
+        // This is only an application head; inserting it would collide with
+        // bool-typed zero-arity logical terms that use the same f-code.
+        head
     }
 
     fn parse_quantified_tformula_tstp_subset(
@@ -4930,6 +4938,50 @@ mod tests {
         assert!(error
             .message()
             .contains("formula application argument has the wrong sort"));
+    }
+
+    #[test]
+    fn tstp_formula_application_accepts_binary_logical_formula_head() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. p: person > $o. q: person > $o.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("(&) @ (p @ a) @ (q @ a)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().and_code());
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let left = formula.argument(0).unwrap();
+        assert_eq!(left.f_code(), bank.signature().eqn_code());
+        let applied_p = left.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(applied_p.f_code()), Some("p"));
+        let right = formula.argument(1).unwrap();
+        assert_eq!(right.f_code(), bank.signature().eqn_code());
+        let applied_q = right.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(applied_q.f_code()), Some("q"));
     }
 
     #[test]
