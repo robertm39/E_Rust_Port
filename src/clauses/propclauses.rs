@@ -1,8 +1,12 @@
 use crate::basics::error::Diagnostic;
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
+};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnProperties;
 use crate::clauses::eqnlist::EqnList;
+use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::terms::signature::SIG_TRUE_CODE;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::Term;
@@ -100,6 +104,25 @@ impl PropClause {
         Ok(clause_print_lop_format_string(bank, &clause, true))
     }
 
+    /// Renders this propositional clause through the C `ClausePrint` dispatch.
+    ///
+    /// C only treats TPTP and TSTP as special global output formats; every
+    /// other output format falls back to the LOP printer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if allocating the rebuilt clause fails or if the
+    /// TSTP printer rejects the temporary clause shape.
+    pub fn print_format_string(
+        &self,
+        bank: &mut TermBank,
+        output_format: ProofDocOutputFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let clause = self.to_clause(bank)?;
+        clause_print_with_output_format(bank, &clause, output_format, problem_type)
+    }
+
     #[must_use]
     pub fn max_var(&self) -> i64 {
         self.literals
@@ -190,19 +213,56 @@ impl PropClauseSet {
         }
         Ok(output)
     }
+
+    /// Renders all propositional clauses through the C `ClausePrint` dispatch.
+    ///
+    /// The set owns the newline after each temporarily rebuilt clause, matching
+    /// C `PropClauseSetPrint`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if rebuilding or printing any stored clause fails.
+    pub fn print_format_string(
+        &self,
+        bank: &mut TermBank,
+        output_format: ProofDocOutputFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        for clause in &self.clauses {
+            output.push_str(&clause.print_format_string(bank, output_format, problem_type)?);
+            output.push('\n');
+        }
+        Ok(output)
+    }
 }
 
 fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+fn clause_print_with_output_format(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: ProofDocOutputFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        ProofDocOutputFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        ProofDocOutputFormat::Tstp => clause_tstp_string(bank, clause, true, true, problem_type),
+        _ => Ok(clause_print_lop_format_string(bank, clause, true)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PropClause, PropClauseSet};
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_POSITIVE, EP_IS_SELECTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::ProofDocOutputFormat;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -289,6 +349,52 @@ mod tests {
     }
 
     #[test]
+    fn prop_clause_print_format_string_dispatches_like_clause_print() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p_format");
+        let second = predicate_atom(&mut bank, "q_format");
+        let prop_clause = PropClause::alloc(&clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ]));
+
+        let input_clause_text = prop_clause
+            .print_format_string(
+                &mut bank,
+                ProofDocOutputFormat::Tptp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+        assert!(input_clause_text.starts_with("input_clause("));
+        assert!(input_clause_text.contains("++p_format"));
+        assert!(input_clause_text.contains("--q_format"));
+        assert!(input_clause_text.ends_with("])."));
+
+        let cnf_text = prop_clause
+            .print_format_string(
+                &mut bank,
+                ProofDocOutputFormat::Tstp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+        assert!(cnf_text.starts_with("cnf("));
+        assert!(cnf_text.contains("p_format"));
+        assert!(cnf_text.contains("~q_format"));
+        assert!(cnf_text.ends_with(")."));
+
+        assert_eq!(
+            prop_clause
+                .print_format_string(
+                    &mut bank,
+                    ProofDocOutputFormat::Pcl,
+                    ProblemType::FirstOrder,
+                )
+                .unwrap(),
+            "p_format <- q_format."
+        );
+    }
+
+    #[test]
     fn max_var_uses_current_literal_entry_numbers() {
         let mut bank = test_bank();
         let first = predicate_atom(&mut bank, "p");
@@ -352,6 +458,33 @@ mod tests {
             set.print_lop_string(&mut bank).unwrap(),
             "p_set_print <- .\n <- q_set_print.\n"
         );
+    }
+
+    #[test]
+    fn prop_clause_set_print_format_string_adds_newlines_after_dispatch() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "p_set_format");
+        let second = predicate_atom(&mut bank, "q_set_format");
+        let mut set = PropClauseSet::new();
+
+        set.insert_prop_clause(PropClause::alloc(&clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        set.insert_prop_clause(PropClause::alloc(&clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+
+        let rendered = set
+            .print_format_string(
+                &mut bank,
+                ProofDocOutputFormat::Tptp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+        assert_eq!(rendered.lines().count(), 2);
+        assert!(rendered.contains("++p_set_format"));
+        assert!(rendered.contains("--q_set_format"));
+        assert!(rendered.ends_with('\n'));
     }
 
     #[test]

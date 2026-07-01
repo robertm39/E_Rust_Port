@@ -113,7 +113,8 @@ Source files reviewed: `CLAUSES/ccl_propclauses.h`, `CLAUSES/ccl_propclauses.c`.
 
 ### C Behaviors To Revisit After Compatibility
 
-- `PropClausePrint` temporarily rebuilds an ordinary `Clause` and then calls global `ClausePrint`; the temporary clause has an unpredictable identifier. Rust now exposes explicit LOP rendering for the rebuilt clause and should keep identifier-sensitive global formats at the outer output boundary.
+- `PropClausePrint` temporarily rebuilds an ordinary `Clause` and then calls global `ClausePrint`; the temporary clause has an unpredictable identifier. Rust now exposes explicit `ClausePrint`-style LOP/TPTP/TSTP rendering for the rebuilt clause and should keep identifier-sensitive global formats at the outer output boundary.
+- `PropClausePrint` is documented with no global variables, but `ClausePrint` observes the process-global `OutputFormat`. Rust passes the output format explicitly; retain that boundary unless executable reference tests require a hidden global renderer.
 - `PropClauseSetPrint` adds the newline after each `PropClausePrint` call, not inside the single-clause printer. Rust preserves this split in the LOP string helpers.
 
 ### Porting Focus

@@ -339,11 +339,23 @@ impl GroundSet {
         let mut result = String::new();
         for (&lit_no, &status) in &self.units {
             if status.contains(GcuEncoding::Pos) {
-                result.push_str(&self.unit_lop_string(bank, lit_no, true)?);
+                result.push_str(&self.unit_format_string(
+                    bank,
+                    lit_no,
+                    true,
+                    ProofDocOutputFormat::Lop,
+                    ProblemType::FirstOrder,
+                )?);
                 result.push('\n');
             }
             if status.contains(GcuEncoding::Neg) {
-                result.push_str(&self.unit_lop_string(bank, lit_no, false)?);
+                result.push_str(&self.unit_format_string(
+                    bank,
+                    lit_no,
+                    false,
+                    ProofDocOutputFormat::Lop,
+                    ProblemType::FirstOrder,
+                )?);
                 result.push('\n');
             }
         }
@@ -351,11 +363,61 @@ impl GroundSet {
         Ok(result)
     }
 
-    fn unit_lop_string(
+    /// Renders this ground set through the C `GroundSetPrint` / `ClausePrint`
+    /// output-format dispatch.
+    ///
+    /// Unit clauses are rebuilt one at a time and receive set-level newlines;
+    /// compact non-units are delegated to the propositional clause-set printer.
+    /// TPTP and TSTP are special, while every other format falls back to LOP.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if a stored unit lacks its atom term, if rebuilding
+    /// any temporary clause fails, or if TSTP rendering rejects a clause shape.
+    pub fn print_format_string(
+        &self,
+        bank: &mut TermBank,
+        output_format: ProofDocOutputFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let mut result = String::new();
+        for (&lit_no, &status) in &self.units {
+            if status.contains(GcuEncoding::Pos) {
+                result.push_str(&self.unit_format_string(
+                    bank,
+                    lit_no,
+                    true,
+                    output_format,
+                    problem_type,
+                )?);
+                result.push('\n');
+            }
+            if status.contains(GcuEncoding::Neg) {
+                result.push_str(&self.unit_format_string(
+                    bank,
+                    lit_no,
+                    false,
+                    output_format,
+                    problem_type,
+                )?);
+                result.push('\n');
+            }
+        }
+        result.push_str(
+            &self
+                .non_units
+                .print_format_string(bank, output_format, problem_type)?,
+        );
+        Ok(result)
+    }
+
+    fn unit_format_string(
         &self,
         bank: &mut TermBank,
         lit_no: i64,
         positive: bool,
+        output_format: ProofDocOutputFormat,
+        problem_type: ProblemType,
     ) -> Result<String, Diagnostic> {
         let Some(term) = self.unit_terms.get(&lit_no) else {
             return Err(Diagnostic::new(
@@ -365,7 +427,7 @@ impl GroundSet {
         };
         let eqn = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, positive)?;
         let clause = Clause::alloc(EqnList::from_vec(vec![eqn]));
-        Ok(clause_print_lop_format_string(bank, &clause, true))
+        clause_print_with_output_format(bank, &clause, output_format, problem_type)
     }
 }
 
@@ -812,6 +874,15 @@ fn write_ground_instance_progress(
 }
 
 fn clause_grounding_progress_string(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: ProofDocOutputFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    clause_print_with_output_format(bank, clause, output_format, problem_type)
+}
+
+fn clause_print_with_output_format(
     bank: &TermBank,
     clause: &Clause,
     output_format: ProofDocOutputFormat,
@@ -1944,6 +2015,61 @@ mod tests {
         assert_eq!(
             set.print_lop_string(&mut bank).unwrap(),
             "ground_print_p <- .\n <- ground_print_q.\nground_print_p <- ground_print_q.\n <- .\n"
+        );
+    }
+
+    #[test]
+    fn ground_set_print_format_string_dispatches_units_and_non_units() {
+        let mut bank = test_bank();
+        let first = predicate_atom(&mut bank, "ground_format_p", &[]);
+        let second = predicate_atom(&mut bank, "ground_format_q", &[]);
+        let mut set = GroundSet::new();
+
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &first, true,
+        )])));
+        assert!(set.insert(clause_from(vec![predicate_literal(
+            &mut bank, &second, false,
+        )])));
+        assert!(set.insert(clause_from(vec![
+            predicate_literal(&mut bank, &first, true),
+            predicate_literal(&mut bank, &second, false),
+        ])));
+
+        let input_clause_text = set
+            .print_format_string(
+                &mut bank,
+                ProofDocOutputFormat::Tptp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+        assert_eq!(input_clause_text.lines().count(), 3);
+        assert!(input_clause_text.contains("++ground_format_p"));
+        assert!(input_clause_text.contains("--ground_format_q"));
+        assert!(input_clause_text.ends_with('\n'));
+        assert!(!input_clause_text.contains("<-"));
+
+        let cnf_text = set
+            .print_format_string(
+                &mut bank,
+                ProofDocOutputFormat::Tstp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap();
+        assert_eq!(cnf_text.lines().count(), 3);
+        assert!(cnf_text.contains("ground_format_p"));
+        assert!(cnf_text.contains("ground_format_q"));
+        assert!(cnf_text.ends_with('\n'));
+        assert!(!cnf_text.contains("<-"));
+
+        assert_eq!(
+            set.print_format_string(
+                &mut bank,
+                ProofDocOutputFormat::Pcl,
+                ProblemType::FirstOrder,
+            )
+            .unwrap(),
+            set.print_lop_string(&mut bank).unwrap()
         );
     }
 
