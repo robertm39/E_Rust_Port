@@ -98,7 +98,8 @@ use crate::inout::scanner::{
     token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
 };
 use crate::inout::signals::{
-    configure_time_limits, e_signal_setup, SignalOutcome, RLIM_INFINITY_COMPAT, SIGXCPU_COMPAT,
+    configure_time_limits, e_signal_setup, finalize_cpu_limit_outcome, silent_time_out,
+    time_limit_expired_kind, SignalOutcome, TimeLimitKind, RLIM_INFINITY_COMPAT, SIGXCPU_COMPAT,
 };
 use crate::orderings::cto_lpo::set_lpo_recursion_depth_limit;
 use crate::prover::options::{EProverOption, EPROVER_OPTIONS};
@@ -2589,7 +2590,7 @@ where
         EProverAction::Run(config) => {
             write_config_warnings(stderr, &config)?;
             write_resource_setup_messages(stderr, &apply_os_resource_limit_state(&config))?;
-            run_config(stdout, &config)
+            run_config_with_stderr(stdout, Some(stderr as &mut dyn Write), &config)
         }
     }
 }
@@ -4389,7 +4390,16 @@ or show the set unsatisfiable.\n\n"
     result
 }
 
+#[cfg(test)]
 fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EProverError> {
+    run_config_with_stderr(stdout, None, config)
+}
+
+fn run_config_with_stderr(
+    stdout: &mut impl Write,
+    stderr: Option<&mut dyn Write>,
+    config: &EProverConfig,
+) -> Result<u8, EProverError> {
     let mut runtime_config = config.clone();
     let verbose = i32::try_from(config.verbose).map_err(|_| {
         Diagnostic::new(
@@ -4435,7 +4445,7 @@ fn run_config(stdout: &mut impl Write, config: &EProverConfig) -> Result<u8, EPr
         return finish_run_config(&mut output, config, ErrorCode::NO_ERROR.exit_status());
     }
 
-    let status = run_proof_search(&mut output, &mut runtime_config)?;
+    let status = run_proof_search(&mut output, stderr, &mut runtime_config)?;
     finish_run_config(&mut output, config, status)
 }
 
@@ -5311,6 +5321,7 @@ fn run_prune_only<W: Write + ?Sized>(
 )]
 fn run_proof_search<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
+    hard_timeout_stderr: Option<&mut dyn Write>,
     config: &mut EProverConfig,
 ) -> Result<u8, EProverError> {
     let mut state = proof_state_alloc(config.free_symbol_properties)?;
@@ -5415,6 +5426,9 @@ fn run_proof_search<W: Write + ?Sized>(
             &mut global_indices,
         )?
     };
+    if hard_time_limit_expired_in_saturation(&outcome) {
+        return finalize_hard_time_limit_stop(output, hard_timeout_stderr);
+    }
     if let Some(filtered_empty) = filter_saturated_unprocessed(config, &mut state, &mut control)? {
         outcome = SaturateOutcome::Returned {
             clause: Box::new(filtered_empty),
@@ -5462,6 +5476,41 @@ fn run_proof_search<W: Write + ?Sized>(
         inference_system_complete,
         config.search.completeness.assume_inference_system_complete,
     ))
+}
+
+fn hard_time_limit_expired_in_saturation(outcome: &SaturateOutcome) -> bool {
+    matches!(
+        outcome,
+        SaturateOutcome::Stopped {
+            reason: SaturateStopReason::TimeLimit,
+            ..
+        }
+    ) && time_limit_expired_kind() == Some(TimeLimitKind::Hard)
+}
+
+fn finalize_hard_time_limit_stop(
+    output: &mut impl Write,
+    stderr: Option<&mut dyn Write>,
+) -> Result<u8, EProverError> {
+    let silent = silent_time_out();
+    let diagnostic = (!silent).then(hard_time_limit_diagnostic);
+    let outcome = SignalOutcome::CpuLimitExceeded {
+        silent,
+        diagnostic: diagnostic.clone(),
+    };
+    let status = finalize_cpu_limit_outcome(output, &outcome)?
+        .expect("hard CPU-limit signal outcomes always finalize");
+    if let (Some(stderr), Some(diagnostic)) = (stderr, diagnostic) {
+        stderr.write_all(diagnostic.render_error(PROGRAM_NAME).as_bytes())?;
+    }
+    Ok(status)
+}
+
+fn hard_time_limit_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::CPU_LIMIT_ERROR,
+        "CPU time limit exceeded, terminating",
+    )
 }
 
 fn run_main_saturation<W: Write + ?Sized>(
@@ -14428,10 +14477,10 @@ mod tests {
     }
 
     #[test]
-    fn run_cooperative_time_limit_uses_resource_out_exit_status() {
+    fn run_hard_time_limit_uses_cpu_limit_exit_status() {
         let _guard = global_state_lock();
         configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
-        let path = temp_path("cpu-limit-resource-out");
+        let path = temp_path("hard-cpu-limit");
         std::fs::write(&path, "p(a).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
@@ -14439,6 +14488,43 @@ mod tests {
 
         let status = run(
             ["eprover", "--lop-in", "--cpu-limit=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::CPU_LIMIT_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed
+            .contains("\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n"));
+        assert!(!printed.contains("User resource limit exceeded"));
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "eprover: CPU time limit exceeded, terminating\n"
+        );
+
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_soft_time_limit_uses_resource_out_exit_status() {
+        let _guard = global_state_lock();
+        configure_time_limits(RLIM_INFINITY_COMPAT, RLIM_INFINITY_COMPAT, 0);
+        let path = temp_path("soft-cpu-limit-resource-out");
+        std::fs::write(&path, "p(a).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--soft-cpu-limit=0",
+                "--cpu-limit=1",
+                path_arg.as_str(),
+            ],
             &mut stdout,
             &mut stderr,
         )

@@ -1,4 +1,4 @@
-use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+use crate::basics::defines::DEFAULT_COMCHAR_DIRECT;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::get_usec_clock;
 #[cfg(all(target_os = "linux", not(test)))]
@@ -7,13 +7,16 @@ use crate::basics::os_wrapper::set_rlimit;
 use crate::basics::os_wrapper::{get_hard_rlimit, RLIMIT_CPU_COMPAT};
 use crate::inout::tempfile::temp_file_cleanup;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 pub const RLIM_INFINITY_COMPAT: u64 = u64::MAX;
 pub const SIGINT_COMPAT: i32 = 2;
 pub const SIGTERM_COMPAT: i32 = 15;
 pub const SIGXCPU_COMPAT: i32 = 24;
 const USEC_PER_SEC: u64 = 1_000_000;
+const TIME_LIMIT_KIND_NONE: u8 = 0;
+const TIME_LIMIT_KIND_SOFT: u8 = 1;
+const TIME_LIMIT_KIND_HARD: u8 = 2;
 
 static SCHEDULE_TIME_LIMIT: AtomicU64 = AtomicU64::new(0);
 static SYSTEM_TIME_LIMIT: AtomicU64 = AtomicU64::new(RLIM_INFINITY_COMPAT);
@@ -23,6 +26,8 @@ static TIME_IS_UP: AtomicBool = AtomicBool::new(false);
 static TIME_LIMIT_IS_SOFT: AtomicBool = AtomicBool::new(false);
 static TIME_LIMIT_START_USEC: AtomicI64 = AtomicI64::new(0);
 static TIME_LIMIT_DEADLINE_USEC: AtomicI64 = AtomicI64::new(i64::MAX);
+static TIME_LIMIT_DEADLINE_KIND: AtomicU8 = AtomicU8::new(TIME_LIMIT_KIND_NONE);
+static TIME_LIMIT_EXPIRED_KIND: AtomicU8 = AtomicU8::new(TIME_LIMIT_KIND_NONE);
 static SIG_TERM_CAUGHT: AtomicUsize = AtomicUsize::new(0);
 static FATAL_ERROR_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static SILENT_TIME_OUT: AtomicBool = AtomicBool::new(false);
@@ -59,6 +64,29 @@ pub enum SignalOutcome {
     UnexpectedSignal {
         signal: i32,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimeLimitKind {
+    Soft,
+    Hard,
+}
+
+impl TimeLimitKind {
+    const fn marker(self) -> u8 {
+        match self {
+            Self::Soft => TIME_LIMIT_KIND_SOFT,
+            Self::Hard => TIME_LIMIT_KIND_HARD,
+        }
+    }
+
+    const fn from_marker(marker: u8) -> Option<Self> {
+        match marker {
+            TIME_LIMIT_KIND_SOFT => Some(Self::Soft),
+            TIME_LIMIT_KIND_HARD => Some(Self::Hard),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,20 +145,22 @@ pub fn configure_time_limits(hard_limit: u64, soft_limit: u64, schedule_limit: u
     SOFT_TIME_LIMIT.store(soft_limit, Ordering::SeqCst);
     SCHEDULE_TIME_LIMIT.store(schedule_limit, Ordering::SeqCst);
     TIME_IS_UP.store(false, Ordering::SeqCst);
+    TIME_LIMIT_EXPIRED_KIND.store(TIME_LIMIT_KIND_NONE, Ordering::SeqCst);
 
-    let active_limit = if soft_limit != RLIM_INFINITY_COMPAT {
+    let (active_limit, deadline_kind) = if soft_limit != RLIM_INFINITY_COMPAT {
         TIME_LIMIT_IS_SOFT.store(true, Ordering::SeqCst);
-        Some(soft_limit)
+        (Some(soft_limit), TimeLimitKind::Soft.marker())
     } else if hard_limit != RLIM_INFINITY_COMPAT {
         TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
-        Some(hard_limit)
+        (Some(hard_limit), TimeLimitKind::Hard.marker())
     } else {
         TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
-        None
+        (None, TIME_LIMIT_KIND_NONE)
     };
 
     let start = get_usec_clock();
     TIME_LIMIT_START_USEC.store(start, Ordering::SeqCst);
+    TIME_LIMIT_DEADLINE_KIND.store(deadline_kind, Ordering::SeqCst);
     TIME_LIMIT_DEADLINE_USEC.store(
         active_limit.map_or(i64::MAX, |limit| time_limit_deadline_usec(start, limit)),
         Ordering::SeqCst,
@@ -153,12 +183,22 @@ pub fn time_is_up() -> bool {
 
     TIME_IS_UP.store(true, Ordering::SeqCst);
     TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
+    TIME_LIMIT_EXPIRED_KIND.store(
+        TIME_LIMIT_DEADLINE_KIND.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
     true
 }
 
 #[must_use]
 pub fn set_time_is_up(value: bool) -> bool {
+    TIME_LIMIT_EXPIRED_KIND.store(TIME_LIMIT_KIND_NONE, Ordering::SeqCst);
     TIME_IS_UP.swap(value, Ordering::SeqCst)
+}
+
+#[must_use]
+pub fn time_limit_expired_kind() -> Option<TimeLimitKind> {
+    TimeLimitKind::from_marker(TIME_LIMIT_EXPIRED_KIND.load(Ordering::SeqCst))
 }
 
 #[must_use]
@@ -247,9 +287,9 @@ pub fn finalize_cpu_limit_outcome(
         SignalOutcome::CpuLimitExceeded { silent: false, .. } => {
             writeln!(
                 output,
-                "\n{DEFAULT_COMCHAR_RAW} Failure: Resource limit exceeded (time)"
+                "\n{DEFAULT_COMCHAR_DIRECT} Failure: Resource limit exceeded (time)"
             )?;
-            writeln!(output, "{DEFAULT_COMCHAR_RAW} SZS status ResourceOut")?;
+            writeln!(output, "{DEFAULT_COMCHAR_DIRECT} SZS status ResourceOut")?;
             Ok(Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()))
         }
         _ => Ok(None),
@@ -259,6 +299,7 @@ pub fn finalize_cpu_limit_outcome(
 fn handle_cpu_limit() -> SignalOutcome {
     if TIME_LIMIT_IS_SOFT.swap(false, Ordering::SeqCst) {
         TIME_IS_UP.store(true, Ordering::SeqCst);
+        TIME_LIMIT_EXPIRED_KIND.store(TimeLimitKind::Soft.marker(), Ordering::SeqCst);
         let rlimit_sequence = cpu_soft_timeout_rlimit_sequence(
             HARD_TIME_LIMIT.load(Ordering::SeqCst),
             SYSTEM_TIME_LIMIT.load(Ordering::SeqCst),
@@ -282,6 +323,7 @@ fn handle_cpu_limit() -> SignalOutcome {
         };
     }
 
+    TIME_LIMIT_EXPIRED_KIND.store(TimeLimitKind::Hard.marker(), Ordering::SeqCst);
     if SILENT_TIME_OUT.load(Ordering::SeqCst) {
         SignalOutcome::CpuLimitExceeded {
             silent: true,
@@ -390,6 +432,8 @@ fn reset_signal_state_for_tests() {
     TIME_LIMIT_IS_SOFT.store(false, Ordering::SeqCst);
     TIME_LIMIT_START_USEC.store(0, Ordering::SeqCst);
     TIME_LIMIT_DEADLINE_USEC.store(i64::MAX, Ordering::SeqCst);
+    TIME_LIMIT_DEADLINE_KIND.store(TIME_LIMIT_KIND_NONE, Ordering::SeqCst);
+    TIME_LIMIT_EXPIRED_KIND.store(TIME_LIMIT_KIND_NONE, Ordering::SeqCst);
     SIG_TERM_CAUGHT.store(0, Ordering::SeqCst);
     FATAL_ERROR_IN_PROGRESS.store(false, Ordering::SeqCst);
     SILENT_TIME_OUT.store(false, Ordering::SeqCst);
@@ -403,8 +447,8 @@ mod tests {
         schedule_time_limit, set_hard_time_limit, set_schedule_time_limit, set_silent_time_out,
         set_soft_time_limit, set_system_time_limit, set_time_is_up, set_time_limit_is_soft,
         sig_term_caught, silent_time_out, soft_time_limit, system_time_limit, time_is_up,
-        time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome, RLIM_INFINITY_COMPAT,
-        SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
+        time_limit_expired_kind, time_limit_is_soft, SchedulerSignalOutcome, SignalOutcome,
+        TimeLimitKind, RLIM_INFINITY_COMPAT, SIGINT_COMPAT, SIGTERM_COMPAT, SIGXCPU_COMPAT,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::inout::tempfile::{temp_file_register, temp_file_test_lock};
@@ -481,6 +525,7 @@ mod tests {
         assert!(time_limit_is_soft());
         assert!(time_is_up());
         assert!(!time_limit_is_soft());
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Soft));
     }
 
     #[test]
@@ -494,6 +539,7 @@ mod tests {
         assert_eq!(soft_time_limit(), RLIM_INFINITY_COMPAT);
         assert!(!time_limit_is_soft());
         assert!(time_is_up());
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
     }
 
     #[test]
@@ -507,6 +553,7 @@ mod tests {
 
         assert!(!time_is_up());
         assert!(!time_limit_is_soft());
+        assert_eq!(time_limit_expired_kind(), None);
     }
 
     #[test]
@@ -523,6 +570,7 @@ mod tests {
         );
         assert!(time_is_up());
         assert!(!time_limit_is_soft());
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Soft));
         #[cfg(target_os = "linux")]
         {
             assert_ne!(system_time_limit(), 50);
@@ -567,6 +615,7 @@ mod tests {
                 diagnostic: None
             }
         );
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
 
         reset_signal_state_for_tests();
         let SignalOutcome::CpuLimitExceeded {
@@ -579,6 +628,7 @@ mod tests {
         assert!(!silent);
         assert_eq!(diagnostic.code(), ErrorCode::CPU_LIMIT_ERROR);
         assert_eq!(diagnostic.message(), "CPU time limit exceeded, terminating");
+        assert_eq!(time_limit_expired_kind(), Some(TimeLimitKind::Hard));
     }
 
     #[test]
@@ -599,7 +649,7 @@ mod tests {
         assert_eq!(status, Some(ErrorCode::CPU_LIMIT_ERROR.exit_status()));
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "\n% Failure: Resource limit exceeded (time)\n% SZS status ResourceOut\n"
+            "\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n"
         );
     }
 

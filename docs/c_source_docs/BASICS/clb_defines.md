@@ -110,6 +110,7 @@ Source files reviewed: `BASICS/clb_defines.h`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `COMCHAR` is compile-time selected: the reference WSL/Linux build used by `e-interop` does not define `UNIX_COMMENTS`, so C prints `%`-prefixed status, proof, resource, and statistics comments. Rust now uses that reference default for supported executable comment output; if a `UNIX_COMMENTS` C build becomes a supported target, expose the comment prefix as a deliberate compatibility mode rather than scattering literals through output call sites.
+- Change-later candidate: in the default build `COMCHAR` is the printf-escaped string `%%`, while `COMCHARRAW` is `%`. Most call sites pass `COMCHAR` through `fprintf` and produce one percent sign, but direct `WriteStr` call sites such as hard CPU-timeout reporting emit the doubled `%%` literally. Rust preserves both spellings for compatibility; after drop-in behavior is secured, consider replacing this with separate explicit formatted-output and direct-output comment-prefix constants.
 
 ### Porting Focus
 
