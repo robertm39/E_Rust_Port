@@ -7,6 +7,7 @@ pub mod expressions;
 pub mod idents;
 pub mod miniclauses;
 pub mod positions;
+pub mod steps;
 
 pub(crate) fn parse_pos_int_as_long(scanner: &mut Scanner) -> Result<i64, Diagnostic> {
     scanner.check_tok(TokenType::POS_INT)?;

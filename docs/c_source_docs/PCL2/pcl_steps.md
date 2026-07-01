@@ -132,4 +132,17 @@ Source files reviewed: `PCL2/pcl_steps.h`, `PCL2/pcl_steps.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/steps.rs`, covering the shared PCL step property word, proof-distance constants, external type parse/print helpers, TSTP role mapping, identifier comparison through `PclId`, and the `PCLStepResetTreeData` analysis-counter reset behavior.
+- Full `PCLStepParse` and logical-content printing are not ported in this slice because they depend on formula-step ownership and protocol-list integration. The shared primitives are available for both later full-step and mini-step ports.
+
+### Change Later
+
+- `SupportShellPCL` is a process-global switch that changes parser behavior for both full and mini PCL steps. Rust has not introduced the global; later parser integration should make shell support an explicit session/config option unless executable compatibility requires a process-wide flag.
+- The header comment beside `PCLType1 = CPType1` says `/* 256 */`, but the current `CPType1` value in `ccl_clauses.h` is `1024`. Rust follows the actual compiled value and records the stale comment as source drift.
+- `PCLParseExternalType` accepts `que`, but its fallback `CheckInpId` message lists only `conj|neg|lemma`. Rust preserves that diagnostic surface in the helper; a cleaned API should include every accepted token.
+- Empty external type fields parse as `PCLTypeAxiom`, while `PCLPropToTSTPType` maps a plain axiom type to `plain` unless `PCLIsInitial` is also set. This role distinction is easy to lose when refactoring proof-output code.
+- `PCLStepResetTreeData(step, false)` resets analysis counters and also clears `PCLIsLemma|PCLIsMarked`; `just_weights=true` resets only the two weight fields. Keep this property side effect visible when lemma-analysis code is ported.
 <!-- END MANUAL REVIEW: c_source_docs -->
