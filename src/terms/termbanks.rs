@@ -1930,13 +1930,26 @@ impl TermBank {
             return Ok(arg);
         }
 
-        let arg = if expected_type.is_bool() || scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
+        let arg = if expected_type.is_bool() {
+            self.parse_tformula_application_bool_arg(scanner)?
+        } else if scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
             self.parse_literal_tformula_tstp_with_applications(scanner)?
         } else {
             self.parse_tformula_application_term_arg(scanner, allow_application_tail)?
         };
         Self::require_term_sort(&arg, expected_type, "formula application argument")?;
         Ok(arg)
+    }
+
+    fn parse_tformula_application_bool_arg(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            self.parse_literal_tformula_tstp_with_applications(scanner)
+        } else {
+            self.parse_literal_tformula_tstp_subset(scanner)
+        }
     }
 
     fn parse_tformula_application_term_arg(
@@ -4842,6 +4855,81 @@ mod tests {
                 .find_name(formula.argument(1).unwrap().f_code()),
             Some("b")
         );
+    }
+
+    #[test]
+    fn tstp_formula_application_accepts_parenthesized_boolean_application_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. p: person > $o. r: $o > $o.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("r @ (p @ a)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        let applied_r = formula.argument(0).unwrap();
+        assert_eq!(applied_r.arity(), 1);
+        assert_eq!(bank.signature().find_name(applied_r.f_code()), Some("r"));
+        let encoded_p = applied_r.argument(0).unwrap();
+        assert_eq!(encoded_p.f_code(), bank.signature().eqn_code());
+        let applied_p = encoded_p.argument(0).unwrap();
+        assert_eq!(applied_p.arity(), 1);
+        assert_eq!(bank.signature().find_name(applied_p.f_code()), Some("p"));
+    }
+
+    #[test]
+    fn tstp_formula_application_preserves_left_association_for_boolean_arguments() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. p: person > $o. r: $o > $o.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("r @ p @ a", false).unwrap();
+
+        let error = bank.parse_tformula_tstp(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+        assert!(error
+            .message()
+            .contains("formula application argument has the wrong sort"));
     }
 
     #[test]
