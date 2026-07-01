@@ -8684,7 +8684,7 @@ fn parse_simple_tstp_formula_clause(
             bank,
         )?;
     }
-    let literal_lists = simple_fof_formulas_to_clause_literal_lists(
+    let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
         formulas,
         formula_conjecture_seen,
         formula_preprocessing.fool_unroll_enabled(),
@@ -8700,17 +8700,19 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let mut clauses = Vec::with_capacity(literal_lists.len());
-    for literals in literal_lists {
-        let mut clause = Clause::alloc(literals);
-        clause.set_tptp_type(clause_type);
-        clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
-        clause.set_info(Some(ClauseInfo::new(
-            Some(name.as_str()),
-            Some(start_source.as_str()),
-            start_line,
-            start_column,
-        )));
+    let mut clauses = Vec::with_capacity(lowered_clauses.len());
+    for lowered in lowered_clauses {
+        let mut clause = Clause::alloc(lowered.literals);
+        if lowered.origin == SimpleFofLoweredClauseOrigin::InputFormula {
+            clause.set_tptp_type(clause_type);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            clause.set_info(Some(ClauseInfo::new(
+                Some(name.as_str()),
+                Some(start_source.as_str()),
+                start_line,
+                start_column,
+            )));
+        }
         clauses.push(clause);
     }
     let raw_formula_features =
@@ -8763,7 +8765,7 @@ fn parse_simple_tptp_formula_clause(
             bank,
         )?;
     }
-    let literal_lists = simple_fof_formulas_to_clause_literal_lists(
+    let lowered_clauses = simple_fof_formulas_to_clause_literal_lists(
         formulas,
         formula_conjecture_seen,
         formula_preprocessing.fool_unroll_enabled(),
@@ -8775,17 +8777,19 @@ fn parse_simple_tptp_formula_clause(
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
     scanner.accept_tok(TokenType::FULLSTOP)?;
 
-    let mut clauses = Vec::with_capacity(literal_lists.len());
-    for literals in literal_lists {
-        let mut clause = Clause::alloc(literals);
-        clause.set_tptp_type(clause_type);
-        clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
-        clause.set_info(Some(ClauseInfo::new(
-            Some(name.as_str()),
-            Some(start_source.as_str()),
-            start_line,
-            start_column,
-        )));
+    let mut clauses = Vec::with_capacity(lowered_clauses.len());
+    for lowered in lowered_clauses {
+        let mut clause = Clause::alloc(lowered.literals);
+        if lowered.origin == SimpleFofLoweredClauseOrigin::InputFormula {
+            clause.set_tptp_type(clause_type);
+            clause.set_prop(CP_INITIAL | CP_INPUT_FORMULA);
+            clause.set_info(Some(ClauseInfo::new(
+                Some(name.as_str()),
+                Some(start_source.as_str()),
+                start_line,
+                start_column,
+            )));
+        }
         clauses.push(clause);
     }
     let raw_formula_features =
@@ -9038,54 +9042,68 @@ impl SimpleFofBoolEqnReplacement {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SimpleFofLoweredClauseOrigin {
+    InputFormula,
+    GeneratedDefinition,
+}
+
+struct SimpleFofLoweredClause {
+    literals: EqnList,
+    origin: SimpleFofLoweredClauseOrigin,
+}
+
 fn simple_fof_formulas_to_clause_literal_lists(
     formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     fool_unroll: bool,
     bank: &mut TermBank,
-) -> Result<Vec<EqnList>, Diagnostic> {
+) -> Result<Vec<SimpleFofLoweredClause>, Diagnostic> {
     let lifted = simple_fof_lift_direct_let_formulas(
         formulas,
         SimpleFofBoolEqnReplacement::from_fool_unroll(fool_unroll),
         bank,
     )?;
-    if negate_as_conjecture {
-        let formulas = simple_fof_simplify_formulas(lifted.formulas);
-        let universal_dependencies = simple_fof_global_free_variables(&formulas);
-        let mut literal_lists = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
+
+    let formulas = simple_fof_simplify_formulas(lifted.formulas);
+    let universal_dependencies = simple_fof_global_free_variables(&formulas);
+    let mut lowered_clauses = simple_fof_lowered_clauses(
+        simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
-            true,
+            negate_as_conjecture,
             &universal_dependencies,
             fool_unroll,
             bank,
-        )?;
-        let definitions = simple_fof_simplify_formulas(lifted.definitions);
-        if !definitions.is_empty() {
-            let definition_dependencies = simple_fof_global_free_variables(&definitions);
-            literal_lists.extend(
-                simple_fof_formulas_to_clause_literal_lists_with_dependencies(
-                    definitions,
-                    false,
-                    &definition_dependencies,
-                    fool_unroll,
-                    bank,
-                )?,
-            );
-        }
-        return Ok(literal_lists);
+        )?,
+        SimpleFofLoweredClauseOrigin::InputFormula,
+    );
+
+    let definitions = simple_fof_simplify_formulas(lifted.definitions);
+    if !definitions.is_empty() {
+        let definition_dependencies = simple_fof_global_free_variables(&definitions);
+        lowered_clauses.extend(simple_fof_lowered_clauses(
+            simple_fof_formulas_to_clause_literal_lists_with_dependencies(
+                definitions,
+                false,
+                &definition_dependencies,
+                fool_unroll,
+                bank,
+            )?,
+            SimpleFofLoweredClauseOrigin::GeneratedDefinition,
+        ));
     }
 
-    let mut formulas = lifted.formulas;
-    formulas.extend(lifted.definitions);
-    formulas = simple_fof_simplify_formulas(formulas);
-    let universal_dependencies = simple_fof_global_free_variables(&formulas);
-    simple_fof_formulas_to_clause_literal_lists_with_dependencies(
-        formulas,
-        negate_as_conjecture,
-        &universal_dependencies,
-        fool_unroll,
-        bank,
-    )
+    Ok(lowered_clauses)
+}
+
+fn simple_fof_lowered_clauses(
+    literal_lists: Vec<EqnList>,
+    origin: SimpleFofLoweredClauseOrigin,
+) -> Vec<SimpleFofLoweredClause> {
+    literal_lists
+        .into_iter()
+        .map(|literals| SimpleFofLoweredClause { literals, origin })
+        .collect()
 }
 
 struct SimpleFofLetLiftResult {
@@ -19667,6 +19685,44 @@ mod tests {
         assert!(printed.contains("(q(X1)|~epred2_1(X1))"));
         assert!(printed.contains("(epred2_1(X1)|~q(X1))"));
         assert!(!printed.contains("$let"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_marks_lifted_let_definitions_plain() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-let-definition-metadata");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, $let(f:$o, f := p(a), f)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-out",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("negated_conjecture, (~epred"));
+        assert!(printed.contains("plain, (p(a)|~epred"));
+        assert!(printed.contains("plain, (epred"));
+        assert!(printed.contains("|~p(a))).\n"));
+        assert!(!printed.contains("negated_conjecture, (p(a)|~epred"));
+        assert!(!printed.contains("negated_conjecture, (epred"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
