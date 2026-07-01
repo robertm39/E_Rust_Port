@@ -110,6 +110,19 @@ impl PclMiniStep {
         self.properties.is_clausal()
     }
 
+    pub fn set_property(&mut self, properties: PclStepProperties) {
+        self.properties.set(properties);
+    }
+
+    pub fn delete_property(&mut self, properties: PclStepProperties) {
+        self.properties.delete(properties);
+    }
+
+    #[must_use]
+    pub fn is_empty_clause(&self) -> bool {
+        matches!(&self.logic, PclMiniStepLogic::Clause(clause) if clause.is_empty())
+    }
+
     /// C `PCLMiniStepParse`.
     ///
     /// # Errors

@@ -115,4 +115,18 @@ Source files reviewed: `PCL2/pcl_miniprotocol.h`, `PCL2/pcl_miniprotocol.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial Rust support is in `src/pcl2/miniprotocol.rs`, covering protocol-owned term-bank initialization, id-indexed mini-step storage, positive-id protocol parsing, duplicate-id rejection, ordered PCL/TSTP rendering, recursive proof-precondition collection, fast/slow proof-step marking, bulk property mutation, extraction/deletion by id, and proof-clause printing with the C newline behavior.
+- Rust stores steps in a safe `Vec<Option<PclMiniStep>>` indexed by mini id instead of a `PDArray_p` of raw step pointers. Protocol parsing still owns the term bank used by mini-step parsing and rendering.
+
+### Change Later
+
+- `PCLMiniProtInsertStep` treats duplicate ids as a pointer-identity invariant: it asserts that the incoming pointer is the already stored pointer, then returns false. Rust rejects any duplicate id in protocol parsing and returns `Ok(false)` from direct insertion; revisit whether callers ever relied on reinserting the same raw pointer.
+- `PCLMiniProtParse` enters its parse loop only when the current token is `PosInt`, even though `PCLMiniStepParse` itself calls `ParseInt`. Rust preserves the protocol-level positive-id gate; later user-facing parsing should decide whether negative or zero mini ids deserve explicit diagnostics.
+- The C parser echoes token comments to `GlobalOut` when `ignore_comments` is false. The current Rust helper does not forward scanner comments while parsing mini protocols; executable integration should decide whether that output is part of drop-in compatibility for PCL tools.
+- `PCLMiniProtPrint` prints each stored mini step without adding separators or newlines, so adjacent rendered steps concatenate. Rust preserves that exact string shape; a cleaned protocol printer should make record separation explicit after compatibility tests cover consumers.
+- Fast proof marking starts only from the contiguous suffix of extract-marked steps ending at `max_ident` and stops at the first gap or non-extract step. Rust preserves this shortcut; later proof tooling should document when the fast path is sound.
+- `PCLMiniExprCollectPreconds` stores raw step pointers in a `PTree`, so traversal order depends on pointer ordering even though proof marking only observes the final property set. Rust uses deterministic mini ids for the precondition set; revisit if a future proof-marking pass emits traversal-order-dependent output.
 <!-- END MANUAL REVIEW: c_source_docs -->

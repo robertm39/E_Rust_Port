@@ -6,6 +6,7 @@ use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 pub mod expressions;
 pub mod idents;
 pub mod miniclauses;
+pub mod miniprotocol;
 pub mod ministeps;
 pub mod positions;
 pub mod steps;
