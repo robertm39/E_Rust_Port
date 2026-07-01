@@ -306,19 +306,19 @@ C source references:
 
 Implemented:
 
-- Deterministic `cco_proc_ctrl` surface pieces, including `EPCTRL_BUFSIZE`, `MAX_CORES`, SZS result-string constants, `E_OPTIONS_BASE`, `E_OPTIONS`, `PRResultTable`-style result-string lookup, `EPCtrl` allocation defaults, output accumulation, C-shaped result-line scanning for theorem/contradictory-axioms/unsatisfiable/satisfiable/counter-satisfiable, EOF-to-failure fallback, cleanup of owned temporary input files, exact command-string construction for the generic/default E subprocess calls, descriptor-indexed `EPCtrlSet` storage, descriptor-interest registration for session/server readiness, process lookup/deletion/clear helpers, and a testable ready-descriptor result poll that returns proof-producing subprocesses while deleting no-proof terminated subprocesses with C-shaped `% No proof found by ...` output.
+- `cco_proc_ctrl` surface pieces, including `EPCTRL_BUFSIZE`, `MAX_CORES`, SZS result-string constants, `E_OPTIONS_BASE`, `E_OPTIONS`, `PRResultTable`-style result-string lookup, `EPCtrl` allocation defaults, output accumulation, C-shaped result-line scanning for theorem/contradictory-axioms/unsatisfiable/satisfiable/counter-satisfiable, EOF-to-failure fallback, cleanup of owned temporary input files, exact command-string construction for the generic/default E subprocess calls, safe `Command`-based subprocess creation with piped stdout, C-shaped `% Pid: ` first-line parsing, child stdout descriptor capture, line-by-line subprocess result polling, child kill/wait cleanup, descriptor-indexed `EPCtrlSet` storage, descriptor-interest registration for session/server readiness, process lookup/deletion/clear helpers, and a testable ready-descriptor result poll that returns the last proof-producing subprocess while still scanning later descriptors and deleting no-proof terminated subprocesses with C-shaped `% No proof found by ...` output.
 
 Pending:
 
-- Actual subprocess creation and pipe ownership for `ECtrlCreate`/`ECtrlCreateGeneric`, including PID-line parsing, `popen`/`pclose` or platform-equivalent child management, signal termination, and nonblocking/readiness integration.
-- Exact `select` timeout/error behavior for `EPCtrlSetGetResult`; Rust currently exposes the deterministic ready-descriptor core that a later event loop can drive.
-- Scheduler/server call-site integration and byte-compatible process-output routing through the executable's selected global output.
+- Exact C `popen` shell-command semantics for `ECtrlCreate`/`ECtrlCreateGeneric`; Rust spawns with structured arguments while preserving the exact command-string helper for compatibility audits.
+- Exact `select` timeout/error behavior for `EPCtrlSetGetResult`; Rust currently exposes the descriptor-ready core that a later event loop can drive.
+- Scheduler/server call-site integration, signal termination policy beyond ordinary child kill/wait cleanup, and byte-compatible process-output routing through the executable's selected global output.
 
 Change-later notes:
 
 - `EPCtrlAlloc` leaves `fileno` uninitialized until process creation. Rust represents the descriptor as optional and rejects insertion into an `EPCtrlSet` without one; keep raw uninitialized behavior out of safe APIs.
 - `EPCtrlGetResult` has table entries for `Failure` and `GaveUp`, but the scanner only recognizes theorem, contradictory axioms, unsatisfiable, satisfiable, and counter-satisfiable lines; EOF without one of those statuses becomes `PRFailure`. Rust preserves that parser surface for now.
-- `ECtrlCreateGeneric` builds one shell command by string concatenation without quoting `prover`, options, or file names. Rust preserves exact command construction in the helper, but actual spawning should use an argument-vector API when possible and reserve shell concatenation for compatibility mode.
+- `ECtrlCreateGeneric` builds one shell command by string concatenation without quoting `prover`, options, or file names. Rust preserves exact command construction in the helper but uses structured process arguments for safe spawning; reserve shell concatenation for compatibility mode if scheduler reference tests require it.
 - `EPCtrlSetGetResult` ignores `select` errors, scans integer descriptors from `0..=maxfd`, and asserts on impossible result states. Rust keeps the deterministic polling behavior explicit; the later event-loop adapter should decide which of these artifacts are compatibility requirements.
 
 ## Initial Crate And CLI Foundation

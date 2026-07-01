@@ -4,8 +4,9 @@ use crate::basics::simple_stuff::ProverResult;
 use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
 use crate::inout::tempfile::temp_file_remove;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdout, Command, Stdio};
 
 pub const EPCTRL_BUFSIZE: usize = 200;
 pub const MAX_CORES: usize = 8;
@@ -34,10 +35,12 @@ pub const fn prover_result_table_entry(result: ProverResult) -> Option<&'static 
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct EPCtrl {
     pid: Option<u32>,
     descriptor: Option<Descriptor>,
+    child: Option<Child>,
+    stdout: Option<BufReader<ChildStdout>>,
     input_file: Option<PathBuf>,
     name: String,
     start_time: i64,
@@ -52,6 +55,8 @@ impl EPCtrl {
         Self {
             pid: None,
             descriptor: None,
+            child: None,
+            stdout: None,
             input_file: None,
             name: name.into(),
             start_time: 0,
@@ -66,6 +71,82 @@ impl EPCtrl {
         let mut control = Self::new(name);
         control.descriptor = Some(descriptor);
         control
+    }
+
+    pub fn create(
+        prover: &str,
+        name: &str,
+        extra_options: &str,
+        cpu_limit: i64,
+        file: impl Into<PathBuf>,
+    ) -> Result<Self, Diagnostic> {
+        Self::create_generic(prover, name, E_OPTIONS, extra_options, cpu_limit, file)
+    }
+
+    pub fn create_generic(
+        prover: &str,
+        name: &str,
+        options: &str,
+        extra_options: &str,
+        cpu_limit: i64,
+        file: impl Into<PathBuf>,
+    ) -> Result<Self, Diagnostic> {
+        let input_file = file.into();
+        let mut command = Command::new(prover);
+        command.args(E_OPTIONS_BASE.split_whitespace());
+        command.args(options.split_whitespace());
+        command.args(extra_options.split_whitespace());
+        command.arg(format!("--cpu-limit={cpu_limit}"));
+        command.arg(&input_file);
+
+        let proc_name = format!("{name} => {options}");
+        let mut control = Self::spawn_command(command, proc_name, Some(input_file), cpu_limit)?;
+        control.start_time = current_sec_time();
+        Ok(control)
+    }
+
+    pub fn spawn_command(
+        mut command: Command,
+        name: impl Into<String>,
+        input_file: Option<PathBuf>,
+        prob_time: i64,
+    ) -> Result<Self, Diagnostic> {
+        command.stdout(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| {
+            proc_ctrl_system_error(format!("Cannot start eprover subprocess: {error}"))
+        })?;
+        let Some(stdout) = child.stdout.take() else {
+            cleanup_child(&mut child);
+            return Err(proc_ctrl_error("Cannot capture eprover subprocess output"));
+        };
+        let descriptor = descriptor_from_child_stdout(&stdout)?;
+        let mut stdout = BufReader::new(stdout);
+        let mut pid_line = String::new();
+        let read = stdout
+            .read_line(&mut pid_line)
+            .map_err(|error| proc_ctrl_error(format!("Cannot read eprover PID line: {error}")))?;
+        if read == 0 {
+            cleanup_child(&mut child);
+            return Err(proc_ctrl_error("Cannot read eprover PID line"));
+        }
+        let pid = match parse_pid_line(&pid_line) {
+            Ok(pid) => pid,
+            Err(error) => {
+                cleanup_child(&mut child);
+                return Err(error);
+            }
+        };
+
+        let mut control = Self::new(name);
+        control.pid = Some(pid);
+        control.descriptor = Some(descriptor);
+        control.child = Some(child);
+        control.stdout = Some(stdout);
+        control.input_file = input_file;
+        control.start_time = current_sec_time();
+        control.prob_time = prob_time;
+        control.output.append_str(&pid_line);
+        Ok(control)
     }
 
     #[must_use]
@@ -84,6 +165,11 @@ impl EPCtrl {
 
     pub fn set_descriptor(&mut self, descriptor: Option<Descriptor>) {
         self.descriptor = descriptor;
+    }
+
+    #[must_use]
+    pub const fn has_child(&self) -> bool {
+        self.child.is_some()
     }
 
     #[must_use]
@@ -129,7 +215,12 @@ impl EPCtrl {
     }
 
     pub fn cleanup(&mut self, delete_file: bool) -> Result<(), Diagnostic> {
+        self.stdout = None;
+        if let Some(mut child) = self.child.take() {
+            cleanup_child(&mut child);
+        }
         self.pid = None;
+        self.descriptor = None;
         if delete_file {
             if let Some(input_file) = self.input_file.take() {
                 let _removed_from_registry = temp_file_remove(&input_file)?;
@@ -152,6 +243,23 @@ impl EPCtrl {
         }
     }
 
+    pub fn read_result_line(&mut self, buffer: &mut String) -> Result<bool, Diagnostic> {
+        buffer.clear();
+        let read = {
+            let stdout = self.stdout.as_mut().ok_or_else(|| {
+                proc_ctrl_error("Cannot read from closed eprover subprocess pipe")
+            })?;
+            stdout.read_line(buffer).map_err(|error| {
+                proc_ctrl_error(format!("Cannot read eprover subprocess output: {error}"))
+            })?
+        };
+        if read == 0 {
+            Ok(self.get_result_from_optional_line(None))
+        } else {
+            Ok(self.get_result_from_optional_line(Some(buffer)))
+        }
+    }
+
     fn update_result_from_line(&mut self, line: &str) {
         if line.contains(SZS_THEOREM_STR) || line.contains(SZS_CONTRAAX_STR) {
             self.result = ProverResult::Theorem;
@@ -165,7 +273,13 @@ impl EPCtrl {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+impl Drop for EPCtrl {
+    fn drop(&mut self) {
+        let _cleanup_result = self.cleanup(false);
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct EPCtrlSet {
     procs: BTreeMap<Descriptor, EPCtrl>,
     buffer: String,
@@ -298,6 +412,15 @@ impl EPCtrlSet {
         }
         Ok(proof_descriptor)
     }
+
+    pub fn get_result_from_pipes(
+        &mut self,
+        ready: &DescriptorInterestSet,
+        delete_files: bool,
+        output: &mut impl Write,
+    ) -> Result<Option<Descriptor>, Diagnostic> {
+        self.get_result_from_ready(ready, delete_files, output, EPCtrl::read_result_line)
+    }
 }
 
 impl SessionProcessSet for EPCtrlSet {
@@ -338,15 +461,71 @@ fn output_error(error: &std::io::Error) -> Diagnostic {
     )
 }
 
+fn proc_ctrl_system_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(ErrorCode::SYSTEM_ERROR, message)
+}
+
+fn current_sec_time() -> i64 {
+    crate::basics::os_wrapper::get_usec_time() / 1_000_000
+}
+
+fn cleanup_child(child: &mut Child) {
+    let _kill_result = child.kill();
+    let _wait_result = child.wait();
+}
+
+fn parse_pid_line(line: &str) -> Result<u32, Diagnostic> {
+    if !line.contains("% Pid: ") {
+        return Err(proc_ctrl_error("Cannot get eprover PID"));
+    }
+    let rest = line.get(7..).unwrap_or_default();
+    let digits = rest
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    if digits.is_empty() {
+        Ok(0)
+    } else {
+        digits
+            .parse::<u32>()
+            .map_err(|error| proc_ctrl_error(format!("Cannot parse eprover PID: {error}")))
+    }
+}
+
+#[cfg(unix)]
+fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diagnostic> {
+    use std::os::fd::AsRawFd;
+
+    let raw = stdout.as_raw_fd();
+    u64::try_from(raw)
+        .map(Descriptor::new)
+        .map_err(|_| proc_ctrl_error(format!("Invalid eprover pipe descriptor: {raw}")))
+}
+
+#[cfg(windows)]
+fn descriptor_from_child_stdout(stdout: &ChildStdout) -> Result<Descriptor, Diagnostic> {
+    use std::os::windows::io::AsRawHandle;
+
+    let raw = stdout.as_raw_handle() as usize;
+    if raw == 0 {
+        Err(proc_ctrl_error(
+            "Invalid eprover pipe descriptor: null handle",
+        ))
+    } else {
+        Ok(Descriptor::new(u64::try_from(raw).unwrap_or(u64::MAX)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         e_ctrl_command, e_ctrl_default_command, prover_result_table_entry, EPCtrl, EPCtrlSet,
-        E_OPTIONS, E_OPTIONS_BASE, SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR, SZS_FAILURE_STR,
-        SZS_GAVEUP_STR, SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
+        EPCTRL_BUFSIZE, E_OPTIONS, E_OPTIONS_BASE, SZS_CONTRAAX_STR, SZS_COUNTERSAT_STR,
+        SZS_FAILURE_STR, SZS_GAVEUP_STR, SZS_SATSTR_STR, SZS_THEOREM_STR, SZS_UNSAT_STR,
     };
     use crate::basics::simple_stuff::ProverResult;
     use crate::control::esession::{Descriptor, DescriptorInterestSet, SessionProcessSet};
+    use std::process::Command;
 
     #[test]
     fn result_table_matches_c_surface() {
@@ -383,6 +562,7 @@ mod tests {
 
         assert_eq!(control.pid(), None);
         assert_eq!(control.descriptor(), None);
+        assert!(!control.has_child());
         assert_eq!(control.input_file(), None);
         assert_eq!(control.name(), "worker");
         assert_eq!(control.start_time(), 0);
@@ -498,5 +678,67 @@ mod tests {
             String::from_utf8(output).unwrap(),
             "% No proof found by failure\n"
         );
+    }
+
+    #[test]
+    fn spawn_command_parses_pid_line_and_reads_status_lines() {
+        let mut control = EPCtrl::spawn_command(
+            pid_status_command("% SZS status Unsatisfiable"),
+            "spawned",
+            None,
+            3,
+        )
+        .unwrap();
+        let mut buffer = String::with_capacity(EPCTRL_BUFSIZE);
+
+        assert_eq!(control.pid(), Some(123));
+        assert!(control.descriptor().is_some());
+        assert!(control.has_child());
+        assert!(control.output().view().contains("% Pid: 123"));
+
+        assert!(!control.read_result_line(&mut buffer).unwrap());
+        assert_eq!(control.result(), ProverResult::Unsatisfiable);
+        assert!(control.read_result_line(&mut buffer).unwrap());
+        assert_eq!(control.result(), ProverResult::Unsatisfiable);
+        control.cleanup(false).unwrap();
+        assert!(!control.has_child());
+    }
+
+    #[test]
+    fn spawn_command_rejects_missing_pid_line() {
+        let error = EPCtrl::spawn_command(no_pid_command(), "bad", None, 3).unwrap_err();
+        assert_eq!(
+            error.code(),
+            crate::basics::error::ErrorCode::INTERFACE_ERROR
+        );
+        assert_eq!(error.message(), "Cannot get eprover PID");
+    }
+
+    #[cfg(windows)]
+    fn pid_status_command(status: &str) -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", &format!("echo % Pid: 123& echo {status}")]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn pid_status_command(status: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", &format!("printf '%s\\n' '% Pid: 123' '{status}'")]);
+        command
+    }
+
+    #[cfg(windows)]
+    fn no_pid_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "echo no pid"]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn no_pid_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf '%s\\n' 'no pid'"]);
+        command
     }
 }
