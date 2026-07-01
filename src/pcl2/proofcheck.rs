@@ -2,6 +2,7 @@
 
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_HYPOTHESIS;
 use crate::clauses::clausesets::ClauseSet;
@@ -20,6 +21,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs::{self, File};
+use std::io::Write as IoWrite;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -288,6 +290,28 @@ pub fn run_prover_invocation(invocation: &ProverInvocation) -> Result<bool, Diag
     }
 }
 
+/// C `pcl_run_prover` output side effects over an explicit invocation.
+///
+/// # Errors
+///
+/// Returns diagnostics for output writes, temporary-file handling, or process
+/// spawning/output collection failures.
+pub fn run_prover_invocation_with_output(
+    output: &mut (impl IoWrite + ?Sized),
+    output_level: i64,
+    invocation: &ProverInvocation,
+) -> Result<bool, Diagnostic> {
+    let problem_file = temp_file_name()?;
+    let result =
+        run_prover_invocation_with_file_and_output(output, output_level, invocation, &problem_file);
+    let cleanup = temp_file_remove(&problem_file);
+
+    match (result, cleanup) {
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(found), Ok(_)) => Ok(found),
+    }
+}
+
 /// Initial C `PCLStepCheck` port.
 ///
 /// `NoProver` and `Setheo` remain unchecked because the C proof checker has no
@@ -370,6 +394,47 @@ pub fn protocol_check(
     Ok(summary)
 }
 
+/// C `PCLProtCheck` with explicit `GlobalOut`/`OutputLevel` rendering.
+///
+/// # Errors
+///
+/// Returns diagnostics from step rendering, check generation, prover
+/// invocation, or output writes.
+pub fn protocol_check_with_output(
+    output: &mut (impl IoWrite + ?Sized),
+    output_level: i64,
+    protocol: &mut PclProtocol,
+    prover: ProverType,
+    executable: Option<&str>,
+    time_limit: i64,
+) -> Result<PclCheckSummary, Diagnostic> {
+    let mut summary = PclCheckSummary::default();
+    for id in protocol.step_ids() {
+        if output_level != 0 {
+            let Some(step) = protocol.find_step(&id).cloned() else {
+                return Err(proofcheck_error("PCL proofcheck step not found"));
+            };
+            let rendered =
+                step.print_extra_string(protocol.term_bank_mut(), ProblemType::FirstOrder, false)?;
+            proofcheck_write_all(
+                output,
+                format!("{DEFAULT_COMCHAR_RAW} Checking {rendered}\n").as_bytes(),
+            )?;
+        }
+
+        let check = step_check_with_runner(
+            protocol,
+            &id,
+            prover,
+            executable,
+            time_limit,
+            |invocation| run_prover_invocation_with_output(output, output_level, invocation),
+        )?;
+        update_summary_and_write_check_result(output, output_level, &mut summary, check)?;
+    }
+    Ok(summary)
+}
+
 fn step_clause(step: &PclStep) -> Option<&Clause> {
     match step.logic() {
         PclStepLogic::Clause(clause) => Some(clause),
@@ -381,13 +446,66 @@ fn run_prover_invocation_with_file(
     invocation: &ProverInvocation,
     problem_file: &Path,
 ) -> Result<bool, Diagnostic> {
+    write_prover_problem_file(invocation, problem_file)?;
+    let output = execute_prover_invocation(invocation, problem_file)?;
+
+    Ok(prover_output_contains_success_marker(
+        &output,
+        &invocation.success_marker,
+    ))
+}
+
+fn run_prover_invocation_with_file_and_output(
+    output: &mut (impl IoWrite + ?Sized),
+    output_level: i64,
+    invocation: &ProverInvocation,
+    problem_file: &Path,
+) -> Result<bool, Diagnostic> {
+    write_prover_problem_file(invocation, problem_file)?;
+    if output_level > 1 {
+        let display = prover_display_command(invocation, problem_file);
+        proofcheck_write_all(
+            output,
+            format!("{DEFAULT_COMCHAR_RAW} Running {display}\n").as_bytes(),
+        )?;
+    }
+
+    let prover_output = execute_prover_invocation(invocation, problem_file)?;
+    if output_level >= 3 {
+        write_prover_output_trace(output, &prover_output)?;
+    }
+
+    let found = prover_output_contains_success_marker(&prover_output, &invocation.success_marker);
+    if !found {
+        proofcheck_write_all(
+            output,
+            format!("{DEFAULT_COMCHAR_RAW} ------------Problem begin--------------\n").as_bytes(),
+        )?;
+        proofcheck_write_all(output, invocation.problem.as_bytes())?;
+        proofcheck_write_all(
+            output,
+            format!("{DEFAULT_COMCHAR_RAW} ------------Problem end----------------\n").as_bytes(),
+        )?;
+    }
+    Ok(found)
+}
+
+fn write_prover_problem_file(
+    invocation: &ProverInvocation,
+    problem_file: &Path,
+) -> Result<(), Diagnostic> {
     fs::write(problem_file, invocation.problem.as_bytes()).map_err(|error| {
         proofcheck_file_error(format!(
             "Could not write proofcheck problem file {}: {error}",
             problem_file.display()
         ))
-    })?;
+    })
+}
 
+fn execute_prover_invocation(
+    invocation: &ProverInvocation,
+    problem_file: &Path,
+) -> Result<Vec<u8>, Diagnostic> {
     let mut command = Command::new(&invocation.executable);
     command.args(&invocation.args);
     match invocation.problem_file_use {
@@ -415,14 +533,50 @@ fn run_prover_invocation_with_file(
         ))
     })?;
 
-    Ok(prover_output_contains_success_marker(
-        &output.stdout,
-        &invocation.success_marker,
-    ))
+    Ok(output.stdout)
 }
 
 fn prover_output_contains_success_marker(output: &[u8], success_marker: &str) -> bool {
     String::from_utf8_lossy(output).contains(success_marker)
+}
+
+fn prover_display_command(invocation: &ProverInvocation, problem_file: &Path) -> String {
+    let mut output = invocation.executable.clone();
+    for arg in &invocation.args {
+        output.push(' ');
+        output.push_str(arg);
+    }
+    match invocation.problem_file_use {
+        ProverProblemFileUse::Argument => {
+            output.push(' ');
+            output.push_str(&problem_file.display().to_string());
+        }
+        ProverProblemFileUse::Stdin => {
+            output.push_str(" < ");
+            output.push_str(&problem_file.display().to_string());
+        }
+    }
+    if invocation.suppress_stderr {
+        output.push_str(" 2> /dev/null");
+    }
+    output
+}
+
+fn write_prover_output_trace(
+    output: &mut (impl IoWrite + ?Sized),
+    prover_output: &[u8],
+) -> Result<(), Diagnostic> {
+    let rendered = String::from_utf8_lossy(prover_output);
+    if rendered.is_empty() {
+        return Ok(());
+    }
+    for line in rendered.split_inclusive('\n') {
+        proofcheck_write_all(output, format!("{DEFAULT_COMCHAR_RAW}> {line}").as_bytes())?;
+    }
+    if !rendered.ends_with('\n') {
+        proofcheck_write_all(output, b"\n")?;
+    }
+    Ok(())
 }
 
 fn otter_clause_string(clause: &Clause, bank: &TermBank) -> String {
@@ -578,14 +732,77 @@ fn proofcheck_system_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::SYSTEM_ERROR, message)
 }
 
+fn proofcheck_write_error(error: &std::io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("Error writing output: {error}"),
+    )
+}
+
+fn proofcheck_write_all(
+    output: &mut (impl IoWrite + ?Sized),
+    bytes: &[u8],
+) -> Result<(), Diagnostic> {
+    output
+        .write_all(bytes)
+        .map_err(|error| proofcheck_write_error(&error))
+}
+
+fn update_summary_and_write_check_result(
+    output: &mut (impl IoWrite + ?Sized),
+    output_level: i64,
+    summary: &mut PclCheckSummary,
+    check: PclCheckType,
+) -> Result<(), Diagnostic> {
+    match check {
+        PclCheckType::ByAssumption => {
+            if output_level >= 1 {
+                proofcheck_write_all(
+                    output,
+                    format!("{DEFAULT_COMCHAR_RAW} Checked (by assumption)\n\n").as_bytes(),
+                )?;
+            }
+            summary.checked += 1;
+        }
+        PclCheckType::Ok => {
+            if output_level >= 1 {
+                proofcheck_write_all(
+                    output,
+                    format!("{DEFAULT_COMCHAR_RAW} Checked (by prover)\n\n").as_bytes(),
+                )?;
+            }
+            summary.checked += 1;
+        }
+        PclCheckType::Fail => {
+            if output_level >= 1 {
+                proofcheck_write_all(
+                    output,
+                    format!("{DEFAULT_COMCHAR_RAW} FAILED\n\n").as_bytes(),
+                )?;
+            }
+        }
+        PclCheckType::NotImplemented => {
+            if output_level >= 1 {
+                proofcheck_write_all(
+                    output,
+                    format!("{DEFAULT_COMCHAR_RAW} Check not implemented, assuming true!\n\n")
+                        .as_bytes(),
+                )?;
+            }
+            summary.unchecked += 1;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         collect_preconditions, dfg_clause_set_string, dfg_signature_string, eprover_problem_string,
         generate_check, neg_skolemize_clause, otter_clause_set_string, otter_problem_string,
-        protocol_check, prover_invocation_for_problem, run_prover_invocation, spass_problem_string,
-        step_check, step_check_with_runner, PclCheckType, ProverInvocation, ProverProblemFileUse,
-        ProverType,
+        protocol_check, protocol_check_with_output, prover_invocation_for_problem,
+        run_prover_invocation, run_prover_invocation_with_output, spass_problem_string, step_check,
+        step_check_with_runner, PclCheckType, ProverInvocation, ProverProblemFileUse, ProverType,
     };
     use crate::basics::defines::DEFAULT_COMCHAR_RAW;
     use crate::basics::simple_stuff::ProblemType;
@@ -926,6 +1143,26 @@ mod tests {
     }
 
     #[test]
+    fn run_prover_invocation_with_output_traces_and_dumps_failed_problem() {
+        let _guard = temp_file_test_lock();
+        fs::create_dir_all(target_dir()).unwrap();
+        let _tmpdir = set_tmpdir(&target_dir());
+        let mut invocation = stdout_copy_invocation(ProverProblemFileUse::Argument);
+        invocation.success_marker = "MISSING-SUCCESS".to_owned();
+        let mut output = Vec::new();
+
+        assert!(!run_prover_invocation_with_output(&mut output, 3, &invocation).unwrap());
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("% Running "));
+        assert!(output.contains("%> payload\n"));
+        assert!(output.contains("%> PROOF-SUCCESS\n"));
+        assert!(output.contains("% ------------Problem begin--------------\n"));
+        assert!(output.contains("payload\nPROOF-SUCCESS\n"));
+        assert!(output.contains("% ------------Problem end----------------\n"));
+    }
+
+    #[test]
     fn step_check_uses_external_runner_result_for_supported_provers() {
         let mut protocol = parse_protocol("1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1");
         let mut seen_invocation = None;
@@ -961,6 +1198,47 @@ mod tests {
             .unwrap(),
             PclCheckType::Fail
         );
+    }
+
+    #[test]
+    fn protocol_check_with_output_reports_progress_and_results() {
+        let mut protocol = parse_protocol(
+            "1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1\n3 : : [++r(a)] : split(2)",
+        );
+        let mut output = Vec::new();
+
+        let summary = protocol_check_with_output(
+            &mut output,
+            1,
+            &mut protocol,
+            ProverType::NoProver,
+            None,
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(summary.checked, 1);
+        assert_eq!(summary.unchecked, 2);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("% Checking       1 :  : [++p(a)] : initial\n"));
+        assert!(output.contains("% Checked (by assumption)\n\n"));
+        assert!(output.contains("% Checking       2 :  : [++q(a)] : 1\n"));
+        assert!(output.contains("% Check not implemented, assuming true!\n\n"));
+        assert!(output.contains("% Checking       3 :  : [++r(a)] : split(2)\n"));
+
+        let mut protocol = parse_protocol("1 : : [++p(a)] : initial");
+        let mut silent = Vec::new();
+        let summary = protocol_check_with_output(
+            &mut silent,
+            0,
+            &mut protocol,
+            ProverType::NoProver,
+            None,
+            10,
+        )
+        .unwrap();
+        assert_eq!(summary.checked, 1);
+        assert!(silent.is_empty());
     }
 
     #[test]
