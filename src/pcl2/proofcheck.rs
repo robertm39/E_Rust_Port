@@ -4,12 +4,19 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_HYPOTHESIS;
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::eqn::Eqn;
+use crate::clauses::eqn::{eqn_string, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
+use crate::inout::scanner::IoFormat;
 use crate::pcl2::expressions::PclOpCode;
 use crate::pcl2::idents::PclId;
 use crate::pcl2::protocol::PclProtocol;
 use crate::pcl2::steps::{PclStep, PclStepLogic};
+use crate::terms::functypes::FunCode;
+use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 pub const E_EXEC_DEFAULT: &str = "eprover";
 pub const OTTER_EXEC_DEFAULT: &str = "otter";
@@ -122,6 +129,85 @@ pub fn generate_check(
     Ok(Some(set))
 }
 
+/// C `pcl_verify_eprover` problem-file body.
+#[must_use]
+pub fn eprover_problem_string(problem: &ClauseSet, bank: &TermBank) -> String {
+    problem.print_tptp_format_string(bank)
+}
+
+/// C `clause_set_print_otter`.
+#[must_use]
+pub fn otter_clause_set_string(problem: &ClauseSet, bank: &TermBank) -> String {
+    let mut output = String::new();
+    for clause in problem.iter() {
+        output.push_str(&otter_clause_string(clause, bank));
+        output.push('\n');
+    }
+    output
+}
+
+/// C `pcl_verify_otter` problem-file body.
+#[must_use]
+pub fn otter_problem_string(problem: &ClauseSet, bank: &TermBank, time_limit: i64) -> String {
+    let mut output = format!(
+        "set(prolog_style_variables).\n\
+         clear(print_kept).\n\
+         clear(print_new_demod).\n\
+         clear(print_back_demod).\n\
+         clear(print_back_sub).\n\
+         set(auto).\n\
+         set(input_sos_first).\n\
+         assign(max_seconds, {time_limit}).\n\n\
+         assign(max_mem, 100000).\n\n\
+         list(usable).\n\n\
+         equal(X,X).\n",
+    );
+    output.push_str(&otter_clause_set_string(problem, bank));
+    output.push_str("end_of_list.\n");
+    output
+}
+
+/// C `sig_print_dfg`.
+#[must_use]
+pub fn dfg_signature_string(problem: &ClauseSet, signature: &Signature) -> String {
+    let symbol_distribution = symbol_distribution(problem, signature);
+    let mut output = String::from("list_of_symbols.\nfunctions[(spass_hack,0)");
+    append_dfg_symbol_list(&mut output, signature, &symbol_distribution, false);
+    output.push_str("].\npredicates[(spass_pred_dummy,0)");
+    append_dfg_symbol_list(&mut output, signature, &symbol_distribution, true);
+    output.push_str("].\nend_of_list.\n");
+    output
+}
+
+/// C `clause_set_print_dfg`.
+#[must_use]
+pub fn dfg_clause_set_string(problem: &ClauseSet, bank: &TermBank) -> String {
+    let mut output = String::new();
+    for clause in problem.iter() {
+        output.push_str(&dfg_clause_string(clause, bank));
+        output.push('\n');
+    }
+    output
+}
+
+/// C `pcl_verify_spass` problem-file body.
+#[must_use]
+pub fn spass_problem_string(problem: &ClauseSet, bank: &TermBank, time_limit: i64) -> String {
+    let mut output = String::from("begin_problem(Unknown).\n");
+    output.push_str(&dfg_signature_string(problem, bank.signature()));
+    output.push_str("list_of_clauses(axioms,cnf).\n");
+    output.push_str(&dfg_clause_set_string(problem, bank));
+    let _ = write!(
+        output,
+        "end_of_list.\n\
+         list_of_settings(SPASS).\n\
+         set_flag(TimeLimit, {time_limit}).\n\
+         end_of_list.\n\
+         end_problem.\n"
+    );
+    output
+}
+
 /// Initial C `PCLStepCheck` port.
 ///
 /// External prover execution is intentionally reported as not implemented in
@@ -187,6 +273,147 @@ fn step_clause(step: &PclStep) -> Option<&Clause> {
     }
 }
 
+fn otter_clause_string(clause: &Clause, bank: &TermBank) -> String {
+    if clause.is_empty() {
+        return "$F.".to_owned();
+    }
+
+    let mut output = String::new();
+    let mut literals = clause.literals().as_slice().iter();
+    if let Some(first) = literals.next() {
+        output.push_str(&otter_eqn_string(first, bank));
+        for literal in literals {
+            output.push_str("|\n");
+            output.push_str(&otter_eqn_string(literal, bank));
+        }
+        output.push_str(".\n");
+    }
+    output
+}
+
+fn otter_eqn_string(literal: &Eqn, bank: &TermBank) -> String {
+    if literal.is_equ_lit(bank) {
+        if literal.is_positive() {
+            return eqn_string(bank, literal, false, true, EqnPrintOptions::default());
+        }
+        return format!(
+            "-{}",
+            eqn_string(bank, literal, true, true, EqnPrintOptions::default())
+        );
+    }
+
+    if literal.left() == bank.true_term() {
+        debug_assert_eq!(literal.right(), bank.true_term());
+        if literal.is_positive() {
+            return "$T".to_owned();
+        }
+        return "$F".to_owned();
+    }
+
+    let mut output = String::new();
+    output.push(if literal.is_negative() { '-' } else { ' ' });
+    output.push_str(&bank.term_string(literal.left(), true));
+    output
+}
+
+fn dfg_clause_string(clause: &Clause, bank: &TermBank) -> String {
+    let mut output = String::from("clause(");
+    let mut variables = BTreeMap::new();
+    let variable_count = clause.collect_variables(&mut variables);
+    if variable_count != 0 {
+        let mut variables = variables.into_values().collect::<Vec<_>>();
+        variables.sort_by_key(|variable| Reverse(variable.f_code()));
+        output.push_str("forall([");
+        for (index, variable) in variables.iter().enumerate() {
+            if index != 0 {
+                output.push(',');
+            }
+            output.push_str(&bank.term_string(variable, true));
+        }
+        output.push_str("],");
+    }
+
+    output.push_str("or(");
+    let mut literals = clause.literals().as_slice().iter();
+    if let Some(first) = literals.next() {
+        output.push_str(&dfg_eqn_string(first, bank));
+        for literal in literals {
+            output.push(',');
+            output.push_str(&dfg_eqn_string(literal, bank));
+        }
+    } else {
+        output.push_str("not(equal(spass_hack,spass_hack))");
+    }
+    output.push(')');
+    output.push(if variable_count != 0 { ')' } else { ' ' });
+    let _ = write!(output, ", c{} ).", clause.ident());
+    output
+}
+
+fn dfg_eqn_string(literal: &Eqn, bank: &TermBank) -> String {
+    let mut output = String::new();
+    if literal.is_negative() {
+        output.push_str("not(");
+    }
+    if literal.left() == bank.true_term() {
+        debug_assert_eq!(literal.right(), bank.true_term());
+        output.push_str("equal(spass_hack,spass_hack)");
+    } else {
+        output.push_str(&eqn_string(
+            bank,
+            literal,
+            literal.is_negative(),
+            true,
+            EqnPrintOptions {
+                output_format: IoFormat::Lop,
+                use_infix: false,
+                ..EqnPrintOptions::default()
+            },
+        ));
+    }
+    if literal.is_negative() {
+        output.push(')');
+    }
+    output
+}
+
+fn symbol_distribution(problem: &ClauseSet, signature: &Signature) -> Vec<i64> {
+    let len = usize::try_from(signature.f_count() + 1).expect("signature size fits usize");
+    let mut distribution = vec![0; len];
+    for clause in problem.iter() {
+        clause.add_symbol_distribution(&mut distribution);
+    }
+    distribution
+}
+
+fn append_dfg_symbol_list(
+    output: &mut String,
+    signature: &Signature,
+    symbol_distribution: &[i64],
+    predicates: bool,
+) {
+    for f_code in (signature.internal_symbols() + 1)..=signature.f_count() {
+        if symbol_is_used(symbol_distribution, f_code)
+            && signature.is_predicate(f_code) == predicates
+        {
+            let name = signature
+                .find_name(f_code)
+                .expect("valid f-code has a printable name");
+            let arity = signature
+                .find_arity(f_code)
+                .expect("valid f-code has an arity");
+            let _ = write!(output, ",({name},{arity})");
+        }
+    }
+}
+
+fn symbol_is_used(symbol_distribution: &[i64], f_code: FunCode) -> bool {
+    usize::try_from(f_code)
+        .ok()
+        .and_then(|index| symbol_distribution.get(index))
+        .is_some_and(|count| *count != 0)
+}
+
 fn proofcheck_error(message: &str) -> Diagnostic {
     Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
 }
@@ -194,12 +421,15 @@ fn proofcheck_error(message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_preconditions, generate_check, neg_skolemize_clause, protocol_check, step_check,
-        PclCheckType, ProverType,
+        collect_preconditions, dfg_clause_set_string, dfg_signature_string, eprover_problem_string,
+        generate_check, neg_skolemize_clause, otter_clause_set_string, otter_problem_string,
+        protocol_check, spass_problem_string, step_check, PclCheckType, ProverType,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::pcl2::idents::PclId;
     use crate::pcl2::protocol::PclProtocol;
@@ -295,6 +525,91 @@ mod tests {
         assert!(generate_check(&mut protocol, &parse_id("1"))
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn eprover_problem_string_delegates_to_tptp_clause_set_rendering() {
+        let mut protocol = parse_protocol("1 : : [++p(a),--q(a)] : initial\n2 : : [++r(a)] : 1");
+
+        let problem = generate_check(&mut protocol, &parse_id("2"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            eprover_problem_string(&problem, protocol.term_bank()),
+            problem.print_tptp_format_string(protocol.term_bank())
+        );
+    }
+
+    #[test]
+    fn otter_problem_string_matches_c_header_and_clause_layout() {
+        let mut protocol = parse_protocol("1 : : [++p(a),--q(a)] : initial\n2 : : [++r(a)] : 1");
+        let problem = generate_check(&mut protocol, &parse_id("2"))
+            .unwrap()
+            .unwrap();
+
+        let rendered = otter_problem_string(&problem, protocol.term_bank(), 7);
+
+        assert!(rendered.starts_with("set(prolog_style_variables).\nclear(print_kept).\n"));
+        assert!(rendered.contains("assign(max_seconds, 7).\n\nassign(max_mem, 100000).\n\n"));
+        assert!(rendered.contains("list(usable).\n\nequal(X,X).\n"));
+        assert!(rendered.contains(" p(a)|\n-q(a).\n\n"));
+        assert!(rendered.contains("-r(a).\n\n"));
+        assert!(rendered.ends_with("end_of_list.\n"));
+    }
+
+    #[test]
+    fn spass_problem_string_matches_c_dfg_wrapper_and_symbol_lists() {
+        let mut protocol = parse_protocol("1 : : [++p(X),--q(X)] : initial\n2 : : [++r(a)] : 1");
+        let problem = generate_check(&mut protocol, &parse_id("2"))
+            .unwrap()
+            .unwrap();
+
+        let signature = dfg_signature_string(&problem, protocol.term_bank().signature());
+        let clauses = dfg_clause_set_string(&problem, protocol.term_bank());
+        let rendered = spass_problem_string(&problem, protocol.term_bank(), 11);
+
+        assert!(signature.starts_with("list_of_symbols.\nfunctions[(spass_hack,0)"));
+        assert!(signature.contains(",(a,0)"));
+        assert!(signature.contains("predicates[(spass_pred_dummy,0)"));
+        assert!(signature.contains(",(p,1)"));
+        assert!(signature.contains(",(q,1)"));
+        assert!(signature.contains(",(r,1)"));
+        assert!(clauses.contains("forall([X1],or(p(X1),not(q(X1))))"));
+        assert!(clauses.contains("or(not(r(a)))"));
+        assert!(rendered.starts_with("begin_problem(Unknown).\nlist_of_symbols.\n"));
+        assert!(rendered.contains("list_of_clauses(axioms,cnf).\n"));
+        assert!(rendered.contains("set_flag(TimeLimit, 11).\n"));
+        assert!(rendered.ends_with("end_problem.\n"));
+    }
+
+    #[test]
+    fn otter_and_dfg_render_c_truth_literal_hacks() {
+        let mut protocol = PclProtocol::new().unwrap();
+        let true_term = protocol.term_bank().true_term().clone();
+        let positive = Eqn::alloc(
+            true_term.clone(),
+            true_term.clone(),
+            protocol.term_bank_mut(),
+            true,
+        )
+        .unwrap();
+        let negative = Eqn::alloc(
+            true_term.clone(),
+            true_term,
+            protocol.term_bank_mut(),
+            false,
+        )
+        .unwrap();
+        let set =
+            ClauseSet::from_clauses([Clause::alloc(EqnList::from_vec(vec![positive, negative]))]);
+
+        assert_eq!(
+            otter_clause_set_string(&set, protocol.term_bank()),
+            "$T|\n$F.\n\n"
+        );
+        assert!(dfg_clause_set_string(&set, protocol.term_bank())
+            .contains("or(equal(spass_hack,spass_hack),not(equal(spass_hack,spass_hack)))"));
     }
 
     #[test]
