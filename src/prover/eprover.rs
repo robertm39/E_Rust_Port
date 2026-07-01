@@ -202,8 +202,8 @@ const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
-const THF_REQUIRES_HOL_MESSAGE: &str =
-    "To support HOL reasoning, recompile E using './configure --enable-ho && make rebuild'";
+const THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE: &str =
+    "THF formula requires the full higher-order formula pipeline; this port currently supports only the simple first-order-shaped THF fragment";
 const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
     "Formula has free variables (check parentheses and quantifier precedence)";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
@@ -8232,7 +8232,7 @@ fn parse_tstp_app_encode_entry_list(
         if scanner.test_id("cnf") {
             saw_input_owner = true;
             let _clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
-        } else if scanner.test_id("fof|tff|tcf") {
+        } else if scanner.test_id("fof|tff|tcf|thf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
                 saw_input_owner = true;
                 saw_formula_owner = true;
@@ -8240,13 +8240,11 @@ fn parse_tstp_app_encode_entry_list(
             }
         } else if scanner.test_id("include") {
             parse_app_encode_ignored_include(scanner)?;
-        } else if scanner.test_id("thf") {
-            parse_thf_type_declaration_or_hol_error(scanner, bank)?;
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): --app-encode currently supports cnf clauses and fof/tff/tcf formula entries for TSTP input",
+                    "{}(just read '{}'): --app-encode currently supports cnf clauses and fof/tff/tcf/thf formula entries for TSTP input",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -8348,7 +8346,7 @@ fn parse_tstp_entry_list(
             ) {
                 insert_input_or_watchlist_clause(clauses, watchlist, clause);
             }
-        } else if scanner.test_id("fof|tff|tcf") {
+        } else if scanner.test_id("fof|tff|tcf|thf") {
             let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
@@ -8374,13 +8372,11 @@ fn parse_tstp_entry_list(
                     formula_preprocessing,
                 )?);
             }
-        } else if scanner.test_id("thf") {
-            parse_thf_type_declaration_or_hol_error(scanner, bank)?;
         } else {
             return Err(Diagnostic::new(
                 ErrorCode::SYNTAX_ERROR,
                 format!(
-                    "{}(just read '{}'): TSTP input currently supports cnf clauses, first-order fof/tff/tcf type declarations, THF type declarations, and the temporary atomic/connective-fragment fof/tff/tcf bridge",
+                    "{}(just read '{}'): TSTP input currently supports cnf clauses, fof/tff/tcf/thf type declarations, and the temporary atomic/connective-fragment fof/tff/tcf/thf bridge",
                     token_pos_rep(scanner.current_token()),
                     scanner.current_token().literal()
                 ),
@@ -8405,36 +8401,32 @@ fn insert_input_or_watchlist_clause(
     }
 }
 
-fn parse_thf_type_declaration_or_hol_error(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-) -> Result<(), Diagnostic> {
-    let thf_position = token_pos_rep(scanner.current_token());
-    let thf_literal = scanner.current_token().literal().clone();
-
-    scanner.accept_id("thf")?;
-    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-    scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
-    scanner.accept_tok(TokenType::COMMA)?;
-
-    if !scanner.test_id("type") {
-        return Err(thf_requires_hol_error_at(&thf_position, &thf_literal));
+fn tstp_formula_kind_problem_type(formula_kind: &str) -> ProblemType {
+    if formula_kind == "thf" {
+        ProblemType::HigherOrder
+    } else {
+        ProblemType::FirstOrder
     }
-
-    scanner.accept_id("type")?;
-    scanner.accept_tok(TokenType::COMMA)?;
-    bank.signature_mut()
-        .parse_tff_type_declaration(scanner, ProblemType::HigherOrder)?;
-    parse_simple_tstp_optional_source(scanner)?;
-    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
-    scanner.accept_tok(TokenType::FULLSTOP)?;
-    Ok(())
 }
 
-fn thf_requires_hol_error_at(position: &str, literal: &str) -> Diagnostic {
+fn simple_tstp_formula_unsupported_error(
+    scanner: &Scanner,
+    problem_type: ProblemType,
+) -> Diagnostic {
+    if problem_type == ProblemType::HigherOrder && scanner.test_tok(TokenType::APPLICATION) {
+        return thf_formula_requires_full_pipeline_error(scanner);
+    }
+    simple_fof_unsupported_error(scanner)
+}
+
+fn thf_formula_requires_full_pipeline_error(scanner: &Scanner) -> Diagnostic {
     Diagnostic::new(
         ErrorCode::SYNTAX_ERROR,
-        format!("{position}(just read '{literal}'): {THF_REQUIRES_HOL_MESSAGE}"),
+        format!(
+            "{}(just read '{}'): {THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE}",
+            token_pos_rep(scanner.current_token()),
+            scanner.current_token().literal()
+        ),
     )
 }
 
@@ -8544,7 +8536,8 @@ fn parse_simple_tstp_app_encode_formula(
     bank.vars().clear_ext_names();
 
     let formula_kind = scanner.current_token().literal();
-    scanner.accept_id("fof|tff|tcf")?;
+    let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
@@ -8553,7 +8546,7 @@ fn parse_simple_tstp_app_encode_formula(
         scanner.accept_id("type")?;
         scanner.accept_tok(TokenType::COMMA)?;
         bank.signature_mut()
-            .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+            .parse_tff_type_declaration(scanner, formula_problem_type)?;
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -8570,14 +8563,17 @@ fn parse_simple_tstp_app_encode_formula(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
 
-    let formula_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let formula_type = clause_type_from_identifier(&role, formula_problem_type);
     let formula_position = token_pos_rep(scanner.current_token());
-    let formulas = parse_simple_fof_formulas(scanner, bank)?;
+    let formulas = parse_simple_fof_formulas(scanner, bank, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
-    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
-        return Err(simple_fof_unsupported_error(scanner));
+    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR | TokenType::APPLICATION) {
+        return Err(simple_tstp_formula_unsupported_error(
+            scanner,
+            formula_problem_type,
+        ));
     }
     parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
@@ -8632,7 +8628,8 @@ fn parse_simple_tstp_formula_clause(
     let start_column = usize_to_i64(scanner.current_token().column());
 
     let formula_kind = scanner.current_token().literal();
-    scanner.accept_id("fof|tff|tcf")?;
+    let formula_problem_type = tstp_formula_kind_problem_type(&formula_kind);
+    scanner.accept_id("fof|tff|tcf|thf")?;
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
     let name = scanner.current_token().literal();
     scanner.accept_tok(TokenType::NAME | TokenType::POS_INT | TokenType::SQ_STRING)?;
@@ -8641,7 +8638,7 @@ fn parse_simple_tstp_formula_clause(
         scanner.accept_id("type")?;
         scanner.accept_tok(TokenType::COMMA)?;
         bank.signature_mut()
-            .parse_tff_type_declaration(scanner, ProblemType::FirstOrder)?;
+            .parse_tff_type_declaration(scanner, formula_problem_type)?;
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
@@ -8664,7 +8661,7 @@ fn parse_simple_tstp_formula_clause(
     scanner.accept_tok(TokenType::IDENT)?;
     scanner.accept_tok(TokenType::COMMA)?;
 
-    let mut clause_type = clause_type_from_identifier(&role, ProblemType::FirstOrder);
+    let mut clause_type = clause_type_from_identifier(&role, formula_problem_type);
     let raw_formula_type = clause_type;
     let annotate_question = should_annotate_question(clause_type, formula_preprocessing);
     if annotate_question {
@@ -8675,7 +8672,7 @@ fn parse_simple_tstp_formula_clause(
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
     let formula_position = token_pos_rep(scanner.current_token());
-    let mut formulas = parse_simple_fof_formulas(scanner, bank)?;
+    let mut formulas = parse_simple_fof_formulas(scanner, bank, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
@@ -8693,8 +8690,11 @@ fn parse_simple_tstp_formula_clause(
         formula_preprocessing.fool_unroll_enabled(),
         bank,
     )?;
-    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR) {
-        return Err(simple_fof_unsupported_error(scanner));
+    if scanner.test_tok(TokenType::FOF_BIN_OP | TokenType::EXIST_QUANTOR | TokenType::APPLICATION) {
+        return Err(simple_tstp_formula_unsupported_error(
+            scanner,
+            formula_problem_type,
+        ));
     }
     parse_simple_tstp_optional_source(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
@@ -11230,14 +11230,20 @@ fn parse_simple_old_tptp_fof_quantified_formula(
         let name = scanner.current_token().literal();
         scanner.accept_tok(TokenType::NAME)?;
         bound.push(parse_simple_fof_quantified_variable_declaration(
-            scanner, bank, name,
+            scanner,
+            bank,
+            name,
+            ProblemType::FirstOrder,
         )?);
         while scanner.test_tok(TokenType::COMMA) {
             scanner.accept_tok(TokenType::COMMA)?;
             let name = scanner.current_token().literal();
             scanner.accept_tok(TokenType::NAME)?;
             bound.push(parse_simple_fof_quantified_variable_declaration(
-                scanner, bank, name,
+                scanner,
+                bank,
+                name,
+                ProblemType::FirstOrder,
             )?);
         }
         scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
@@ -11266,18 +11272,20 @@ fn parse_simple_old_tptp_fof_quantified_formula(
 fn parse_simple_fof_formulas(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_connective_formulas(scanner, bank)
+    parse_simple_fof_connective_formulas(scanner, bank, problem_type)
 }
 
 fn parse_simple_fof_connective_formulas(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let formulas = parse_simple_fof_disjunction_chain(scanner, bank)?;
+    let formulas = parse_simple_fof_disjunction_chain(scanner, bank, problem_type)?;
     if scanner.test_tok(TokenType::FOF_LR_IMPL) {
         scanner.accept_tok(TokenType::FOF_LR_IMPL)?;
-        let consequents = parse_simple_fof_implication_operand(scanner, bank)?;
+        let consequents = parse_simple_fof_implication_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Implication {
             antecedents: formulas,
             consequents,
@@ -11285,7 +11293,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::FOF_RL_IMPL) {
         scanner.accept_tok(TokenType::FOF_RL_IMPL)?;
-        let antecedents = parse_simple_fof_implication_operand(scanner, bank)?;
+        let antecedents = parse_simple_fof_implication_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::ReverseImplication {
             antecedents,
             consequents: formulas,
@@ -11293,7 +11301,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::FOF_EQUIV) {
         scanner.accept_tok(TokenType::FOF_EQUIV)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Equivalence {
             left: formulas,
             right,
@@ -11301,7 +11309,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::EQUAL_SIGN) {
         scanner.accept_tok(TokenType::EQUAL_SIGN)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Equivalence {
             left: formulas,
             right,
@@ -11309,7 +11317,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::FOF_XOR) {
         scanner.accept_tok(TokenType::FOF_XOR)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Xor {
             left: formulas,
             right,
@@ -11317,7 +11325,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
         scanner.accept_tok(TokenType::NEG_EQUAL_SIGN)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Xor {
             left: formulas,
             right,
@@ -11325,7 +11333,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::FOF_NAND) {
         scanner.accept_tok(TokenType::FOF_NAND)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Nand {
             left: formulas,
             right,
@@ -11333,7 +11341,7 @@ fn parse_simple_fof_connective_formulas(
     }
     if scanner.test_tok(TokenType::FOF_NOR) {
         scanner.accept_tok(TokenType::FOF_NOR)?;
-        let right = parse_simple_fof_equivalence_operand(scanner, bank)?;
+        let right = parse_simple_fof_equivalence_operand(scanner, bank, problem_type)?;
         return Ok(vec![SimpleFofFormula::Nor {
             left: formulas,
             right,
@@ -11348,28 +11356,31 @@ fn parse_simple_fof_connective_formulas(
 fn parse_simple_fof_implication_operand(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_connective_formulas(scanner, bank)
+    parse_simple_fof_connective_formulas(scanner, bank, problem_type)
 }
 
 fn parse_simple_fof_equivalence_operand(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    parse_simple_fof_connective_formulas(scanner, bank)
+    parse_simple_fof_connective_formulas(scanner, bank, problem_type)
 }
 
 fn parse_simple_fof_disjunction_chain(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let formulas = parse_simple_fof_conjunction_chain(scanner, bank)?;
+    let formulas = parse_simple_fof_conjunction_chain(scanner, bank, problem_type)?;
     if scanner.test_tok(TokenType::FOF_OR) {
         let mut disjuncts = simple_fof_formulas_to_disjuncts(formulas);
         while scanner.test_tok(TokenType::FOF_OR) {
             scanner.accept_tok(TokenType::FOF_OR)?;
             disjuncts.extend(simple_fof_formulas_to_disjuncts(
-                parse_simple_fof_conjunction_chain(scanner, bank)?,
+                parse_simple_fof_conjunction_chain(scanner, bank, problem_type)?,
             ));
         }
         return Ok(vec![SimpleFofFormula::Disjunction(disjuncts)]);
@@ -11380,11 +11391,16 @@ fn parse_simple_fof_disjunction_chain(
 fn parse_simple_fof_conjunction_chain(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    let mut formulas = parse_simple_fof_primary_formula(scanner, bank)?;
+    let mut formulas = parse_simple_fof_primary_formula(scanner, bank, problem_type)?;
     while scanner.test_tok(TokenType::FOF_AND) {
         scanner.accept_tok(TokenType::FOF_AND)?;
-        formulas.extend(parse_simple_fof_primary_formula(scanner, bank)?);
+        formulas.extend(parse_simple_fof_primary_formula(
+            scanner,
+            bank,
+            problem_type,
+        )?);
     }
     Ok(formulas)
 }
@@ -11392,6 +11408,7 @@ fn parse_simple_fof_conjunction_chain(
 fn parse_simple_fof_primary_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
         return Ok(formulas);
@@ -11400,21 +11417,21 @@ fn parse_simple_fof_primary_formula(
         return parse_simple_fof_distinct_formula(scanner, bank);
     }
     if scanner.test_tok(TokenType::EXIST_QUANTOR) {
-        return parse_simple_fof_existential_formula(scanner, bank);
+        return parse_simple_fof_existential_formula(scanner, bank, problem_type);
     }
     let (universal_bound, universal_scope_count) =
-        parse_simple_fof_universal_prefix(scanner, bank)?;
+        parse_simple_fof_universal_prefix(scanner, bank, problem_type)?;
     let formulas = match (|| {
         if scanner.test_tok(TokenType::EXIST_QUANTOR) {
-            parse_simple_fof_existential_formula(scanner, bank)
+            parse_simple_fof_existential_formula(scanner, bank, problem_type)
         } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-            let formulas = parse_simple_fof_connective_formulas(scanner, bank)?;
+            let formulas = parse_simple_fof_connective_formulas(scanner, bank, problem_type)?;
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             Ok(formulas)
         } else if scanner.test_tok(TokenType::TILDE_SIGN) {
             scanner.accept_tok(TokenType::TILDE_SIGN)?;
-            let formulas = parse_simple_fof_primary_formula(scanner, bank)?;
+            let formulas = parse_simple_fof_primary_formula(scanner, bank, problem_type)?;
             Ok(vec![SimpleFofFormula::Negation(formulas)])
         } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
             Ok(formulas)
@@ -11423,7 +11440,7 @@ fn parse_simple_fof_primary_formula(
         } else if let Some(formulas) = parse_simple_fof_fool_term_atom(scanner, bank)? {
             Ok(formulas)
         } else {
-            let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let literal = eqn_fof_parse(scanner, bank, problem_type)?;
             Ok(simple_fof_literal_formulas(vec![literal]))
         }
     })() {
@@ -11469,6 +11486,7 @@ fn simple_fof_wrap_universal_formulas(
 fn parse_simple_fof_universal_prefix(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<(Vec<SimpleFofBoundVariable>, usize), Diagnostic> {
     let mut bound = Vec::new();
     let mut scope_count = 0;
@@ -11481,14 +11499,20 @@ fn parse_simple_fof_universal_prefix(
             let name = scanner.current_token().literal();
             scanner.accept_tok(TokenType::NAME)?;
             bound.push(parse_simple_fof_quantified_variable_declaration(
-                scanner, bank, name,
+                scanner,
+                bank,
+                name,
+                problem_type,
             )?);
             while scanner.test_tok(TokenType::COMMA) {
                 scanner.accept_tok(TokenType::COMMA)?;
                 let name = scanner.current_token().literal();
                 scanner.accept_tok(TokenType::NAME)?;
                 bound.push(parse_simple_fof_quantified_variable_declaration(
-                    scanner, bank, name,
+                    scanner,
+                    bank,
+                    name,
+                    problem_type,
                 )?);
             }
             scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
@@ -11506,6 +11530,7 @@ fn parse_simple_fof_universal_prefix(
 fn parse_simple_fof_existential_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
+    problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     scanner.accept_tok(TokenType::EXIST_QUANTOR)?;
     scanner.accept_tok(TokenType::OPEN_SQUARE)?;
@@ -11515,14 +11540,20 @@ fn parse_simple_fof_existential_formula(
         let name = scanner.current_token().literal();
         scanner.accept_tok(TokenType::NAME)?;
         bound.push(parse_simple_fof_quantified_variable_declaration(
-            scanner, bank, name,
+            scanner,
+            bank,
+            name,
+            problem_type,
         )?);
         while scanner.test_tok(TokenType::COMMA) {
             scanner.accept_tok(TokenType::COMMA)?;
             let name = scanner.current_token().literal();
             scanner.accept_tok(TokenType::NAME)?;
             bound.push(parse_simple_fof_quantified_variable_declaration(
-                scanner, bank, name,
+                scanner,
+                bank,
+                name,
+                problem_type,
             )?);
         }
         scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
@@ -11530,13 +11561,13 @@ fn parse_simple_fof_existential_formula(
 
         let formulas = if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-            let formulas = parse_simple_fof_connective_formulas(scanner, bank)?;
+            let formulas = parse_simple_fof_connective_formulas(scanner, bank, problem_type)?;
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             formulas
         } else if scanner
             .test_tok(TokenType::UNIV_QUANTOR | TokenType::EXIST_QUANTOR | TokenType::TILDE_SIGN)
         {
-            parse_simple_fof_primary_formula(scanner, bank)?
+            parse_simple_fof_primary_formula(scanner, bank, problem_type)?
         } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
             formulas
         } else if scanner.test_id("$distinct") {
@@ -11548,7 +11579,7 @@ fn parse_simple_fof_existential_formula(
                 return Err(simple_fof_unsupported_error(scanner));
             }
 
-            let literal = eqn_fof_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let literal = eqn_fof_parse(scanner, bank, problem_type)?;
             simple_fof_literal_formulas(vec![literal])
         };
         Ok((bound, formulas))
@@ -11570,13 +11601,14 @@ fn parse_simple_fof_quantified_variable_declaration(
     scanner: &mut Scanner,
     bank: &mut TermBank,
     name: String,
+    problem_type: ProblemType,
 ) -> Result<SimpleFofBoundVariable, Diagnostic> {
     if scanner.test_tok(TokenType::COLON) {
         scanner.accept_tok(TokenType::COLON)?;
         let type_ = bank
             .signature_mut()
             .type_bank_mut()
-            .parse_type(scanner, ProblemType::FirstOrder)?;
+            .parse_type(scanner, problem_type)?;
         let variable = bank.vars().ext_name_declare_alloc_sort(&name, &type_);
         return Ok(SimpleFofBoundVariable {
             name,
@@ -11792,7 +11824,7 @@ mod tests {
         ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
         ParamodulationType, PredicateEliminationFlag, PrimEnumMode, SimpleFofBoolEqnReplacement,
         SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -14061,15 +14093,15 @@ mod tests {
     }
 
     #[test]
-    fn run_app_encode_accepts_thf_type_declarations() {
+    fn run_app_encode_accepts_simple_thf_formula() {
         let _guard = global_state_lock();
-        let path = temp_path("app-encode-thf-types");
+        let path = temp_path("app-encode-simple-thf");
         std::fs::write(
             &path,
             "thf(person_type, type, person: $tType).\n\
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
-             fof(ax, axiom, p(a)).\n",
+             thf(ax, axiom, p(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -22588,10 +22620,17 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_thf_with_hol_diagnostic() {
+    fn run_syntax_only_rejects_thf_application_until_full_formula_pipeline() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-thf-requires-hol");
-        std::fs::write(&path, "thf(goal, conjecture, p(a)).\n").unwrap();
+        let path = temp_path("syntax-thf-application-requires-full-pipeline");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(a_type, type, a: person).\n\
+             thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -22604,7 +22643,9 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
-        assert!(error.message().contains(THF_REQUIRES_HOL_MESSAGE));
+        assert!(error
+            .message()
+            .contains(THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -22618,7 +22659,8 @@ mod tests {
             &path,
             "thf(person_type, type, person: $tType).\n\
              thf(p_type, type, p: person > $o, file('types.ax', p_type)).\n\
-             thf(lift_type, type, lift: (person > $o) > $o).\n",
+             thf(lift_type, type, lift: (person > $o) > $o).\n\
+             thf(typed_rule, axiom, ![X: person]:p(X)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -22637,6 +22679,37 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             "\n% Parsing successful!\n% SZS status Unknown\n"
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_simple_thf_atomic_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("simple-thf-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p(a)).\n\
+             thf(goal, conjecture, p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
