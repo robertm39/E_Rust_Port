@@ -4,7 +4,7 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
     clause_pcl_parse, clause_pcl_string, clause_print_lop_format_string,
-    clause_print_tptp_format_string, clause_print_tstp_core_string, Clause,
+    clause_print_tptp_format_string, clause_print_tstp_core_string, clause_tstp_string, Clause,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_TYPE_1, CP_TYPE_2, CP_TYPE_3, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
@@ -307,6 +307,34 @@ impl Default for PclStepParseOptions {
         Self {
             problem_type: ProblemType::FirstOrder,
             support_shell_pcl: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PclExamplePrintOptions {
+    pub id: i64,
+    pub proof_steps: i64,
+    pub total_steps: i64,
+    pub format: ProofDocOutputFormat,
+    pub problem_type: ProblemType,
+}
+
+impl PclExamplePrintOptions {
+    #[must_use]
+    pub const fn new(
+        id: i64,
+        proof_steps: i64,
+        total_steps: i64,
+        format: ProofDocOutputFormat,
+        problem_type: ProblemType,
+    ) -> Self {
+        Self {
+            id,
+            proof_steps,
+            total_steps,
+            format,
+            problem_type,
         }
     }
 }
@@ -769,6 +797,38 @@ impl PclStep {
         )
     }
 
+    /// C `PCLStepPrintExample` with explicit `OutputFormat` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from TSTP clause rendering.
+    ///
+    /// # Panics
+    ///
+    /// Panics for FOF steps, matching the C assertion.
+    pub fn print_example_format_string(
+        &self,
+        bank: &TermBank,
+        options: PclExamplePrintOptions,
+    ) -> Result<String, Diagnostic> {
+        assert!(
+            !self.is_fof(),
+            "PCLStepPrintExample requires a clausal step"
+        );
+        if self.is_shell() {
+            return Ok(self.shell_omitted_string());
+        }
+        let PclStepLogic::Clause(clause) = &self.logic else {
+            return Ok(self.shell_omitted_string());
+        };
+        Ok(self.example_string_with_clause(
+            &clause_example_body_string(bank, clause, options.format, options.problem_type)?,
+            options.id,
+            options.proof_steps,
+            options.total_steps,
+        ))
+    }
+
     /// C `PCLStepPrintExample`, including the shell-step warning side channel.
     ///
     /// # Errors
@@ -789,6 +849,27 @@ impl PclStep {
     ) -> Result<String, Diagnostic> {
         self.write_shell_pcl_warning(warning, program_name)?;
         Ok(self.print_example_string(bank, id, proof_steps, total_steps))
+    }
+
+    /// C `PCLStepPrintExample`, including explicit `OutputFormat` dispatch and
+    /// the shell-step warning side channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from warning writes or TSTP clause rendering.
+    ///
+    /// # Panics
+    ///
+    /// Panics for FOF steps, matching the C assertion.
+    pub fn print_example_format_with_warning_string(
+        &self,
+        warning: &mut (impl IoWrite + ?Sized),
+        program_name: &str,
+        bank: &TermBank,
+        options: PclExamplePrintOptions,
+    ) -> Result<String, Diagnostic> {
+        self.write_shell_pcl_warning(warning, program_name)?;
+        self.print_example_format_string(bank, options)
     }
 
     #[must_use]
@@ -819,6 +900,30 @@ impl PclStep {
     fn shell_omitted_string(&self) -> String {
         format!("# Step {} omitted (Shell)\n", self.id.print_string())
     }
+
+    fn example_string_with_clause(
+        &self,
+        clause_text: &str,
+        id: i64,
+        proof_steps: i64,
+        total_steps: i64,
+    ) -> String {
+        format!(
+            "{id:4}:({}, {:.6},{:.6},{:.6},{:.6}):{}",
+            self.tree_data.proof_distance,
+            c_example_ratio(self.tree_data.contrib_simpl_refs, proof_steps + 1),
+            c_example_ratio(
+                self.tree_data.useless_simpl_refs,
+                total_steps - proof_steps + 1,
+            ),
+            c_example_ratio(self.tree_data.contrib_gen_refs, proof_steps + 1),
+            c_example_ratio(
+                self.tree_data.useless_gen_refs,
+                total_steps - proof_steps + 1,
+            ),
+            clause_text
+        )
+    }
 }
 
 /// C `PCLStepIdCompare`, parameterized over already-ported step cells.
@@ -840,16 +945,30 @@ fn step_write_error(error: &std::io::Error) -> Diagnostic {
     )
 }
 
+fn clause_example_body_string(
+    bank: &TermBank,
+    clause: &Clause,
+    format: ProofDocOutputFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match format {
+        ProofDocOutputFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        ProofDocOutputFormat::Tstp => clause_tstp_string(bank, clause, true, true, problem_type),
+        _ => Ok(clause_print_lop_format_string(bank, clause, true)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         external_type_string, parse_external_type, pcl_step_id_compare, prop_to_tstp_type,
-        step_id_compare, PclStep, PclStepLogic, PclStepParseOptions, PclStepTreeData,
-        PCL_IS_EXAMPLE, PCL_IS_FINAL, PCL_IS_FOF_STEP, PCL_IS_INITIAL, PCL_IS_LEMMA, PCL_IS_MARKED,
-        PCL_IS_PROOF_STEP, PCL_IS_SHELL_STEP, PCL_NO_PROP, PCL_NO_WEIGHT, PCL_PROOF_DIST_DEFAULT,
-        PCL_PROOF_DIST_INFINITY, PCL_PROOF_DIST_UNKNOWN, PCL_TYPE_1, PCL_TYPE_2, PCL_TYPE_3,
-        PCL_TYPE_AXIOM, PCL_TYPE_CONJECTURE, PCL_TYPE_HYPOTHESIS, PCL_TYPE_MASK,
-        PCL_TYPE_NEG_CONJECTURE, PCL_TYPE_QUESTION, PCL_TYPE_UNKNOWN, SHELL_PCL_STEP_WARNING,
+        step_id_compare, PclExamplePrintOptions, PclStep, PclStepLogic, PclStepParseOptions,
+        PclStepTreeData, PCL_IS_EXAMPLE, PCL_IS_FINAL, PCL_IS_FOF_STEP, PCL_IS_INITIAL,
+        PCL_IS_LEMMA, PCL_IS_MARKED, PCL_IS_PROOF_STEP, PCL_IS_SHELL_STEP, PCL_NO_PROP,
+        PCL_NO_WEIGHT, PCL_PROOF_DIST_DEFAULT, PCL_PROOF_DIST_INFINITY, PCL_PROOF_DIST_UNKNOWN,
+        PCL_TYPE_1, PCL_TYPE_2, PCL_TYPE_3, PCL_TYPE_AXIOM, PCL_TYPE_CONJECTURE,
+        PCL_TYPE_HYPOTHESIS, PCL_TYPE_MASK, PCL_TYPE_NEG_CONJECTURE, PCL_TYPE_QUESTION,
+        PCL_TYPE_UNKNOWN, SHELL_PCL_STEP_WARNING,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::inferencedoc::ProofDocOutputFormat;
@@ -1273,6 +1392,51 @@ mod tests {
             step.print_example_string(&bank, 11, 3, 9),
             "  11:(3, 0.500000,0.857143,1.000000,1.142857):p <- ."
         );
+        assert_eq!(
+            step.print_example_format_string(
+                &bank,
+                PclExamplePrintOptions::new(
+                    11,
+                    3,
+                    9,
+                    ProofDocOutputFormat::Pcl,
+                    ProblemType::FirstOrder
+                )
+            )
+            .unwrap(),
+            step.print_example_string(&bank, 11, 3, 9)
+        );
+
+        let tptp_example = step
+            .print_example_format_string(
+                &bank,
+                PclExamplePrintOptions::new(
+                    11,
+                    3,
+                    9,
+                    ProofDocOutputFormat::Tptp,
+                    ProblemType::FirstOrder,
+                ),
+            )
+            .unwrap();
+        assert!(tptp_example
+            .starts_with("  11:(3, 0.500000,0.857143,1.000000,1.142857):input_clause(i_0_"));
+        assert!(tptp_example.ends_with(",axiom,[++p])."));
+
+        let annotated_example = step
+            .print_example_format_string(
+                &bank,
+                PclExamplePrintOptions::new(
+                    11,
+                    3,
+                    9,
+                    ProofDocOutputFormat::Tstp,
+                    ProblemType::FirstOrder,
+                ),
+            )
+            .unwrap();
+        assert!(annotated_example.starts_with("  11:(3, 0.500000,0.857143,1.000000,1.142857):cnf("));
+        assert!(annotated_example.ends_with(", (p))."));
     }
 
     #[test]

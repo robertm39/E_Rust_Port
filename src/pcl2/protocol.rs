@@ -12,8 +12,8 @@ use crate::pcl2::expressions::{
 };
 use crate::pcl2::idents::PclId;
 use crate::pcl2::steps::{
-    pcl_step_id_compare, PclStep, PclStepParseOptions, PclStepProperties, PCL_IS_EXAMPLE,
-    PCL_IS_FOF_STEP, PCL_IS_PROOF_STEP,
+    pcl_step_id_compare, PclExamplePrintOptions, PclStep, PclStepParseOptions, PclStepProperties,
+    PCL_IS_EXAMPLE, PCL_IS_FOF_STEP, PCL_IS_PROOF_STEP,
 };
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -380,6 +380,20 @@ impl PclProtocol {
     /// Returns a diagnostic if the protocol index cannot be represented as a C
     /// `long`-shaped Rust `i64`.
     pub fn print_examples_string(&mut self) -> Result<String, Diagnostic> {
+        self.print_examples_format_string(ProofDocOutputFormat::Lop, ProblemType::FirstOrder)
+    }
+
+    /// C `PCLProtPrintExamples` with explicit `OutputFormat` dispatch for the
+    /// clause body.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from index conversion or TSTP clause rendering.
+    pub fn print_examples_format_string(
+        &mut self,
+        format: ProofDocOutputFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
         let proof_steps = self.count_property(PCL_IS_PROOF_STEP);
         let total_steps = i64::try_from(self.steps.len())
             .map_err(|_| protocol_error("PCL protocol step count overflow"))?;
@@ -388,12 +402,10 @@ impl PclProtocol {
             if step.properties().query(PCL_IS_EXAMPLE) {
                 let id = i64::try_from(index)
                     .map_err(|_| protocol_error("PCL protocol index overflow"))?;
-                output.push_str(&step.print_example_string(
+                output.push_str(&step.print_example_format_string(
                     &self.terms,
-                    id,
-                    proof_steps,
-                    total_steps,
-                ));
+                    PclExamplePrintOptions::new(id, proof_steps, total_steps, format, problem_type),
+                )?);
                 output.push('\n');
             }
         }
@@ -714,6 +726,18 @@ mod tests {
         let examples = protocol.print_examples_string().unwrap();
         assert!(examples.contains("   0:(4, 0.000000,0.000000,0.000000,0.000000):p <- ."));
         assert!(examples.contains("   1:(-1, 0.000000,0.000000,0.000000,0.000000):q <- ."));
+        assert_eq!(
+            protocol
+                .print_examples_format_string(ProofDocOutputFormat::Pcl, ProblemType::FirstOrder)
+                .unwrap(),
+            examples
+        );
+        let tptp_examples = protocol
+            .print_examples_format_string(ProofDocOutputFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap();
+        assert!(tptp_examples
+            .contains("   0:(4, 0.000000,0.000000,0.000000,0.000000):input_clause(i_0_"));
+        assert!(tptp_examples.contains(",axiom,[++p]).\n"));
 
         protocol.delete_property(PCL_IS_MARKED);
         assert_eq!(protocol.count_property(PCL_IS_MARKED), 0);
