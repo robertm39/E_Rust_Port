@@ -1585,7 +1585,7 @@ impl WrappedFormula {
         })
     }
 
-    /// Renders C's `WFormulaTPTPPrint` shape for a formula-backed wrapper.
+    /// Renders C's `WFormulaTPTPPrint` shape for a wrapped formula.
     ///
     /// # Errors
     ///
@@ -1601,11 +1601,6 @@ impl WrappedFormula {
         problem_type: ProblemType,
         keep_input_names: bool,
     ) -> Result<String, Diagnostic> {
-        if self.is_clause {
-            return Err(formula_set_write_error(
-                "WFormulaTPTPPrint clause conversion is not ported",
-            ));
-        }
         let rendered = tformula_tptp_string(
             bank,
             self.formula(),
@@ -3858,6 +3853,31 @@ mod tests {
         assert!(tstp_output.ends_with(")."));
         assert!(incomplete_tstp.starts_with("fof(wf_print_neg, negated_conjecture, "));
         assert!(!incomplete_tstp.ends_with(")."));
+    }
+
+    #[test]
+    fn wrapped_formula_tptp_prints_clause_backed_formula_payload() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "wf_tptp_clause_a");
+        let b = typed_const(&mut bank, "wf_tptp_clause_b");
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            eqn(&mut bank, &a, &b, true),
+            eqn(&mut bank, &b, &a, false),
+        ]));
+        let formula = tformula_clause_encode(&mut bank, &clause, ProblemType::FirstOrder).unwrap();
+        let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+        wrapped.set_is_clause(true);
+        wrapped.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        wrapped.set_info(Some(ClauseInfo::new(Some("wf_tptp_clause"), None, 1, 1)));
+
+        let rendered = wrapped
+            .tptp_string(&mut bank, true, ProblemType::FirstOrder, true)
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "input_formula(wf_tptp_clause,conjecture,(equal(wf_tptp_clause_a, wf_tptp_clause_b)|~equal(wf_tptp_clause_b, wf_tptp_clause_a)))."
+        );
     }
 
     #[test]
