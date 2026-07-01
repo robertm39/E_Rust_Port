@@ -100,4 +100,16 @@ Source files reviewed: `PCL2/pcl_idents.h`, `PCL2/pcl_idents.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/pcl2/idents.rs` ports `PCLIdAlloc`, `PCLIdParse`, `PCLIdPrintFormatted`, `PCLIdPrintTSTP`, and `PCLIdCompare` with the existing Rust scanner.
+- The Rust representation stores identifier components in a `Vec<i64>` and treats the C `NO_PCL_ID_ELEMENT` sentinel as an implicit end marker for comparison.
+- `compare_c_value` preserves the C-shaped return surface by subtracting the first differing elements and returning an `i32`, rather than exposing only a Rust `Ordering`.
+
+### Change Later
+
+- The source comment says identifiers are separated by spaces, but the parser actually accepts fullstop-separated positive integers such as `1.2.3`. Rust follows the parser; update comments only after compatibility is settled.
+- `PCLIdCompare` subtracts `long` elements and then casts the result to `int`; huge identifier components can overflow or truncate on C platforms. Rust uses wrapping subtraction plus `i32` truncation for the compatibility-shaped helper, but a cleaned API should use explicit lexicographic ordering.
+- C represents identifiers as `PDArray` values terminated by `NO_PCL_ID_ELEMENT`. Rust stores only live components; revisit allocation shape only if proof-object identifier parsing shows measurable hot-path sensitivity.
 <!-- END MANUAL REVIEW: c_source_docs -->
