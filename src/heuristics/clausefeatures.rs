@@ -1,8 +1,14 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
-use crate::clauses::clause::{clause_pcl_string, clause_print_lop_format_string, Clause};
-use crate::clauses::eqn::Eqn;
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_pcl_string, clause_print_lop_format_string, clause_print_lop_format_string_with_options,
+    clause_print_tptp_format_string_with_options, clause_write_tstp_with_type_suffixes, Clause,
+};
+use crate::clauses::eqn::{Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::heuristics::varweights::clause_count_ext_symbols as varweight_clause_count_ext_symbols;
+use crate::inout::scanner::IoFormat;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -201,6 +207,55 @@ pub fn clause_line_print_string(bank: &TermBank, clause: &Clause, print_info: bo
     clause_line_string(bank, &clause_text, clause, print_info)
 }
 
+/// Returns the C `ClauseLinePrint` shape with explicit `ClausePrint` dispatch.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects the clause shape.
+pub fn clause_line_print_format_string(
+    bank: &TermBank,
+    clause: &Clause,
+    print_info: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    let options = match output_format {
+        IoFormat::Tptp => EqnPrintOptions::tptp(),
+        IoFormat::Lop | IoFormat::Tstp | IoFormat::Auto => EqnPrintOptions::lop(),
+    };
+    clause_line_print_format_string_with_options(
+        bank,
+        clause,
+        print_info,
+        output_format,
+        problem_type,
+        options,
+    )
+}
+
+/// Returns the C `ClauseLinePrint` shape with caller-provided equation options.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects the clause shape.
+pub fn clause_line_print_format_string_with_options(
+    bank: &TermBank,
+    clause: &Clause,
+    print_info: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    eqn_print_options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    let clause_text = clause_print_for_output_format(
+        bank,
+        clause,
+        output_format,
+        problem_type,
+        eqn_print_options,
+    )?;
+    Ok(clause_line_string(bank, &clause_text, clause, print_info))
+}
+
 #[must_use]
 pub fn clause_line_string_with_comment(
     bank: &TermBank,
@@ -295,6 +350,41 @@ pub fn clause_prop_info_stats_string_with_comment(comment: &str, clause: &Clause
     )
 }
 
+fn clause_print_for_output_format(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    eqn_print_options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string_with_options(
+            bank,
+            clause,
+            eqn_print_options,
+        )),
+        IoFormat::Tstp => {
+            let mut output = String::new();
+            clause_write_tstp_with_type_suffixes(
+                &mut output,
+                bank,
+                clause,
+                true,
+                true,
+                problem_type,
+                eqn_print_options.print_types,
+            )?;
+            Ok(output)
+        }
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string_with_options(
+            bank,
+            clause,
+            true,
+            eqn_print_options,
+        )),
+    }
+}
+
 fn eqn_tptp_depth_info_add(
     bank: &TermBank,
     eqn: &Eqn,
@@ -367,17 +457,20 @@ mod tests {
     use super::{
         clause_add_var_distribution, clause_count_ext_symbols, clause_count_maximal_literals,
         clause_count_maximal_terms, clause_count_singleton_set, clause_count_unorientable_literals,
-        clause_count_variable_set, clause_info_string, clause_line_print_string,
-        clause_line_string, clause_line_string_with_comment, clause_prop_info_print_string,
-        clause_prop_info_stats_string, clause_prop_info_stats_string_with_comment,
-        clause_prop_info_string, clause_prop_info_string_with_comment, clause_tptp_depth_info_add,
-        eqn_add_var_distribution, eqn_list_add_var_distribution, term_add_var_distribution,
+        clause_count_variable_set, clause_info_string, clause_line_print_format_string,
+        clause_line_print_string, clause_line_string, clause_line_string_with_comment,
+        clause_prop_info_print_string, clause_prop_info_stats_string,
+        clause_prop_info_stats_string_with_comment, clause_prop_info_string,
+        clause_prop_info_string_with_comment, clause_tptp_depth_info_add, eqn_add_var_distribution,
+        eqn_list_add_var_distribution, term_add_var_distribution,
     };
     use crate::basics::pdarrays::PDIntArray;
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
+    use crate::inout::scanner::IoFormat;
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
@@ -644,6 +737,58 @@ mod tests {
         assert_eq!(
             clause_line_print_string(&bank, &clause, true),
             "line_print_a=line_print_b <- line_print_b=line_print_a. % info(12, 0, 0, 6, 1, 2, 2, 0)\n"
+        );
+    }
+
+    #[test]
+    fn clause_line_print_format_string_dispatches_like_clause_print() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "line_format_a");
+        let b = typed_const(&mut bank, "line_format_b");
+        let mut clause = clause_from(vec![
+            equation(&mut bank, &a, &b, true),
+            equation(&mut bank, &b, &a, false),
+        ]);
+        clause.set_ident(14);
+
+        let input_clause_line = clause_line_print_format_string(
+            &bank,
+            &clause,
+            false,
+            IoFormat::Tptp,
+            ProblemType::FirstOrder,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(input_clause_line.starts_with("input_clause("));
+        assert!(input_clause_line.contains("c_0_14"));
+        assert!(input_clause_line.contains("++equal(line_format_a, line_format_b)"));
+        assert!(input_clause_line.ends_with("]).\n"));
+        assert!(!input_clause_line.contains("<-"));
+
+        let wrapped_clause_line = clause_line_print_format_string(
+            &bank,
+            &clause,
+            true,
+            IoFormat::Tstp,
+            ProblemType::FirstOrder,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(wrapped_clause_line.starts_with("cnf(") || wrapped_clause_line.starts_with("tcf("));
+        assert!(wrapped_clause_line.contains("c_0_14"));
+        assert!(wrapped_clause_line.contains("line_format_a"));
+        assert!(wrapped_clause_line.contains(" % info(14, 0, 0, 6, 1, 2, 2, 0)\n"));
+        assert!(!wrapped_clause_line.contains("<-"));
+
+        assert_eq!(
+            clause_line_print_format_string(
+                &bank,
+                &clause,
+                false,
+                IoFormat::Auto,
+                ProblemType::FirstOrder,
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            clause_line_print_string(&bank, &clause, false)
         );
     }
 

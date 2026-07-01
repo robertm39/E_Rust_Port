@@ -1,7 +1,7 @@
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
-use crate::clauses::clause::{clause_print_lop_format_string_with_options, Clause};
+use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::{eq_axioms_print_string, ClauseSet};
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
@@ -9,8 +9,9 @@ use crate::clauses::formulasets::FormulaSet;
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::clausefeatures::{
     clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
-    clause_count_unorientable_literals, clause_count_variable_set, clause_line_print_string,
-    clause_line_string, clause_tptp_depth_info_add,
+    clause_count_unorientable_literals, clause_count_variable_set,
+    clause_line_print_format_string_with_options, clause_line_print_string, clause_line_string,
+    clause_tptp_depth_info_add,
 };
 use crate::inout::basicparser::{parse_float, parse_int, parse_plain_filename};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
@@ -802,6 +803,30 @@ pub fn clause_set_print_pos_units_default_string(
     clause_set_print_filtered_default_string(bank, set, print_info, Clause::is_demodulator)
 }
 
+/// Returns `ClauseSetPrintPosUnits` with explicit `ClausePrint` dispatch.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects a selected clause.
+pub fn clause_set_print_pos_units_format_string(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    eqn_print_options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    clause_set_print_filtered_default_format_string(
+        bank,
+        set,
+        print_info,
+        Clause::is_demodulator,
+        output_format,
+        problem_type,
+        eqn_print_options,
+    )
+}
+
 #[must_use]
 pub fn clause_set_print_neg_units_default_string(
     bank: &TermBank,
@@ -813,6 +838,30 @@ pub fn clause_set_print_neg_units_default_string(
     })
 }
 
+/// Returns `ClauseSetPrintNegUnits` with explicit `ClausePrint` dispatch.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects a selected clause.
+pub fn clause_set_print_neg_units_format_string(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    eqn_print_options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    clause_set_print_filtered_default_format_string(
+        bank,
+        set,
+        print_info,
+        |clause| clause.is_unit() && clause.is_goal(),
+        output_format,
+        problem_type,
+        eqn_print_options,
+    )
+}
+
 #[must_use]
 pub fn clause_set_print_non_units_default_string(
     bank: &TermBank,
@@ -820,6 +869,30 @@ pub fn clause_set_print_non_units_default_string(
     print_info: bool,
 ) -> String {
     clause_set_print_filtered_default_string(bank, set, print_info, |clause| !clause.is_unit())
+}
+
+/// Returns `ClauseSetPrintNonUnits` with explicit `ClausePrint` dispatch.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects a selected clause.
+pub fn clause_set_print_non_units_format_string(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    eqn_print_options: EqnPrintOptions,
+) -> Result<String, Diagnostic> {
+    clause_set_print_filtered_default_format_string(
+        bank,
+        set,
+        print_info,
+        |clause| !clause.is_unit(),
+        output_format,
+        problem_type,
+        eqn_print_options,
+    )
 }
 
 /// Returns the C `ProofStatePrintSelective` shape for the currently ported
@@ -838,6 +911,12 @@ pub fn proof_state_print_selective_string(
     eqn_print_options: EqnPrintOptions,
 ) -> Result<String, Diagnostic> {
     let mut output = String::new();
+    let print_context = SelectiveClausePrintContext {
+        bank: state.terms(),
+        print_info,
+        output_format,
+        eqn_print_options,
+    };
     for current in descriptor.bytes() {
         match current {
             b't' => {
@@ -847,70 +926,58 @@ pub fn proof_state_print_selective_string(
                 }
             }
             b'e' => {
-                push_comment_line(&mut output, "Processed positive unit clauses:");
-                output.push_str(&clause_set_print_pos_units_with_options(
-                    state.terms(),
-                    state.processed_pos_rules(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push_str(&clause_set_print_pos_units_with_options(
-                    state.terms(),
-                    state.processed_pos_eqns(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push('\n');
+                push_selective_clause_section(
+                    &mut output,
+                    "Processed positive unit clauses:",
+                    &[state.processed_pos_rules(), state.processed_pos_eqns()],
+                    print_context,
+                    clause_set_print_pos_units_with_options,
+                )?;
             }
             b'i' => {
-                push_comment_line(&mut output, "Processed negative unit clauses:");
-                output.push_str(&clause_set_print_neg_units_with_options(
-                    state.terms(),
-                    state.processed_neg_units(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push('\n');
+                push_selective_clause_section(
+                    &mut output,
+                    "Processed negative unit clauses:",
+                    &[state.processed_neg_units()],
+                    print_context,
+                    clause_set_print_neg_units_with_options,
+                )?;
             }
             b'g' => {
-                push_comment_line(&mut output, "Processed non-unit clauses:");
-                output.push_str(&clause_set_print_non_units_with_options(
-                    state.terms(),
-                    state.processed_non_units(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push('\n');
+                push_selective_clause_section(
+                    &mut output,
+                    "Processed non-unit clauses:",
+                    &[state.processed_non_units()],
+                    print_context,
+                    clause_set_print_non_units_with_options,
+                )?;
             }
             b'E' => {
-                push_comment_line(&mut output, "Unprocessed positive unit clauses:");
-                output.push_str(&clause_set_print_pos_units_with_options(
-                    state.terms(),
-                    state.unprocessed(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push('\n');
+                push_selective_clause_section(
+                    &mut output,
+                    "Unprocessed positive unit clauses:",
+                    &[state.unprocessed()],
+                    print_context,
+                    clause_set_print_pos_units_with_options,
+                )?;
             }
             b'I' => {
-                push_comment_line(&mut output, "Unprocessed negative unit clauses:");
-                output.push_str(&clause_set_print_neg_units_with_options(
-                    state.terms(),
-                    state.unprocessed(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push('\n');
+                push_selective_clause_section(
+                    &mut output,
+                    "Unprocessed negative unit clauses:",
+                    &[state.unprocessed()],
+                    print_context,
+                    clause_set_print_neg_units_with_options,
+                )?;
             }
             b'G' => {
-                push_comment_line(&mut output, "Unprocessed non-unit clauses:");
-                output.push_str(&clause_set_print_non_units_with_options(
-                    state.terms(),
-                    state.unprocessed(),
-                    print_info,
-                    eqn_print_options,
-                ));
-                output.push('\n');
+                push_selective_clause_section(
+                    &mut output,
+                    "Unprocessed non-unit clauses:",
+                    &[state.unprocessed()],
+                    print_context,
+                    clause_set_print_non_units_with_options,
+                )?;
             }
             b'a' | b'A' => {
                 if clause_set_is_equational(state.terms(), state.axioms()) {
@@ -938,6 +1005,38 @@ pub fn proof_state_print_selective_string(
     Ok(output)
 }
 
+#[derive(Clone, Copy)]
+struct SelectiveClausePrintContext<'bank> {
+    bank: &'bank TermBank,
+    print_info: bool,
+    output_format: IoFormat,
+    eqn_print_options: EqnPrintOptions,
+}
+
+type SelectiveClausePrintFn =
+    fn(&TermBank, &ClauseSet, bool, IoFormat, EqnPrintOptions) -> Result<String, Diagnostic>;
+
+fn push_selective_clause_section(
+    output: &mut String,
+    header: &str,
+    sets: &[&ClauseSet],
+    context: SelectiveClausePrintContext<'_>,
+    render_set: SelectiveClausePrintFn,
+) -> Result<(), Diagnostic> {
+    push_comment_line(output, header);
+    for set in sets {
+        output.push_str(&render_set(
+            context.bank,
+            set,
+            context.print_info,
+            context.output_format,
+            context.eqn_print_options,
+        )?);
+    }
+    output.push('\n');
+    Ok(())
+}
+
 fn push_comment_line(output: &mut String, text: &str) {
     output.push_str(DEFAULT_COMCHAR_RAW);
     output.push(' ');
@@ -949,33 +1048,51 @@ fn clause_set_print_pos_units_with_options(
     bank: &TermBank,
     set: &ClauseSet,
     print_info: bool,
+    output_format: IoFormat,
     options: EqnPrintOptions,
-) -> String {
-    clause_set_print_pos_units_string(bank, set, print_info, |clause| {
-        clause_print_lop_format_string_with_options(bank, clause, true, options)
-    })
+) -> Result<String, Diagnostic> {
+    clause_set_print_pos_units_format_string(
+        bank,
+        set,
+        print_info,
+        output_format,
+        problem_type(),
+        options,
+    )
 }
 
 fn clause_set_print_neg_units_with_options(
     bank: &TermBank,
     set: &ClauseSet,
     print_info: bool,
+    output_format: IoFormat,
     options: EqnPrintOptions,
-) -> String {
-    clause_set_print_neg_units_string(bank, set, print_info, |clause| {
-        clause_print_lop_format_string_with_options(bank, clause, true, options)
-    })
+) -> Result<String, Diagnostic> {
+    clause_set_print_neg_units_format_string(
+        bank,
+        set,
+        print_info,
+        output_format,
+        problem_type(),
+        options,
+    )
 }
 
 fn clause_set_print_non_units_with_options(
     bank: &TermBank,
     set: &ClauseSet,
     print_info: bool,
+    output_format: IoFormat,
     options: EqnPrintOptions,
-) -> String {
-    clause_set_print_non_units_string(bank, set, print_info, |clause| {
-        clause_print_lop_format_string_with_options(bank, clause, true, options)
-    })
+) -> Result<String, Diagnostic> {
+    clause_set_print_non_units_format_string(
+        bank,
+        set,
+        print_info,
+        output_format,
+        problem_type(),
+        options,
+    )
 }
 
 fn type_decls_tstp_string(state: &ProofState) -> Result<String, Diagnostic> {
@@ -1543,6 +1660,34 @@ where
     result
 }
 
+fn clause_set_print_filtered_default_format_string<P>(
+    bank: &TermBank,
+    set: &ClauseSet,
+    print_info: bool,
+    mut predicate: P,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+    eqn_print_options: EqnPrintOptions,
+) -> Result<String, Diagnostic>
+where
+    P: FnMut(&Clause) -> bool,
+{
+    let mut result = String::new();
+    for clause in set.iter() {
+        if predicate(clause) {
+            result.push_str(&clause_line_print_format_string_with_options(
+                bank,
+                clause,
+                print_info,
+                output_format,
+                problem_type,
+                eqn_print_options,
+            )?);
+        }
+    }
+    Ok(result)
+}
+
 fn arity_feature_class(arity: i32) -> SpecFeatureClass {
     match arity {
         0 => SpecFeatureClass::Arity0,
@@ -1721,20 +1866,22 @@ mod tests {
         clause_set_is_horn_set, clause_set_is_pure_equational_set, clause_set_is_unit_set,
         clause_set_max_literal_number, clause_set_max_standard_weight,
         clause_set_non_ground_axiom_part, clause_set_print_neg_units_default_string,
-        clause_set_print_neg_units_string, clause_set_print_non_units_default_string,
+        clause_set_print_neg_units_format_string, clause_set_print_neg_units_string,
+        clause_set_print_non_units_default_string, clause_set_print_non_units_format_string,
         clause_set_print_non_units_string, clause_set_print_pos_units_default_string,
-        clause_set_print_pos_units_string, clause_set_term_cells, clause_set_tptp_depth_info_add,
-        create_default_spec_limits, spec_features_add_basic_eval, spec_features_add_eval,
-        spec_features_compute, spec_features_compute_clause_set, spec_features_parse,
-        spec_features_print_string, spec_limits_print_string, spec_type_print_string,
-        spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass,
-        SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
+        clause_set_print_pos_units_format_string, clause_set_print_pos_units_string,
+        clause_set_term_cells, clause_set_tptp_depth_info_add, create_default_spec_limits,
+        spec_features_add_basic_eval, spec_features_add_eval, spec_features_compute,
+        spec_features_compute_clause_set, spec_features_parse, spec_features_print_string,
+        spec_limits_print_string, spec_type_print_string, spec_type_string_for_problem,
+        ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK,
+        DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_TYPE_HYPOTHESIS;
     use crate::clauses::clausesets::ClauseSet;
-    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{EP_IS_MAXIMAL, EP_IS_ORIENTED};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
@@ -1742,7 +1889,7 @@ mod tests {
         clause_count_maximal_literals, clause_count_maximal_terms, clause_count_singleton_set,
         clause_count_unorientable_literals, clause_count_variable_set, clause_tptp_depth_info_add,
     };
-    use crate::inout::scanner::Scanner;
+    use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::functypes::FunCode;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
@@ -2082,6 +2229,61 @@ mod tests {
             clause_set_print_non_units_default_string(&bank, &set, false),
             "default_selective_a=default_selective_b <- default_selective_b=default_selective_c.\n"
         );
+    }
+
+    #[test]
+    fn selective_clause_set_format_line_helpers_dispatch_clause_output() {
+        let mut bank = term_bank();
+        let a = typed_const(&mut bank, "format_selective_a");
+        let b = typed_const(&mut bank, "format_selective_b");
+        let c = typed_const(&mut bank, "format_selective_c");
+        let positive_unit = clause_from(vec![equation(&mut bank, &a, &b, true)]);
+        let negative_unit = clause_from(vec![equation(&mut bank, &b, &a, false)]);
+        let non_unit = clause_from(vec![
+            equation(&mut bank, &a, &b, true),
+            equation(&mut bank, &b, &c, false),
+        ]);
+        let set = ClauseSet::from_clauses([positive_unit, negative_unit, non_unit]);
+
+        let positive_tptp = clause_set_print_pos_units_format_string(
+            &bank,
+            &set,
+            false,
+            IoFormat::Tptp,
+            ProblemType::FirstOrder,
+            EqnPrintOptions::tptp(),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(positive_tptp.starts_with("input_clause("));
+        assert!(positive_tptp.contains("++equal(format_selective_a, format_selective_b)"));
+        assert!(!positive_tptp.contains("<-"));
+
+        let negative_tptp = clause_set_print_neg_units_format_string(
+            &bank,
+            &set,
+            false,
+            IoFormat::Tptp,
+            ProblemType::FirstOrder,
+            EqnPrintOptions::tptp(),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(negative_tptp.starts_with("input_clause("));
+        assert!(negative_tptp.contains("--equal(format_selective_b, format_selective_a)"));
+        assert!(!negative_tptp.contains("<-"));
+
+        let non_unit_tstp = clause_set_print_non_units_format_string(
+            &bank,
+            &set,
+            true,
+            IoFormat::Tstp,
+            ProblemType::FirstOrder,
+            EqnPrintOptions::lop(),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(non_unit_tstp.starts_with("cnf(") || non_unit_tstp.starts_with("tcf("));
+        assert!(non_unit_tstp.contains("format_selective_a"));
+        assert!(non_unit_tstp.contains(" % info("));
+        assert!(!non_unit_tstp.contains("<-"));
     }
 
     #[test]

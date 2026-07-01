@@ -120,6 +120,7 @@ Source files reviewed: `HEURISTICS/che_clausefeatures.h`, `HEURISTICS/che_clause
 ### C Behaviors To Revisit After Compatibility
 
 - `ClauseInfoPrint` labels field `d6` as variable occurrences, but computes it through `ClauseWeight(..., max_term_multiplier=0, vweight=1, fweight=1, ...)`, so the value includes the corrected equality-predicate contribution and follows orientation/maximality weight semantics rather than a direct variable-occurrence count.
-- `ClauseLinePrint` adds exactly ` COMCHARRAW ` plus `ClauseInfoPrint` when `printinfo` is true, then always writes a trailing newline. Rust now provides both caller-rendered assembly and a default LOP clause-rendering wrapper; global output-format/TSTP dispatch remains a higher-level integration step.
+- `ClauseLinePrint` adds exactly ` COMCHARRAW ` plus `ClauseInfoPrint` when `printinfo` is true, then always writes a trailing newline. Rust now provides caller-rendered assembly, the default LOP clause-rendering wrapper, and explicit LOP/TPTP/TSTP output-format dispatch.
+- `ClauseLinePrint` is documented with no global variables, but its `ClausePrint` call observes the process-global `OutputFormat`. Rust keeps this as an explicit output-format parameter; keep that boundary unless executable reference tests require hidden global state.
 - `ClausePropInfoPrint` prefixes `ClausePCLPrint` with `COMCHAR` and emits its statistics through fixed `%6ld`/`%6d` fields and the compile-time `COMCHAR` prefix. Rust now provides both caller-rendered PCL assembly and a default PCL wrapper over the explicit clause renderer; process-global output state remains intentionally avoided.
 <!-- END MANUAL REVIEW: c_source_docs -->

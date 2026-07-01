@@ -7579,16 +7579,17 @@ fn write_saturated_output(
     if !config.flags.contains(EProverFlag::PrintSaturated) {
         return Ok(());
     }
+    let section_output_format = saturated_clause_section_output_format(config);
     let eqn_print_options = config
         .equation_print
-        .into_eqn_print_options(config.output_format)
+        .into_eqn_print_options(section_output_format)
         .with_print_types(config.encoding.print_types);
     if let Some(success) = success {
         write_comment_line(output, "Saturated system contains the empty clause:")?;
         let rendered = clause_print_for_output_format(
             state.terms(),
             success,
-            config.output_format,
+            section_output_format,
             eqn_print_options,
             config.encoding.print_types,
         )?;
@@ -7599,12 +7600,20 @@ fn write_saturated_output(
         state,
         &config.saturated_output_descriptor,
         config.flags.contains(EProverFlag::PrintSaturatedInfo),
-        config.output_format,
+        section_output_format,
         eqn_print_options,
     )?;
     output.write_all(rendered.as_bytes())?;
     output.write_all(b"\n")?;
     Ok(())
+}
+
+const fn saturated_clause_section_output_format(config: &EProverConfig) -> IoFormat {
+    if config.flags.contains(EProverFlag::CnfOnly) {
+        IoFormat::Lop
+    } else {
+        config.output_format
+    }
 }
 
 fn clause_print_for_output_format(
