@@ -20,9 +20,9 @@ use std::cmp::Ordering;
 ///
 /// # Panics
 ///
-/// Panics if a higher-order surface needs Lambda-order normalization, if term
-/// argument slots are uninitialized, or if the OCB lacks KBO weight/precedence
-/// storage.
+/// Panics if a higher-order problem selects the not-yet-ported Lambda-order
+/// branch, if term argument slots are uninitialized, or if the OCB lacks KBO
+/// weight/precedence storage.
 pub fn kbo6_compare(
     ocb: &mut OrderControlBlock,
     signature: &Signature,
@@ -32,7 +32,7 @@ pub fn kbo6_compare(
     deref_t: DerefType,
 ) -> CompareResult {
     kbo6_reset(ocb);
-    if needs_lfho_kbo6_surface(s, t, deref_s, deref_t) {
+    if problem_type() == ProblemType::HigherOrder {
         assert!(
             ocb.ho_order_kind == HoOrderKind::LfhoOrder,
             "Lambda-order KBO6 term ordering is not ported yet"
@@ -71,47 +71,6 @@ fn kbo6_reset(ocb: &mut OrderControlBlock) {
     ocb.pos_bal = 0;
     ocb.neg_bal = 0;
     ocb.max_var = 0;
-}
-
-fn needs_lfho_kbo6_surface(s: &Term, t: &Term, deref_s: DerefType, deref_t: DerefType) -> bool {
-    if problem_type() == ProblemType::HigherOrder {
-        term_needs_lfho_kbo6_surface(s, deref_s) || term_needs_lfho_kbo6_surface(t, deref_t)
-    } else {
-        false
-    }
-}
-
-fn term_needs_lfho_kbo6_surface(term: &Term, deref: DerefType) -> bool {
-    if term.has_higher_order_ordering_surface() {
-        return true;
-    }
-    if deref == DerefType::Never || !term.is_free_var() {
-        return false;
-    }
-    let Some(binding) = term.binding() else {
-        return false;
-    };
-    binding_has_lfho_kbo6_surface(&binding, deref)
-}
-
-fn binding_has_lfho_kbo6_surface(binding: &Term, deref: DerefType) -> bool {
-    if binding.has_higher_order_ordering_surface() {
-        return true;
-    }
-    if deref != DerefType::Always {
-        return false;
-    }
-    let mut current = binding.clone();
-    while current.is_free_var() {
-        let Some(next) = current.binding() else {
-            return false;
-        };
-        if next.has_higher_order_ordering_surface() {
-            return true;
-        }
-        current = next;
-    }
-    false
 }
 
 fn resize_vb(ocb: &mut OrderControlBlock, index: usize) {
@@ -1120,6 +1079,58 @@ mod tests {
                 DerefType::Never
             ),
             CompareResult::Equal
+        );
+    }
+
+    #[test]
+    fn kbo6_higher_order_lfho_uses_higher_order_unordered_head_result() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut signature = signature();
+        let a = symbol(&mut signature, "a", 0);
+        let b = symbol(&mut signature, "b", 0);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            false,
+            &signature,
+            HoOrderKind::LfhoOrder,
+        );
+
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                &signature,
+                &Term::const_cell_alloc(a),
+                &Term::const_cell_alloc(b),
+                DerefType::Never,
+                DerefType::Never
+            ),
+            CompareResult::Uncomparable
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Lambda-order KBO6 term ordering is not ported yet")]
+    fn kbo6_higher_order_lambda_order_reports_pending_for_first_order_terms() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut signature = signature();
+        let a = symbol(&mut signature, "a", 0);
+        let b = symbol(&mut signature, "b", 0);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            false,
+            &signature,
+            HoOrderKind::LambdaOrder,
+        );
+
+        let _ = kbo6_compare(
+            &mut ocb,
+            &signature,
+            &Term::const_cell_alloc(a),
+            &Term::const_cell_alloc(b),
+            DerefType::Never,
+            DerefType::Never,
         );
     }
 

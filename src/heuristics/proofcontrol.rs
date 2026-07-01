@@ -1823,8 +1823,8 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
 fn forward_modify_check_higher_order_ordering(
     higher_order: bool,
     ocb: &OrderControlBlock,
-    clause: &Clause,
-    demodulators: &[&ClauseSet],
+    _clause: &Clause,
+    _demodulators: &[&ClauseSet],
 ) -> Result<(), Diagnostic> {
     if !higher_order || ocb.ordering_type == TermOrdering::Empty {
         return Ok(());
@@ -1837,11 +1837,7 @@ fn forward_modify_check_higher_order_ordering(
         ));
     }
 
-    let has_higher_order_surface = clause_has_higher_order_ordering_surface(clause)
-        || demodulators
-            .iter()
-            .any(|set| clause_set_has_higher_order_ordering_surface(set));
-    if has_higher_order_surface && ocb.ho_order_kind != HoOrderKind::LfhoOrder {
+    if ocb.ho_order_kind != HoOrderKind::LfhoOrder {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "ForwardModifyClause higher-order term ordering is not ported yet",
@@ -1849,20 +1845,6 @@ fn forward_modify_check_higher_order_ordering(
     }
 
     Ok(())
-}
-
-fn clause_set_has_higher_order_ordering_surface(set: &ClauseSet) -> bool {
-    set.iter().any(clause_has_higher_order_ordering_surface)
-}
-
-fn clause_has_higher_order_ordering_surface(clause: &Clause) -> bool {
-    clause
-        .literals()
-        .exists_term(term_has_higher_order_ordering_surface)
-}
-
-fn term_has_higher_order_ordering_surface(term: &Term) -> bool {
-    term.has_higher_order_ordering_surface()
 }
 
 fn forward_modify_normalize_if_higher_order(
@@ -9227,6 +9209,40 @@ mod tests {
 
         assert!(!trivial);
         assert!(clause.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_ho_lambda_order_fo_subset_stays_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let left = typed_const(terms, "pc_ho_order_lambda_fo_a");
+            let right = typed_const(terms, "pc_ho_order_lambda_fo_b");
+            Clause::alloc(EqnList::from_vec(vec![literal(terms, &left, &right, true)]))
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            state.terms().signature(),
+            HoOrderKind::LambdaOrder,
+        ));
+
+        let error = proof_state_forward_modify_clause_impl::<String>(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("term ordering"));
     }
 
     #[test]
