@@ -6818,10 +6818,39 @@ fn remap_derivation_for_display(
                 );
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, parent.source()))
             }
+            DerivationEntry::Demodulator(demodulator) => remap_demodulator_for_display(
+                graph,
+                child_index,
+                demodulator,
+                display_ids_by_index,
+                fallback_display_ids,
+            )
+            .unwrap_or(*entry),
             entry => entry,
         });
     }
     remapped
+}
+
+fn remap_demodulator_for_display(
+    graph: &ProofObjectGraph<'_>,
+    child_index: usize,
+    demodulator: crate::terms::termtypes::RewriteDemodulator,
+    display_ids_by_index: &[i64],
+    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+) -> Option<DerivationEntry> {
+    demodulator_clause_refs(demodulator)
+        .into_iter()
+        .find_map(|parent| {
+            proof_object_display_parent_ident_if_known(
+                graph,
+                child_index,
+                parent,
+                display_ids_by_index,
+                fallback_display_ids,
+            )
+        })
+        .map(|ident| DerivationEntry::ClauseParent(ClauseDerivationRef::new(ident, 0)))
 }
 
 fn proof_object_display_parent_ident(
@@ -6831,6 +6860,23 @@ fn proof_object_display_parent_ident(
     display_ids_by_index: &[i64],
     fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
 ) -> i64 {
+    proof_object_display_parent_ident_if_known(
+        graph,
+        child_index,
+        parent,
+        display_ids_by_index,
+        fallback_display_ids,
+    )
+    .unwrap_or(parent.ident())
+}
+
+fn proof_object_display_parent_ident_if_known(
+    graph: &ProofObjectGraph<'_>,
+    child_index: usize,
+    parent: ClauseDerivationRef,
+    display_ids_by_index: &[i64],
+    fallback_display_ids: &BTreeMap<ClauseDerivationRef, i64>,
+) -> Option<i64> {
     graph
         .edges
         .iter()
@@ -6839,13 +6885,8 @@ fn proof_object_display_parent_ident(
                 && ClauseDerivationRef::from(graph.clauses[edge.parent_index]) == parent
         })
         .map_or_else(
-            || {
-                fallback_display_ids
-                    .get(&parent)
-                    .copied()
-                    .unwrap_or(parent.ident())
-            },
-            |edge| display_ids_by_index[edge.parent_index],
+            || fallback_display_ids.get(&parent).copied(),
+            |edge| Some(display_ids_by_index[edge.parent_index]),
         )
 }
 
@@ -19550,6 +19591,39 @@ mod tests {
         assert!(printed
             .contains("cnf(c_0_1, axiom, ($false), inference(cn,[status(thm)],[]), ['proof']).\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_object_list_remaps_demodulator_parent_display_ids() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-object-demodulator-display-id");
+        std::fs::write(
+            &path,
+            "fof(socratesdies, conjecture, mortal(socrates)).\n\
+             fof(wealldie, axiom, ![X]:(human(X)=>mortal(X))).\n\
+             fof(socrateshuman, axiom, human(socrates)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--proof-object=1", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert!(
+            printed.contains("inference(rw,[status(thm)],[c_0_1, c_0_4])"),
+            "{printed}"
+        );
+        assert!(!printed.contains("c_0_9223372036854775807"), "{printed}");
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
