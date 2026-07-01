@@ -133,19 +133,24 @@ enum RequiredSign {
     Positive,
 }
 
-/// Performs the currently ported singular, non-equational predicate
-/// elimination path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResolverKind {
+    NonEquational,
+    Equational,
+}
+
+/// Performs the currently ported singular predicate-elimination path.
 ///
-/// This mirrors the `ccl_pred_elim` singular branch when no equality literal is
-/// present in the passive set and gate recognition is disabled. If equality
-/// literals are present, the C code switches to `build_eq_resolvent`; that
-/// branch is intentionally rejected here until it is ported.
+/// This mirrors the `ccl_pred_elim` singular branch with gate recognition
+/// disabled. If any equality literal is present in the passive set, the C code
+/// globally switches to the equality-aware resolver; Rust preserves that
+/// behavior.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if the passive set contains equality literals, or if
-/// term-bank insertion, tautology checking, or variable normalization fails.
-pub fn eliminate_predicates_singular_non_equational(
+/// Returns a diagnostic if term-bank insertion, tautology checking, or
+/// variable normalization fails.
+pub fn eliminate_predicates_singular(
     passive: &mut ClauseSet,
     archive: &mut ClauseSet,
     bank: &mut TermBank,
@@ -160,12 +165,11 @@ pub fn eliminate_predicates_singular_non_equational(
 
     loop {
         let (tasks, eqn_found) = build_task_map(passive, bank, &config, &mut blocked_symbols);
-        if eqn_found {
-            return Err(Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "Predicate elimination with equality literals is not yet ported",
-            ));
-        }
+        let resolver = if eqn_found {
+            ResolverKind::Equational
+        } else {
+            ResolverKind::NonEquational
+        };
 
         let mut task_queue = build_task_queue(tasks, &last_checks);
         let mut changed = false;
@@ -177,7 +181,7 @@ pub fn eliminate_predicates_singular_non_equational(
                     sq_vars: task.sq_vars,
                 },
             );
-            let mut generated = do_singular_elimination(&task, passive, bank, tmp_bank)?;
+            let mut generated = do_singular_elimination(&task, passive, bank, tmp_bank, resolver)?;
             if measure_decreases(
                 &task,
                 &generated,
@@ -207,15 +211,14 @@ pub fn eliminate_predicates_singular_non_equational(
     })
 }
 
-/// Performs singular non-equational predicate elimination and writes the C
+/// Performs singular predicate elimination and writes the C
 /// `PredicateElimination` progress lines.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic under the same conditions as
-/// [`eliminate_predicates_singular_non_equational`], or if `output` rejects a
-/// write.
-pub fn eliminate_predicates_singular_non_equational_with_output(
+/// [`eliminate_predicates_singular`], or if `output` rejects a write.
+pub fn eliminate_predicates_singular_with_output(
     passive: &mut ClauseSet,
     archive: &mut ClauseSet,
     bank: &mut TermBank,
@@ -226,12 +229,41 @@ pub fn eliminate_predicates_singular_non_equational_with_output(
 ) -> Result<PredicateEliminationResult, Diagnostic> {
     let start_count = passive.members();
     writeln!(output, "% PE start: {start_count}").map_err(predicate_elim_write_error)?;
-    let result = eliminate_predicates_singular_non_equational(
-        passive, archive, bank, tmp_bank, fresh_vars, config,
-    )?;
+    let result =
+        eliminate_predicates_singular(passive, archive, bank, tmp_bank, fresh_vars, config)?;
     writeln!(output, "% PE eliminated: {}", result.eliminated_count)
         .map_err(predicate_elim_write_error)?;
     Ok(result)
+}
+
+/// Compatibility alias for the initial non-equational helper name.
+///
+/// The implementation now also supports the C equality-aware singular resolver
+/// branch when equality literals are present in the passive set.
+pub fn eliminate_predicates_singular_non_equational(
+    passive: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    config: PredicateEliminationConfig,
+) -> Result<PredicateEliminationResult, Diagnostic> {
+    eliminate_predicates_singular(passive, archive, bank, tmp_bank, fresh_vars, config)
+}
+
+/// Compatibility alias for the initial non-equational output helper name.
+pub fn eliminate_predicates_singular_non_equational_with_output(
+    passive: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    config: PredicateEliminationConfig,
+    output: &mut impl fmt::Write,
+) -> Result<PredicateEliminationResult, Diagnostic> {
+    eliminate_predicates_singular_with_output(
+        passive, archive, bank, tmp_bank, fresh_vars, config, output,
+    )
 }
 
 fn build_task_map(
@@ -323,6 +355,7 @@ fn do_singular_elimination(
     passive: &ClauseSet,
     bank: &mut TermBank,
     tmp_bank: &mut TermBank,
+    resolver: ResolverKind,
 ) -> Result<Vec<Clause>, Diagnostic> {
     let mut generated = Vec::new();
     for positive_id in &task.positive_singular {
@@ -333,9 +366,18 @@ fn do_singular_elimination(
             let Some(negative_clause) = passive.find_by_id(*negative_id) else {
                 continue;
             };
-            if let Some(resolvent) =
-                build_neq_resolvent(positive_clause, negative_clause, task.sym, bank)?
-            {
+            let resolvent = match resolver {
+                ResolverKind::NonEquational => {
+                    build_neq_resolvent(positive_clause, negative_clause, task.sym, bank)?
+                }
+                ResolverKind::Equational => Some(build_eq_resolvent(
+                    positive_clause,
+                    negative_clause,
+                    task.sym,
+                    bank,
+                )?),
+            };
+            if let Some(resolvent) = resolvent {
                 if !clause_is_tautology(tmp_bank, &resolvent)? {
                     generated.push(resolvent);
                 }
@@ -386,6 +428,60 @@ fn build_neq_resolvent(
     result.map(Some)
 }
 
+fn build_eq_resolvent(
+    positive_clause: &Clause,
+    negative_clause: &Clause,
+    sym: FunCode,
+    bank: &mut TermBank,
+) -> Result<Clause, Diagnostic> {
+    debug_assert_ne!(positive_clause.ident(), negative_clause.ident());
+
+    let positive_copy = positive_clause.copy_disjoint(bank)?;
+    let Some((positive_literal, positive_rest)) =
+        split_first_literal_with_head(positive_copy, bank, sym, RequiredSign::Positive)
+    else {
+        panic!("positive predicate-elimination parent must contain the pivot symbol");
+    };
+    let negative_copy = negative_clause.copy_to_bank(bank)?;
+    let Some((negative_literal, negative_rest)) =
+        split_first_literal_with_head(negative_copy, bank, sym, RequiredSign::Negative)
+    else {
+        panic!("negative predicate-elimination parent must contain the pivot symbol");
+    };
+
+    let literals = if unique_distinct_vars(positive_literal.left())
+        || unique_distinct_vars(negative_literal.left())
+    {
+        let mut subst = Substitution::new();
+        let unified =
+            subst_mgu_complete(positive_literal.left(), negative_literal.left(), &mut subst);
+        debug_assert!(
+            unified,
+            "distinct-variable predicate pivot should always unify"
+        );
+        let result = instantiate_resolvent_rest(&positive_rest, &negative_rest, bank);
+        subst.delete();
+        result?
+    } else {
+        let mut result =
+            argument_disequalities(positive_literal.left(), negative_literal.left(), bank)?;
+        result.append(positive_rest.copy_to_bank(bank)?);
+        result.append(negative_rest.copy_to_bank(bank)?);
+        result.remove_resolved(bank);
+        result.remove_duplicates(bank);
+        result
+    };
+
+    let mut resolvent = Clause::alloc(literals);
+    clause_push_derivation(
+        &mut resolvent,
+        DC_PE_RESOLVE,
+        Some(positive_clause),
+        Some(negative_clause),
+    );
+    Ok(resolvent)
+}
+
 fn split_first_literal_with_head(
     clause: Clause,
     bank: &TermBank,
@@ -415,6 +511,43 @@ impl RequiredSign {
             Self::Positive => positive,
         }
     }
+}
+
+fn unique_distinct_vars(term: &crate::terms::termtypes::Term) -> bool {
+    let mut variables = Vec::new();
+    for index in 0..term.arity() {
+        let arg = term
+            .argument(index)
+            .unwrap_or_else(|| panic!("predicate argument {index} is initialized"));
+        if !arg.is_free_var() || variables.iter().any(|seen| seen == &arg) {
+            return false;
+        }
+        variables.push(arg);
+    }
+    true
+}
+
+fn argument_disequalities(
+    positive_predicate: &crate::terms::termtypes::Term,
+    negative_predicate: &crate::terms::termtypes::Term,
+    bank: &mut TermBank,
+) -> Result<EqnList, Diagnostic> {
+    assert_eq!(
+        positive_predicate.arity(),
+        negative_predicate.arity(),
+        "predicate pivots with the same head have equal arity"
+    );
+    let mut result = EqnList::new();
+    for index in 0..positive_predicate.arity() {
+        let positive_arg = positive_predicate
+            .argument(index)
+            .unwrap_or_else(|| panic!("positive predicate argument {index} is initialized"));
+        let negative_arg = negative_predicate
+            .argument(index)
+            .unwrap_or_else(|| panic!("negative predicate argument {index} is initialized"));
+        result.insert_first(Eqn::alloc(positive_arg, negative_arg, bank, false)?);
+    }
+    Ok(result)
 }
 
 fn instantiate_resolvent_rest(
@@ -521,9 +654,8 @@ fn i64_to_f64(value: i64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        eliminate_predicates_singular_non_equational,
-        eliminate_predicates_singular_non_equational_with_output, PredicateEliminationConfig,
-        PredicateEliminationResult,
+        eliminate_predicates_singular, eliminate_predicates_singular_with_output,
+        PredicateEliminationConfig, PredicateEliminationResult,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_TYPE_CONJECTURE;
@@ -559,6 +691,23 @@ mod tests {
             .declare_final_type(f_code, type_)
             .unwrap();
         bank.create_const_term(f_code).unwrap()
+    }
+
+    fn object_var(bank: &TermBank, code: i64) -> Term {
+        let type_ = bank.signature().type_bank().i_type();
+        bank.vars().var_assert_alloc(code, &type_)
+    }
+
+    fn object_unary(bank: &mut TermBank, name: &str, arg: &Term) -> Term {
+        let type_ = bank.signature().type_bank().i_type();
+        let f_code = bank.signature_mut().insert_id(name, 1, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, alloc_arrow_type(vec![type_.clone(), type_.clone()]))
+            .unwrap();
+        let term = Term::top_alloc(f_code, 1);
+        term.set_type(Some(type_));
+        term.set_argument(0, arg.clone());
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     fn predicate_atom(bank: &mut TermBank, name: &str, args: &[Term]) -> Term {
@@ -632,7 +781,7 @@ mod tests {
         let mut tmp = tmp_bank(&bank);
         let fresh = fresh_vars(&bank);
 
-        let result = eliminate_predicates_singular_non_equational(
+        let result = eliminate_predicates_singular(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -683,7 +832,7 @@ mod tests {
         let mut tmp = tmp_bank(&bank);
         let fresh = fresh_vars(&bank);
 
-        let result = eliminate_predicates_singular_non_equational(
+        let result = eliminate_predicates_singular(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -718,7 +867,7 @@ mod tests {
         let mut tmp = tmp_bank(&bank);
         let fresh = fresh_vars(&bank);
 
-        let result = eliminate_predicates_singular_non_equational(
+        let result = eliminate_predicates_singular(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -751,7 +900,7 @@ mod tests {
         let mut tmp = tmp_bank(&bank);
         let fresh = fresh_vars(&bank);
 
-        let result = eliminate_predicates_singular_non_equational(
+        let result = eliminate_predicates_singular(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -784,7 +933,7 @@ mod tests {
         let mut tmp = tmp_bank(&bank);
         let fresh = fresh_vars(&bank);
 
-        let result = eliminate_predicates_singular_non_equational(
+        let result = eliminate_predicates_singular(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -814,7 +963,7 @@ mod tests {
         let fresh = fresh_vars(&bank);
         let mut output = String::new();
 
-        let result = eliminate_predicates_singular_non_equational_with_output(
+        let result = eliminate_predicates_singular_with_output(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -830,18 +979,24 @@ mod tests {
     }
 
     #[test]
-    fn equality_literals_are_rejected_until_eq_resolvents_are_ported() {
+    fn equality_resolver_adds_argument_disequalities_for_non_pattern_pivots() {
         let mut bank = test_bank();
         let a = object_const(&mut bank, "pe_eq_a");
-        let p_a = predicate_atom(&mut bank, "pe_eq_p", std::slice::from_ref(&a));
-        let positive = clause(vec![predicate_literal(&mut bank, &p_a, true)]);
-        let eq_clause = clause(vec![equality_literal(&mut bank, &a, &a)]);
-        let mut passive = ClauseSet::from_clauses([positive, eq_clause]);
+        let fa = object_unary(&mut bank, "pe_eq_f", &a);
+        let ga = object_unary(&mut bank, "pe_eq_g", &a);
+        let positive_atom = predicate_atom(&mut bank, "pe_eq_p", std::slice::from_ref(&fa));
+        let negative_atom = predicate_atom(&mut bank, "pe_eq_p", std::slice::from_ref(&ga));
+        let trigger = clause(vec![equality_literal(&mut bank, &a, &a)]);
+        let positive = clause(vec![predicate_literal(&mut bank, &positive_atom, true)]);
+        let negative = clause(vec![predicate_literal(&mut bank, &negative_atom, false)]);
+        let positive_id = positive.ident();
+        let negative_id = negative.ident();
+        let mut passive = ClauseSet::from_clauses([trigger, positive, negative]);
         let mut archive = ClauseSet::new();
         let mut tmp = tmp_bank(&bank);
         let fresh = fresh_vars(&bank);
 
-        let error = eliminate_predicates_singular_non_equational(
+        let result = eliminate_predicates_singular(
             &mut passive,
             &mut archive,
             &mut bank,
@@ -849,12 +1004,78 @@ mod tests {
             &fresh,
             PredicateEliminationConfig::default(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), crate::basics::error::ErrorCode::OTHER_ERROR);
         assert_eq!(
-            error.message(),
-            "Predicate elimination with equality literals is not yet ported"
+            result,
+            PredicateEliminationResult {
+                start_count: 3,
+                eliminated_count: 1,
+                generated_count: 1
+            }
         );
+        assert!(ids(&archive).contains(&positive_id));
+        assert!(ids(&archive).contains(&negative_id));
+        let resolvents = passive
+            .iter()
+            .filter(|clause| clause.derivation().is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(resolvents.len(), 1);
+        let literal = &resolvents[0].literals().as_slice()[0];
+        assert!(literal.is_negative());
+        assert!(literal.is_equ_lit(&bank));
+        assert_eq!(literal.left(), &fa);
+        assert_eq!(literal.right(), &ga);
+    }
+
+    #[test]
+    fn equality_resolver_instantiates_rest_when_pivot_has_distinct_variables() {
+        let mut bank = test_bank();
+        let a = object_const(&mut bank, "pe_eq_pattern_a");
+        let b = object_const(&mut bank, "pe_eq_pattern_b");
+        let c = object_const(&mut bank, "pe_eq_pattern_c");
+        let x = object_var(&bank, -2);
+        let p_x = predicate_atom(&mut bank, "pe_eq_pattern_p", std::slice::from_ref(&x));
+        let p_a = predicate_atom(&mut bank, "pe_eq_pattern_p", std::slice::from_ref(&a));
+        let s_x = predicate_atom(&mut bank, "pe_eq_pattern_s", std::slice::from_ref(&x));
+        let s_a = predicate_atom(&mut bank, "pe_eq_pattern_s", std::slice::from_ref(&a));
+        let s_b = predicate_atom(&mut bank, "pe_eq_pattern_s", std::slice::from_ref(&b));
+        let s_c = predicate_atom(&mut bank, "pe_eq_pattern_s", std::slice::from_ref(&c));
+        let trigger = clause(vec![equality_literal(&mut bank, &a, &a)]);
+        let positive = clause(vec![
+            predicate_literal(&mut bank, &p_x, true),
+            predicate_literal(&mut bank, &s_x, true),
+        ]);
+        let negative = clause(vec![predicate_literal(&mut bank, &p_a, false)]);
+        let s_offending = clause(vec![
+            predicate_literal(&mut bank, &s_b, true),
+            predicate_literal(&mut bank, &s_c, true),
+        ]);
+        let mut passive = ClauseSet::from_clauses([trigger, positive, negative, s_offending]);
+        let mut archive = ClauseSet::new();
+        let mut tmp = tmp_bank(&bank);
+        let fresh = fresh_vars(&bank);
+
+        let result = eliminate_predicates_singular(
+            &mut passive,
+            &mut archive,
+            &mut bank,
+            &mut tmp,
+            &fresh,
+            PredicateEliminationConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.eliminated_count, 1);
+        assert_eq!(result.generated_count, 1);
+        let resolvents = passive
+            .iter()
+            .filter(|clause| clause.derivation().is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(resolvents.len(), 1);
+        assert_eq!(resolvents[0].literal_number(), 1);
+        let literal = &resolvents[0].literals().as_slice()[0];
+        assert!(!literal.is_equ_lit(&bank));
+        assert_eq!(literal.left(), &s_a);
     }
 }
