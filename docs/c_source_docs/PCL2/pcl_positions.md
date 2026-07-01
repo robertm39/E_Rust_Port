@@ -95,4 +95,16 @@ Source files reviewed: `PCL2/pcl_positions.h`, `PCL2/pcl_positions.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status Notes
+
+- `src/pcl2/positions.rs` ports `PCL2PosAlloc`, `PCL2PosParse`, and `PCL2PosPrint` with the existing Rust scanner and the ported `EqnSide` discriminants from `ccl_eqn`.
+- The Rust representation stores the optional term path in a `Vec<i64>` instead of a nullable `PDArray`; this preserves the observable empty/non-empty position state without exposing the C allocation sentinel.
+- The Rust printer intentionally preserves the C separator behavior: parsed input such as `3.L.4.5` renders as `3.L45`, because `PCL2PosPrint` prints term-position components without a preceding full stop.
+
+### Change Later
+
+- `PCL2PosPrint` omits separators before term-position components even though `PCL2PosParse` requires dotted components. That makes multi-component printed positions fail to round-trip through the parser. Keep this for compatibility until reference PCL traces say whether external tools depend on it.
+- The header comment says the literal and side are optional, but `PCL2PosParse` always starts by accepting a positive integer literal. Revisit the syntax contract when the rest of PCL2 proof-object parsing is ported.
+- C allocates `PDArrayAlloc(5,10)` only when at least one term-position component follows the side. Rust uses `Vec<i64>` for now; if PCL position parsing becomes hot in proof checking, benchmark whether the C small-array growth shape matters.
 <!-- END MANUAL REVIEW: c_source_docs -->

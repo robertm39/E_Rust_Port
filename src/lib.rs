@@ -10,6 +10,7 @@ pub mod heuristics;
 pub mod inout;
 pub mod learn;
 pub mod orderings;
+pub mod pcl2;
 pub mod propositional;
 pub mod prover;
 pub mod terms;
