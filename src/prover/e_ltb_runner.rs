@@ -1,8 +1,10 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::verbose::set_verbose_level;
 use crate::control::batch_spec::{
-    parse_ltb_header, BatchProcCtrlRunnerSet, BatchProcessProblemsConfig, BatchSpec,
+    parse_ltb_header, BatchProcCtrlRunnerSet, BatchProcessFileConfig, BatchProcessProblemsConfig,
+    BatchProcessVariantsConfig, BatchRunnerBackend, BatchSpec, BatchVariantProblemJob,
 };
+use crate::control::gproc_ctrl::EGPCtrl;
 use crate::control::sine::StructFofSpec;
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -17,12 +19,28 @@ use crate::terms::typebanks::TypeBank;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const PROGRAM_NAME: &str = "e_ltb_runner";
 
 const DEFAULT_PROVER: &str = "eprover";
 const C_USAGE_ERROR: &str = "Usage: e_ltb_runner <spec> [<path-to-eprover>]";
+const INTERNAL_VARIANT_CHILD_ARG: &str = "--internal-ltb-variant-child";
+const VARIANT_CHILD_NAME: &str = "E-LTB wrapper";
+const VARIANT_CHILD_CORES: usize = 1;
+const VARIANT_CHILD_CPU_LIMIT: u64 = 1_000_000;
+
+const VARIANTS27: &[&str] = &["+4", "+5", "_4", "_5"];
+const PROVERS27: &[&str] = &["./eprover", "./eprover", "./eprover", "./eprover"];
+const VARIANTS28: &[&str] = &["+1", "_1"];
+const PROVERS28: &[&str] = &["./eprover", "./eprover"];
+const VARIANTS28_HO: &[&str] = &["+1", "_1", "^1"];
+const PROVERS28_HO: &[&str] = &["./eprover", "./eprover", "./eprover-ho"];
+const VARIANTS28_25: &[&str] = &["+1", "_1"];
+const PROVERS28_25: &[&str] = &["./eprover-25", "./eprover-25"];
+const VARIANTSJ11: &[&str] = &["_1", "_3", "^1"];
+const PROVERSJ11: &[&str] = &["./eprover-ho", "./eprover-ho", "./eprover-ho"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -166,6 +184,30 @@ enum LtbVariantMode {
     VariantsJ11,
 }
 
+impl LtbVariantMode {
+    #[must_use]
+    const fn variants(self) -> &'static [&'static str] {
+        match self {
+            Self::Variants27 => VARIANTS27,
+            Self::Variants28 => VARIANTS28,
+            Self::Variants28Ho => VARIANTS28_HO,
+            Self::Variants28_25 => VARIANTS28_25,
+            Self::VariantsJ11 => VARIANTSJ11,
+        }
+    }
+
+    #[must_use]
+    const fn provers(self) -> &'static [&'static str] {
+        match self {
+            Self::Variants27 => PROVERS27,
+            Self::Variants28 => PROVERS28,
+            Self::Variants28Ho => PROVERS28_HO,
+            Self::Variants28_25 => PROVERS28_25,
+            Self::VariantsJ11 => PROVERSJ11,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LtbRunnerConfig {
     spec_file: String,
@@ -187,9 +229,22 @@ enum RunCommand {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LtbBatchJob<'a> {
+    spec_file: &'a str,
+    batch_index: usize,
     default_dir: Option<&'a str>,
     output_dir: Option<&'a str>,
     start: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LtbVariantChildConfig {
+    spec_file: String,
+    batch_index: usize,
+    variant: String,
+    prover: String,
+    source: String,
+    dest: String,
+    wct_limit: i64,
 }
 
 pub fn run<I, S>(
@@ -212,6 +267,14 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
+    if argv
+        .get(1)
+        .is_some_and(|arg| arg == INTERNAL_VARIANT_CHILD_ARG)
+    {
+        return run_variant_child_from_args(&argv[2..], stdout);
+    }
+
     match process_options(argv, stdout)? {
         RunCommand::Execute(config) => execute_config_to_configured_output(&config, stdout),
         RunCommand::Exit(status) => Ok(status),
@@ -307,33 +370,57 @@ fn execute_config_to_configured_output(
 }
 
 fn execute_config(config: &LtbRunnerConfig, output: &mut impl Write) -> Result<u8, Diagnostic> {
-    execute_config_with_processor(
+    execute_config_with_processors(
         config,
         output,
         current_time_seconds,
         process_non_variant_batch,
+        process_variant_batch,
     )
 }
 
+#[cfg(test)]
 fn execute_config_with_processor<W, C, P>(
     config: &LtbRunnerConfig,
     output: &mut W,
-    mut clock_seconds: C,
-    mut process_batch: P,
+    clock_seconds: C,
+    process_batch: P,
 ) -> Result<u8, Diagnostic>
 where
     W: Write + ?Sized,
     C: FnMut() -> i64,
     P: FnMut(&mut BatchSpec, LtbBatchJob<'_>, &mut C, &mut W) -> Result<i64, Diagnostic>,
 {
+    execute_config_with_processors(
+        config,
+        output,
+        clock_seconds,
+        process_batch,
+        process_variant_batch,
+    )
+}
+
+fn execute_config_with_processors<W, C, P, V>(
+    config: &LtbRunnerConfig,
+    output: &mut W,
+    mut clock_seconds: C,
+    mut process_batch: P,
+    mut process_variants: V,
+) -> Result<u8, Diagnostic>
+where
+    W: Write + ?Sized,
+    C: FnMut() -> i64,
+    P: FnMut(&mut BatchSpec, LtbBatchJob<'_>, &mut C, &mut W) -> Result<i64, Diagnostic>,
+    V: FnMut(
+        &mut BatchSpec,
+        LtbBatchJob<'_>,
+        LtbVariantMode,
+        &mut C,
+        &mut W,
+    ) -> Result<(), Diagnostic>,
+{
     apply_global_options(config)?;
 
-    if let Some(variant_mode) = config.variant_mode {
-        return Err(Diagnostic::new(
-            ErrorCode::INTERFACE_ERROR,
-            format!("e_ltb_runner variant mode {variant_mode:?} is not wired yet"),
-        ));
-    }
     if config.interactive {
         return Err(Diagnostic::new(
             ErrorCode::INTERFACE_ERROR,
@@ -345,6 +432,7 @@ where
     scanner.set_format(IoFormat::Tstp);
     let default_dir = scanner.default_dir().to_owned();
     let header = parse_ltb_header(&mut scanner)?;
+    let mut batch_index = 0;
 
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         let start = clock_seconds();
@@ -366,18 +454,21 @@ where
             ));
         }
 
-        let solved = process_batch(
-            &mut spec,
-            LtbBatchJob {
-                default_dir: Some(default_dir.as_str()),
-                output_dir: config.output_dir.as_deref(),
-                start,
-            },
-            &mut clock_seconds,
-            output,
-        )?;
-        let elapsed = clock_seconds() - start;
-        write_batch_done(output, elapsed, solved, spec.problem_no())?;
+        let job = LtbBatchJob {
+            spec_file: &config.spec_file,
+            batch_index,
+            default_dir: Some(default_dir.as_str()),
+            output_dir: config.output_dir.as_deref(),
+            start,
+        };
+        if let Some(variant_mode) = config.variant_mode {
+            process_variants(&mut spec, job, variant_mode, &mut clock_seconds, output)?;
+        } else {
+            let solved = process_batch(&mut spec, job, &mut clock_seconds, output)?;
+            let elapsed = clock_seconds() - start;
+            write_batch_done(output, elapsed, solved, spec.problem_no())?;
+        }
+        batch_index += 1;
     }
 
     Ok(ErrorCode::NO_ERROR.exit_status())
@@ -412,6 +503,198 @@ where
         &mut backend,
     )?;
     Ok(report.c_return_value())
+}
+
+fn process_variant_batch<W, C>(
+    spec: &mut BatchSpec,
+    job: LtbBatchJob<'_>,
+    variant_mode: LtbVariantMode,
+    clock_seconds: &mut C,
+    output: &mut W,
+) -> Result<(), Diagnostic>
+where
+    W: Write + ?Sized,
+    C: FnMut() -> i64,
+{
+    spec.process_variants_with_child_processes(
+        BatchProcessVariantsConfig {
+            variants: variant_mode.variants(),
+            provers: variant_mode.provers(),
+            start: job.start,
+            default_dir: job.default_dir,
+            outdir: job.output_dir,
+        },
+        output,
+        clock_seconds,
+        |variant_job, startup_output| {
+            spawn_ltb_variant_child(job.spec_file, job.batch_index, variant_job, startup_output)
+        },
+    )?;
+    writeln!(output, "% =============== Variant batch done ===========\n")
+        .map_err(|error| io_diagnostic(format!("Cannot write variant batch summary: {error}")))
+}
+
+fn spawn_ltb_variant_child<W: Write + ?Sized>(
+    spec_file: &str,
+    batch_index: usize,
+    job: &BatchVariantProblemJob,
+    startup_output: &mut W,
+) -> Result<EGPCtrl, Diagnostic> {
+    let current_exe = std::env::current_exe().map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::FILE_ERROR,
+            format!("Cannot locate e_ltb_runner executable: {error}"),
+        )
+    })?;
+    let mut command = Command::new(current_exe);
+    command
+        .arg(INTERNAL_VARIANT_CHILD_ARG)
+        .arg(spec_file)
+        .arg(batch_index.to_string())
+        .arg(&job.variant)
+        .arg(&job.prover)
+        .arg(&job.concrete_source)
+        .arg(&job.dest)
+        .arg(job.wct_limit.to_string());
+    EGPCtrl::spawn_command_reporting(
+        command,
+        VARIANT_CHILD_NAME,
+        VARIANT_CHILD_CORES,
+        VARIANT_CHILD_CPU_LIMIT,
+        startup_output,
+    )
+}
+
+fn run_variant_child_from_args(args: &[String], stdout: &mut impl Write) -> Result<u8, Diagnostic> {
+    let config = parse_variant_child_args(args)?;
+    execute_variant_child(&config, stdout)
+}
+
+fn parse_variant_child_args(args: &[String]) -> Result<LtbVariantChildConfig, Diagnostic> {
+    if args.len() != 7 {
+        return Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Usage: {PROGRAM_NAME} {INTERNAL_VARIANT_CHILD_ARG} <spec> <batch-index> <variant> <prover> <source> <dest> <wct-limit>"
+            ),
+        ));
+    }
+    let batch_index = args[1].parse::<usize>().map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Invalid LTB variant child batch index '{}': {error}",
+                args[1]
+            ),
+        )
+    })?;
+    let wct_limit = args[6].parse::<i64>().map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "Invalid LTB variant child wall-clock limit '{}': {error}",
+                args[6]
+            ),
+        )
+    })?;
+
+    Ok(LtbVariantChildConfig {
+        spec_file: args[0].clone(),
+        batch_index,
+        variant: args[2].clone(),
+        prover: args[3].clone(),
+        source: args[4].clone(),
+        dest: args[5].clone(),
+        wct_limit,
+    })
+}
+
+fn execute_variant_child(
+    config: &LtbVariantChildConfig,
+    output: &mut impl Write,
+) -> Result<u8, Diagnostic> {
+    let mut backend = BatchProcCtrlRunnerSet::new();
+    execute_variant_child_with_backend(config, output, current_time_seconds, &mut backend)
+}
+
+fn execute_variant_child_with_backend<W, C, B>(
+    config: &LtbVariantChildConfig,
+    output: &mut W,
+    clock_seconds: C,
+    backend: &mut B,
+) -> Result<u8, Diagnostic>
+where
+    W: Write,
+    C: FnMut() -> i64,
+    B: BatchRunnerBackend,
+{
+    let (mut spec, default_dir) =
+        parse_ltb_batch_spec_at(&config.spec_file, config.batch_index, &config.prover)?;
+    spec.executable.clone_from(&config.prover);
+    let mut bank = new_term_bank()?;
+    let mut ctrl = StructFofSpec::new(bank.signature());
+    spec.init_concrete_struct_fof_spec_from_files(
+        &mut bank,
+        &mut ctrl,
+        Some(default_dir.as_str()),
+        &config.variant,
+        output,
+    )?;
+    let report = spec.process_file_with_runner_backend(
+        &mut bank,
+        &mut ctrl,
+        BatchProcessFileConfig {
+            wct_limit: config.wct_limit,
+            default_dir: Some(default_dir.as_str()),
+            source: &config.source,
+            dest: &config.dest,
+        },
+        output,
+        clock_seconds,
+        backend,
+    )?;
+    if report.solved {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
+fn parse_ltb_batch_spec_at(
+    spec_file: &str,
+    batch_index: usize,
+    prover: &str,
+) -> Result<(BatchSpec, String), Diagnostic> {
+    let mut scanner = Scanner::from_file(Path::new(spec_file), true)?;
+    scanner.set_format(IoFormat::Tstp);
+    let default_dir = scanner.default_dir().to_owned();
+    let header = parse_ltb_header(&mut scanner)?;
+    let mut include_sink = std::io::sink();
+
+    for index in 0..=batch_index {
+        if scanner.test_tok(TokenType::NO_TOKEN) {
+            return Err(Diagnostic::new(
+                ErrorCode::USAGE_ERROR,
+                format!("LTB child requested missing batch index {batch_index}"),
+            ));
+        }
+        let spec = BatchSpec::parse_with_include_output(
+            &mut scanner,
+            prover,
+            &header.category,
+            header.train_dir.as_deref(),
+            IoFormat::Tstp,
+            &mut include_sink,
+        )?;
+        if index == batch_index {
+            return Ok((spec, default_dir));
+        }
+    }
+
+    Err(Diagnostic::new(
+        ErrorCode::INTERFACE_ERROR,
+        "LTB child batch parser did not return the requested batch",
+    ))
 }
 
 fn apply_global_options(config: &LtbRunnerConfig) -> Result<(), Diagnostic> {
@@ -515,16 +798,24 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        execute_config_with_processor, print_help, process_options, remaining_total_wtc_limit, run,
-        LtbBatchJob, LtbRunnerConfig, LtbVariantMode, RunCommand, C_USAGE_ERROR, DEFAULT_PROVER,
-        PROGRAM_NAME,
+        execute_config_with_processor, execute_config_with_processors,
+        execute_variant_child_with_backend, parse_variant_child_args, print_help, process_options,
+        remaining_total_wtc_limit, run, LtbBatchJob, LtbRunnerConfig, LtbVariantChildConfig,
+        LtbVariantMode, RunCommand, C_USAGE_ERROR, DEFAULT_PROVER, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::ProverResult;
     use crate::basics::verbose::{set_verbose_level, verbose_level};
-    use crate::control::batch_spec::BatchSpec;
+    use crate::control::batch_spec::{
+        BatchCompletedRunner, BatchRunnerBackend, BatchRunnerRequest, BatchRunnerTempRequest,
+        BatchSpawnedRunner, BatchSpec,
+    };
     use crate::inout::output::{output_level, set_output_level};
+    use crate::inout::tempfile::{temp_file_remove, temp_file_test_lock};
     use crate::test_support::global_state_lock;
+    use std::ffi::OsString;
     use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
 
     #[test]
@@ -599,6 +890,38 @@ mod tests {
         assert_eq!(config.output_level, 1);
         assert!(config.interactive);
         assert_eq!(config.variant_mode, Some(LtbVariantMode::Variants28Ho));
+    }
+
+    #[test]
+    fn variant_mode_tables_match_c_ltb_runner_globals() {
+        assert_eq!(
+            LtbVariantMode::Variants27.variants(),
+            ["+4", "+5", "_4", "_5"]
+        );
+        assert_eq!(
+            LtbVariantMode::Variants27.provers(),
+            ["./eprover", "./eprover", "./eprover", "./eprover"]
+        );
+        assert_eq!(LtbVariantMode::Variants28.variants(), ["+1", "_1"]);
+        assert_eq!(
+            LtbVariantMode::Variants28.provers(),
+            ["./eprover", "./eprover"]
+        );
+        assert_eq!(LtbVariantMode::Variants28Ho.variants(), ["+1", "_1", "^1"]);
+        assert_eq!(
+            LtbVariantMode::Variants28Ho.provers(),
+            ["./eprover", "./eprover", "./eprover-ho"]
+        );
+        assert_eq!(LtbVariantMode::Variants28_25.variants(), ["+1", "_1"]);
+        assert_eq!(
+            LtbVariantMode::Variants28_25.provers(),
+            ["./eprover-25", "./eprover-25"]
+        );
+        assert_eq!(LtbVariantMode::VariantsJ11.variants(), ["_1", "_3", "^1"]);
+        assert_eq!(
+            LtbVariantMode::VariantsJ11.provers(),
+            ["./eprover-ho", "./eprover-ho", "./eprover-ho"]
+        );
     }
 
     #[test]
@@ -682,9 +1005,71 @@ mod tests {
     }
 
     #[test]
-    fn execute_rejects_not_yet_wired_modes_explicitly() {
+    fn execute_with_fake_variant_processor_dispatches_variant_mode() {
+        let _guard = global_state_lock();
+        let path = write_temp_spec(
+            "runner-variant-dispatch.spec",
+            "division.category LTB.SAT\n\
+             output.required Proof\n\
+             limit.time.problem.wc 12\n\
+             limit.time.overall.wc 40\n\
+             Problems/TSTP/prob_*ignored.p Results/prob.out\n",
+        );
+        let config = LtbRunnerConfig {
+            spec_file: path.to_string_lossy().into_owned(),
+            prover: DEFAULT_PROVER.to_owned(),
+            output_file: None,
+            output_dir: Some("Out".to_owned()),
+            total_wtc_limit: 0,
+            verbose_level: 0,
+            output_level: 1,
+            interactive: false,
+            variant_mode: Some(LtbVariantMode::Variants28),
+        };
         let mut output = Vec::new();
-        let mut config = LtbRunnerConfig {
+        let mut seen = Vec::new();
+
+        let status = execute_config_with_processors(
+            &config,
+            &mut output,
+            || 100,
+            |_spec, _job, _clock, _output| {
+                panic!("variant mode should not use the non-variant processor")
+            },
+            |spec, job, mode, _clock, output| {
+                seen.push((
+                    spec.problem_no(),
+                    spec.total_wtc_limit,
+                    job.spec_file.to_owned(),
+                    job.batch_index,
+                    job.output_dir.map(str::to_owned),
+                    job.start,
+                    mode,
+                ));
+                writeln!(output, "% fake variant dispatch").unwrap();
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, 1);
+        assert_eq!(seen[0].1, 40);
+        assert_eq!(seen[0].2, config.spec_file);
+        assert_eq!(seen[0].3, 0);
+        assert_eq!(seen[0].4.as_deref(), Some("Out"));
+        assert_eq!(seen[0].5, 100);
+        assert_eq!(seen[0].6, LtbVariantMode::Variants28);
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains("% fake variant dispatch"));
+    }
+
+    #[test]
+    fn execute_rejects_interactive_mode_explicitly() {
+        let mut output = Vec::new();
+        let config = LtbRunnerConfig {
             spec_file: "missing.spec".to_owned(),
             prover: DEFAULT_PROVER.to_owned(),
             output_file: None,
@@ -708,18 +1093,6 @@ mod tests {
             interactive.message(),
             "e_ltb_runner interactive mode is not wired yet"
         );
-
-        config.interactive = false;
-        config.variant_mode = Some(LtbVariantMode::VariantsJ11);
-        let variant = execute_config_with_processor(
-            &config,
-            &mut output,
-            || 0,
-            |_spec, _job, _clock, _output| Ok(0),
-        )
-        .unwrap_err();
-        assert_eq!(variant.code(), ErrorCode::INTERFACE_ERROR);
-        assert!(variant.message().contains("variant mode VariantsJ11"));
     }
 
     #[test]
@@ -798,6 +1171,94 @@ mod tests {
     }
 
     #[test]
+    fn parse_variant_child_args_uses_fixed_internal_shape() {
+        let args = [
+            "spec.ltb".to_owned(),
+            "2".to_owned(),
+            "+1".to_owned(),
+            "./eprover".to_owned(),
+            "Problems/prob_+1.p".to_owned(),
+            "Results/prob.out".to_owned(),
+            "17".to_owned(),
+        ];
+
+        let config = parse_variant_child_args(&args).unwrap();
+
+        assert_eq!(config.spec_file, "spec.ltb");
+        assert_eq!(config.batch_index, 2);
+        assert_eq!(config.variant, "+1");
+        assert_eq!(config.prover, "./eprover");
+        assert_eq!(config.source, "Problems/prob_+1.p");
+        assert_eq!(config.dest, "Results/prob.out");
+        assert_eq!(config.wct_limit, 17);
+
+        let invalid = parse_variant_child_args(&args[..6]).unwrap_err();
+        assert_eq!(invalid.code(), ErrorCode::USAGE_ERROR);
+    }
+
+    #[test]
+    fn execute_variant_child_with_fake_backend_processes_concrete_problem() {
+        let _guard = global_state_lock();
+        let _temp_guard = temp_file_test_lock();
+        let dir = test_temp_dir();
+        fs::create_dir_all(dir.join("Problems")).unwrap();
+        let _tmpdir_guard = TmpDirGuard::set(&dir);
+        let prefix = format!("runner-child-{}-", std::process::id());
+        let abstract_include = format!("{prefix}*ignored.ax");
+        let concrete_include = format!("{prefix}+1.ax");
+        fs::write(
+            dir.join(&concrete_include),
+            "fof(concrete_shared, axiom, p(a)).\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("Problems").join("prob_+1.p"),
+            "cnf(goal_clause, axiom, $false).\n",
+        )
+        .unwrap();
+        let dest = dir.join(format!("runner-child-{}.out", std::process::id()));
+        let _ = fs::remove_file(&dest);
+        let spec_path = write_temp_spec(
+            "runner-child.spec",
+            &format!(
+                "division.category LTB.SAT\n\
+                 output.required Proof\n\
+                 limit.time.problem.wc 12\n\
+                 limit.time.overall.wc 40\n\
+                 include('{abstract_include}').\n\
+                 Problems/prob_*ignored.p Results/prob.out\n"
+            ),
+        );
+        let child = LtbVariantChildConfig {
+            spec_file: spec_path.to_string_lossy().replace('\\', "/"),
+            batch_index: 0,
+            variant: "+1".to_owned(),
+            prover: "variant-prover".to_owned(),
+            source: "Problems/prob_+1.p".to_owned(),
+            dest: dest.to_string_lossy().into_owned(),
+            wct_limit: 11,
+        };
+        let mut output = Vec::new();
+        let mut backend = FakeRunnerBackend::new(ProverResult::Theorem, "% child proof\n");
+
+        let status =
+            execute_variant_child_with_backend(&child, &mut output, || 100, &mut backend).unwrap();
+
+        assert_eq!(status, 1);
+        assert_eq!(backend.requests.len(), 1);
+        assert_eq!(backend.requests[0].executable, "variant-prover");
+        assert_eq!(backend.requests[0].cpu_time, 6);
+        assert!(!backend.payloads[0].is_empty());
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains(&format!("% Parsing {concrete_include}\n")));
+        assert_eq!(
+            fs::read_to_string(dest).unwrap(),
+            "% SZS status Theorem for Problems/prob_+1.p\n% child proof\n"
+        );
+    }
+
+    #[test]
     fn remaining_total_wtc_limit_matches_c_max_zero_boundary() {
         assert_eq!(remaining_total_wtc_limit(30, 10, 17), 23);
         assert_eq!(remaining_total_wtc_limit(30, 10, 50), 0);
@@ -821,5 +1282,96 @@ mod tests {
         let path = dir.join(format!("{name}-{}", std::process::id()));
         fs::write(&path, contents).unwrap();
         path
+    }
+
+    fn test_temp_dir() -> PathBuf {
+        std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("e-ltb-runner-tests")
+    }
+
+    struct FakeRunnerBackend {
+        active: usize,
+        completed: Option<BatchCompletedRunner>,
+        requests: Vec<BatchRunnerRequest>,
+        payloads: Vec<String>,
+    }
+
+    struct TmpDirGuard {
+        previous: Option<OsString>,
+    }
+
+    impl TmpDirGuard {
+        fn set(path: &PathBuf) -> Self {
+            fs::create_dir_all(path).unwrap();
+            let previous = std::env::var_os("TMPDIR");
+            std::env::set_var("TMPDIR", path);
+            Self { previous }
+        }
+    }
+
+    impl Drop for TmpDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("TMPDIR", value),
+                None => std::env::remove_var("TMPDIR"),
+            }
+        }
+    }
+
+    impl FakeRunnerBackend {
+        fn new(result: ProverResult, output: &str) -> Self {
+            Self {
+                active: 0,
+                completed: Some(BatchCompletedRunner {
+                    runner: BatchSpawnedRunner {
+                        name: "Threshold(10000) => --satauto-schedule --assume-incompleteness"
+                            .to_owned(),
+                        start_time: 100,
+                        prob_time: 6,
+                    },
+                    result,
+                    output: output.to_owned(),
+                }),
+                requests: Vec::new(),
+                payloads: Vec::new(),
+            }
+        }
+    }
+
+    impl BatchRunnerBackend for FakeRunnerBackend {
+        fn active_count(&self) -> usize {
+            self.active
+        }
+
+        fn spawn_runner(
+            &mut self,
+            request: BatchRunnerTempRequest,
+        ) -> Result<BatchSpawnedRunner, crate::basics::error::Diagnostic> {
+            let payload = fs::read_to_string(&request.input_file).unwrap();
+            let _removed = temp_file_remove(&request.input_file).unwrap();
+            self.payloads.push(payload);
+            self.requests.push(request.request);
+            self.active = crate::control::proc_ctrl::MAX_CORES;
+            Ok(BatchSpawnedRunner {
+                name: "Threshold(10000) => --satauto-schedule --assume-incompleteness".to_owned(),
+                start_time: 100,
+                prob_time: 6,
+            })
+        }
+
+        fn poll_runner<W: std::io::Write>(
+            &mut self,
+            _output: &mut W,
+        ) -> Result<Option<BatchCompletedRunner>, crate::basics::error::Diagnostic> {
+            self.active = 0;
+            Ok(self.completed.take())
+        }
+
+        fn clear(&mut self, _delete_files: bool) -> Result<(), crate::basics::error::Diagnostic> {
+            self.active = 0;
+            Ok(())
+        }
     }
 }

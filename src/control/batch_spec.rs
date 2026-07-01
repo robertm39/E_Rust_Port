@@ -754,6 +754,23 @@ impl BatchSpec {
         Ok(parsed)
     }
 
+    pub fn init_concrete_struct_fof_spec_from_files<W: Write + ?Sized>(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        default_dir: Option<&str>,
+        variant: &str,
+        output: &mut W,
+    ) -> Result<i64, Diagnostic> {
+        let mut concrete_spec = self.clone();
+        concrete_spec.includes = self
+            .includes
+            .iter()
+            .map(|include| abstract_to_concrete(include, variant, ".ax"))
+            .collect();
+        concrete_spec.init_struct_fof_spec_from_files(bank, ctrl, default_dir, output)
+    }
+
     pub fn load_problem_from_file(
         &self,
         bank: &mut TermBank,
@@ -3016,6 +3033,42 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains(&format!("% Parsing {include_name}\n")));
         assert!(output.contains("% Could not find definitely-missing.ax\n"));
+    }
+
+    #[test]
+    fn init_concrete_struct_fof_spec_from_files_rewrites_includes_like_c() {
+        let dir = test_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let prefix = format!("batch-concrete-variant-{}-", std::process::id());
+        let concrete_name = format!("{prefix}+1.ax");
+        let abstract_name = format!("{prefix}*ignored.ax");
+        let concrete_include = dir.join(&concrete_name);
+        fs::write(&concrete_include, "fof(concrete_shared, axiom, p(a)).\n").unwrap();
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.includes = vec![abstract_name.clone()];
+        let mut output = Vec::new();
+        let default_dir = format!("{}/", dir.to_string_lossy().replace('\\', "/"));
+
+        let parsed = spec
+            .init_concrete_struct_fof_spec_from_files(
+                &mut bank,
+                &mut ctrl,
+                Some(&default_dir),
+                "+1",
+                &mut output,
+            )
+            .unwrap();
+
+        assert_eq!(parsed, 1);
+        assert_eq!(spec.includes, [abstract_name]);
+        assert!(ctrl.has_parsed_include(&concrete_name));
+        assert!(!ctrl.has_parsed_include(&spec.includes[0]));
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains(&format!("% Parsing {concrete_name}\n")));
     }
 
     #[test]
