@@ -11416,6 +11416,9 @@ fn parse_simple_fof_primary_formula(
     if scanner.test_id("$distinct") {
         return parse_simple_fof_distinct_formula(scanner, bank);
     }
+    if problem_type == ProblemType::HigherOrder {
+        return parse_simple_thf_term_formula(scanner, bank);
+    }
     if scanner.test_tok(TokenType::EXIST_QUANTOR) {
         return parse_simple_fof_existential_formula(scanner, bank, problem_type);
     }
@@ -11454,6 +11457,21 @@ fn parse_simple_fof_primary_formula(
     let formulas = simple_fof_wrap_universal_formulas(bank, universal_bound, formulas);
     pop_simple_fof_var_envs(bank, universal_scope_count);
     Ok(formulas)
+}
+
+fn parse_simple_thf_term_formula(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    let formula = bank.parse_tformula_tstp(scanner)?;
+    if !formula.type_().as_ref().is_some_and(Type::is_bool) {
+        return Err(thf_formula_requires_full_pipeline_error(scanner));
+    }
+    simple_fof_bool_term_to_formulas(
+        &formula,
+        SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
+        bank,
+    )
 }
 
 fn simple_fof_formulas_to_disjuncts(formulas: Vec<SimpleFofFormula>) -> Vec<SimpleFofFormula> {
@@ -14101,7 +14119,7 @@ mod tests {
             "thf(person_type, type, person: $tType).\n\
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
-             thf(ax, axiom, p(a)).\n",
+             thf(ax, axiom, p @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -22620,15 +22638,14 @@ mod tests {
     }
 
     #[test]
-    fn run_syntax_only_rejects_thf_application_until_full_formula_pipeline() {
+    fn run_syntax_only_rejects_thf_lambda_until_full_formula_pipeline() {
         let _guard = global_state_lock();
-        let path = temp_path("syntax-thf-application-requires-full-pipeline");
+        let path = temp_path("syntax-thf-lambda-requires-full-pipeline");
         std::fs::write(
             &path,
             "thf(person_type, type, person: $tType).\n\
              thf(p_type, type, p: person > $o).\n\
-             thf(a_type, type, a: person).\n\
-             thf(goal, conjecture, p @ a).\n",
+             thf(goal, conjecture, ^[X: person]:p(X)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -22692,8 +22709,8 @@ mod tests {
             "thf(person_type, type, person: $tType).\n\
              thf(a_type, type, a: person).\n\
              thf(p_type, type, p: person > $o).\n\
-             thf(fact, axiom, p(a)).\n\
-             thf(goal, conjecture, p(a)).\n",
+             thf(fact, axiom, p @ a).\n\
+             thf(goal, conjecture, p @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();

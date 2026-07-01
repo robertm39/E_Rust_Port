@@ -1827,7 +1827,11 @@ impl TermBank {
         } else {
             self.parse_tformula_atom(scanner)?
         };
-        self.encode_predicate_as_eqn(formula)
+        if scanner.test_tok(TokenType::APPLICATION) {
+            Ok(formula)
+        } else {
+            self.encode_predicate_as_eqn(formula)
+        }
     }
 
     fn parse_quantified_tformula_tptp(
@@ -2304,12 +2308,83 @@ impl TermBank {
             };
             self.encode_equality_term(left, right, positive)
         } else {
+            if scanner.test_tok(TokenType::APPLICATION) {
+                return Ok(self.prepare_tformula_application_head(left));
+            }
             if self.tformula_atom_can_stay_plain_term(&left) {
                 return Ok(left);
             }
             self.prepare_predicate_formula_atom(&left)?;
             Ok(left)
         }
+    }
+
+    fn prepare_tformula_application_head(&mut self, head: Term) -> Term {
+        let Some((f_code, head_type)) = self.tformula_application_head_code_and_type(&head) else {
+            return head;
+        };
+        if f_code == head.f_code() && head.type_().as_ref() == Some(&head_type) {
+            return head;
+        }
+
+        let recovered = if head.arity() == 0 {
+            Term::const_cell_alloc(f_code)
+        } else {
+            let recovered = Term::top_alloc(f_code, head.arity());
+            for (index, arg) in head.argument_clones().into_iter().enumerate() {
+                recovered.set_argument(
+                    index,
+                    arg.unwrap_or_else(|| {
+                        panic!("application head argument {index} is uninitialized")
+                    }),
+                );
+            }
+            recovered
+        };
+        recovered.set_type(Some(head_type));
+        recovered
+    }
+
+    fn tformula_application_head_code_and_type(&mut self, head: &Term) -> Option<(FunCode, Type)> {
+        if let Some(type_) = self
+            .sig
+            .get_type(head.f_code())
+            .cloned()
+            .and_then(|type_| self.tformula_application_residual_type(&type_, head.arity()))
+        {
+            return Some((head.f_code(), type_));
+        }
+
+        let name = self.sig.find_name(head.f_code())?.to_owned();
+        let f_code = self.sig.find_f_code(&name);
+        if f_code == 0 || f_code == head.f_code() {
+            return None;
+        }
+        self.sig
+            .get_type(f_code)
+            .cloned()
+            .and_then(|type_| self.tformula_application_residual_type(&type_, head.arity()))
+            .map(|type_| (f_code, type_))
+    }
+
+    fn tformula_application_residual_type(
+        &mut self,
+        symbol_type: &Type,
+        consumed_args: usize,
+    ) -> Option<Type> {
+        if !symbol_type.is_arrow() || consumed_args >= type_get_max_arity(symbol_type) {
+            return None;
+        }
+        let residual = if consumed_args == 0 {
+            symbol_type.clone()
+        } else {
+            self.sig
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(
+                    symbol_type.args()[consumed_args..].to_vec(),
+                ))
+        };
+        residual.is_arrow().then_some(residual)
     }
 
     fn tformula_atom_can_stay_plain_term(&self, term: &Term) -> bool {
@@ -3157,7 +3232,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
-    use crate::inout::scanner::Scanner;
+    use crate::inout::scanner::{Scanner, TokenType};
     use crate::terms::functypes::FunCode;
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
@@ -4443,6 +4518,35 @@ mod tests {
         assert!(error
             .message()
             .contains("let declaration expects a function symbol"));
+    }
+
+    #[test]
+    fn tstp_formula_application_uses_thf_declared_predicate_type() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("person: $tType. a: person. p: person > $o.", false).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("p @ a", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
     }
 
     #[test]
