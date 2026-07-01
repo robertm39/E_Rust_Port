@@ -9917,7 +9917,10 @@ fn simple_fof_formula_collect_bound_variable_ids(
     variables: &mut BTreeSet<usize>,
 ) {
     match formula {
-        SimpleFofFormula::Truth(_) | SimpleFofFormula::Literal(_) => {}
+        SimpleFofFormula::Truth(_) => {}
+        SimpleFofFormula::Literal(literal) => {
+            simple_fof_literal_collect_let_bound_variable_ids(literal, variables);
+        }
         SimpleFofFormula::Implication {
             antecedents,
             consequents,
@@ -9957,6 +9960,56 @@ fn simple_fof_formulas_collect_bound_variable_ids(
 ) {
     for formula in formulas {
         simple_fof_formula_collect_bound_variable_ids(formula, variables);
+    }
+}
+
+fn simple_fof_literal_collect_let_bound_variable_ids(
+    literal: &Eqn,
+    variables: &mut BTreeSet<usize>,
+) {
+    simple_fof_term_collect_let_bound_variable_ids(literal.left(), variables);
+    simple_fof_term_collect_let_bound_variable_ids(literal.right(), variables);
+}
+
+fn simple_fof_term_collect_let_bound_variable_ids(term: &Term, variables: &mut BTreeSet<usize>) {
+    if term.is_any_var() {
+        return;
+    }
+
+    if term.f_code() == SIG_LET_CODE {
+        let body_index = term.arity().saturating_sub(1);
+        for index in 0..body_index {
+            if let Some(definition) = term.argument(index) {
+                simple_fof_let_definition_collect_formal_ids(&definition, variables);
+                simple_fof_term_collect_let_bound_variable_ids(&definition, variables);
+            }
+        }
+        if let Some(body) = term.argument(body_index) {
+            simple_fof_term_collect_let_bound_variable_ids(&body, variables);
+        }
+        return;
+    }
+
+    for index in 0..term.arity() {
+        if let Some(argument) = term.argument(index) {
+            simple_fof_term_collect_let_bound_variable_ids(&argument, variables);
+        }
+    }
+}
+
+fn simple_fof_let_definition_collect_formal_ids(
+    definition: &Term,
+    variables: &mut BTreeSet<usize>,
+) {
+    let Some(lhs) = definition.argument(0) else {
+        return;
+    };
+    for index in 0..lhs.arity() {
+        if let Some(argument) = lhs.argument(index) {
+            if argument.is_free_var() {
+                variables.insert(term_identity_id(&argument));
+            }
+        }
     }
 }
 
@@ -23000,6 +23053,37 @@ mod tests {
              thf(r_type, type, r: $o > $o).\n\
              thf(fact, axiom, r @ (p @ a)).\n\
              thf(goal, conjecture, r @ (p @ a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_parameterized_thf_boolean_let_application() {
+        let _guard = global_state_lock();
+        let path = temp_path("parameterized-thf-boolean-let-application-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(let_fact, axiom, $let(f: person > $o, f(X) := p @ X, f @ a)).\n\
+             thf(goal, conjecture, p @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
