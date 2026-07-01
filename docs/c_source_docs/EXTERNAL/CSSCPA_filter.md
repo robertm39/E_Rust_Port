@@ -86,7 +86,7 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 ### Rust Port Notes
 
 - The core CSSCPA state/process-clause behavior and `CSSCPALoop` command parser from `cex_csscpa` are represented in `src/external/csscpa.rs`.
-- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: C-shaped option parsing for help/version/verbose/output/silent/output-level/rant, stdout or output-file routing, default `-` stdin handling, file scanner setup, sequential input processing over one CSSCPA state, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `OutClose` output-stream error wording on flush failure, and `InitIO`/`ExitIO` initialization.
+- `src/external/csscpa_filter.rs` and the `CSSCPA_filter` Cargo binary now port the standalone wrapper: C-shaped option parsing for help/version/verbose/output/silent/output-level/rant, stdout or output-file routing, default `-` stdin handling, file scanner setup, sequential input processing over one CSSCPA state, final TSTP positive-unit/negative-unit/non-unit clause-set printing, C `SysError`-style two-line input/output file-open diagnostics, C `OutClose` output-stream error wording on flush failure, and `InitIO`/`ExitIO` initialization.
 
 ### Change Later
 
@@ -95,6 +95,7 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 - `process_options` mutates process-global `outname`, `OutputLevel`, `Verbose`, `OutputFormat`, and the dummy `app_encode = false` global. Rust should keep those as layered configuration after compatibility tests establish the exact option order and diagnostic wording.
 - `main` sets the scanner format to `TSTPFormat`, while the checked-in sample `.csscpa` file uses old `input_clause(...)` statements. The Rust loop accepts that legacy clause form under filter TSTP mode, but reference runs should confirm whether C's scanner/parser accepted it through TSTP mode or through a looser `ClauseParse` dispatch.
 - Rust exposes output routing through explicit writers and file creation rather than the process-global `GlobalOut`. This is cleaner for tests, but exact `OpenGlobalOut`/`OutClose` ownership and error wording should still be audited when byte-compatible CLI diagnostics are required.
+- Change later: Rust now mirrors C's two-line `SysError` shape for CSSCPA input/output file-open failures by embedding the program-prefixed OS error line in the diagnostic. A later process-level diagnostic layer could represent fatal system errors structurally instead of carrying the second line as text.
 - Rust file scanners currently load each file or stdin into memory before scanning. C reads through a `FILE*` stream; large CSSCPA inputs should be benchmarked before treating the eager path as final.
 
 ### Porting Focus

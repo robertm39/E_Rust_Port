@@ -246,7 +246,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         return Scanner::from_file_content("-", data, true);
     }
-    Scanner::from_file(Path::new(name), true)
+    Scanner::from_file(Path::new(name), true).map_err(csscpa_scanner_open_diagnostic)
 }
 
 fn write_clause_set(
@@ -307,9 +307,9 @@ impl<'a, W: Write> FilterOutput<'a, W> {
         if path == Path::new("-") {
             return Ok(Self::Stdout(stdout));
         }
-        File::create(path)
-            .map(Self::File)
-            .map_err(|error| io_diagnostic(format!("Cannot open file {}: {error}", path.display())))
+        File::create(path).map(Self::File).map_err(|error| {
+            csscpa_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
+        })
     }
 }
 
@@ -342,6 +342,26 @@ fn writeln_diag(output: &mut impl Write, line: &str) -> Result<(), Diagnostic> {
 
 fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
+}
+
+fn csscpa_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
+fn csscpa_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+        return error;
+    }
+    let Some((prefix, source_error)) = error.message().split_once(": ") else {
+        return error;
+    };
+    Diagnostic::new(
+        error.code(),
+        format!("{prefix}\n{PROGRAM_NAME}: {source_error}"),
+    )
 }
 
 fn i64_to_i32_saturating(value: i64) -> i32 {
@@ -516,6 +536,68 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
         assert!(error.message().contains("accepts only 0 or 1"));
+    }
+
+    #[test]
+    fn missing_input_file_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let missing_path = temp_path("missing-input");
+        remove_if_present(&missing_path);
+        _ = std::fs::remove_dir(&missing_path);
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME, missing_path.to_str().expect("path is utf8")],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("missing input file is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("output-dir");
+        remove_if_present(&output_path);
+        _ = std::fs::remove_dir(&output_path);
+        std::fs::create_dir(&output_path).expect("output fixture directory is created");
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("directory output path is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        std::fs::remove_dir(&output_path).expect("output fixture directory is removed");
     }
 
     #[test]
