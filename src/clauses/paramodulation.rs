@@ -229,9 +229,6 @@ fn compute_clause_clause_paramodulants_impl<W: fmt::Write>(
     if clause.query_prop(CP_NO_GENERATION) || with.query_prop(CP_NO_GENERATION) {
         return Ok(0);
     }
-    ensure_higher_order_paramodulation_clauses_subset(ocb, &[clause, parent_alias, with], || {
-        higher_order_paramod_diagnostic_for_type(pm_type)
-    })?;
 
     let mut paramod_count = compute_directed_clause_paramodulants(
         bank,
@@ -458,10 +455,6 @@ fn compute_all_paramodulants_indexed_impl<W: fmt::Write>(
     pm_type: ParamodulationType,
     mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
-    ensure_higher_order_paramodulation_clauses_subset(ocb, &[clause, parent_alias], || {
-        higher_order_paramod_diagnostic_for_type(pm_type)
-    })?;
-
     let mut paramod_count = compute_into_paramodulants_indexed(
         bank,
         ocb,
@@ -638,11 +631,6 @@ fn compute_from_position_into_occurrence(
     let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
 
     for into_clause_pos in occurrence.position_clauses().entries() {
-        ensure_higher_order_paramodulation_clauses_subset(
-            ocb,
-            &[into_clause_pos.clause()],
-            || higher_order_paramod_diagnostic_for_type(effective_pm_type),
-        )?;
         let mut marked_term = None;
         for into_cpos in into_clause_pos.positions() {
             let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
@@ -737,11 +725,6 @@ fn compute_indexed_sources_into_position(
                 else {
                     continue;
                 };
-                ensure_higher_order_paramodulation_clauses_subset(
-                    ocb,
-                    &[from_clause_pos.clause()],
-                    || higher_order_paramod_diagnostic_for_type(effective_pm_type),
-                )?;
                 let into_term = into_pos
                     .get_subterm()
                     .expect("indexed target position must select a subterm");
@@ -885,24 +868,6 @@ fn unifiable_occurrences<'index>(
     occurrences
 }
 
-fn ensure_higher_order_paramodulation_clauses_subset(
-    ocb: &OrderControlBlock,
-    clauses: &[&Clause],
-    diagnostic: impl Fn() -> Diagnostic,
-) -> Result<(), Diagnostic> {
-    if problem_type() != ProblemType::HigherOrder {
-        return Ok(());
-    }
-    if ocb.ordering_type != TermOrdering::Kbo6
-        || clauses
-            .iter()
-            .any(|clause| clause_has_higher_order_paramodulation_surface(clause))
-    {
-        return Err(diagnostic());
-    }
-    Ok(())
-}
-
 fn ensure_higher_order_paramodulation_terms_subset(
     ocb: &OrderControlBlock,
     terms: &[&Term],
@@ -919,12 +884,6 @@ fn ensure_higher_order_paramodulation_terms_subset(
         return Err(diagnostic());
     }
     Ok(())
-}
-
-fn clause_has_higher_order_paramodulation_surface(clause: &Clause) -> bool {
-    clause
-        .literals()
-        .exists_term(term_has_higher_order_unification_surface)
 }
 
 fn higher_order_paramod_diagnostic_for_type(pm_type: ParamodulationType) -> Diagnostic {
@@ -1202,11 +1161,6 @@ pub fn clause_ordered_paramod(
         !from_literal.is_oriented() || from.side() == EqnSide::LeftSide,
         "oriented paramodulation source can only use its left side"
     );
-    ensure_higher_order_paramodulation_clauses_subset(
-        ocb,
-        &[from_clause, into_clause],
-        higher_order_paramod_diagnostic,
-    )?;
     let freshvars = fresh_var_bank_for_clauses(bank, from_clause, into_clause);
     let mut subst = Substitution::new();
     let result = clause_ordered_paramod_with_subst(
@@ -1336,9 +1290,9 @@ fn clause_ordered_sim_paramod_variant(
     let into_other = into
         .get_other_side()
         .expect("simultaneous paramodulation target position must select an opposite side");
-    ensure_higher_order_paramodulation_clauses_subset(
+    ensure_higher_order_paramodulation_terms_subset(
         ocb,
-        &[from_clause, into_clause],
+        &[&from_term, &from_other, &into_term, &into_side, &into_other],
         higher_order_sim_paramod_diagnostic,
     )?;
 
@@ -1919,8 +1873,9 @@ mod tests {
         compute_clause_clause_paramodulants, paramod_from_side_positions, paramod_into_positions,
         paramodulation_pair_positions, ParamodulationType,
     };
+    use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausepos::ClausePos;
@@ -1938,11 +1893,27 @@ mod tests {
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::lambda::apply_terms;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_POTENTIAL_PARAMOD};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -1953,6 +1924,15 @@ mod tests {
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
         OrderControlBlock::alloc(
             TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn kbo6_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
             true,
             bank.signature(),
             HoOrderKind::LfhoOrder,
@@ -2014,6 +1994,16 @@ mod tests {
         term.set_type(Some(bool_type));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn unary_predicate_var(bank: &mut TermBank, f_code: i64) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let type_ = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
+        bank.vars().var_assert_alloc(f_code, &type_)
     }
 
     fn lit(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -2193,6 +2183,89 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
             ]
         );
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_carries_unrelated_surface_literal() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_ho_mixed_source_left");
+        let source_right = typed_const(&mut bank, "pm_ho_mixed_source_right");
+        let target_rhs = typed_const(&mut bank, "pm_ho_mixed_target_rhs");
+        let f_code = typed_unary_code(&mut bank, "pm_ho_mixed_f");
+        let f_of_source = typed_unary(&mut bank, f_code, &source_left);
+        let f_of_replacement = typed_unary(&mut bank, f_code, &source_right);
+        let predicate = unary_predicate_var(&mut bank, -2_401);
+        let arg = typed_const(&mut bank, "pm_ho_mixed_arg");
+        let applied = apply_terms(&mut bank, &predicate, std::slice::from_ref(&arg)).unwrap();
+        let truth = bank.true_term().clone();
+
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &f_of_source, &target_rhs, true);
+        let unrelated_literal = lit(&mut bank, &applied, &truth, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal, unrelated_literal]));
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store.iter().next().expect("one paramodulant inserted");
+        assert_eq!(stored.literal_number(), 2);
+        assert!(stored.literals().as_slice().iter().any(|literal| {
+            literal.left() == &f_of_replacement && literal.right() == &target_rhs
+        }));
+        assert!(stored
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| { literal.left().is_applied_free_var() && literal.right() == &truth }));
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_rejects_actual_surface_overlap() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let predicate = unary_predicate_var(&mut bank, -2_402);
+        let arg = typed_const(&mut bank, "pm_ho_surface_arg");
+        let applied = apply_terms(&mut bank, &predicate, std::slice::from_ref(&arg)).unwrap();
+        let truth = bank.true_term().clone();
+        let mut source_literal = lit(&mut bank, &applied, &truth, true);
+        let mut target_literal = lit(&mut bank, &applied, &truth, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let error = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error.message().contains("higher-order paramodulation"));
     }
 
     #[test]

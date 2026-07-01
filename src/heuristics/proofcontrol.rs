@@ -12833,11 +12833,11 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_generate_new_clauses_higher_order_applied_var_paramodulation_stays_diagnostic() {
+    fn proof_state_generate_new_clauses_higher_order_carries_unrelated_applied_var_literal() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let (selected, partner) = {
+        let (selected, partner, replacement, rhs, truth) = {
             let terms = state.terms_mut();
             let source = typed_const(terms, "pc_generate_ho_pm_diag_source");
             let replacement = typed_const(terms, "pc_generate_ho_pm_diag_replacement");
@@ -12857,7 +12857,7 @@ mod tests {
             let partner = Clause::alloc(EqnList::from_vec(vec![partner_lit]));
             let mut selected = Clause::alloc(EqnList::from_vec(vec![selected_lit, applied_lit]));
             selected.set_ident(4_154);
-            (selected, partner)
+            (selected, partner, replacement, rhs, truth)
         };
         state.processed_pos_eqns_mut().insert(partner);
         let mut control = proof_control_alloc();
@@ -12865,11 +12865,26 @@ mod tests {
         control.heuristic_parms_mut().arg_cong = ExtInferenceType::NoLits;
         control.heuristic_parms_mut().enable_eq_factoring = false;
 
-        let error =
-            proof_state_generate_new_clauses(&mut state, &mut control, &selected).unwrap_err();
+        let outcome = proof_state_generate_new_clauses(&mut state, &mut control, &selected)
+            .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("higher-order paramodulation"));
+        assert_eq!(outcome.paramodulants, 1);
+        assert_eq!(state.statistics().paramod_count, 1);
+        assert_eq!(state.tmp_store().members(), 1);
+        let generated = state.tmp_store().iter().next().unwrap();
+        assert_eq!(generated.literal_number(), 2);
+        assert!(generated.literals().as_slice().iter().any(|literal| {
+            literal.right() == &rhs
+                && literal
+                    .left()
+                    .argument(0)
+                    .is_some_and(|arg| arg == replacement)
+        }));
+        assert!(generated
+            .literals()
+            .as_slice()
+            .iter()
+            .any(|literal| { literal.right() == &truth && literal.left().is_applied_free_var() }));
     }
 
     #[test]
