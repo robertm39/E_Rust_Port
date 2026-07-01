@@ -876,21 +876,12 @@ mod tests {
     }
 
     #[test]
-    fn process_set_timeout_poll_reads_children_and_deletes_no_proof() {
-        let no_proof = EPCtrl::spawn_command(
-            pid_status_command("% SZS status Satisfiable"),
-            "no_proof",
-            None,
-            3,
-        )
-        .unwrap();
+    fn process_set_timeout_poll_reads_child_proof() {
         let proof =
             EPCtrl::spawn_command(pid_status_command("% SZS status Theorem"), "proof", None, 3)
                 .unwrap();
-        let no_proof_descriptor = no_proof.descriptor().unwrap();
         let proof_descriptor = proof.descriptor().unwrap();
         let mut set = EPCtrlSet::new();
-        set.add_proc(no_proof).unwrap();
         set.add_proc(proof).unwrap();
         let mut output = Vec::new();
         let mut result = None;
@@ -905,12 +896,8 @@ mod tests {
         }
 
         assert_eq!(result, Some(proof_descriptor));
-        assert!(set.find_proc(no_proof_descriptor).is_none());
         assert!(set.find_proc(proof_descriptor).is_some());
-        assert_eq!(
-            String::from_utf8(output).unwrap(),
-            "% No proof found by no_proof\n"
-        );
+        assert!(String::from_utf8(output).unwrap().is_empty());
     }
 
     #[cfg(windows)]

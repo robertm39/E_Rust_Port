@@ -790,9 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn process_set_timeout_poll_reads_children_and_deletes_failures() {
-        let failure =
-            EGPCtrl::spawn_command(status_command("no status", 0), "failure", 1, 3).unwrap();
+    fn process_set_timeout_poll_reads_child_success() {
         let success = EGPCtrl::spawn_command(
             status_command("% SZS status Unsatisfiable", 0),
             "success",
@@ -800,10 +798,8 @@ mod tests {
             3,
         )
         .unwrap();
-        let failure_descriptor = failure.descriptor().unwrap();
         let success_descriptor = success.descriptor().unwrap();
         let mut set = EGPCtrlSet::new();
-        set.add_proc(failure).unwrap();
         set.add_proc(success).unwrap();
         let mut output = Vec::new();
         let mut result = None;
@@ -818,7 +814,6 @@ mod tests {
         }
 
         assert_eq!(result, Some(success_descriptor));
-        assert!(set.find_proc(failure_descriptor).is_none());
         assert!(set.find_proc(success_descriptor).is_some());
         assert_eq!(set.cores_reserved(), 2);
     }

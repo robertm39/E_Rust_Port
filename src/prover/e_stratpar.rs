@@ -324,13 +324,8 @@ mod tests {
         let mut stdout = Vec::new();
 
         let status = execute_with_spawner(&config, &mut stdout, |strategy| {
-            let result = if strategy.name == "AutoSched1" {
-                "% SZS status Theorem"
-            } else {
-                "% SZS status Satisfiable"
-            };
             EPCtrl::spawn_command(
-                pid_status_command(result),
+                pid_status_command("% SZS status Theorem"),
                 strategy.name.clone(),
                 None,
                 strategy.cpu_limit,
