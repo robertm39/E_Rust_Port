@@ -1,5 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
+};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::freqvectors::{
     bill_features_collect_alloc, bill_plus_features_collect_alloc, fv_pack_clause,
@@ -8,6 +11,7 @@ use crate::clauses::freqvectors::{
     FVINDEX_SYMBOL_SLACK_DEFAULT,
 };
 use crate::clauses::subsumption::clause_subsume_order_sort_lits;
+use crate::inout::scanner::IoFormat;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use std::collections::{btree_map::Entry, BTreeMap};
@@ -442,6 +446,23 @@ impl FvIndex {
         })
     }
 
+    /// Returns the C `FVIndexPrint` tree shape with explicit `ClausePrint` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects a stored clause.
+    pub fn print_format_string(
+        &self,
+        bank: &TermBank,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        self.print_string_with_result_clause_renderer(|clause| {
+            fv_index_clause_rendered_string(bank, clause, full_terms, output_format, problem_type)
+        })
+    }
+
     #[must_use]
     pub fn print_string_with_clause_renderer<R>(&self, mut render_clause: R) -> String
     where
@@ -450,6 +471,18 @@ impl FvIndex {
         let mut output = "* ROOT *\n".to_owned();
         self.write_print(&mut output, 0, &mut render_clause);
         output
+    }
+
+    fn print_string_with_result_clause_renderer<R>(
+        &self,
+        mut render_clause: R,
+    ) -> Result<String, Diagnostic>
+    where
+        R: FnMut(&Clause) -> Result<String, Diagnostic>,
+    {
+        let mut output = "* ROOT *\n".to_owned();
+        self.write_print_result(&mut output, 0, &mut render_clause)?;
+        Ok(output)
     }
 
     fn insert_vector_clause(
@@ -531,6 +564,51 @@ impl FvIndex {
                 let _ = writeln!(output, "Alternative {key}: ");
                 successor.write_print(output, level + 1, render_clause);
             }
+        }
+    }
+
+    fn write_print_result<R>(
+        &self,
+        output: &mut String,
+        level: usize,
+        render_clause: &mut R,
+    ) -> Result<(), Diagnostic>
+    where
+        R: FnMut(&Clause) -> Result<String, Diagnostic>,
+    {
+        if self.final_node {
+            for clause in self.clauses.values() {
+                for _ in 0..=level {
+                    output.push_str("--");
+                }
+                output.push_str(&render_clause(clause)?);
+                output.push_str(" \n");
+            }
+        } else {
+            for (key, successor) in &self.successors {
+                for _ in 0..level {
+                    output.push_str("--");
+                }
+                let _ = writeln!(output, "Alternative {key}: ");
+                successor.write_print_result(output, level + 1, render_clause)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn fv_index_clause_rendered_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        IoFormat::Tstp => clause_tstp_string(bank, clause, full_terms, true, problem_type),
+        IoFormat::Lop | IoFormat::Auto => {
+            Ok(clause_print_lop_format_string(bank, clause, full_terms))
         }
     }
 }
@@ -642,6 +720,7 @@ mod tests {
         fv_index_pack_clause, fv_index_storage, fvi_param_init_anchors, fvi_param_init_specs,
         FvIndex, FvIndexAnchor, FvIndexInitTargetSets, FvIndexParams,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
@@ -650,6 +729,7 @@ mod tests {
         FreqVector, FvCollect, FvCollectLayout, FvIndexType, FvOverflowSpec,
         FVINDEX_MAX_FEATURES_DEFAULT,
     };
+    use crate::inout::scanner::IoFormat;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1037,6 +1117,43 @@ mod tests {
         assert_eq!(
             index.print_lop_string(&bank, true),
             "* ROOT *\nAlternative 2: \n--Alternative 0: \n------fv_index_a=fv_index_b <- . \n"
+        );
+    }
+
+    #[test]
+    fn index_print_format_string_dispatches_clause_output() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_format_a");
+        let second = typed_const(&mut bank, "fv_format_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)], 51);
+        let mut index = FvIndex::new();
+        let vector = FreqVector::from_values(vec![3, 1]);
+
+        assert!(index.insert_vector_clause(&vector, 1, clause));
+
+        let input_clause_tree = index
+            .print_format_string(&bank, true, IoFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(input_clause_tree.starts_with("* ROOT *\nAlternative 3: "));
+        assert!(input_clause_tree.contains("------input_clause("));
+        assert!(input_clause_tree.contains("++equal(fv_format_a, fv_format_b)"));
+        assert!(!input_clause_tree.contains("<-"));
+
+        let wrapped_clause_tree = index
+            .print_format_string(&bank, true, IoFormat::Tstp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(
+            wrapped_clause_tree.contains("------cnf(")
+                || wrapped_clause_tree.contains("------tcf(")
+        );
+        assert!(wrapped_clause_tree.contains("fv_format_a"));
+        assert!(!wrapped_clause_tree.contains("<-"));
+
+        assert_eq!(
+            index
+                .print_format_string(&bank, true, IoFormat::Auto, ProblemType::FirstOrder)
+                .unwrap_or_else(|err| panic!("{err}")),
+            index.print_lop_string(&bank, true)
         );
     }
 }
