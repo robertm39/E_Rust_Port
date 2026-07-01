@@ -300,6 +300,18 @@ impl Scanner {
         &self.tok_sequence[self.current]
     }
 
+    /// Return and clear the comments accumulated before the current token.
+    ///
+    /// This mirrors C callers that print `AktToken(in)->comment` and then
+    /// reset the dynamic string.
+    #[must_use]
+    pub fn take_current_comment_bytes(&mut self) -> Vec<u8> {
+        let token = &mut self.tok_sequence[self.current];
+        let comment = token.comment.view_bytes().to_vec();
+        token.comment.reset();
+        comment
+    }
+
     #[must_use]
     pub const fn format(&self) -> IoFormat {
         self.format

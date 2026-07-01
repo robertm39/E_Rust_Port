@@ -1,6 +1,7 @@
 //! Port of `PCL2/pcl_miniprotocol`.
 
 use std::collections::BTreeSet;
+use std::io::Write as IoWrite;
 
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
@@ -114,6 +115,33 @@ impl PclMiniProtocol {
             }
             count += 1;
         }
+        Ok(count)
+    }
+
+    /// C `PCLMiniProtParse`, including comment forwarding through explicit output.
+    ///
+    /// # Errors
+    ///
+    /// Returns scanner diagnostics for invalid protocol syntax, duplicate
+    /// identifiers, diagnostics from mini-step parsing, or output write
+    /// failures.
+    pub fn parse_with_output(
+        &mut self,
+        output: &mut (impl IoWrite + ?Sized),
+        scanner: &mut Scanner,
+        options: PclMiniStepParseOptions,
+    ) -> Result<i64, Diagnostic> {
+        let mut count = 0;
+        while scanner.test_tok(TokenType::POS_INT) {
+            write_current_comment(output, scanner)?;
+            let start = scanner.current_token().clone();
+            let step = PclMiniStep::parse(scanner, &mut self.terms, options)?;
+            if !self.insert_step(step)? {
+                return Err(duplicate_identifier_error(&start));
+            }
+            count += 1;
+        }
+        write_current_comment(output, scanner)?;
         Ok(count)
     }
 
@@ -301,6 +329,23 @@ fn duplicate_identifier_error(token: &Token) -> Diagnostic {
     )
 }
 
+fn write_current_comment(
+    output: &mut (impl IoWrite + ?Sized),
+    scanner: &mut Scanner,
+) -> Result<(), Diagnostic> {
+    let comment = scanner.take_current_comment_bytes();
+    if comment.is_empty() {
+        Ok(())
+    } else {
+        output.write_all(&comment).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Error writing output: {error}"),
+            )
+        })
+    }
+}
+
 fn protocol_error(message: &str) -> Diagnostic {
     Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
 }
@@ -348,6 +393,50 @@ mod tests {
                 .unwrap(),
             "     1 : lemma : [++p] : 2     2 :  : [++q] : initial : 'proof'"
         );
+    }
+
+    #[test]
+    fn parse_with_output_forwards_comments_and_clears_them() {
+        let mut protocol = PclMiniProtocol::new().unwrap();
+        let mut scanner = Scanner::from_user_string(
+            "% lead\n1 : : [++p] : initial\n# mid\n2 : : [++q] : 1\n% tail\ntail",
+            false,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tptp);
+        let mut output = Vec::new();
+
+        let count = protocol
+            .parse_with_output(
+                &mut output,
+                &mut scanner,
+                PclMiniStepParseOptions {
+                    problem_type: ProblemType::FirstOrder,
+                    support_shell_pcl: true,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% lead\n# mid\n% tail\n"
+        );
+        assert_eq!(scanner.current_token().literal(), "tail");
+        assert!(scanner.current_token().comment_bytes().is_empty());
+
+        let mut repeated = Vec::new();
+        assert_eq!(
+            protocol
+                .parse_with_output(
+                    &mut repeated,
+                    &mut scanner,
+                    PclMiniStepParseOptions::default()
+                )
+                .unwrap(),
+            0
+        );
+        assert!(repeated.is_empty());
     }
 
     #[test]
