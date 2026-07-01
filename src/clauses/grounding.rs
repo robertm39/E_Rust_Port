@@ -1,6 +1,10 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::memory::mem_is_low;
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
+};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
@@ -10,12 +14,14 @@ use crate::clauses::groundconstr::{
     sig_collect_constant_terms, term_identity_set_from_terms, LitOccTable, TermIdentitySet,
     VarConstraintMap,
 };
+use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::clauses::propclauses::{PropClause, PropClauseSet};
 use crate::inout::signals::time_is_up;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
+use std::io::Write as IoWrite;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -40,6 +46,37 @@ pub enum GroundInstanceOutcome {
     Complete,
     EmptyClause,
     EstimateLimitExceeded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GroundInstancePrintOptions {
+    pub output_level: i64,
+    pub output_format: ProofDocOutputFormat,
+    pub problem_type: ProblemType,
+    pub subsume: bool,
+    pub resolve: bool,
+    pub taut_check: bool,
+}
+
+impl GroundInstancePrintOptions {
+    #[must_use]
+    pub const fn new(
+        output_level: i64,
+        output_format: ProofDocOutputFormat,
+        problem_type: ProblemType,
+        subsume: bool,
+        resolve: bool,
+        taut_check: bool,
+    ) -> Self {
+        Self {
+            output_level,
+            output_format,
+            problem_type,
+            subsume,
+            resolve,
+            taut_check,
+        }
+    }
 }
 
 impl GcuEncoding {
@@ -664,6 +701,37 @@ pub fn clause_create_ground_instances(
     )
 }
 
+/// C `ClauseCreateGroundInstances`, including the `OutputLevel` progress
+/// side effect through an explicit output owner.
+///
+/// # Errors
+///
+/// Returns diagnostics from progress output, TSTP clause rendering, or
+/// generated literal copying.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`clause_create_ground_instances`].
+pub fn clause_create_ground_instances_with_output(
+    output: &mut (impl IoWrite + ?Sized),
+    options: GroundInstancePrintOptions,
+    bank: &mut TermBank,
+    clause: &Clause,
+    inst: &mut VarSetInst,
+    groundset: &mut GroundSet,
+) -> Result<bool, Diagnostic> {
+    write_ground_instance_progress(output, options, bank, clause)?;
+    clause_create_ground_instances(
+        bank,
+        clause,
+        inst,
+        groundset,
+        options.subsume,
+        options.resolve,
+        options.taut_check,
+    )
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "C-compatible helper mirrors ccl_grounding control flags plus stop hook"
@@ -714,6 +782,68 @@ fn clause_create_ground_instances_with_stop(
     } else {
         Ok(res)
     }
+}
+
+fn write_ground_instance_progress(
+    output: &mut (impl IoWrite + ?Sized),
+    options: GroundInstancePrintOptions,
+    bank: &TermBank,
+    clause: &Clause,
+) -> Result<(), Diagnostic> {
+    if options.output_level == 1 {
+        grounding_write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())?;
+        grounding_flush(output)?;
+    } else if options.output_level >= 2 {
+        grounding_write_all(output, DEFAULT_COMCHAR_RAW.as_bytes())?;
+        grounding_write_all(output, b" ")?;
+        grounding_write_all(
+            output,
+            clause_grounding_progress_string(
+                bank,
+                clause,
+                options.output_format,
+                options.problem_type,
+            )?
+            .as_bytes(),
+        )?;
+        grounding_write_all(output, b"\n")?;
+    }
+    Ok(())
+}
+
+fn clause_grounding_progress_string(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: ProofDocOutputFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        ProofDocOutputFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        ProofDocOutputFormat::Tstp => clause_tstp_string(bank, clause, true, true, problem_type),
+        _ => Ok(clause_print_lop_format_string(bank, clause, true)),
+    }
+}
+
+fn grounding_write_all(
+    output: &mut (impl IoWrite + ?Sized),
+    bytes: &[u8],
+) -> Result<(), Diagnostic> {
+    output
+        .write_all(bytes)
+        .map_err(|error| grounding_write_error(&error))
+}
+
+fn grounding_flush(output: &mut (impl IoWrite + ?Sized)) -> Result<(), Diagnostic> {
+    output
+        .flush()
+        .map_err(|error| grounding_write_error(&error))
+}
+
+fn grounding_write_error(error: &std::io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("failed to write grounding progress output: {error}"),
+    )
 }
 
 /// Creates unconstrained ground instances for a slice of clauses.
@@ -1250,16 +1380,18 @@ fn usize_diff_as_i32(left: usize, right: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_cmp_by_len, clause_create_ground_instances_with_stop, clause_eqlit_recode,
-        clause_get_max_lit, clause_print_dimacs_string, clause_print_dimacs_to_writers,
+        clause_cmp_by_len, clause_create_ground_instances_with_output,
+        clause_create_ground_instances_with_stop, clause_eqlit_recode, clause_get_max_lit,
+        clause_print_dimacs_string, clause_print_dimacs_to_writers,
         clause_set_create_constrained_ground_instances_with_stop,
         clause_set_create_ground_instances_with_stop, clause_set_eqlit_recode,
         clause_set_print_dimacs_string, clause_set_print_dimacs_to_writers,
         clause_slice_create_constrained_ground_instances_with_stop,
         clause_slice_create_ground_instances_with_stop, eqn_eqlit_recode,
-        print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome, GroundSet, GroundSetState,
-        VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
+        print_dimacs_header_string, GcuEncoding, GroundInstanceOutcome, GroundInstancePrintOptions,
+        GroundSet, GroundSetState, VarSetInst, DEFAULT_LIT_GROW, DEFAULT_LIT_NO,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
@@ -1268,6 +1400,7 @@ mod tests {
     use crate::clauses::groundconstr::{
         lit_occ_add_lit_alt, term_identity_set_from_terms, LitOccTable,
     };
+    use crate::clauses::inferencedoc::ProofDocOutputFormat;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1903,6 +2036,83 @@ mod tests {
             Some(&GcuEncoding::Pos)
         );
         assert_eq!(x.binding(), None);
+    }
+
+    #[test]
+    fn clause_create_ground_instances_with_output_writes_c_progress_prefixes() {
+        let mut bank = test_bank();
+        let atom = predicate_atom(&mut bank, "grounding_progress_p", &[]);
+        let clause = clause_from(vec![predicate_literal(&mut bank, &atom, true)]);
+
+        let mut level_one_output = Vec::new();
+        let mut level_one_inst = VarSetInst::alloc(&clause);
+        let mut level_one_groundset = GroundSet::new();
+        assert!(clause_create_ground_instances_with_output(
+            &mut level_one_output,
+            GroundInstancePrintOptions::new(
+                1,
+                ProofDocOutputFormat::Lop,
+                ProblemType::FirstOrder,
+                false,
+                false,
+                false,
+            ),
+            &mut bank,
+            &clause,
+            &mut level_one_inst,
+            &mut level_one_groundset,
+        )
+        .unwrap());
+        assert_eq!(String::from_utf8(level_one_output).unwrap(), "%");
+
+        let mut level_two_output = Vec::new();
+        let mut level_two_inst = VarSetInst::alloc(&clause);
+        let mut level_two_groundset = GroundSet::new();
+        assert!(clause_create_ground_instances_with_output(
+            &mut level_two_output,
+            GroundInstancePrintOptions::new(
+                2,
+                ProofDocOutputFormat::Lop,
+                ProblemType::FirstOrder,
+                false,
+                false,
+                false,
+            ),
+            &mut bank,
+            &clause,
+            &mut level_two_inst,
+            &mut level_two_groundset,
+        )
+        .unwrap());
+        assert_eq!(
+            String::from_utf8(level_two_output).unwrap(),
+            "% grounding_progress_p <- .\n"
+        );
+
+        let mut tptp_output = Vec::new();
+        let mut tptp_inst = VarSetInst::alloc(&clause);
+        let mut tptp_groundset = GroundSet::new();
+        assert!(clause_create_ground_instances_with_output(
+            &mut tptp_output,
+            GroundInstancePrintOptions::new(
+                2,
+                ProofDocOutputFormat::Tptp,
+                ProblemType::FirstOrder,
+                false,
+                false,
+                false,
+            ),
+            &mut bank,
+            &clause,
+            &mut tptp_inst,
+            &mut tptp_groundset,
+        )
+        .unwrap());
+        let tptp_progress = String::from_utf8(tptp_output).unwrap();
+        assert!(tptp_progress.starts_with("% input_clause("));
+        assert!(tptp_progress.contains("grounding_progress_p"));
+        assert!(tptp_progress.ends_with("]).\n"));
+        assert!(!tptp_progress.contains("<-"));
     }
 
     #[test]
