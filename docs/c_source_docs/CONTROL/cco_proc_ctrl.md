@@ -131,4 +131,12 @@ Source files reviewed: `CONTROL/cco_proc_ctrl.h`, `CONTROL/cco_proc_ctrl.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `EPCtrlAlloc` initializes most fields but not `fileno`; callers must not add the control cell to an `EPCtrlSet` before `ECtrlCreateGeneric` assigns the pipe descriptor. Rust should model this as an optional descriptor at the safe boundary rather than exposing uninitialized state.
+- `ECtrlCreateGeneric` constructs a shell command by concatenating the prover path, fixed options, caller-provided options, CPU limit, and input file without quoting or escaping. Preserve exact construction only where byte-compatible command text matters; actual process creation should prefer structured arguments to avoid shell/path surprises.
+- `EPCtrlGetResult` publishes `PRResultTable` entries for `PRFailure` and `PRGaveUp`, but the result scanner does not recognize `% Failure:` or `% SZS status GaveUp`; it only assigns `PRFailure` on EOF when no recognized proof/saturation status was seen. Rust should keep this compatibility quirk until scheduler reference tests decide whether failure/gave-up output needs direct recognition.
+- `EPCtrlSetGetResult` ignores `select` errors, scans every integer descriptor from zero through `maxfd`, deletes no-proof subprocesses during that scan, and treats `PRGaveUp` as an impossible default case. A cleaned event-loop API should separate readiness polling, result parsing, process deletion, and diagnostic policy after compatibility is covered.
+- The C module mixes subprocess ownership, temporary-file deletion, result parsing, and `GlobalOut` printing. Rust should keep those as explicit responsibilities so server and scheduler integrations can choose compatibility routing without hardwiring global output into the reusable process-control core.
 <!-- END MANUAL REVIEW: c_source_docs -->

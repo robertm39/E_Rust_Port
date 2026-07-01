@@ -283,7 +283,7 @@ Implemented:
 Pending:
 
 - Exact event-loop integration for `select`/`fd_set` or a compatible platform abstraction.
-- Full `cco_proc_ctrl` process-control ownership and I/O; the C session code registers running subprocess descriptors but leaves subprocess I/O as a TODO.
+- Full subprocess I/O in session processing; `cco_proc_ctrl` descriptor registration is represented, but the C session code leaves actual subprocess I/O as a TODO.
 - Server executable/control wiring, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
 
 Change-later notes:
@@ -292,6 +292,34 @@ Change-later notes:
 - `EServerInitFDSet` does not guard against `listening == -1` before `FD_SET(server->listening, rd_fds)`. Rust only registers a listener descriptor when one exists; preserve the invalid C call surface only in a low-level compatibility shim if a reference path depends on it.
 - `ESessionProcessCmds` only prints `Received: ...` for queued messages and does not dispatch commands. Rust routes this through an explicit writer for testability; executable server integration should decide where the C direct-stdout behavior belongs.
 - C `fd_set` handling and raw integer socket ownership are represented as safe descriptor-interest collection plus owned Rust sockets. Keep this as an adapter boundary so later platform event loops can target either exact `select` behavior or a cleaner poll abstraction without changing session state semantics.
+
+## E Process Control
+
+Rust files:
+
+- `src/control/proc_ctrl.rs`
+
+C source references:
+
+- `eprover/CONTROL/cco_proc_ctrl.c`
+- `eprover/CONTROL/cco_proc_ctrl.h`
+
+Implemented:
+
+- Deterministic `cco_proc_ctrl` surface pieces, including `EPCTRL_BUFSIZE`, `MAX_CORES`, SZS result-string constants, `E_OPTIONS_BASE`, `E_OPTIONS`, `PRResultTable`-style result-string lookup, `EPCtrl` allocation defaults, output accumulation, C-shaped result-line scanning for theorem/contradictory-axioms/unsatisfiable/satisfiable/counter-satisfiable, EOF-to-failure fallback, cleanup of owned temporary input files, exact command-string construction for the generic/default E subprocess calls, descriptor-indexed `EPCtrlSet` storage, descriptor-interest registration for session/server readiness, process lookup/deletion/clear helpers, and a testable ready-descriptor result poll that returns proof-producing subprocesses while deleting no-proof terminated subprocesses with C-shaped `% No proof found by ...` output.
+
+Pending:
+
+- Actual subprocess creation and pipe ownership for `ECtrlCreate`/`ECtrlCreateGeneric`, including PID-line parsing, `popen`/`pclose` or platform-equivalent child management, signal termination, and nonblocking/readiness integration.
+- Exact `select` timeout/error behavior for `EPCtrlSetGetResult`; Rust currently exposes the deterministic ready-descriptor core that a later event loop can drive.
+- Scheduler/server call-site integration and byte-compatible process-output routing through the executable's selected global output.
+
+Change-later notes:
+
+- `EPCtrlAlloc` leaves `fileno` uninitialized until process creation. Rust represents the descriptor as optional and rejects insertion into an `EPCtrlSet` without one; keep raw uninitialized behavior out of safe APIs.
+- `EPCtrlGetResult` has table entries for `Failure` and `GaveUp`, but the scanner only recognizes theorem, contradictory axioms, unsatisfiable, satisfiable, and counter-satisfiable lines; EOF without one of those statuses becomes `PRFailure`. Rust preserves that parser surface for now.
+- `ECtrlCreateGeneric` builds one shell command by string concatenation without quoting `prover`, options, or file names. Rust preserves exact command construction in the helper, but actual spawning should use an argument-vector API when possible and reserve shell concatenation for compatibility mode.
+- `EPCtrlSetGetResult` ignores `select` errors, scans integer descriptors from `0..=maxfd`, and asserts on impossible result states. Rust keeps the deterministic polling behavior explicit; the later event-loop adapter should decide which of these artifacts are compatibility requirements.
 
 ## Initial Crate And CLI Foundation
 
