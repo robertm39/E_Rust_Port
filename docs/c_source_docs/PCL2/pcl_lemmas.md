@@ -132,4 +132,16 @@ Source files reviewed: `PCL2/pcl_lemmas.h`, `PCL2/pcl_lemmas.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial lemma-selection support is ported as `src/pcl2/lemmas.rs`, including default lemma parameters, deterministic inference weights, active/passive reference counters by C operator class, pure quote references, proof-tree-size caching with lemma-as-zero recursion, lemma-quality computation, lemma-quality comparison, and sequential, recursive, and flat lemma selection.
+
+### Change Later
+
+- `InferenceWeightsAlloc` initializes only a subset of `PCLOpcodes`, leaving slots such as `PCLOpIntroDef`, `PCLOpSatCheck`, `PCLOpCondense`, and all FOF-side transformations with allocator-dependent values even though `PCL_OP_CONDENSE_WEIGHT` is defined. Rust uses deterministic zero defaults for the uninitialized slots while preserving the explicitly assigned C weights.
+- `LemmaParamCell` exposes `proof_tree_w` and `proof_dag_w`, and the header comment describes both in the rating formula, but `PCLStepComputeLemmaWeight` ignores those parameters and uses `1 + proof_tree_size` directly. Rust mirrors the executable formula; revisit the parameter API when lemma-quality compatibility traces exist.
+- `PCLProtSeqFindLemmas` increments and marks a qualifying lemma before checking `res > max_number`, so `max_number == 0` can still mark and return one lemma. Rust preserves this off-by-one behavior.
+- `PCLProtComputeLemmaWeights` and the selection loops do not exclude FOF steps; FOF steps receive quality `0` and can be selected when the quality limit is non-positive. Rust keeps that behavior until proof-object tooling proves whether FOF lemma selection is intentional.
+- `PCLStepUpdateRefs` dereferences a missing parent for a top-level quote without a null check, while nested dangling quote references are silently ignored through `PCLExprGetQuotedArg` failure and quote recursion. Rust ignores missing reference-counter parents but reports missing parents during proof-size computation.
 <!-- END MANUAL REVIEW: c_source_docs -->
