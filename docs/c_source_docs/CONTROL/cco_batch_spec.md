@@ -126,4 +126,17 @@ Source files reviewed: `CONTROL/cco_batch_spec.h`, `CONTROL/cco_batch_spec.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Rust support is in `src/control/batch_spec.rs`, covering the output-type enum values, batch filter/strategy tables, owned batch-spec state, scanner-backed config/include/problem-list parsing, C-shaped printing, `BatchSpecProblemNo`, `e_ltb_runner` header parsing, include acceptance notices, and abstract variant filename construction.
+
+### Change Later
+
+- `BatchSpecParse` comments call the spec syntax "wonky": comments and newlines are significant to the external format, but this implementation ignores them and hopes scanner token flow is enough. Preserve this while building drop-in compatibility; later, replace it with an explicit grammar only after real LTB corpus tests cover accepted legacy forms.
+- The input path through `e_ltb_runner` accepts `division.category.training_data`, while `BatchSpecPrint` emits `division.category.training_directory`. Keep both spellings visible until compatibility tests decide whether the printer should remain mismatched or normalize the field name.
+- `BatchSpecParse` prints `% Accepted ... for parsing` to stdout while parsing includes. That side effect belongs to parsing rather than axiom loading, and a future interface may want to move it behind a runner-level logging decision.
+- The problem-list loop starts on either a slash token or the exact identifiers `Problem|Problems`, then consumes two filename-shaped token streams. This is path-shape compatibility rather than a robust section grammar.
+- `abstract_to_concrete` ignores everything after the first `*` in an abstract filename. If future variant specs need suffix preservation, change this only behind compatibility tests because the truncation is documented in the C function comment.
+- Training-directory values are parsed with the normal scanner's continuous-token behavior, so comment delimiters still have scanner semantics inside unquoted paths. Consider quoted or explicitly delimited fields only after matching existing LTB files.
 <!-- END MANUAL REVIEW: c_source_docs -->

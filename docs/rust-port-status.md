@@ -404,6 +404,35 @@ Change-later notes:
 - The C usage error says `e_ltb_runner` even though the executable is `e_stratpar`. Rust preserves that message in diagnostics for now; revise only after compatibility tests say user-facing typo compatibility is unnecessary.
 - The eight strategies and `HardTimeLimit/2` child limit are hard-coded for the CASC-2017 SLB hack. Keep this as a compatibility executable, but a future scheduler-facing interface should share configurable process orchestration with the main auto-schedule machinery.
 
+## LTB Batch Specification Surface
+
+Rust files:
+
+- `src/control/batch_spec.rs`
+
+C source references:
+
+- `eprover/CONTROL/cco_batch_spec.h`
+- `eprover/CONTROL/cco_batch_spec.c`
+- `eprover/PROVER/e_ltb_runner.c`
+
+Implemented:
+
+- Initial `cco_batch_spec` support includes the `BOOutputType` enum values, `BatchSpecCell`-shaped owned Rust state, C batch filter/strategy tables without NULL sentinels, `BatchSpecProblemNo` behavior, C-shaped batch-spec printing, scanner-backed `BatchSpecParse` control flow, `e_ltb_runner` header parsing for `division.category` plus optional `division.category.training_data`, include acceptance notices, and `abstract_to_concrete` prefix/variant/postfix construction.
+
+Pending:
+
+- Actual batch problem processing, shared-axiom `StructFOFSpec` initialization, filter-specific child spawning, interactive mode, variant batch execution, output-directory handling, and the `e_ltb_runner` CLI wrapper remain pending.
+- Reference comparisons against real CASC LTB specs should be added once the runner can execute problems, because this grammar is intentionally loose and historically tied to specific competition file shapes.
+
+Change-later notes:
+
+- `BatchSpecParse` is explicitly described as wonky in C: comments and newlines are structurally meaningful in the spec format, but the implementation ignores them and relies on scanner token flow. Rust mirrors the token flow for compatibility; later, a strict grammar should be considered only after reference corpus coverage exists.
+- `e_ltb_runner` accepts `division.category.training_data`, while `BatchSpecPrint` emits `division.category.training_directory`. Rust preserves both spellings at their respective boundaries so the mismatch stays visible.
+- Parsing includes prints `% Accepted ... for parsing` as a side effect before any actual axiom parsing. Keep this until runner output compatibility says whether the notice can move behind a verbosity flag.
+- The problem-list loop starts only when the next token is `/` or the literal identifier `Problem|Problems`, then parses two filename-shaped token runs. This accommodates `Problems/...` paths but is not a real section grammar.
+- `abstract_to_concrete` discards everything in the abstract name after the first `*`; variant processing should keep that truncation until CASC variant specs are covered by tests.
+
 ## Initial Crate And CLI Foundation
 
 Rust files:
