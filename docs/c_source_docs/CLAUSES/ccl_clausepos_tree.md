@@ -102,7 +102,8 @@ Source files reviewed: `CLAUSES/ccl_clausepos_tree.h`, `CLAUSES/ccl_clausepos_tr
 
 ### C Behaviors To Revisit After Compatibility
 
-- `ClauseTPosTreePrint` combines global `ClausePrint` output with `NumTreeDebugPrint`, which prints the actual numeric-tree shape and a `Tree size` line. Rust now provides explicit LOP-backed clause rendering over sorted compact positions; reproduce the exact numeric-tree debug output only if this path becomes compatibility-visible.
+- `ClauseTPosTreePrint` combines global `ClausePrint` output with `NumTreeDebugPrint`, which prints the actual numeric-tree shape and a `Tree size` line. Rust now provides default LOP and explicit LOP/TPTP/TSTP clause rendering over sorted compact positions; reproduce the exact numeric-tree debug output only if this path becomes compatibility-visible.
+- `ClauseTPosTreePrint` is documented with no global variables, but its `ClausePrint` call observes the process-global `OutputFormat` and TSTP printing observes the process-global problem type. Rust keeps those dependencies explicit through output-format and problem-type parameters.
 
 ### Porting Focus
 

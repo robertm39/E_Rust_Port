@@ -1,5 +1,10 @@
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::basics::error::Diagnostic;
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
+};
 use crate::clauses::clausecpos::CompactPos;
+use crate::inout::scanner::IoFormat;
 use crate::terms::termbanks::TermBank;
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
@@ -84,6 +89,45 @@ impl ClauseTPos {
         let _ = self.write_lop_debug(&mut output, bank);
         output
     }
+
+    /// Returns the C `ClauseTPosTreePrint` shape with explicit `ClausePrint` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects the stored clause.
+    pub fn format_debug_string(
+        &self,
+        bank: &TermBank,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        writeln!(
+            output,
+            "OLs: {}",
+            clause_tpos_rendered_clause_string(bank, &self.clause, output_format, problem_type,)?
+        )
+        .expect("writing to String cannot fail");
+        write!(output, "occ:").expect("writing to String cannot fail");
+        for pos in &self.positions {
+            write!(output, " {pos}").expect("writing to String cannot fail");
+        }
+        writeln!(output).expect("writing to String cannot fail");
+        Ok(output)
+    }
+}
+
+fn clause_tpos_rendered_clause_string(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        IoFormat::Tstp => clause_tstp_string(bank, clause, true, true, problem_type),
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string(bank, clause, true)),
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -164,9 +208,11 @@ pub const fn clause_key(clause: &Clause) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{clause_key, cmp_clause_tpos_cells, ClauseTPos, ClauseTPosTree};
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::inout::scanner::IoFormat;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
@@ -283,6 +329,43 @@ mod tests {
         assert_eq!(
             cell.lop_debug_string(&bank),
             "OLs: clause_tpos_a=clause_tpos_b <- .\nocc: 1 5\n"
+        );
+    }
+
+    #[test]
+    fn format_debug_print_dispatches_clause_output() {
+        let mut bank = test_bank();
+        let left = typed_const(&mut bank, "clause_tpos_format_a");
+        let right = typed_const(&mut bank, "clause_tpos_format_b");
+        let literal = Eqn::alloc(left, right, &mut bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        let mut cell = ClauseTPos::new(&clause);
+        cell.insert_pos(2);
+        cell.insert_pos(7);
+
+        let input_clause_debug = cell
+            .format_debug_string(&bank, IoFormat::Tptp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(input_clause_debug.starts_with("OLs: input_clause("));
+        assert!(input_clause_debug.contains("++equal(clause_tpos_format_a, clause_tpos_format_b)"));
+        assert!(input_clause_debug.ends_with("\nocc: 2 7\n"));
+        assert!(!input_clause_debug.contains("<-"));
+
+        let wrapped_clause_debug = cell
+            .format_debug_string(&bank, IoFormat::Tstp, ProblemType::FirstOrder)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(
+            wrapped_clause_debug.starts_with("OLs: cnf(")
+                || wrapped_clause_debug.starts_with("OLs: tcf(")
+        );
+        assert!(wrapped_clause_debug.contains("clause_tpos_format_a"));
+        assert!(wrapped_clause_debug.ends_with("\nocc: 2 7\n"));
+        assert!(!wrapped_clause_debug.contains("<-"));
+
+        assert_eq!(
+            cell.format_debug_string(&bank, IoFormat::Auto, ProblemType::FirstOrder)
+                .unwrap_or_else(|err| panic!("{err}")),
+            cell.lop_debug_string(&bank)
         );
     }
 }
