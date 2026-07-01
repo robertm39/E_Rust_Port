@@ -1,12 +1,15 @@
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
-use crate::basics::error::Diagnostic;
-use crate::clauses::clause::Clause;
+use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{clause_parse, Clause};
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::subsumption::{
     clause_set_subsumes_clause, clause_subsume_order_sort_lits, clause_subsumes_clause,
     unit_clause_set_subsumes_clause, unit_clause_subsumes_clause,
 };
 use crate::clauses::tautologies::clause_is_tautology;
+use crate::inout::basicparser::parse_float;
+use crate::inout::scanner::{Scanner, TokenType};
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
@@ -70,6 +73,36 @@ impl CsscpaProcessResult {
 
     #[must_use]
     pub const fn accepted(&self) -> bool {
+        self.accepted
+    }
+
+    #[must_use]
+    pub fn trace(&self) -> &str {
+        &self.trace
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CsscpaLoopResult {
+    output_level: bool,
+    processed: usize,
+    accepted: usize,
+    trace: String,
+}
+
+impl CsscpaLoopResult {
+    #[must_use]
+    pub const fn output_level(&self) -> bool {
+        self.output_level
+    }
+
+    #[must_use]
+    pub const fn processed(&self) -> usize {
+        self.processed
+    }
+
+    #[must_use]
+    pub const fn accepted(&self) -> usize {
         self.accepted
     }
 
@@ -287,6 +320,64 @@ impl CsscpaState {
         })
     }
 
+    pub fn process_loop(
+        &mut self,
+        scanner: &mut Scanner,
+        initial_output_level: bool,
+    ) -> Result<CsscpaLoopResult, Diagnostic> {
+        let mut output_level = initial_output_level;
+        let mut processed = 0;
+        let mut accepted = 0;
+        let mut trace = String::new();
+
+        while !scanner.test_tok(TokenType::NO_TOKEN) {
+            if scanner.test_id("output_level") {
+                scanner.next_token()?;
+                output_level = parse_csscpa_output_level(scanner, output_level)?;
+                continue;
+            }
+
+            if scanner.test_id("state") {
+                scanner.next_token()?;
+                scanner.accept_tok(TokenType::COLON)?;
+                trace.push_str(&self.state_line_for_source(CsscpaClauseStatus::Requested, 0));
+                continue;
+            }
+
+            if scanner.test_id("Please") {
+                accept_please_sequence(scanner)?;
+                continue;
+            }
+
+            let accept = parse_accept_or_check(scanner)?;
+            let source = parse_optional_csscpa_source(scanner)?;
+            let (weight_delta, average_delta) = parse_optional_improve(scanner)?;
+            scanner.accept_tok(TokenType::COLON)?;
+
+            let mut clause = clause_parse(scanner, self.terms_mut(), ProblemType::FirstOrder)?;
+            clause.set_csscpa_source(source);
+            let result = self.process_clause_with_trace(
+                clause,
+                accept,
+                weight_delta,
+                average_delta,
+                output_level,
+            )?;
+            processed += 1;
+            if result.accepted() {
+                accepted += 1;
+            }
+            trace.push_str(result.trace());
+        }
+
+        Ok(CsscpaLoopResult {
+            output_level,
+            processed,
+            accepted,
+            trace,
+        })
+    }
+
     fn clause_is_tautology(&self, clause: &Clause) -> Result<bool, Diagnostic> {
         let mut work_bank = TermBank::new(self.terms.signature().clone())?;
         clause_is_tautology(&mut work_bank, clause)
@@ -368,6 +459,14 @@ impl CsscpaState {
     }
 }
 
+pub fn csscpa_loop(
+    scanner: &mut Scanner,
+    state: &mut CsscpaState,
+    initial_output_level: bool,
+) -> Result<CsscpaLoopResult, Diagnostic> {
+    state.process_loop(scanner, initial_output_level)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClauseBucket {
     Positive,
@@ -446,6 +545,87 @@ fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+fn parse_csscpa_output_level(
+    scanner: &mut Scanner,
+    current_output_level: bool,
+) -> Result<bool, Diagnostic> {
+    scanner.check_tok(TokenType::POS_INT)?;
+    let parsed = scanner.current_token().numval();
+    scanner.accept_tok(TokenType::POS_INT)?;
+    Ok(match parsed {
+        0 => false,
+        1 => true,
+        _ => current_output_level,
+    })
+}
+
+fn parse_accept_or_check(scanner: &mut Scanner) -> Result<bool, Diagnostic> {
+    scanner.check_id("accept|check")?;
+    let accept = scanner.test_id("accept");
+    scanner.next_token()?;
+    Ok(accept)
+}
+
+fn parse_optional_csscpa_source(scanner: &mut Scanner) -> Result<u64, Diagnostic> {
+    if !scanner.test_id("from") {
+        return Ok(0);
+    }
+    scanner.next_token()?;
+    scanner.check_tok(TokenType::POS_INT)?;
+    let source = scanner.current_token().numval();
+    if !(2..=15).contains(&source) {
+        return Err(csscpa_syntax_error(
+            "CSSCPA source specifier must be in the range 2...15",
+        ));
+    }
+    scanner.accept_tok(TokenType::POS_INT)?;
+    Ok(source)
+}
+
+fn parse_optional_improve(scanner: &mut Scanner) -> Result<(f32, f32), Diagnostic> {
+    if !scanner.test_id("improve") {
+        return Ok((0.0, 0.0));
+    }
+    scanner.next_token()?;
+    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+    let weight_delta = f64_to_f32(parse_float(scanner)?);
+    scanner.accept_tok(TokenType::COMMA)?;
+    let average_delta = f64_to_f32(parse_float(scanner)?);
+    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+    Ok((weight_delta, average_delta))
+}
+
+fn accept_please_sequence(scanner: &mut Scanner) -> Result<(), Diagnostic> {
+    scanner.accept_id("Please")?;
+    scanner.accept_id("process")?;
+    scanner.accept_id("clauses")?;
+    scanner.accept_id("now")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.accept_id("I")?;
+    scanner.accept_id("beg")?;
+    scanner.accept_id("you")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.accept_id("great")?;
+    scanner.accept_id("shining")?;
+    scanner.accept_id("CSSCPA")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.accept_id("wonder")?;
+    scanner.accept_id("of")?;
+    scanner.accept_id("the")?;
+    scanner.accept_id("world")?;
+    scanner.accept_tok(TokenType::COMMA)?;
+    scanner.accept_id("most")?;
+    scanner.accept_id("beautiful")?;
+    scanner.accept_id("program")?;
+    scanner.accept_id("ever")?;
+    scanner.accept_id("written")?;
+    scanner.accept_tok(TokenType::FULLSTOP)
+}
+
+fn csscpa_syntax_error(message: &str) -> Diagnostic {
+    Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn i64_to_f32(value: i64) -> f32 {
     value as f32
@@ -456,9 +636,19 @@ fn i64_to_f64(value: i64) -> f64 {
     value as f64
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn f64_to_f32(value: f64) -> f32 {
+    value as f32
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CsscpaClauseStatus, CsscpaState};
+    use super::{csscpa_loop, CsscpaClauseStatus, CsscpaState};
+    use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::{clause_parse, Clause};
     use crate::inout::scanner::{IoFormat, Scanner};
@@ -576,5 +766,95 @@ mod tests {
         assert!(state.pos_units().find_by_id(positive_ident).is_some());
         assert!(result.trace().contains("% Unit contradiction found!\n"));
         assert!(result.trace().contains("% CSSCPAState: contradicts"));
+    }
+
+    #[test]
+    fn loop_parses_commands_state_request_and_please_sequence() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let mut scanner = Scanner::from_user_string(
+            "\
+output_level 0
+state:
+output_level 1
+accept from 2: cnf(csscpa_unit,axiom,p(a)).
+check improve(0.0,0.0): cnf(csscpa_candidate,axiom,(p(a)|q(a))).
+Please process clauses now, I beg you, great shining CSSCPA,
+wonder of the world, most beautiful program ever written.
+state:",
+            false,
+        )
+        .expect("CSSCPA loop scanner allocation");
+        scanner.set_format(IoFormat::Tstp);
+
+        let result = csscpa_loop(&mut scanner, &mut state, true).expect("CSSCPA loop parses");
+
+        assert!(result.output_level());
+        assert_eq!(result.processed(), 2);
+        assert_eq!(result.accepted(), 1);
+        assert_eq!(state.clauses(), 1);
+        assert_eq!(state.pos_units().len(), 1);
+        assert!(result
+            .trace()
+            .starts_with("% CSSCPAState: requested  by 0, 0, 0, 0"));
+        assert!(result.trace().contains("accepted from 2 (forced)"));
+        assert!(result.trace().contains("rejected (subsumed by"));
+        assert!(result
+            .trace()
+            .ends_with(" (system, clauses,literals,weight)\n"));
+    }
+
+    #[test]
+    fn loop_output_level_accepts_only_zero_or_one_as_state_changes() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let mut scanner = Scanner::from_user_string(
+            "output_level 2
+accept: cnf(csscpa_hidden,axiom,p(a)).",
+            false,
+        )
+        .expect("CSSCPA loop scanner allocation");
+        scanner.set_format(IoFormat::Tstp);
+
+        let result = state
+            .process_loop(&mut scanner, false)
+            .expect("CSSCPA loop parses output_level command");
+
+        assert!(!result.output_level());
+        assert_eq!(result.processed(), 1);
+        assert_eq!(result.accepted(), 1);
+        assert!(result.trace().is_empty());
+    }
+
+    #[test]
+    fn loop_rejects_csscpa_source_outside_c_range() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let mut scanner =
+            Scanner::from_user_string("accept from 1: cnf(csscpa_bad,axiom,p(a)).", false)
+                .expect("CSSCPA loop scanner allocation");
+        scanner.set_format(IoFormat::Tstp);
+
+        let error = state.process_loop(&mut scanner, true).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains("CSSCPA source specifier must be in the range 2...15"));
+    }
+
+    #[test]
+    fn loop_dispatches_to_current_scanner_clause_format() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let mut scanner =
+            Scanner::from_user_string("accept: input_clause(c_0_1,axiom,[++p(a)]).", false)
+                .expect("CSSCPA loop scanner allocation");
+        scanner.set_format(IoFormat::Tptp);
+
+        let result = state
+            .process_loop(&mut scanner, true)
+            .expect("CSSCPA loop parses old TPTP input clause");
+
+        assert_eq!(result.processed(), 1);
+        assert_eq!(result.accepted(), 1);
+        assert_eq!(state.clauses(), 1);
+        assert!(result.trace().contains("accepted from 0 (forced)"));
     }
 }

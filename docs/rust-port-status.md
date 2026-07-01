@@ -241,17 +241,19 @@ Implemented:
 
 - Initial CSSCPA state/process-clause support from `cex_csscpa`, including `ClauseStatusType` discriminants and strings, three clause buckets for positive units, negative units, and non-units, total clause/literal/weight counters, and C-shaped state-line rendering.
 - Core `CSSCPAProcessClause` behavior over current Rust clause sets: forced acceptance, tautology rejection, positive/negative unit and non-unit subsumption rejection, C's unit-subsumption fast path when collecting clauses subsumed by a unit, improvement by removed-weight and average-weight gates, opposite-sign unit contradiction detection, subsumed-clause removal, CSSCPA source preservation, accepted/rejected status return, and optional `OutputLevel`-style trace text.
+- `CSSCPALoop` command parsing as an explicit output-capturing Rust API, including `output_level` updates with C's only-0-or-1 mutation rule, ungated `state:` state-line output, the exact buffering-plea no-op sequence, `accept`/`check` dispatch, optional `from` source validation in the C `2..=15` range, optional `improve(weight_delta, average_delta)` parsing through the scanner float parser, current scanner-format clause parsing, CSSCPA source tagging, and process-clause dispatch/result counting.
 
 Pending:
 
-- `CSSCPALoop` command parsing, including `output_level`, `state`, the exact buffering-plea token sequence, `accept`/`check from` source validation, `improve(weight_delta, average_delta)`, and final process-clause dispatch.
-- Standalone `CSSCPA_filter` executable integration, including command-line options, output-file handling, final TSTP clause-set printing, `InitIO`/`ExitIO` behavior, and exact diagnostics.
+- Standalone `CSSCPA_filter` executable integration, including command-line options, output-file/stdin scanner setup, final TSTP clause-set printing, `InitIO`/`ExitIO` behavior, and exact diagnostics.
+- Exact executable scanner-format parity for historical `.csscpa` files that use old `input_clause(...)` syntax even though `CSSCPA_filter.c` sets `TSTPFormat` before invoking `CSSCPALoop`.
 
 Change-later notes:
 
 - C keeps `terms` and `tmp_terms` as separate term banks over one shared mutable signature. Rust currently allocates a fresh tautology work bank from the live signature for each processed clause; revisit persistent scratch-bank reuse after shared signature ownership is available.
 - C stores raw subsumed-clause pointers before later deletion. Rust records clause identifiers and the owning CSSCPA bucket because `ClauseSet` owns clauses by value; stable clause handles would make the deletion path closer to C and may matter if CSSCPA becomes performance-critical.
 - C embeds `GlobalOut` printing and unconditional flushing inside `CSSCPAProcessClause`, while Rust returns trace text from the core state operation. Preserve the exact flush points in the future executable wrapper without making process-global output part of the core API.
+- C silently consumes unsupported `output_level` positive integers without changing the current output gate, and prints `state:` requests regardless of the gate. Rust preserves both in the loop API; a later cleaned CLI could make unsupported levels and state-output policy explicit after compatibility runs are stable.
 
 ## Initial Crate And CLI Foundation
 

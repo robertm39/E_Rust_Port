@@ -85,14 +85,15 @@ Source files reviewed: `EXTERNAL/CSSCPA_filter.c`.
 
 ### Rust Port Notes
 
-- The core CSSCPA state/process-clause behavior from `cex_csscpa` is now represented in `src/external/csscpa.rs`, but this standalone `CSSCPA_filter` command-line program has not been ported yet.
-- Porting the executable path still needs `CSSCPALoop` command parsing, `e_version`/`InitIO`/`OpenGlobalOut` integration, final TSTP clause-set printing, and exact command-line option behavior for `--silent`, `--output-level`, output files, verbosity, and rant handling.
+- The core CSSCPA state/process-clause behavior and `CSSCPALoop` command parser from `cex_csscpa` are now represented in `src/external/csscpa.rs`, but this standalone `CSSCPA_filter` command-line program has not been ported yet.
+- Porting the executable path still needs `e_version`/`InitIO`/`OpenGlobalOut` integration, final TSTP clause-set printing, file/stdin scanner setup, and exact command-line option behavior for `--silent`, `--output-level`, output files, verbosity, and rant handling.
 
 ### Change Later
 
 - The exact `Please process clauses now, I beg you, great shining CSSCPA, wonder of the world, most beautiful program ever written.` input sequence is an input-buffering workaround. The Rust parser should accept it for compatibility, but a later interface can replace it with an explicit flush/control command.
 - `--rant-about-input-buffering` intentionally writes informal complaint text to `stderr`. Keep it isolated in the CLI compatibility layer rather than exposing it through the CSSCPA state API.
 - `process_options` mutates process-global `outname`, `OutputLevel`, `Verbose`, `OutputFormat`, and the dummy `app_encode = false` global. Rust should keep those as layered configuration after compatibility tests establish the exact option order and diagnostic wording.
+- `main` sets the scanner format to `TSTPFormat`, while the checked-in sample `.csscpa` file uses old `input_clause(...)` statements. The Rust loop dispatches to whatever concrete scanner format the caller selected; the executable wrapper should confirm the exact C parser behavior for those historical inputs before freezing its scanner setup.
 
 ### Porting Focus
 
