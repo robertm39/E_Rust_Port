@@ -2224,30 +2224,98 @@ impl From<io::Error> for EProverError {
 }
 
 enum ConfiguredOutput<'a, W: Write + ?Sized> {
-    Writer(&'a mut W),
-    File { file: File, stdout: &'a mut W },
+    Writer {
+        writer: &'a mut W,
+        buffer: Vec<u8>,
+    },
+    File {
+        file: File,
+        buffer: Vec<u8>,
+        stdout: &'a mut W,
+    },
+}
+
+const STDIO_COMPAT_BUFFER_CAPACITY: usize = 8 * 1024;
+
+fn write_with_stdio_buffer<W: Write + ?Sized>(
+    writer: &mut W,
+    pending: &mut Vec<u8>,
+    buffer: &[u8],
+) -> io::Result<()> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+
+    if pending.len().saturating_add(buffer.len()) > STDIO_COMPAT_BUFFER_CAPACITY {
+        flush_stdio_buffer(writer, pending)?;
+    }
+
+    if buffer.len() >= STDIO_COMPAT_BUFFER_CAPACITY {
+        writer.write_all(buffer)
+    } else {
+        pending.extend_from_slice(buffer);
+        Ok(())
+    }
+}
+
+fn flush_stdio_buffer<W: Write + ?Sized>(writer: &mut W, pending: &mut Vec<u8>) -> io::Result<()> {
+    if !pending.is_empty() {
+        writer.write_all(pending)?;
+        pending.clear();
+    }
+    writer.flush()
 }
 
 impl<W: Write + ?Sized> Write for ConfiguredOutput<'_, W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Writer(writer) => writer.write(buffer),
-            Self::File { file, .. } => file.write(buffer),
+            Self::Writer {
+                writer,
+                buffer: output,
+            } => {
+                write_with_stdio_buffer(*writer, output, buffer)?;
+            }
+            Self::File {
+                file,
+                buffer: output,
+                ..
+            } => {
+                write_with_stdio_buffer(file, output, buffer)?;
+            }
         }
+        Ok(buffer.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
-            Self::Writer(writer) => writer.flush(),
-            Self::File { file, .. } => file.flush(),
+            Self::Writer { writer, buffer } => flush_stdio_buffer(*writer, buffer),
+            Self::File { file, buffer, .. } => flush_stdio_buffer(file, buffer),
         }
+    }
+}
+
+impl<W: Write + ?Sized> Drop for ConfiguredOutput<'_, W> {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
 
 impl<W: Write + ?Sized> ConfiguredOutput<'_, W> {
     fn write_stdout_side_channel(&mut self, buffer: &[u8]) -> io::Result<()> {
         match self {
-            Self::Writer(writer) | Self::File { stdout: writer, .. } => writer.write_all(buffer),
+            Self::Writer {
+                writer,
+                buffer: output,
+            } => write_with_stdio_buffer(*writer, output, buffer)?,
+            Self::File { stdout: writer, .. } => writer.write_all(buffer)?,
+        }
+        Ok(())
+    }
+
+    fn write_direct_global_out(&mut self, buffer: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Writer { writer, .. } => writer.write_all(buffer),
+            Self::File { file, .. } => file.write_all(buffer),
         }
     }
 }
@@ -2257,15 +2325,25 @@ fn open_configured_output<'a, W: Write + ?Sized>(
     output_file: Option<&str>,
 ) -> Result<ConfiguredOutput<'a, W>, Diagnostic> {
     let Some(name) = output_file else {
-        return Ok(ConfiguredOutput::Writer(stdout));
+        return Ok(ConfiguredOutput::Writer {
+            writer: stdout,
+            buffer: Vec::new(),
+        });
     };
     if name == "-" {
-        return Ok(ConfiguredOutput::Writer(stdout));
+        return Ok(ConfiguredOutput::Writer {
+            writer: stdout,
+            buffer: Vec::new(),
+        });
     }
 
     let path = Path::new(name);
     File::create(path)
-        .map(|file| ConfiguredOutput::File { file, stdout })
+        .map(|file| ConfiguredOutput::File {
+            file,
+            buffer: Vec::new(),
+            stdout,
+        })
         .map_err(|error| {
             Diagnostic::new(
                 ErrorCode::FILE_ERROR,
@@ -5488,8 +5566,8 @@ fn hard_time_limit_expired_in_saturation(outcome: &SaturateOutcome) -> bool {
     ) && time_limit_expired_kind() == Some(TimeLimitKind::Hard)
 }
 
-fn finalize_hard_time_limit_stop(
-    output: &mut impl Write,
+fn finalize_hard_time_limit_stop<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
     stderr: Option<&mut dyn Write>,
 ) -> Result<u8, EProverError> {
     let silent = silent_time_out();
@@ -5498,8 +5576,10 @@ fn finalize_hard_time_limit_stop(
         silent,
         diagnostic: diagnostic.clone(),
     };
-    let status = finalize_cpu_limit_outcome(output, &outcome)?
+    let mut direct_output = Vec::new();
+    let status = finalize_cpu_limit_outcome(&mut direct_output, &outcome)?
         .expect("hard CPU-limit signal outcomes always finalize");
+    output.write_direct_global_out(&direct_output)?;
     if let (Some(stderr), Some(diagnostic)) = (stderr, diagnostic) {
         stderr.write_all(diagnostic.render_error(PROGRAM_NAME).as_bytes())?;
     }
@@ -14487,7 +14567,13 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = run(
-            ["eprover", "--lop-in", "--cpu-limit=0", path_arg.as_str()],
+            [
+                "eprover",
+                "--lop-in",
+                "--auto",
+                "--cpu-limit=0",
+                path_arg.as_str(),
+            ],
             &mut stdout,
             &mut stderr,
         )
@@ -14495,8 +14581,10 @@ mod tests {
 
         assert_eq!(status, ErrorCode::CPU_LIMIT_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
-        assert!(printed
-            .contains("\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n"));
+        assert!(printed.starts_with(
+            "\n%% Failure: Resource limit exceeded (time)\n%% SZS status ResourceOut\n"
+        ));
+        assert!(printed.contains("% Preprocessing class:"));
         assert!(!printed.contains("User resource limit exceeded"));
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
