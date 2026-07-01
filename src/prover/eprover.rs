@@ -9039,18 +9039,44 @@ impl SimpleFofBoolEqnReplacement {
 }
 
 fn simple_fof_formulas_to_clause_literal_lists(
-    mut formulas: Vec<SimpleFofFormula>,
+    formulas: Vec<SimpleFofFormula>,
     negate_as_conjecture: bool,
     fool_unroll: bool,
     bank: &mut TermBank,
 ) -> Result<Vec<EqnList>, Diagnostic> {
-    if !negate_as_conjecture {
-        formulas = simple_fof_lift_direct_let_formulas(
+    let lifted = simple_fof_lift_direct_let_formulas(
+        formulas,
+        SimpleFofBoolEqnReplacement::from_fool_unroll(fool_unroll),
+        bank,
+    )?;
+    if negate_as_conjecture {
+        let formulas = simple_fof_simplify_formulas(lifted.formulas);
+        let universal_dependencies = simple_fof_global_free_variables(&formulas);
+        let mut literal_lists = simple_fof_formulas_to_clause_literal_lists_with_dependencies(
             formulas,
-            SimpleFofBoolEqnReplacement::from_fool_unroll(fool_unroll),
+            true,
+            &universal_dependencies,
+            fool_unroll,
             bank,
         )?;
+        let definitions = simple_fof_simplify_formulas(lifted.definitions);
+        if !definitions.is_empty() {
+            let definition_dependencies = simple_fof_global_free_variables(&definitions);
+            literal_lists.extend(
+                simple_fof_formulas_to_clause_literal_lists_with_dependencies(
+                    definitions,
+                    false,
+                    &definition_dependencies,
+                    fool_unroll,
+                    bank,
+                )?,
+            );
+        }
+        return Ok(literal_lists);
     }
+
+    let mut formulas = lifted.formulas;
+    formulas.extend(lifted.definitions);
     formulas = simple_fof_simplify_formulas(formulas);
     let universal_dependencies = simple_fof_global_free_variables(&formulas);
     simple_fof_formulas_to_clause_literal_lists_with_dependencies(
@@ -9062,11 +9088,16 @@ fn simple_fof_formulas_to_clause_literal_lists(
     )
 }
 
+struct SimpleFofLetLiftResult {
+    formulas: Vec<SimpleFofFormula>,
+    definitions: Vec<SimpleFofFormula>,
+}
+
 fn simple_fof_lift_direct_let_formulas(
     formulas: Vec<SimpleFofFormula>,
     bool_eqn_replacement: SimpleFofBoolEqnReplacement,
     bank: &mut TermBank,
-) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+) -> Result<SimpleFofLetLiftResult, Diagnostic> {
     let mut definitions = Vec::new();
     let mut transformed = Vec::with_capacity(formulas.len());
     for formula in formulas {
@@ -9077,8 +9108,10 @@ fn simple_fof_lift_direct_let_formulas(
             bank,
         )?);
     }
-    transformed.extend(definitions);
-    Ok(transformed)
+    Ok(SimpleFofLetLiftResult {
+        formulas: transformed,
+        definitions,
+    })
 }
 
 #[allow(
@@ -19670,6 +19703,34 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_boolean_let_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("boolean-let-conjecture-proof");
+        std::fs::write(
+            &path,
+            "fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, $let(f:$o, f := p(a), f)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_output_level_two_prints_initial_clause_docs_in_default_pcl() {
         let _guard = global_state_lock();
         let path = temp_path("proof-initial-docs-pcl");
@@ -23084,6 +23145,37 @@ mod tests {
              thf(p_type, type, p: person > $o).\n\
              thf(let_fact, axiom, $let(f: person > $o, f(X) := p @ X, f @ a)).\n\
              thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_parameterized_thf_boolean_let_conjecture() {
+        let _guard = global_state_lock();
+        let path = temp_path("parameterized-thf-boolean-let-conjecture-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(fact, axiom, p @ a).\n\
+             thf(goal, conjecture, $let(f: person > $o, f(X) := p @ X, f @ a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
