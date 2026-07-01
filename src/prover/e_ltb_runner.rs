@@ -583,7 +583,7 @@ where
         writeln!(output, "\n% Processing started for {jobname}")
             .map_err(|error| io_diagnostic(format!("Cannot write interactive status: {error}")))?;
         let problem = spec.load_problem_from_scanner(bank, ctrl, &mut scanner)?;
-        let report = spec.process_problem_with_runner_backend(
+        spec.process_problem_with_runner_backend(
             bank,
             ctrl,
             problem,
@@ -601,7 +601,6 @@ where
             &mut clock_seconds,
             backend,
         )?;
-        let _solved = report.solved;
         writeln!(output, "\n% Processing finished for {jobname}\n")
             .map_err(|error| io_diagnostic(format!("Cannot write interactive status: {error}")))?;
     }

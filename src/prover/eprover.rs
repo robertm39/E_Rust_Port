@@ -5501,6 +5501,12 @@ struct AutoModeContext {
     selected_preprocessing_index: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ScheduledHeuristicSelection {
+    name: String,
+    ordering: to_params::TermOrdering,
+}
+
 fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
@@ -5528,14 +5534,21 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
     } else {
         0
     };
-    let preproc_name =
-        schedule_heuristic_name(&preprocessing_schedule, selected_preprocessing_index)?;
-    get_heuristic_with_name(preproc_name, params)?;
+    let preproc_selection =
+        schedule_heuristic_selection(&preprocessing_schedule, selected_preprocessing_index)?;
+    if config.strategy_scheduling {
+        params.order_params.ordertype = preproc_selection.ordering;
+    }
+    get_heuristic_with_name(&preproc_selection.name, params)?;
     overlay_explicit_heuristic_options(config, params)?;
 
     if !config.strategy_scheduling {
         output.write_stdout_side_channel(
-            format!("{DEFAULT_COMCHAR_RAW} Configuration: {preproc_name}\n").as_bytes(),
+            format!(
+                "{DEFAULT_COMCHAR_RAW} Configuration: {}\n",
+                preproc_selection.name
+            )
+            .as_bytes(),
         )?;
     }
 
@@ -5580,37 +5593,47 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     output.write_stdout_side_channel(
         format!("{DEFAULT_COMCHAR_RAW} Search class: {class}\n").as_bytes(),
     )?;
-    let search_name = if config.strategy_scheduling {
+    let search_selection = if config.strategy_scheduling {
         select_scheduled_search_cell(output, config, auto_context, &mut search_schedule)?
     } else {
-        first_schedule_heuristic_name(&search_schedule)?.to_owned()
+        first_schedule_heuristic_selection(&search_schedule)?
     };
 
-    get_heuristic_with_name(&search_name, params)?;
+    if config.strategy_scheduling {
+        params.order_params.ordertype = search_selection.ordering;
+    }
+    get_heuristic_with_name(&search_selection.name, params)?;
     params.inst_choice_max_depth = choice_max_depth;
     overlay_explicit_heuristic_options(config, params)?;
 
     if !config.strategy_scheduling {
         output.write_stdout_side_channel(
-            format!("{DEFAULT_COMCHAR_RAW} Configuration: {search_name}\n").as_bytes(),
+            format!(
+                "{DEFAULT_COMCHAR_RAW} Configuration: {}\n",
+                search_selection.name
+            )
+            .as_bytes(),
         )?;
     }
     Ok(())
 }
 
-fn first_schedule_heuristic_name(
-    schedule: &[crate::heuristics::new_autoschedule::ScheduleCell],
-) -> Result<&str, Diagnostic> {
-    schedule
-        .first()
-        .map(|cell| cell.heuristic_name.as_str())
-        .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty"))
+fn first_schedule_heuristic_selection(
+    schedule: &[ScheduleCell],
+) -> Result<ScheduledHeuristicSelection, Diagnostic> {
+    schedule_heuristic_selection(schedule, 0)
 }
 
-fn schedule_heuristic_name(schedule: &[ScheduleCell], index: usize) -> Result<&str, Diagnostic> {
+fn schedule_heuristic_selection(
+    schedule: &[ScheduleCell],
+    index: usize,
+) -> Result<ScheduledHeuristicSelection, Diagnostic> {
     schedule
         .get(index)
-        .map(|cell| cell.heuristic_name.as_str())
+        .map(|cell| ScheduledHeuristicSelection {
+            name: cell.heuristic_name.clone(),
+            ordering: cell.ordering,
+        })
         .ok_or_else(|| Diagnostic::new(ErrorCode::OTHER_ERROR, "auto schedule is empty"))
 }
 
@@ -5647,7 +5670,7 @@ fn select_scheduled_search_cell<W: Write + ?Sized>(
     config: &EProverConfig,
     auto_context: &AutoModeContext,
     search_schedule: &mut Vec<ScheduleCell>,
-) -> Result<String, EProverError> {
+) -> Result<ScheduledHeuristicSelection, EProverError> {
     let preprocessing_tail =
         &auto_context.preprocessing_schedule[auto_context.selected_preprocessing_index..];
     initialize_placeholder_search_schedule(
@@ -5674,9 +5697,7 @@ fn select_scheduled_search_cell<W: Write + ?Sized>(
         report.limit,
         report.total_time,
     )?;
-    first_schedule_heuristic_name(search_schedule)
-        .map(str::to_owned)
-        .map_err(EProverError::from)
+    first_schedule_heuristic_selection(search_schedule).map_err(EProverError::from)
 }
 
 fn write_schedule_report(
@@ -11554,13 +11575,14 @@ mod tests {
         order_parms_from_config, preprocessing_config_debug_line, process_options,
         proof_control_from_config, resource_limit_warning_from_outcome,
         resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
-        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
-        PrimEnumMode, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
+        schedule_heuristic_selection, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -11574,6 +11596,7 @@ mod tests {
     use crate::clauses::derivation::{clause_push_derivation, DC_EQ_RES};
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::proof_state_alloc;
+    use crate::heuristics::new_autoschedule::ScheduleCell;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
     use crate::inout::scanner::{IoFormat, Scanner};
@@ -12144,6 +12167,23 @@ mod tests {
         };
         assert_eq!(config.schedule_cores, 4);
         assert_eq!(config.sine.as_deref(), Some("Auto"));
+    }
+
+    #[test]
+    fn scheduled_heuristic_selection_preserves_cell_ordering() {
+        let schedule = vec![ScheduleCell {
+            heuristic_name: "scheduled-strategy".to_owned(),
+            ordering: to_params::TermOrdering::Lpo4Copy,
+            sine: Some("Auto".to_owned()),
+            time_fraction: 0.5,
+            time_absolute: 0,
+            cores: 2,
+        }];
+
+        let selected = schedule_heuristic_selection(&schedule, 0).unwrap();
+
+        assert_eq!(selected.name, "scheduled-strategy");
+        assert_eq!(selected.ordering, to_params::TermOrdering::Lpo4Copy);
     }
 
     #[test]
