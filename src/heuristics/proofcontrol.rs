@@ -1,5 +1,6 @@
 use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::partial_orderings::HoOrderKind;
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::{problem_type, ProblemType, ProverResult};
 use crate::basics::sysdate::{SysDate, SysDateIncrement};
@@ -1829,16 +1830,24 @@ fn forward_modify_check_higher_order_ordering(
         return Ok(());
     }
 
-    let first_order_shaped = !clause_has_higher_order_ordering_surface(clause)
-        && !demodulators
-            .iter()
-            .any(|set| clause_set_has_higher_order_ordering_surface(set));
-    if ocb.ordering_type != TermOrdering::Kbo6 || !first_order_shaped {
+    if ocb.ordering_type != TermOrdering::Kbo6 {
         return Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "ForwardModifyClause higher-order term ordering is not ported yet",
         ));
     }
+
+    let has_higher_order_surface = clause_has_higher_order_ordering_surface(clause)
+        || demodulators
+            .iter()
+            .any(|set| clause_set_has_higher_order_ordering_surface(set));
+    if has_higher_order_surface && ocb.ho_order_kind != HoOrderKind::LfhoOrder {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ForwardModifyClause higher-order term ordering is not ported yet",
+        ));
+    }
+
     Ok(())
 }
 
@@ -9221,7 +9230,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_state_forward_modify_clause_higher_order_applied_var_ordering_stays_diagnostic() {
+    fn proof_state_forward_modify_clause_higher_order_lfho_applied_var_ordering_runs() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
@@ -9238,6 +9247,45 @@ mod tests {
         };
         let mut control = proof_control_alloc();
         control.set_ocb(kbo6_ocb(state.terms()));
+
+        let trivial = proof_state_forward_modify_clause_impl::<String>(
+            &mut state,
+            &mut control,
+            &mut clause,
+            false,
+            RewriteLevel::RuleRewrite,
+            ProblemType::HigherOrder,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!trivial);
+        assert!(clause.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
+    }
+
+    #[test]
+    fn proof_state_forward_modify_clause_higher_order_lambda_order_surface_stays_diagnostic() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = {
+            let terms = state.terms_mut();
+            let predicate = unary_predicate_var(terms, -4_092);
+            let arg = typed_const(terms, "pc_ho_order_lambda_app_arg");
+            let applied = apply_terms(terms, &predicate, std::slice::from_ref(&arg))
+                .unwrap_or_else(|err| panic!("{err}"));
+            let truth = terms.true_term().clone();
+            Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &applied, &truth, true,
+            )]))
+        };
+        let mut control = proof_control_alloc();
+        control.set_ocb(OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            state.terms().signature(),
+            HoOrderKind::LambdaOrder,
+        ));
 
         let error = proof_state_forward_modify_clause_impl::<String>(
             &mut state,
