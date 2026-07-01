@@ -333,6 +333,23 @@ pub struct BatchProcCtrlRunnerSet {
     poll_timeout: Duration,
 }
 
+pub trait BatchRunnerBackend {
+    #[must_use]
+    fn active_count(&self) -> usize;
+
+    fn spawn_runner(
+        &mut self,
+        request: BatchRunnerTempRequest,
+    ) -> Result<BatchSpawnedRunner, Diagnostic>;
+
+    fn poll_runner<W: Write>(
+        &mut self,
+        output: &mut W,
+    ) -> Result<Option<BatchCompletedRunner>, Diagnostic>;
+
+    fn clear(&mut self, delete_files: bool) -> Result<(), Diagnostic>;
+}
+
 impl Default for BatchProcCtrlRunnerSet {
     fn default() -> Self {
         Self::new()
@@ -383,6 +400,13 @@ impl BatchProcCtrlRunnerSet {
         self.add_control(control)
     }
 
+    pub fn spawn_temp_runner(
+        &mut self,
+        request: BatchRunnerTempRequest,
+    ) -> Result<BatchSpawnedRunner, Diagnostic> {
+        self.spawn_runner_from_file(&request.request, request.input_file)
+    }
+
     pub fn poll_runners<W: Write>(
         &mut self,
         output: &mut W,
@@ -428,6 +452,30 @@ impl BatchProcCtrlRunnerSet {
             result: control.result(),
             output: control.output().view().into_owned(),
         })
+    }
+}
+
+impl BatchRunnerBackend for BatchProcCtrlRunnerSet {
+    fn active_count(&self) -> usize {
+        self.active_count()
+    }
+
+    fn spawn_runner(
+        &mut self,
+        request: BatchRunnerTempRequest,
+    ) -> Result<BatchSpawnedRunner, Diagnostic> {
+        self.spawn_temp_runner(request)
+    }
+
+    fn poll_runner<W: Write>(
+        &mut self,
+        output: &mut W,
+    ) -> Result<Option<BatchCompletedRunner>, Diagnostic> {
+        self.poll_runners(output)
+    }
+
+    fn clear(&mut self, delete_files: bool) -> Result<(), Diagnostic> {
+        self.clear(delete_files)
     }
 }
 
@@ -995,6 +1043,95 @@ impl BatchSpec {
 
     #[expect(
         clippy::too_many_arguments,
+        reason = "The direct BatchProcessProblem port must thread C config, output, clock, and runner backend state"
+    )]
+    pub fn process_problem_with_runner_backend<WGlobal, WExternal, C, B>(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        problem: BatchProblemData,
+        config: BatchProcessProblemConfig<'_>,
+        problem_config: BatchRunnerProblemConfig,
+        mut outputs: BatchProcessProblemOutputs<'_, WGlobal, WExternal>,
+        mut clock_seconds: C,
+        backend: &mut B,
+    ) -> Result<BatchProcessProblemReport, Diagnostic>
+    where
+        WGlobal: Write,
+        WExternal: Write + ?Sized,
+        C: FnMut() -> i64,
+        B: BatchRunnerBackend,
+    {
+        let filters = crate::heuristics::axfilter::AxFilterSet::default_set()?;
+        let _pre_add_start = clock_seconds();
+        ctrl.add_problem(bank.signature(), problem.clauses, problem.formulas, false);
+
+        let mut spawn_count = 0;
+        let process_result = (|| {
+            let start = clock_seconds();
+            let end = start + config.wct_limit;
+            let mut filter_index = 0;
+            let mut completed = None;
+
+            while completed.is_none() && clock_seconds() <= end {
+                while filter_index < BATCH_FILTERS.len() && backend.active_count() < MAX_CORES {
+                    let now = clock_seconds();
+                    if now > end {
+                        break;
+                    }
+                    let used = now - start;
+                    let filter_name = BATCH_FILTERS[filter_index];
+                    let filter = filters.find_filter(filter_name).ok_or_else(|| {
+                        batch_process_error(format!(
+                            "Batch filter '{filter_name}' is missing from the default filter set"
+                        ))
+                    })?;
+                    let request = self.create_runner_temp_request_with(
+                        ctrl,
+                        bank,
+                        filter,
+                        BatchRunnerCreateConfig {
+                            options: BATCH_STRATEGIES[filter_index],
+                            extra_options: self.answer_options(),
+                            cpu_time: batch_runner_cpu_time(config.wct_limit, used),
+                        },
+                        problem_config,
+                        &mut *outputs.global_output,
+                        || clock_seconds() % 1000,
+                    )?;
+                    let _spawned = backend.spawn_runner(request)?;
+                    spawn_count += 1;
+                    filter_index += 1;
+                }
+
+                if let Some(done) = backend.poll_runner(&mut *outputs.global_output)? {
+                    completed = Some(done);
+                    break;
+                }
+            }
+
+            if let Some(completed_runner) = completed {
+                write_problem_success(config, &completed_runner, &mut outputs, clock_seconds())?;
+                Ok((true, Some(completed_runner)))
+            } else {
+                write_problem_gave_up(config, &mut outputs)?;
+                Ok((false, None))
+            }
+        })();
+
+        let backtrack = ctrl.backtrack_to_spec(bank.signature());
+        let (solved, completed) = process_result?;
+
+        Ok(BatchProcessProblemReport {
+            solved,
+            spawned: spawn_count,
+            completed,
+            backtrack,
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
         reason = "The staged BatchProcessProblem port keeps C runner and clock seams injectable"
     )]
     pub fn process_problem_with<WGlobal, WExternal, C, S, P>(
@@ -1441,11 +1578,11 @@ mod tests {
         BatchOutputType, BatchProblemData, BatchProcCtrlRunnerSet, BatchProcessFileConfig,
         BatchProcessFileOutputs, BatchProcessProblemConfig, BatchProcessProblemJob,
         BatchProcessProblemOutputs, BatchProcessProblemsConfig, BatchProcessVariantsConfig,
-        BatchRunnerCreateConfig, BatchRunnerProblemConfig, BatchSpawnedRunner, BatchSpec,
-        BatchVariantProblemOutcome, BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES,
-        BATCH_STRATEGIES_DIV,
+        BatchRunnerBackend, BatchRunnerCreateConfig, BatchRunnerProblemConfig, BatchRunnerRequest,
+        BatchRunnerTempRequest, BatchSpawnedRunner, BatchSpec, BatchVariantProblemOutcome,
+        BATCH_FILTERS, BATCH_FILTERS_DIV, BATCH_STRATEGIES, BATCH_STRATEGIES_DIV,
     };
-    use crate::basics::error::ErrorCode;
+    use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::simple_stuff::{ProblemType, ProverResult};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
@@ -1461,6 +1598,7 @@ mod tests {
     use crate::terms::typebanks::TypeBank;
     use std::ffi::OsString;
     use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
 
     #[test]
@@ -1838,6 +1976,117 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
         assert_eq!(runners.active_count(), 0);
+    }
+
+    #[test]
+    fn process_problem_with_runner_backend_writes_temp_files_and_reports_success() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.res_answer = BatchOutputType::Desired;
+        let mut global = Vec::new();
+        let mut external = Vec::new();
+        let mut backend = FakeRunnerBackend::new(Some(BatchCompletedRunner {
+            runner: BatchSpawnedRunner {
+                name: "Threshold(10000) => --satauto-schedule --assume-incompleteness".to_owned(),
+                start_time: 100,
+                prob_time: 10,
+            },
+            result: ProverResult::Theorem,
+            output: "% backend proof\n".to_owned(),
+        }));
+
+        let report = spec
+            .process_problem_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                one_empty_clause_problem(),
+                BatchProcessProblemConfig {
+                    wct_limit: 20,
+                    jobname: "job.p",
+                    interactive: true,
+                },
+                BatchRunnerProblemConfig::default(),
+                BatchProcessProblemOutputs {
+                    global_output: &mut global,
+                    external_output: Some(&mut external),
+                },
+                || 100,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(report.solved);
+        assert_eq!(report.spawned, MAX_CORES);
+        assert_eq!(report.backtrack.removed_clause_sets, 1);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(backend.requests.len(), MAX_CORES);
+        assert_eq!(backend.requests[0].name, "Threshold(10000)");
+        assert_eq!(
+            backend.requests[0].extra_options,
+            "--conjectures-are-questions"
+        );
+        assert_eq!(backend.requests[0].cpu_time, 10);
+        assert_eq!(backend.payloads.len(), MAX_CORES);
+        assert!(backend.payloads[0].contains("cnf("));
+        assert!(backend.payloads[0].contains("$false"));
+        assert_eq!(backend.polls, 1);
+        assert_eq!(backend.active, MAX_CORES - 1);
+
+        let global = String::from_utf8(global).unwrap();
+        assert!(global.contains("% Filtering for Threshold(10000) (100)\n"));
+        assert!(global.contains("% SZS status Theorem for job.p\n"));
+        assert!(global.ends_with("% backend proof\n"));
+        assert_eq!(
+            String::from_utf8(external).unwrap(),
+            "% SZS status Theorem for job.p\n% backend proof\n"
+        );
+    }
+
+    #[test]
+    fn process_problem_with_runner_backend_reports_gave_up_after_expired_limit() {
+        let mut bank = test_bank();
+        let mut ctrl = shared_spec(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut global = Vec::new();
+        let mut external = Vec::new();
+        let mut backend = FakeRunnerBackend::new(None);
+
+        let report = spec
+            .process_problem_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                one_empty_clause_problem(),
+                BatchProcessProblemConfig {
+                    wct_limit: -1,
+                    jobname: "late.p",
+                    interactive: false,
+                },
+                BatchRunnerProblemConfig::default(),
+                BatchProcessProblemOutputs {
+                    global_output: &mut global,
+                    external_output: Some(&mut external),
+                },
+                || 50,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert!(!report.solved);
+        assert_eq!(report.spawned, 0);
+        assert_eq!(backend.requests.len(), 0);
+        assert_eq!(report.backtrack.removed_clause_sets, 1);
+        assert_eq!(
+            String::from_utf8(global).unwrap(),
+            "% SZS status GaveUp for late.p\n"
+        );
+        assert_eq!(
+            String::from_utf8(external).unwrap(),
+            "% SZS status GaveUp for late.p\n"
+        );
     }
 
     #[test]
@@ -2355,6 +2604,65 @@ mod tests {
 
     fn test_bank() -> TermBank {
         TermBank::new(test_signature()).unwrap()
+    }
+
+    struct FakeRunnerBackend {
+        active: usize,
+        polls: usize,
+        requests: Vec<BatchRunnerRequest>,
+        payloads: Vec<String>,
+        completed: Option<BatchCompletedRunner>,
+    }
+
+    impl FakeRunnerBackend {
+        fn new(completed: Option<BatchCompletedRunner>) -> Self {
+            Self {
+                active: 0,
+                polls: 0,
+                requests: Vec::new(),
+                payloads: Vec::new(),
+                completed,
+            }
+        }
+    }
+
+    impl BatchRunnerBackend for FakeRunnerBackend {
+        fn active_count(&self) -> usize {
+            self.active
+        }
+
+        fn spawn_runner(
+            &mut self,
+            request: BatchRunnerTempRequest,
+        ) -> Result<BatchSpawnedRunner, Diagnostic> {
+            let payload = fs::read_to_string(&request.input_file).unwrap();
+            let _removed = temp_file_remove(&request.input_file).unwrap();
+            let spawned = BatchSpawnedRunner {
+                name: request.request.name.clone(),
+                start_time: 100,
+                prob_time: request.request.cpu_time,
+            };
+            self.active += 1;
+            self.payloads.push(payload);
+            self.requests.push(request.request);
+            Ok(spawned)
+        }
+
+        fn poll_runner<W: Write>(
+            &mut self,
+            _output: &mut W,
+        ) -> Result<Option<BatchCompletedRunner>, Diagnostic> {
+            self.polls += 1;
+            if self.completed.is_some() {
+                self.active = self.active.saturating_sub(1);
+            }
+            Ok(self.completed.take())
+        }
+
+        fn clear(&mut self, _delete_files: bool) -> Result<(), Diagnostic> {
+            self.active = 0;
+            Ok(())
+        }
     }
 
     struct TmpDirGuard {
