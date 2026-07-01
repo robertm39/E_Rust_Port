@@ -11842,6 +11842,9 @@ fn parse_simple_thf_term_formula(
     if !formula.type_().as_ref().is_some_and(Type::is_bool) {
         return Err(thf_formula_requires_full_pipeline_error(scanner));
     }
+    if formula.has_lambda_subterm() {
+        return Err(thf_formula_requires_full_pipeline_error(scanner));
+    }
     simple_fof_bool_term_to_formulas(
         &formula,
         SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
@@ -23191,6 +23194,38 @@ mod tests {
             "thf(person_type, type, person: $tType).\n\
              thf(p_type, type, p: person > $o).\n\
              thf(goal, conjecture, ^[X: person]:p(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error
+            .message()
+            .contains(THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_applied_thf_lambda_until_full_formula_pipeline() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-thf-applied-lambda-requires-full-pipeline");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(goal, conjecture, (^[X: person]:p(X)) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
