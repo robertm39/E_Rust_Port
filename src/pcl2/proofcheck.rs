@@ -1,5 +1,6 @@
 //! Initial port of `PCL2/pcl_proofcheck`.
 
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_HYPOTHESIS;
@@ -7,6 +8,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::eqn::{eqn_string, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
 use crate::inout::scanner::IoFormat;
+use crate::inout::tempfile::{temp_file_name, temp_file_remove};
 use crate::pcl2::expressions::PclOpCode;
 use crate::pcl2::idents::PclId;
 use crate::pcl2::protocol::PclProtocol;
@@ -17,6 +19,9 @@ use crate::terms::termbanks::TermBank;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::fs::{self, File};
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 pub const E_EXEC_DEFAULT: &str = "eprover";
 pub const OTTER_EXEC_DEFAULT: &str = "otter";
@@ -43,6 +48,22 @@ pub enum ProverType {
 pub struct PclCheckSummary {
     pub checked: i64,
     pub unchecked: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProverProblemFileUse {
+    Argument,
+    Stdin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProverInvocation {
+    pub executable: String,
+    pub args: Vec<String>,
+    pub problem: String,
+    pub problem_file_use: ProverProblemFileUse,
+    pub suppress_stderr: bool,
+    pub success_marker: String,
 }
 
 /// C `PCLCollectPreconds`.
@@ -208,21 +229,97 @@ pub fn spass_problem_string(problem: &ClauseSet, bank: &TermBank, time_limit: i6
     output
 }
 
-/// Initial C `PCLStepCheck` port.
-///
-/// External prover execution is intentionally reported as not implemented in
-/// this slice; generated check-problem construction is available through
-/// [`generate_check`].
+#[must_use]
+pub fn prover_invocation_for_problem(
+    prover: ProverType,
+    executable: Option<&str>,
+    time_limit: i64,
+    problem: &ClauseSet,
+    bank: &TermBank,
+) -> Option<ProverInvocation> {
+    match prover {
+        ProverType::EProver => Some(ProverInvocation {
+            executable: executable.unwrap_or(E_EXEC_DEFAULT).to_owned(),
+            args: vec![
+                "--tptp-in".to_owned(),
+                "--prefer-initial-clauses".to_owned(),
+                "--ac-handling=None".to_owned(),
+                format!("--cpu-limit={time_limit}"),
+            ],
+            problem: eprover_problem_string(problem, bank),
+            problem_file_use: ProverProblemFileUse::Argument,
+            suppress_stderr: false,
+            success_marker: format!("{DEFAULT_COMCHAR_RAW} Proof found!"),
+        }),
+        ProverType::Otter => Some(ProverInvocation {
+            executable: executable.unwrap_or(OTTER_EXEC_DEFAULT).to_owned(),
+            args: Vec::new(),
+            problem: otter_problem_string(problem, bank, time_limit),
+            problem_file_use: ProverProblemFileUse::Stdin,
+            suppress_stderr: true,
+            success_marker: "-------- PROOF --------".to_owned(),
+        }),
+        ProverType::Spass => Some(ProverInvocation {
+            executable: executable.unwrap_or(SPASS_EXEC_DEFAULT).to_owned(),
+            args: Vec::new(),
+            problem: spass_problem_string(problem, bank, time_limit),
+            problem_file_use: ProverProblemFileUse::Argument,
+            suppress_stderr: false,
+            success_marker: "Proof found.".to_owned(),
+        }),
+        ProverType::NoProver | ProverType::Setheo => None,
+    }
+}
+
+/// C `pcl_run_prover` over an explicit argument-vector invocation.
 ///
 /// # Errors
 ///
-/// Returns diagnostics from check-problem generation.
+/// Returns diagnostics for temporary-file creation/writing/removal, stdin-file
+/// opening, or process spawning/output collection failures.
+pub fn run_prover_invocation(invocation: &ProverInvocation) -> Result<bool, Diagnostic> {
+    let problem_file = temp_file_name()?;
+    let result = run_prover_invocation_with_file(invocation, &problem_file);
+    let cleanup = temp_file_remove(&problem_file);
+
+    match (result, cleanup) {
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(found), Ok(_)) => Ok(found),
+    }
+}
+
+/// Initial C `PCLStepCheck` port.
+///
+/// `NoProver` and `Setheo` remain unchecked because the C proof checker has no
+/// implemented external verifier for those variants.
+///
+/// # Errors
+///
+/// Returns diagnostics from check-problem generation or prover invocation.
 pub fn step_check(
     protocol: &mut PclProtocol,
     step_id: &PclId,
     prover: ProverType,
-    _executable: Option<&str>,
-    _time_limit: i64,
+    executable: Option<&str>,
+    time_limit: i64,
+) -> Result<PclCheckType, Diagnostic> {
+    step_check_with_runner(
+        protocol,
+        step_id,
+        prover,
+        executable,
+        time_limit,
+        run_prover_invocation,
+    )
+}
+
+fn step_check_with_runner(
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    prover: ProverType,
+    executable: Option<&str>,
+    time_limit: i64,
+    mut run_prover: impl FnMut(&ProverInvocation) -> Result<bool, Diagnostic>,
 ) -> Result<PclCheckType, Diagnostic> {
     let Some(step) = protocol.find_step(step_id) else {
         return Err(proofcheck_error("PCL proofcheck step not found"));
@@ -231,16 +328,23 @@ pub fn step_check(
         return Ok(PclCheckType::NotImplemented);
     }
 
-    if generate_check(protocol, step_id)?.is_none() {
+    let Some(problem) = generate_check(protocol, step_id)? else {
         return Ok(PclCheckType::ByAssumption);
-    }
+    };
+    let Some(invocation) = prover_invocation_for_problem(
+        prover,
+        executable,
+        time_limit,
+        &problem,
+        protocol.term_bank(),
+    ) else {
+        return Ok(PclCheckType::NotImplemented);
+    };
 
-    match prover {
-        ProverType::NoProver
-        | ProverType::EProver
-        | ProverType::Spass
-        | ProverType::Setheo
-        | ProverType::Otter => Ok(PclCheckType::NotImplemented),
+    if run_prover(&invocation)? {
+        Ok(PclCheckType::Ok)
+    } else {
+        Ok(PclCheckType::Fail)
     }
 }
 
@@ -271,6 +375,54 @@ fn step_clause(step: &PclStep) -> Option<&Clause> {
         PclStepLogic::Clause(clause) => Some(clause),
         PclStepLogic::Shell | PclStepLogic::Formula(_) => None,
     }
+}
+
+fn run_prover_invocation_with_file(
+    invocation: &ProverInvocation,
+    problem_file: &Path,
+) -> Result<bool, Diagnostic> {
+    fs::write(problem_file, invocation.problem.as_bytes()).map_err(|error| {
+        proofcheck_file_error(format!(
+            "Could not write proofcheck problem file {}: {error}",
+            problem_file.display()
+        ))
+    })?;
+
+    let mut command = Command::new(&invocation.executable);
+    command.args(&invocation.args);
+    match invocation.problem_file_use {
+        ProverProblemFileUse::Argument => {
+            command.arg(problem_file);
+        }
+        ProverProblemFileUse::Stdin => {
+            let stdin = File::open(problem_file).map_err(|error| {
+                proofcheck_file_error(format!(
+                    "Could not open proofcheck problem file {}: {error}",
+                    problem_file.display()
+                ))
+            })?;
+            command.stdin(Stdio::from(stdin));
+        }
+    }
+    if invocation.suppress_stderr {
+        command.stderr(Stdio::null());
+    }
+
+    let output = command.output().map_err(|error| {
+        proofcheck_system_error(format!(
+            "Cannot run proofcheck prover {}: {error}",
+            invocation.executable
+        ))
+    })?;
+
+    Ok(prover_output_contains_success_marker(
+        &output.stdout,
+        &invocation.success_marker,
+    ))
+}
+
+fn prover_output_contains_success_marker(output: &[u8], success_marker: &str) -> bool {
+    String::from_utf8_lossy(output).contains(success_marker)
 }
 
 fn otter_clause_string(clause: &Clause, bank: &TermBank) -> String {
@@ -418,22 +570,50 @@ fn proofcheck_error(message: &str) -> Diagnostic {
     Diagnostic::new(ErrorCode::SYNTAX_ERROR, message)
 }
 
+fn proofcheck_file_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(ErrorCode::FILE_ERROR, message)
+}
+
+fn proofcheck_system_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(ErrorCode::SYSTEM_ERROR, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         collect_preconditions, dfg_clause_set_string, dfg_signature_string, eprover_problem_string,
         generate_check, neg_skolemize_clause, otter_clause_set_string, otter_problem_string,
-        protocol_check, spass_problem_string, step_check, PclCheckType, ProverType,
+        protocol_check, prover_invocation_for_problem, run_prover_invocation, spass_problem_string,
+        step_check, step_check_with_runner, PclCheckType, ProverInvocation, ProverProblemFileUse,
+        ProverType,
     };
+    use crate::basics::defines::DEFAULT_COMCHAR_RAW;
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::{IoFormat, Scanner};
+    use crate::inout::tempfile::temp_file_test_lock;
     use crate::pcl2::idents::PclId;
     use crate::pcl2::protocol::PclProtocol;
     use crate::pcl2::steps::PclStepParseOptions;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    struct TmpDirGuard {
+        previous: Option<OsString>,
+    }
+
+    impl Drop for TmpDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("TMPDIR", value),
+                None => std::env::remove_var("TMPDIR"),
+            }
+        }
+    }
 
     fn parse_id(source: &str) -> PclId {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
@@ -454,6 +634,44 @@ mod tests {
             )
             .unwrap();
         protocol
+    }
+
+    fn target_dir() -> PathBuf {
+        std::env::current_dir().unwrap().join("target")
+    }
+
+    fn set_tmpdir(path: &Path) -> TmpDirGuard {
+        let previous = std::env::var_os("TMPDIR");
+        std::env::set_var("TMPDIR", path);
+        TmpDirGuard { previous }
+    }
+
+    #[cfg(windows)]
+    fn stdout_copy_invocation(problem_file_use: ProverProblemFileUse) -> ProverInvocation {
+        let args = match problem_file_use {
+            ProverProblemFileUse::Argument => vec!["/C".to_owned(), "type".to_owned()],
+            ProverProblemFileUse::Stdin => vec!["/C".to_owned(), "more".to_owned()],
+        };
+        ProverInvocation {
+            executable: "cmd".to_owned(),
+            args,
+            problem: "payload\nPROOF-SUCCESS\n".to_owned(),
+            problem_file_use,
+            suppress_stderr: true,
+            success_marker: "PROOF-SUCCESS".to_owned(),
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn stdout_copy_invocation(problem_file_use: ProverProblemFileUse) -> ProverInvocation {
+        ProverInvocation {
+            executable: "cat".to_owned(),
+            args: Vec::new(),
+            problem: "payload\nPROOF-SUCCESS\n".to_owned(),
+            problem_file_use,
+            suppress_stderr: true,
+            success_marker: "PROOF-SUCCESS".to_owned(),
+        }
     }
 
     #[test]
@@ -610,6 +828,139 @@ mod tests {
         );
         assert!(dfg_clause_set_string(&set, protocol.term_bank())
             .contains("or(equal(spass_hack,spass_hack),not(equal(spass_hack,spass_hack)))"));
+    }
+
+    #[test]
+    fn prover_invocation_for_problem_matches_c_command_shapes() {
+        let mut protocol = parse_protocol("1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1");
+        let problem = generate_check(&mut protocol, &parse_id("2"))
+            .unwrap()
+            .unwrap();
+
+        let eprover = prover_invocation_for_problem(
+            ProverType::EProver,
+            Some("custom-e"),
+            17,
+            &problem,
+            protocol.term_bank(),
+        )
+        .unwrap();
+        assert_eq!(eprover.executable, "custom-e");
+        assert_eq!(
+            eprover.args,
+            [
+                "--tptp-in",
+                "--prefer-initial-clauses",
+                "--ac-handling=None",
+                "--cpu-limit=17"
+            ]
+        );
+        assert_eq!(eprover.problem_file_use, ProverProblemFileUse::Argument);
+        assert!(!eprover.suppress_stderr);
+        assert_eq!(
+            eprover.success_marker,
+            format!("{DEFAULT_COMCHAR_RAW} Proof found!")
+        );
+        assert!(eprover.problem.contains("input_clause("));
+
+        let otter = prover_invocation_for_problem(
+            ProverType::Otter,
+            None,
+            19,
+            &problem,
+            protocol.term_bank(),
+        )
+        .unwrap();
+        assert_eq!(otter.executable, super::OTTER_EXEC_DEFAULT);
+        assert!(otter.args.is_empty());
+        assert_eq!(otter.problem_file_use, ProverProblemFileUse::Stdin);
+        assert!(otter.suppress_stderr);
+        assert_eq!(otter.success_marker, "-------- PROOF --------");
+        assert!(otter.problem.contains("assign(max_seconds, 19)."));
+
+        let spass = prover_invocation_for_problem(
+            ProverType::Spass,
+            None,
+            23,
+            &problem,
+            protocol.term_bank(),
+        )
+        .unwrap();
+        assert_eq!(spass.executable, super::SPASS_EXEC_DEFAULT);
+        assert!(spass.args.is_empty());
+        assert_eq!(spass.problem_file_use, ProverProblemFileUse::Argument);
+        assert!(!spass.suppress_stderr);
+        assert_eq!(spass.success_marker, "Proof found.");
+        assert!(spass.problem.contains("set_flag(TimeLimit, 23)."));
+
+        assert!(prover_invocation_for_problem(
+            ProverType::NoProver,
+            None,
+            1,
+            &problem,
+            protocol.term_bank()
+        )
+        .is_none());
+        assert!(prover_invocation_for_problem(
+            ProverType::Setheo,
+            None,
+            1,
+            &problem,
+            protocol.term_bank()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn run_prover_invocation_writes_problem_and_scans_stdout() {
+        let _guard = temp_file_test_lock();
+        fs::create_dir_all(target_dir()).unwrap();
+        let _tmpdir = set_tmpdir(&target_dir());
+
+        assert!(
+            run_prover_invocation(&stdout_copy_invocation(ProverProblemFileUse::Argument)).unwrap()
+        );
+        assert!(
+            run_prover_invocation(&stdout_copy_invocation(ProverProblemFileUse::Stdin)).unwrap()
+        );
+    }
+
+    #[test]
+    fn step_check_uses_external_runner_result_for_supported_provers() {
+        let mut protocol = parse_protocol("1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1");
+        let mut seen_invocation = None;
+
+        let check = step_check_with_runner(
+            &mut protocol,
+            &parse_id("2"),
+            ProverType::EProver,
+            Some("fake-e"),
+            29,
+            |invocation| {
+                seen_invocation = Some(invocation.clone());
+                Ok(true)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(check, PclCheckType::Ok);
+        let invocation = seen_invocation.unwrap();
+        assert_eq!(invocation.executable, "fake-e");
+        assert!(invocation.args.contains(&"--cpu-limit=29".to_owned()));
+
+        let mut protocol = parse_protocol("1 : : [++p(a)] : initial\n2 : : [++q(a)] : 1");
+        assert_eq!(
+            step_check_with_runner(
+                &mut protocol,
+                &parse_id("2"),
+                ProverType::EProver,
+                None,
+                29,
+                |_| Ok(false),
+            )
+            .unwrap(),
+            PclCheckType::Fail
+        );
     }
 
     #[test]
