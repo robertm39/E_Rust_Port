@@ -1,12 +1,25 @@
-//! Shared primitives from `PCL2/pcl_steps`.
+//! Port of `PCL2/pcl_steps`.
 
 use crate::basics::error::Diagnostic;
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_pcl_parse, clause_pcl_string, clause_print_lop_format_string,
+    clause_print_tptp_format_string, clause_print_tstp_core_string, Clause,
+};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_TYPE_1, CP_TYPE_2, CP_TYPE_3, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
     CP_TYPE_MASK, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_UNKNOWN,
 };
+use crate::clauses::clausefunc::{
+    tformula_tptp_parse, tformula_tptp_string, TFormulaTptpPrintOptions,
+};
+use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::pcl2::expressions::{PclExpression, PclOpCode};
 use crate::pcl2::idents::PclId;
+use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::Term;
+use std::fmt::Write as _;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 
 pub const PCL_PROOF_DIST_INFINITY: i64 = i64::MAX;
@@ -280,19 +293,437 @@ pub fn step_id_compare(left: &PclId, right: &PclId) -> i32 {
     left.compare_c_value(right)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PclStepParseOptions {
+    pub problem_type: ProblemType,
+    pub support_shell_pcl: bool,
+}
+
+impl Default for PclStepParseOptions {
+    fn default() -> Self {
+        Self {
+            problem_type: ProblemType::FirstOrder,
+            support_shell_pcl: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PclStepLogic {
+    Shell,
+    Clause(Box<Clause>),
+    Formula(Term),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PclStep {
+    id: PclId,
+    logic: PclStepLogic,
+    just: PclExpression,
+    extra: Option<String>,
+    properties: PclStepProperties,
+    tree_data: PclStepTreeData,
+}
+
+impl PclStep {
+    #[must_use]
+    pub fn new(
+        id: PclId,
+        logic: PclStepLogic,
+        just: PclExpression,
+        extra: Option<String>,
+        properties: PclStepProperties,
+    ) -> Self {
+        Self {
+            id,
+            logic,
+            just,
+            extra,
+            properties,
+            tree_data: PclStepTreeData::default(),
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> &PclId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn logic(&self) -> &PclStepLogic {
+        &self.logic
+    }
+
+    #[must_use]
+    pub const fn just(&self) -> &PclExpression {
+        &self.just
+    }
+
+    #[must_use]
+    pub fn extra(&self) -> Option<&str> {
+        self.extra.as_deref()
+    }
+
+    #[must_use]
+    pub const fn properties(&self) -> PclStepProperties {
+        self.properties
+    }
+
+    #[must_use]
+    pub const fn tree_data(&self) -> &PclStepTreeData {
+        &self.tree_data
+    }
+
+    pub const fn tree_data_mut(&mut self) -> &mut PclStepTreeData {
+        &mut self.tree_data
+    }
+
+    #[must_use]
+    pub const fn is_fof(&self) -> bool {
+        self.properties.is_fof()
+    }
+
+    #[must_use]
+    pub const fn is_shell(&self) -> bool {
+        self.properties.is_shell()
+    }
+
+    #[must_use]
+    pub const fn is_clausal(&self) -> bool {
+        self.properties.is_clausal()
+    }
+
+    pub fn set_property(&mut self, properties: PclStepProperties) {
+        self.properties.set(properties);
+    }
+
+    pub fn delete_property(&mut self, properties: PclStepProperties) {
+        self.properties.delete(properties);
+    }
+
+    /// C `PCLStepParse`.
+    ///
+    /// # Errors
+    ///
+    /// Returns scanner diagnostics for invalid full-step syntax or diagnostics
+    /// from the underlying clause/formula/expression parsers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a clausal step is parsed while the scanner is not in TPTP
+    /// format, matching the currently ported `ClausePCLParse` assertion.
+    pub fn parse(
+        scanner: &mut Scanner,
+        bank: &mut TermBank,
+        options: PclStepParseOptions,
+    ) -> Result<Self, Diagnostic> {
+        let id = PclId::parse(scanner)?;
+        scanner.accept_tok(TokenType::COLON)?;
+        let mut properties = parse_external_type(scanner)?;
+        scanner.accept_tok(TokenType::COLON)?;
+
+        let logic = if options.support_shell_pcl && scanner.test_tok(TokenType::COLON) {
+            properties.set(PCL_IS_SHELL_STEP);
+            PclStepLogic::Shell
+        } else if scanner.test_tok(TokenType::OPEN_SQUARE) {
+            let clause = clause_pcl_parse(scanner, bank, options.problem_type)?;
+            properties.delete(PCL_IS_FOF_STEP);
+            PclStepLogic::Clause(Box::new(clause))
+        } else {
+            let formula = tformula_tptp_parse(scanner, bank)?;
+            properties.set(PCL_IS_FOF_STEP);
+            PclStepLogic::Formula(formula)
+        };
+
+        scanner.accept_tok(TokenType::COLON)?;
+        let just = PclExpression::parse(scanner, false)?;
+        let extra = if scanner.test_tok(TokenType::COLON) {
+            scanner.next_token()?;
+            scanner.check_tok(TokenType::SQ_STRING | TokenType::NAME | TokenType::POS_INT)?;
+            let value = scanner.current_token().literal();
+            scanner.next_token()?;
+            Some(value)
+        } else {
+            None
+        };
+
+        properties.delete(PCL_IS_PROOF_STEP);
+        if just.op() == PclOpCode::Initial {
+            properties.set(PCL_IS_INITIAL);
+        }
+
+        Ok(Self {
+            id,
+            logic,
+            just,
+            extra,
+            properties,
+            tree_data: PclStepTreeData::default(),
+        })
+    }
+
+    /// C `PCLStepPrintExtra`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from temporary formula rendering.
+    pub fn print_extra_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        data: bool,
+    ) -> Result<String, Diagnostic> {
+        let mut output = self.id.print_formatted_string(true);
+        output.push_str(" : ");
+        output.push_str(&external_type_string(self.properties));
+        output.push_str(" : ");
+        if !self.is_shell() {
+            match &self.logic {
+                PclStepLogic::Shell => {}
+                PclStepLogic::Clause(clause) => {
+                    output.push_str(&clause_pcl_string(bank, clause, true));
+                }
+                PclStepLogic::Formula(formula) => {
+                    output.push_str(&tformula_tptp_string(
+                        bank,
+                        formula,
+                        true,
+                        TFormulaTptpPrintOptions::tptp(problem_type),
+                    )?);
+                }
+            }
+        }
+        output.push_str(" : ");
+        output.push_str(&self.just.print_string(false));
+        if let Some(extra) = &self.extra {
+            output.push_str(" : ");
+            output.push_str(extra);
+        } else if self.properties.query(PCL_IS_LEMMA) {
+            output.push_str(" : 'lemma'");
+        }
+        if data {
+            let _ = write!(
+                output,
+                " /* {:3} {:3} {:3} {:3} {:3}  */",
+                self.tree_data.contrib_simpl_refs,
+                self.tree_data.contrib_gen_refs,
+                self.tree_data.useless_simpl_refs,
+                self.tree_data.useless_gen_refs,
+                self.tree_data.proof_distance
+            );
+        }
+        Ok(output)
+    }
+
+    /// C `PCLStepPrintTSTP`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from temporary formula rendering.
+    pub fn print_tstp_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let mut output = String::new();
+        if self.is_clausal() {
+            let _ = write!(
+                output,
+                "cnf({},{},",
+                self.id.print_tstp_string(),
+                prop_to_tstp_type(self.properties)
+            );
+            if !self.is_shell() {
+                if let PclStepLogic::Clause(clause) = &self.logic {
+                    output.push_str(&clause_print_tstp_core_string(bank, clause, true, false));
+                }
+            }
+        } else {
+            let _ = write!(
+                output,
+                "fof({},{},",
+                self.id.print_tstp_string(),
+                prop_to_tstp_type(self.properties)
+            );
+            if !self.is_shell() {
+                if let PclStepLogic::Formula(formula) = &self.logic {
+                    output.push_str(&tformula_tptp_string(
+                        bank,
+                        formula,
+                        true,
+                        TFormulaTptpPrintOptions::tptp(problem_type),
+                    )?);
+                }
+            }
+        }
+        output.push(',');
+        output.push_str(&self.just.print_tstp_string(false));
+        if let Some(extra) = &self.extra {
+            output.push_str(",[");
+            output.push_str(extra);
+            output.push(']');
+        }
+        output.push_str(").");
+        Ok(output)
+    }
+
+    /// C `PCLStepPrintTPTP`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from temporary formula rendering.
+    pub fn print_tptp_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        if self.is_shell() {
+            return Ok(self.shell_omitted_string());
+        }
+        match &self.logic {
+            PclStepLogic::Shell => Ok(self.shell_omitted_string()),
+            PclStepLogic::Clause(clause) => Ok(clause_print_tptp_format_string(bank, clause)),
+            PclStepLogic::Formula(formula) => Ok(format!(
+                "input_formula({},{},{})",
+                self.id.print_tstp_string(),
+                prop_to_tstp_type(self.properties),
+                tformula_tptp_string(
+                    bank,
+                    formula,
+                    true,
+                    TFormulaTptpPrintOptions::tptp(problem_type),
+                )?
+            )),
+        }
+    }
+
+    /// C `PCLStepPrintLOP`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from temporary formula rendering.
+    pub fn print_lop_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        if self.is_shell() {
+            return Ok(self.shell_omitted_string());
+        }
+        match &self.logic {
+            PclStepLogic::Shell => Ok(self.shell_omitted_string()),
+            PclStepLogic::Clause(clause) => Ok(clause_print_lop_format_string(bank, clause, true)),
+            PclStepLogic::Formula(formula) => tformula_tptp_string(
+                bank,
+                formula,
+                true,
+                TFormulaTptpPrintOptions::tptp(problem_type),
+            ),
+        }
+    }
+
+    /// C `PCLStepPrintFormat`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from the selected printer.
+    ///
+    /// # Panics
+    ///
+    /// Panics for unsupported formats, matching the C assertion in the default
+    /// switch branch.
+    pub fn print_format_string(
+        &self,
+        bank: &mut TermBank,
+        problem_type: ProblemType,
+        data: bool,
+        format: ProofDocOutputFormat,
+    ) -> Result<String, Diagnostic> {
+        match format {
+            ProofDocOutputFormat::Pcl => self.print_extra_string(bank, problem_type, data),
+            ProofDocOutputFormat::Lop => self.print_lop_string(bank, problem_type),
+            ProofDocOutputFormat::Tptp => self.print_tptp_string(bank, problem_type),
+            ProofDocOutputFormat::Tstp => self.print_tstp_string(bank, problem_type),
+            _ => panic!("PCLStepPrintFormat supports only PCL, LOP, TPTP, and TSTP"),
+        }
+    }
+
+    /// C `PCLStepPrintExample`.
+    ///
+    /// # Panics
+    ///
+    /// Panics for FOF steps, matching the C assertion.
+    #[must_use]
+    pub fn print_example_string(
+        &self,
+        bank: &TermBank,
+        id: i64,
+        proof_steps: i64,
+        total_steps: i64,
+    ) -> String {
+        assert!(
+            !self.is_fof(),
+            "PCLStepPrintExample requires a clausal step"
+        );
+        if self.is_shell() {
+            return self.shell_omitted_string();
+        }
+        let PclStepLogic::Clause(clause) = &self.logic else {
+            return self.shell_omitted_string();
+        };
+        format!(
+            "{id:4}:({}, {:.6},{:.6},{:.6},{:.6}):{}",
+            self.tree_data.proof_distance,
+            c_example_ratio(self.tree_data.contrib_simpl_refs, proof_steps + 1),
+            c_example_ratio(
+                self.tree_data.useless_simpl_refs,
+                total_steps - proof_steps + 1,
+            ),
+            c_example_ratio(self.tree_data.contrib_gen_refs, proof_steps + 1),
+            c_example_ratio(
+                self.tree_data.useless_gen_refs,
+                total_steps - proof_steps + 1,
+            ),
+            clause_print_lop_format_string(bank, clause, true)
+        )
+    }
+
+    #[must_use]
+    fn shell_omitted_string(&self) -> String {
+        format!("# Step {} omitted (Shell)\n", self.id.print_string())
+    }
+}
+
+/// C `PCLStepIdCompare`, parameterized over already-ported step cells.
+#[must_use]
+pub fn pcl_step_id_compare(left: &PclStep, right: &PclStep) -> i32 {
+    step_id_compare(left.id(), right.id())
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn c_example_ratio(numerator: i64, denominator: i64) -> f64 {
+    // C computes these with `(float)` denominators and `%f` output.
+    f64::from(numerator as f32 / denominator as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        external_type_string, parse_external_type, prop_to_tstp_type, step_id_compare,
-        PclStepTreeData, PCL_IS_EXAMPLE, PCL_IS_FINAL, PCL_IS_FOF_STEP, PCL_IS_INITIAL,
-        PCL_IS_LEMMA, PCL_IS_MARKED, PCL_IS_PROOF_STEP, PCL_IS_SHELL_STEP, PCL_NO_PROP,
-        PCL_NO_WEIGHT, PCL_PROOF_DIST_DEFAULT, PCL_PROOF_DIST_INFINITY, PCL_PROOF_DIST_UNKNOWN,
-        PCL_TYPE_1, PCL_TYPE_2, PCL_TYPE_3, PCL_TYPE_AXIOM, PCL_TYPE_CONJECTURE,
-        PCL_TYPE_HYPOTHESIS, PCL_TYPE_MASK, PCL_TYPE_NEG_CONJECTURE, PCL_TYPE_QUESTION,
-        PCL_TYPE_UNKNOWN,
+        external_type_string, parse_external_type, pcl_step_id_compare, prop_to_tstp_type,
+        step_id_compare, PclStep, PclStepLogic, PclStepParseOptions, PclStepTreeData,
+        PCL_IS_EXAMPLE, PCL_IS_FINAL, PCL_IS_FOF_STEP, PCL_IS_INITIAL, PCL_IS_LEMMA, PCL_IS_MARKED,
+        PCL_IS_PROOF_STEP, PCL_IS_SHELL_STEP, PCL_NO_PROP, PCL_NO_WEIGHT, PCL_PROOF_DIST_DEFAULT,
+        PCL_PROOF_DIST_INFINITY, PCL_PROOF_DIST_UNKNOWN, PCL_TYPE_1, PCL_TYPE_2, PCL_TYPE_3,
+        PCL_TYPE_AXIOM, PCL_TYPE_CONJECTURE, PCL_TYPE_HYPOTHESIS, PCL_TYPE_MASK,
+        PCL_TYPE_NEG_CONJECTURE, PCL_TYPE_QUESTION, PCL_TYPE_UNKNOWN,
     };
-    use crate::inout::scanner::{Scanner, TokenType};
+    use crate::basics::simple_stuff::ProblemType;
+    use crate::clauses::inferencedoc::ProofDocOutputFormat;
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::pcl2::idents::PclId;
+    use crate::terms::signature::Signature;
+    use crate::terms::termbanks::TermBank;
+    use crate::terms::typebanks::TypeBank;
 
     fn parse_id(source: &str) -> PclId {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
@@ -303,6 +734,28 @@ mod tests {
         let mut scanner = Scanner::from_user_string(source, false).unwrap();
         let props = parse_external_type(&mut scanner).unwrap();
         (props, scanner)
+    }
+
+    fn test_bank() -> TermBank {
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        TermBank::new(signature).unwrap()
+    }
+
+    fn parse_step(source: &str, support_shell_pcl: bool) -> (PclStep, TermBank, Scanner) {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        scanner.set_format(IoFormat::Tptp);
+        let step = PclStep::parse(
+            &mut scanner,
+            &mut bank,
+            PclStepParseOptions {
+                problem_type: ProblemType::FirstOrder,
+                support_shell_pcl,
+            },
+        )
+        .unwrap();
+        (step, bank, scanner)
     }
 
     #[test]
@@ -450,5 +903,187 @@ mod tests {
         assert_eq!(step_id_compare(&parse_id("1.2"), &parse_id("1.2")), 0);
         assert!(step_id_compare(&parse_id("1.2"), &parse_id("1.3")) < 0);
         assert!(step_id_compare(&parse_id("2"), &parse_id("1.999")) > 0);
+    }
+
+    #[test]
+    fn parses_clause_step_and_prints_pcl_and_tstp_shapes() {
+        let (step, mut bank, scanner) = parse_step(
+            "42 : lemma,conj : [++p(a),--q(a)] : initial : 'extra' tail",
+            false,
+        );
+
+        assert_eq!(step.id().elements(), [42]);
+        assert!(matches!(step.logic(), PclStepLogic::Clause(_)));
+        assert!(step.properties().query(PCL_IS_LEMMA | PCL_IS_INITIAL));
+        assert_eq!(step.properties().query_type(), PCL_TYPE_CONJECTURE);
+        assert!(!step.properties().is_fof());
+        assert_eq!(step.extra(), Some("'extra'"));
+        assert_eq!(scanner.current_token().literal(), "tail");
+
+        assert_eq!(
+            step.print_extra_string(&mut bank, ProblemType::FirstOrder, false)
+                .unwrap(),
+            "     42 : lemma,conj : [++p(a),--q(a)] : initial : 'extra'"
+        );
+        assert_eq!(
+            step.print_tstp_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "cnf(42,conjecture,(p(a)|~q(a)),unknown(),['extra'])."
+        );
+    }
+
+    #[test]
+    fn parses_formula_step_and_uses_full_identifier_quotes() {
+        let (step, mut bank, scanner) = parse_step("7.2 : neg : p(a)|q(a) : 3.4 tail", false);
+
+        assert_eq!(step.id().print_tstp_string(), "pclid7_2");
+        assert!(matches!(step.logic(), PclStepLogic::Formula(_)));
+        assert!(step.properties().query(PCL_IS_FOF_STEP));
+        assert_eq!(step.properties().query_type(), PCL_TYPE_NEG_CONJECTURE);
+        assert_eq!(scanner.current_token().literal(), "tail");
+
+        assert_eq!(
+            step.print_extra_string(&mut bank, ProblemType::FirstOrder, false)
+                .unwrap(),
+            "      7.2 : neg : (p(a)|q(a)) : 3.4"
+        );
+        assert_eq!(
+            step.print_tstp_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "fof(pclid7_2,negated_conjecture,(p(a)|q(a)),pclid3_4)."
+        );
+        assert_eq!(
+            step.print_tptp_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "input_formula(pclid7_2,negated_conjecture,(p(a)|q(a)))"
+        );
+    }
+
+    #[test]
+    fn lemma_without_extra_gets_implicit_pcl_lemma_comment_only() {
+        let (step, mut bank, _) = parse_step("5 : lemma : [++p] : initial", false);
+
+        assert_eq!(
+            step.print_extra_string(&mut bank, ProblemType::FirstOrder, false)
+                .unwrap(),
+            "      5 : lemma : [++p] : initial : 'lemma'"
+        );
+        assert_eq!(
+            step.print_tstp_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "cnf(5,lemma,(p),unknown())."
+        );
+    }
+
+    #[test]
+    fn shell_steps_require_option_and_print_omitted_for_logical_formats() {
+        let (step, mut bank, _) = parse_step("3 : : : 2 : final", true);
+
+        assert!(matches!(step.logic(), PclStepLogic::Shell));
+        assert!(step.properties().query(PCL_IS_SHELL_STEP));
+        assert_eq!(step.extra(), Some("final"));
+        assert_eq!(
+            step.print_extra_string(&mut bank, ProblemType::FirstOrder, false)
+                .unwrap(),
+            "      3 :  :  : 2 : final"
+        );
+        assert_eq!(
+            step.print_tstp_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "cnf(3,plain,,2,[final])."
+        );
+        assert_eq!(
+            step.print_lop_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "# Step 3 omitted (Shell)\n"
+        );
+        assert_eq!(
+            step.print_tptp_string(&mut bank, ProblemType::FirstOrder)
+                .unwrap(),
+            "# Step 3 omitted (Shell)\n"
+        );
+    }
+
+    #[test]
+    fn full_step_extra_accepts_names_and_positive_integers() {
+        let (named, _, _) = parse_step("1 : : [++p] : initial : proof", false);
+        assert_eq!(named.extra(), Some("proof"));
+
+        let (numbered, _, _) = parse_step("2 : : [++q] : 1 : 99", false);
+        assert_eq!(numbered.extra(), Some("99"));
+    }
+
+    #[test]
+    fn print_format_dispatches_all_c_supported_full_step_formats() {
+        let (step, mut bank, _) = parse_step("4 : : [++p] : initial", false);
+
+        assert_eq!(
+            step.print_format_string(
+                &mut bank,
+                ProblemType::FirstOrder,
+                false,
+                ProofDocOutputFormat::Pcl,
+            )
+            .unwrap(),
+            "      4 :  : [++p] : initial"
+        );
+        assert_eq!(
+            step.print_format_string(
+                &mut bank,
+                ProblemType::FirstOrder,
+                false,
+                ProofDocOutputFormat::Tstp,
+            )
+            .unwrap(),
+            "cnf(4,axiom,(p),unknown())."
+        );
+        let tptp = step
+            .print_format_string(
+                &mut bank,
+                ProblemType::FirstOrder,
+                false,
+                ProofDocOutputFormat::Tptp,
+            )
+            .unwrap();
+        assert!(tptp.starts_with("input_clause(i_0_"));
+        assert!(tptp.ends_with(",axiom,[++p])."));
+        assert_eq!(
+            step.print_format_string(
+                &mut bank,
+                ProblemType::FirstOrder,
+                false,
+                ProofDocOutputFormat::Lop,
+            )
+            .unwrap(),
+            "p <- ."
+        );
+    }
+
+    #[test]
+    fn print_extra_data_and_example_use_analysis_counters() {
+        let (mut step, mut bank, _) = parse_step("8 : : [++p] : initial", false);
+        step.tree_data_mut().contrib_simpl_refs = 2;
+        step.tree_data_mut().contrib_gen_refs = 4;
+        step.tree_data_mut().useless_simpl_refs = 6;
+        step.tree_data_mut().useless_gen_refs = 8;
+        step.tree_data_mut().proof_distance = 3;
+
+        assert_eq!(
+            step.print_extra_string(&mut bank, ProblemType::FirstOrder, true)
+                .unwrap(),
+            "      8 :  : [++p] : initial /*   2   4   6   8   3  */"
+        );
+        assert_eq!(
+            step.print_example_string(&bank, 11, 3, 9),
+            "  11:(3, 0.500000,0.857143,1.000000,1.142857):p <- ."
+        );
+    }
+
+    #[test]
+    fn full_step_id_compare_uses_full_identifier_comparison() {
+        let (left, _, _) = parse_step("1.2 : : [++p] : initial", false);
+        let (right, _, _) = parse_step("1.3 : : [++p] : initial", false);
+
+        assert!(pcl_step_id_compare(&left, &right) < 0);
     }
 }

@@ -135,8 +135,8 @@ Source files reviewed: `PCL2/pcl_steps.h`, `PCL2/pcl_steps.c`.
 
 ### Rust Port Status
 
-- Initial Rust support is in `src/pcl2/steps.rs`, covering the shared PCL step property word, proof-distance constants, external type parse/print helpers, TSTP role mapping, identifier comparison through `PclId`, and the `PCLStepResetTreeData` analysis-counter reset behavior.
-- Full `PCLStepParse` and logical-content printing are not ported in this slice because they depend on formula-step ownership and protocol-list integration. The shared primitives are available for both later full-step and mini-step ports.
+- Rust support is in `src/pcl2/steps.rs`, covering the shared PCL step property word, proof-distance constants, external type parse/print helpers, TSTP role mapping, identifier comparison through `PclId`, and the `PCLStepResetTreeData` analysis-counter reset behavior.
+- Initial full-step support now covers `PCLStep` representation, full-id parsing, clausal/formula/shell logical content, full-expression justifications, full-step extras accepting `SQString|Name|PosInt`, PCL/TSTP/TPTP/LOP rendering, example-line rendering over analysis counters, and format dispatch for the C-supported output formats.
 
 ### Change Later
 
@@ -145,4 +145,8 @@ Source files reviewed: `PCL2/pcl_steps.h`, `PCL2/pcl_steps.c`.
 - `PCLParseExternalType` accepts `que`, but its fallback `CheckInpId` message lists only `conj|neg|lemma`. Rust preserves that diagnostic surface in the helper; a cleaned API should include every accepted token.
 - Empty external type fields parse as `PCLTypeAxiom`, while `PCLPropToTSTPType` maps a plain axiom type to `plain` unless `PCLIsInitial` is also set. This role distinction is easy to lose when refactoring proof-output code.
 - `PCLStepResetTreeData(step, false)` resets analysis counters and also clears `PCLIsLemma|PCLIsMarked`; `just_weights=true` resets only the two weight fields. Keep this property side effect visible when lemma-analysis code is ported.
+- `PCLStepParse` calls `PCLStepResetTreeData(handle, false)` before assigning `handle->properties`, so the reset helper clears bits in an uninitialized property field before the parser overwrites it. Rust initializes tree data directly and sets parsed properties afterward; a cleaned C-compatible API should separate data initialization from property mutation.
+- Shell-step logical-format printers call `Warning(...)` on stderr and also emit a comment-line omission marker to the requested output stream. Rust preserves the returned omission marker but does not yet model the warning side channel; executable integration should decide whether PCL tooling depends on the warning text.
+- `PCLStepPrintExample` delegates clause rendering to global `OutputFormat` through `ClausePrint`, even though example files are otherwise a fixed learning-data format. Rust currently uses the LOP-shaped clause rendering available in the local API; revisit once the process-global output-format compatibility shim exists.
+- `PCLStepPrintTPTP` prints formula-backed `input_formula(...)` without appending a final period. Rust preserves this string shape; a future TPTP compatibility audit should verify whether consumers expect the missing terminator.
 <!-- END MANUAL REVIEW: c_source_docs -->
