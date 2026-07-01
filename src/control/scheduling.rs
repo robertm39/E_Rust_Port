@@ -1,7 +1,8 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::control::gproc_ctrl::{EGPCtrl, EGPCtrlSet};
 use crate::heuristics::new_autoschedule::{
-    schedule_times_init_multi_core, ScheduleCell, ScheduleMultiCoreInitReport, SCHEDULE_DONE,
+    get_filtered_default_schedule, schedule_times_init_multi_core, ScheduleCell,
+    ScheduleMultiCoreInitReport, RETRY_DEFAULT_SCHEDULE_THRESHOLD, SCHEDULE_DONE,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -35,6 +36,29 @@ pub struct ScheduleExecutionReport {
     pub outcome: ScheduleExecutionOutcome,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScheduleExecutionWithRetryReport {
+    pub primary: ScheduleExecutionReport,
+    pub retry: Option<ScheduleExecutionReport>,
+}
+
+impl ScheduleExecutionWithRetryReport {
+    #[must_use]
+    pub fn outcome(&self) -> &ScheduleExecutionOutcome {
+        self.retry
+            .as_ref()
+            .map_or(&self.primary.outcome, |report| &report.outcome)
+    }
+
+    #[must_use]
+    pub const fn c_return_value(&self) -> i32 {
+        match &self.retry {
+            Some(report) => report.outcome.c_return_value(),
+            None => self.primary.outcome.c_return_value(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScheduleExecutionConfig {
     pub time_used: f64,
@@ -42,6 +66,61 @@ pub struct ScheduleExecutionConfig {
     pub preprocessing_schedule: bool,
     pub max_cores: i32,
     pub serialize: bool,
+}
+
+pub fn execute_schedule_multi_core_with_default_retry<F, T>(
+    schedule: &mut Vec<ScheduleCell>,
+    default_schedule: &[ScheduleCell],
+    config: ScheduleExecutionConfig,
+    output: &mut impl Write,
+    mut total_time_used: T,
+    mut spawn: F,
+) -> Result<ScheduleExecutionWithRetryReport, Diagnostic>
+where
+    F: FnMut(usize, &ScheduleCell, &mut dyn Write) -> Result<EGPCtrl, Diagnostic>,
+    T: FnMut() -> f64,
+{
+    let primary = execute_schedule_multi_core(schedule, config, output, &mut spawn)?;
+    if config.preprocessing_schedule
+        || !matches!(primary.outcome, ScheduleExecutionOutcome::Exhausted)
+    {
+        return Ok(ScheduleExecutionWithRetryReport {
+            primary,
+            retry: None,
+        });
+    }
+
+    let remaining_time = config.wc_time_limit - total_time_used();
+    if remaining_time <= RETRY_DEFAULT_SCHEDULE_THRESHOLD {
+        return Ok(ScheduleExecutionWithRetryReport {
+            primary,
+            retry: None,
+        });
+    }
+
+    let mut retry_schedule = get_filtered_default_schedule(default_schedule, schedule);
+    writeln!(
+        output,
+        "% executing default schedule for {remaining_time} seconds."
+    )
+    .map_err(|error| output_error(&error))?;
+    let retry = execute_schedule_multi_core(
+        &mut retry_schedule,
+        ScheduleExecutionConfig {
+            time_used: 0.0,
+            wc_time_limit: remaining_time,
+            preprocessing_schedule: false,
+            max_cores: config.max_cores,
+            serialize: config.serialize,
+        },
+        output,
+        &mut spawn,
+    )?;
+
+    Ok(ScheduleExecutionWithRetryReport {
+        primary,
+        retry: Some(retry),
+    })
 }
 
 pub fn execute_schedule_multi_core<F>(
@@ -192,7 +271,10 @@ fn output_error(error: &std::io::Error) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::{execute_schedule_multi_core, ScheduleExecutionConfig, ScheduleExecutionOutcome};
+    use super::{
+        execute_schedule_multi_core, execute_schedule_multi_core_with_default_retry,
+        ScheduleExecutionConfig, ScheduleExecutionOutcome,
+    };
     use crate::basics::error::ErrorCode;
     use crate::control::gproc_ctrl::EGPCtrl;
     use crate::heuristics::new_autoschedule::{ScheduleCell, SCHEDULE_DONE};
@@ -317,6 +399,99 @@ mod tests {
         assert!(String::from_utf8(output)
             .unwrap()
             .contains("% Schedule exhausted\n"));
+    }
+
+    #[test]
+    fn execution_retries_filtered_default_schedule_when_time_remains() {
+        let mut schedule = vec![
+            schedule_cell("fail-a", 0.1, 1),
+            schedule_cell("fail-b", 0.1, 1),
+        ];
+        let default_schedule = vec![
+            schedule_cell("fail-a", 0.1, 1),
+            schedule_cell("default-prove", 0.1, 1),
+            schedule_cell("default-later", 0.1, 1),
+        ];
+        let mut output = Vec::new();
+        let mut spawned_names = Vec::new();
+
+        let report = execute_schedule_multi_core_with_default_retry(
+            &mut schedule,
+            &default_schedule,
+            config(10.0, 2),
+            &mut output,
+            || 4.0,
+            |_, cell, output| {
+                spawned_names.push(cell.heuristic_name.clone());
+                let status = if cell.heuristic_name == "default-prove" {
+                    "% SZS status Theorem"
+                } else {
+                    "no result"
+                };
+                EGPCtrl::spawn_command_reporting(
+                    status_command(status, 0),
+                    cell.heuristic_name.clone(),
+                    usize::try_from(cell.cores).unwrap_or(1),
+                    cell.time_absolute,
+                    output,
+                )
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.primary.outcome, ScheduleExecutionOutcome::Exhausted);
+        assert_eq!(
+            report.outcome(),
+            &ScheduleExecutionOutcome::Result {
+                index: 0,
+                name: "default-prove".to_owned(),
+                exit_status: 0,
+            }
+        );
+        assert_eq!(report.c_return_value(), 0);
+        assert_eq!(
+            spawned_names,
+            ["fail-a", "fail-b", "default-prove", "default-later"]
+        );
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("% Schedule exhausted\n"));
+        assert!(printed.contains("% executing default schedule for 6 seconds.\n"));
+        assert!(printed.contains("% Result found by default-prove"));
+    }
+
+    #[test]
+    fn execution_skips_default_retry_when_remaining_time_is_too_small() {
+        let mut schedule = vec![schedule_cell("fail-a", 0.1, 1)];
+        let default_schedule = vec![schedule_cell("default-prove", 0.1, 1)];
+        let mut output = Vec::new();
+        let mut spawned_names = Vec::new();
+
+        let report = execute_schedule_multi_core_with_default_retry(
+            &mut schedule,
+            &default_schedule,
+            config(10.0, 1),
+            &mut output,
+            || 9.0,
+            |_, cell, output| {
+                spawned_names.push(cell.heuristic_name.clone());
+                EGPCtrl::spawn_command_reporting(
+                    status_command("no result", 0),
+                    cell.heuristic_name.clone(),
+                    usize::try_from(cell.cores).unwrap_or(1),
+                    cell.time_absolute,
+                    output,
+                )
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.primary.outcome, ScheduleExecutionOutcome::Exhausted);
+        assert_eq!(report.retry, None);
+        assert_eq!(report.c_return_value(), SCHEDULE_DONE);
+        assert_eq!(spawned_names, ["fail-a"]);
+        let printed = String::from_utf8(output).unwrap();
+        assert!(printed.contains("% Schedule exhausted\n"));
+        assert!(!printed.contains("executing default schedule"));
     }
 
     #[test]

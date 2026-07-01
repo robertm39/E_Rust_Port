@@ -365,17 +365,18 @@ C source references:
 
 Implemented:
 
-- A reusable `ExecuteScheduleMultiCore`-style coordinator over owned Rust schedules, including multicore time/core initialization through the ported pure helper, C-shaped schedule summary output, max-core reservation checks, injected child-process spawning through `EGPCtrlSet`, descriptor-to-schedule-index tracking, concurrent spawning while enough cores are free, generic process polling, first-success result reporting with `% Result found by ...` plus accumulated child output, schedule-exhaustion reporting, explicit C-return-value mapping for success and `SCHEDULE_DONE`, and tests for first success, core-capacity sequencing, exhaustion, and the unschedulable-core edge case.
+- A reusable `ExecuteScheduleMultiCore`-style coordinator over owned Rust schedules, including multicore time/core initialization through the ported pure helper, C-shaped schedule summary output, max-core reservation checks, injected child-process spawning through `EGPCtrlSet`, descriptor-to-schedule-index tracking, concurrent spawning while enough cores are free, generic process polling, first-success result reporting with `% Result found by ...` plus accumulated child output, schedule-exhaustion reporting, explicit C-return-value mapping for success and `SCHEDULE_DONE`, optional filtered-default-schedule retry when an exhausted search schedule leaves more than the C retry-threshold budget, and tests for first success, core-capacity sequencing, exhaustion, default retry, no-retry exhaustion, and the unschedulable-core edge case.
 
 Pending:
 
 - Main `eprover` integration that uses this coordinator for `--auto-schedule`/`--satauto-schedule` instead of selecting only the first scheduled preprocessing/search cell in-process.
-- Exact C fork child return semantics, parent `exit(handle->exit_status)` replay, SIGTERM `PARENT_REQUEST` handling, optional resource-usage printing after result/exhaustion, and default-schedule retry after schedule exhaustion.
+- Exact C fork child return semantics, parent `exit(handle->exit_status)` replay, SIGTERM `PARENT_REQUEST` handling, optional resource-usage printing after result/exhaustion, and main-executable wiring of the default-schedule retry after search-schedule exhaustion.
 
 Change-later notes:
 
 - C `ExecuteScheduleMultiCore` can spin if the next schedule cell requires more cores than the total available and no subprocess is running to free capacity. Rust returns an explicit diagnostic for that state; revisit only if reference traces prove the hang is observable compatibility.
 - The C API returns a schedule index only in the forked child and exits the parent on result. Rust exposes an explicit report so callers can decide whether to replay C parent-exit behavior or compose schedule execution into a larger workflow.
+- C computes default-schedule retry time from total CPU including children but then re-enters `ScheduleTimesInitMultiCore`, which subtracts the current parent process CPU time again. Rust's reusable retry wrapper treats the computed remaining time as the retry schedule's remaining budget; main `eprover` integration should revisit this when exact process CPU accounting is wired.
 
 ## e_stratpar Executable
 
