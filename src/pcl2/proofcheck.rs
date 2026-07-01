@@ -28,6 +28,7 @@ use std::process::{Command, Stdio};
 pub const E_EXEC_DEFAULT: &str = "eprover";
 pub const OTTER_EXEC_DEFAULT: &str = "otter";
 pub const SPASS_EXEC_DEFAULT: &str = "SPASS-0.55";
+pub const FOF_PROOFCHECK_WARNING: &str = "Cannot currently handle full first-order format!";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PclCheckType {
@@ -68,6 +69,22 @@ pub struct ProverInvocation {
     pub success_marker: String,
 }
 
+#[derive(Debug)]
+pub struct ProofcheckWarningOutput<'a, W: IoWrite + ?Sized> {
+    writer: &'a mut W,
+    program_name: &'a str,
+}
+
+impl<'a, W: IoWrite + ?Sized> ProofcheckWarningOutput<'a, W> {
+    #[must_use]
+    pub fn new(writer: &'a mut W, program_name: &'a str) -> Self {
+        Self {
+            writer,
+            program_name,
+        }
+    }
+}
+
 /// C `PCLCollectPreconds`.
 ///
 /// # Errors
@@ -79,6 +96,33 @@ pub fn collect_preconditions(
     step_id: &PclId,
     set: &mut ClauseSet,
 ) -> Result<i64, Diagnostic> {
+    collect_preconditions_with_warning_callback(protocol, step_id, set, || Ok(()))
+}
+
+/// C `PCLCollectPreconds`, including the full-FOF warning side channel.
+///
+/// # Errors
+///
+/// Returns diagnostics for dangling full-protocol references, mini identifiers,
+/// clause copy failures, or warning writes.
+pub fn collect_preconditions_with_warnings(
+    warning: &mut (impl IoWrite + ?Sized),
+    program_name: &str,
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    set: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    collect_preconditions_with_warning_callback(protocol, step_id, set, || {
+        write_fof_proofcheck_warning(warning, program_name)
+    })
+}
+
+fn collect_preconditions_with_warning_callback(
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    set: &mut ClauseSet,
+    mut warn_fof: impl FnMut() -> Result<(), Diagnostic>,
+) -> Result<i64, Diagnostic> {
     let Some(step) = protocol.find_step(step_id) else {
         return Err(proofcheck_error("PCL proofcheck step not found"));
     };
@@ -86,11 +130,13 @@ pub fn collect_preconditions(
     let mut count = 0;
 
     for parent_id in parent_ids {
-        let Some(clause) = protocol
-            .find_step(&parent_id)
-            .and_then(step_clause)
-            .cloned()
-        else {
+        let Some(parent) = protocol.find_step(&parent_id) else {
+            continue;
+        };
+        let Some(clause) = step_clause(parent).cloned() else {
+            if parent.is_fof() {
+                warn_fof()?;
+            }
             continue;
         };
         let copied = clause.copy_to_bank(protocol.term_bank_mut())?;
@@ -110,7 +156,37 @@ pub fn neg_skolemize_clause(
     step_id: &PclId,
     set: &mut ClauseSet,
 ) -> Result<i64, Diagnostic> {
+    neg_skolemize_clause_with_warning_callback(protocol, step_id, set, || Ok(()))
+}
+
+/// C `PCLNegSkolemizeClause`, including the full-FOF warning side channel.
+///
+/// # Errors
+///
+/// Returns diagnostics from skolemization, literal allocation, or warning
+/// writes.
+pub fn neg_skolemize_clause_with_warnings(
+    warning: &mut (impl IoWrite + ?Sized),
+    program_name: &str,
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    set: &mut ClauseSet,
+) -> Result<i64, Diagnostic> {
+    neg_skolemize_clause_with_warning_callback(protocol, step_id, set, || {
+        write_fof_proofcheck_warning(warning, program_name)
+    })
+}
+
+fn neg_skolemize_clause_with_warning_callback(
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    set: &mut ClauseSet,
+    mut warn_fof: impl FnMut() -> Result<(), Diagnostic>,
+) -> Result<i64, Diagnostic> {
     let Some(clause) = protocol.find_step(step_id).and_then(step_clause).cloned() else {
+        if protocol.find_step(step_id).is_some_and(PclStep::is_fof) {
+            warn_fof()?;
+        }
         return Ok(0);
     };
     let skolemized = clause.skolemize(protocol.term_bank_mut())?;
@@ -144,11 +220,37 @@ pub fn generate_check(
     protocol: &mut PclProtocol,
     step_id: &PclId,
 ) -> Result<Option<ClauseSet>, Diagnostic> {
+    generate_check_with_warning_callback(protocol, step_id, || Ok(()))
+}
+
+/// C `PCLGenerateCheck`, including FOF warning side effects from its helpers.
+///
+/// # Errors
+///
+/// Returns diagnostics from precondition collection, clause copying,
+/// skolemization, or warning writes.
+pub fn generate_check_with_warnings(
+    warning: &mut (impl IoWrite + ?Sized),
+    program_name: &str,
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+) -> Result<Option<ClauseSet>, Diagnostic> {
+    generate_check_with_warning_callback(protocol, step_id, || {
+        write_fof_proofcheck_warning(warning, program_name)
+    })
+}
+
+fn generate_check_with_warning_callback(
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    mut warn_fof: impl FnMut() -> Result<(), Diagnostic>,
+) -> Result<Option<ClauseSet>, Diagnostic> {
     let mut set = ClauseSet::new();
-    if collect_preconditions(protocol, step_id, &mut set)? == 0 {
+    if collect_preconditions_with_warning_callback(protocol, step_id, &mut set, &mut warn_fof)? == 0
+    {
         return Ok(None);
     }
-    let _ = neg_skolemize_clause(protocol, step_id, &mut set)?;
+    let _ = neg_skolemize_clause_with_warning_callback(protocol, step_id, &mut set, &mut warn_fof)?;
     Ok(Some(set))
 }
 
@@ -333,6 +435,33 @@ pub fn step_check(
         prover,
         executable,
         time_limit,
+        generate_check,
+        run_prover_invocation,
+    )
+}
+
+/// C `PCLStepCheck`, including FOF warning side effects from check generation.
+///
+/// # Errors
+///
+/// Returns diagnostics from check-problem generation, warning writes, or prover
+/// invocation.
+pub fn step_check_with_warnings(
+    warning: &mut (impl IoWrite + ?Sized),
+    program_name: &str,
+    protocol: &mut PclProtocol,
+    step_id: &PclId,
+    prover: ProverType,
+    executable: Option<&str>,
+    time_limit: i64,
+) -> Result<PclCheckType, Diagnostic> {
+    step_check_with_runner(
+        protocol,
+        step_id,
+        prover,
+        executable,
+        time_limit,
+        |protocol, step_id| generate_check_with_warnings(warning, program_name, protocol, step_id),
         run_prover_invocation,
     )
 }
@@ -343,6 +472,7 @@ fn step_check_with_runner(
     prover: ProverType,
     executable: Option<&str>,
     time_limit: i64,
+    mut generate: impl FnMut(&mut PclProtocol, &PclId) -> Result<Option<ClauseSet>, Diagnostic>,
     mut run_prover: impl FnMut(&ProverInvocation) -> Result<bool, Diagnostic>,
 ) -> Result<PclCheckType, Diagnostic> {
     let Some(step) = protocol.find_step(step_id) else {
@@ -352,7 +482,7 @@ fn step_check_with_runner(
         return Ok(PclCheckType::NotImplemented);
     }
 
-    let Some(problem) = generate_check(protocol, step_id)? else {
+    let Some(problem) = generate(protocol, step_id)? else {
         return Ok(PclCheckType::ByAssumption);
     };
     let Some(invocation) = prover_invocation_for_problem(
@@ -428,6 +558,58 @@ pub fn protocol_check_with_output(
             prover,
             executable,
             time_limit,
+            generate_check,
+            |invocation| run_prover_invocation_with_output(output, output_level, invocation),
+        )?;
+        update_summary_and_write_check_result(output, output_level, &mut summary, check)?;
+    }
+    Ok(summary)
+}
+
+/// C `PCLProtCheck` with explicit `GlobalOut`/`OutputLevel` rendering and
+/// warning output.
+///
+/// # Errors
+///
+/// Returns diagnostics from step rendering, check generation, warning writes,
+/// prover invocation, or output writes.
+pub fn protocol_check_with_output_and_warnings(
+    output: &mut (impl IoWrite + ?Sized),
+    warning: &mut ProofcheckWarningOutput<'_, impl IoWrite + ?Sized>,
+    output_level: i64,
+    protocol: &mut PclProtocol,
+    prover: ProverType,
+    executable: Option<&str>,
+    time_limit: i64,
+) -> Result<PclCheckSummary, Diagnostic> {
+    let mut summary = PclCheckSummary::default();
+    for id in protocol.step_ids() {
+        if output_level != 0 {
+            let Some(step) = protocol.find_step(&id).cloned() else {
+                return Err(proofcheck_error("PCL proofcheck step not found"));
+            };
+            let rendered =
+                step.print_extra_string(protocol.term_bank_mut(), ProblemType::FirstOrder, false)?;
+            proofcheck_write_all(
+                output,
+                format!("{DEFAULT_COMCHAR_RAW} Checking {rendered}\n").as_bytes(),
+            )?;
+        }
+
+        let check = step_check_with_runner(
+            protocol,
+            &id,
+            prover,
+            executable,
+            time_limit,
+            |protocol, step_id| {
+                generate_check_with_warnings(
+                    &mut *warning.writer,
+                    warning.program_name,
+                    protocol,
+                    step_id,
+                )
+            },
             |invocation| run_prover_invocation_with_output(output, output_level, invocation),
         )?;
         update_summary_and_write_check_result(output, output_level, &mut summary, check)?;
@@ -748,6 +930,14 @@ fn proofcheck_write_all(
         .map_err(|error| proofcheck_write_error(&error))
 }
 
+fn write_fof_proofcheck_warning(
+    warning: &mut (impl IoWrite + ?Sized),
+    program_name: &str,
+) -> Result<(), Diagnostic> {
+    let diagnostic = Diagnostic::new(ErrorCode::OTHER_ERROR, FOF_PROOFCHECK_WARNING);
+    proofcheck_write_all(warning, diagnostic.render_warning(program_name).as_bytes())
+}
+
 fn update_summary_and_write_check_result(
     output: &mut (impl IoWrite + ?Sized),
     output_level: i64,
@@ -798,11 +988,14 @@ fn update_summary_and_write_check_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_preconditions, dfg_clause_set_string, dfg_signature_string, eprover_problem_string,
-        generate_check, neg_skolemize_clause, otter_clause_set_string, otter_problem_string,
-        protocol_check, protocol_check_with_output, prover_invocation_for_problem,
-        run_prover_invocation, run_prover_invocation_with_output, spass_problem_string, step_check,
-        step_check_with_runner, PclCheckType, ProverInvocation, ProverProblemFileUse, ProverType,
+        collect_preconditions, collect_preconditions_with_warnings, dfg_clause_set_string,
+        dfg_signature_string, eprover_problem_string, generate_check, generate_check_with_warnings,
+        neg_skolemize_clause, otter_clause_set_string, otter_problem_string, protocol_check,
+        protocol_check_with_output, protocol_check_with_output_and_warnings,
+        prover_invocation_for_problem, run_prover_invocation, run_prover_invocation_with_output,
+        spass_problem_string, step_check, step_check_with_runner, PclCheckType,
+        ProofcheckWarningOutput, ProverInvocation, ProverProblemFileUse, ProverType,
+        FOF_PROOFCHECK_WARNING,
     };
     use crate::basics::defines::DEFAULT_COMCHAR_RAW;
     use crate::basics::simple_stuff::ProblemType;
@@ -909,6 +1102,33 @@ mod tests {
     }
 
     #[test]
+    fn collect_preconditions_with_warnings_reports_fof_parent_steps() {
+        let mut protocol = parse_protocol(
+            "1 : : [++p(a)] : initial\n\
+             2 : : q(a) : initial\n\
+             3 : : [++r(a)] : pm(1,2)",
+        );
+        let mut set = ClauseSet::new();
+        let mut warning = Vec::new();
+
+        let count = collect_preconditions_with_warnings(
+            &mut warning,
+            "eprover",
+            &mut protocol,
+            &parse_id("3"),
+            &mut set,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(set.members(), 1);
+        assert_eq!(
+            String::from_utf8(warning).unwrap(),
+            format!("eprover: Warning: {FOF_PROOFCHECK_WARNING}\n")
+        );
+    }
+
+    #[test]
     fn neg_skolemize_clause_adds_one_flipped_hypothesis_unit_per_literal() {
         let mut protocol = parse_protocol("1 : : [++p(X),--q(a)] : initial\n2 : : [++r(a)] : 1");
         let mut set = ClauseSet::new();
@@ -932,6 +1152,23 @@ mod tests {
                 .filter(|clause| clause.literals().as_slice()[0].is_positive())
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn generate_check_with_warnings_reports_fof_target_steps() {
+        let mut protocol = parse_protocol("1 : : [++p(a)] : initial\n2 : : q(a) : 1");
+        let mut warning = Vec::new();
+
+        let problem =
+            generate_check_with_warnings(&mut warning, "eprover", &mut protocol, &parse_id("2"))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(problem.members(), 1);
+        assert_eq!(
+            String::from_utf8(warning).unwrap(),
+            format!("eprover: Warning: {FOF_PROOFCHECK_WARNING}\n")
         );
     }
 
@@ -1173,6 +1410,7 @@ mod tests {
             ProverType::EProver,
             Some("fake-e"),
             29,
+            generate_check,
             |invocation| {
                 seen_invocation = Some(invocation.clone());
                 Ok(true)
@@ -1193,6 +1431,7 @@ mod tests {
                 ProverType::EProver,
                 None,
                 29,
+                generate_check,
                 |_| Ok(false),
             )
             .unwrap(),
@@ -1239,6 +1478,35 @@ mod tests {
         .unwrap();
         assert_eq!(summary.checked, 1);
         assert!(silent.is_empty());
+    }
+
+    #[test]
+    fn protocol_check_with_output_and_warnings_reports_fof_generation_warnings() {
+        let mut protocol = parse_protocol("1 : : [++p(a)] : initial\n2 : : q(a) : 1");
+        let mut output = Vec::new();
+        let mut warning = Vec::new();
+
+        let summary = protocol_check_with_output_and_warnings(
+            &mut output,
+            &mut ProofcheckWarningOutput::new(&mut warning, "eprover"),
+            1,
+            &mut protocol,
+            ProverType::NoProver,
+            None,
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(summary.checked, 1);
+        assert_eq!(summary.unchecked, 1);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("% Checking       1 :  : [++p(a)] : initial\n"));
+        assert!(output.contains("% Checking       2 :  : q(a) : 1\n"));
+        assert!(output.contains("% Check not implemented, assuming true!\n\n"));
+        assert_eq!(
+            String::from_utf8(warning).unwrap(),
+            format!("eprover: Warning: {FOF_PROOFCHECK_WARNING}\n")
+        );
     }
 
     #[test]
