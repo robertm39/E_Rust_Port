@@ -1,7 +1,9 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::pstacks::PStack;
 use crate::basics::simple_stuff::ProblemType;
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
+};
 use crate::clauses::clause_props::{
     FormulaProperties, CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_D_INDEXED, CP_IS_PURE_INJECTIVITY,
     CP_IS_SOS, CP_IS_S_INDEXED, CP_LIMITED_RW,
@@ -21,7 +23,7 @@ use crate::clauses::eqn_props::{
     PatEqnDirection, EP_IS_EQU_LITERAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_MAX_IS_UP_TO_DATE,
 };
 use crate::clauses::eqnlist::EqnList;
-use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
+use crate::inout::scanner::{token_pos_rep, IoFormat, Scanner, TokenType};
 use crate::terms::functypes::{func_symb_start_token, FunCode};
 use crate::terms::lambda::{
     apply_terms, beta_normalize_db, close_with_db_var, close_with_type_prefix,
@@ -193,6 +195,47 @@ pub fn pstack_clause_print_lop_string(
         output.push('\n');
     }
     output
+}
+
+/// Returns the C `PStackClausePrint` shape with explicit `ClausePrint` dispatch.
+///
+/// # Errors
+///
+/// Returns a diagnostic if TSTP rendering rejects a selected clause.
+pub fn pstack_clause_print_format_string(
+    bank: &TermBank,
+    stack: &PStack<&Clause>,
+    extra: Option<&str>,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    let mut output = String::new();
+    for clause in stack.as_slice() {
+        output.push_str(&pstack_clause_rendered_string(
+            bank,
+            clause,
+            output_format,
+            problem_type,
+        )?);
+        if let Some(extra) = extra {
+            output.push_str(extra);
+        }
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn pstack_clause_rendered_string(
+    bank: &TermBank,
+    clause: &Clause,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        IoFormat::Tstp => clause_tstp_string(bank, clause, true, true, problem_type),
+        IoFormat::Lop | IoFormat::Auto => Ok(clause_print_lop_format_string(bank, clause, true)),
+    }
 }
 
 pub fn clause_archive(
@@ -6002,22 +6045,22 @@ mod tests {
         clause_resolve_flex_clause, clause_set_archive_copy, clause_set_canonize,
         clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
-        clause_unit_simplify_test, close_with_db_var, pstack_clause_print_lop_string,
-        tcf_tstp_parse, tformula_add_quantor, tformula_app_encode_string,
-        tformula_clause_closed_encode, tformula_clause_encode, tformula_closure,
-        tformula_collect_clause, tformula_collect_free_vars, tformula_conjunctive_nf,
-        tformula_conjunctive_nf3, tformula_copy, tformula_copy_def, tformula_create_def,
-        tformula_decode_polarity, tformula_def_rename, tformula_distribute_disjunctions,
-        tformula_encode_predicate_as_eqn, tformula_equal, tformula_estimate_clauses,
-        tformula_expand_distinct, tformula_expand_literals, tformula_fcode_alloc,
-        tformula_find_defs, tformula_find_max_var_code, tformula_gc_mark_cells,
-        tformula_has_free_vars, tformula_has_subform1, tformula_has_subform2, tformula_is_binary,
-        tformula_is_closed, tformula_is_complex_bool, tformula_is_literal, tformula_is_prop_const,
-        tformula_is_prop_false, tformula_is_prop_true, tformula_is_quantified,
-        tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped, tformula_lift_ite,
-        tformula_lift_lets, tformula_lit_alloc, tformula_mark_polarity, tformula_mini_scope,
-        tformula_mini_scope3, tformula_neg_alloc, tformula_negate, tformula_nnf,
-        tformula_preload_types, tformula_prop_constant_alloc, tformula_quantor_alloc,
+        clause_unit_simplify_test, close_with_db_var, pstack_clause_print_format_string,
+        pstack_clause_print_lop_string, tcf_tstp_parse, tformula_add_quantor,
+        tformula_app_encode_string, tformula_clause_closed_encode, tformula_clause_encode,
+        tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
+        tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy, tformula_copy_def,
+        tformula_create_def, tformula_decode_polarity, tformula_def_rename,
+        tformula_distribute_disjunctions, tformula_encode_predicate_as_eqn, tformula_equal,
+        tformula_estimate_clauses, tformula_expand_distinct, tformula_expand_literals,
+        tformula_fcode_alloc, tformula_find_defs, tformula_find_max_var_code,
+        tformula_gc_mark_cells, tformula_has_free_vars, tformula_has_subform1,
+        tformula_has_subform2, tformula_is_binary, tformula_is_closed, tformula_is_complex_bool,
+        tformula_is_literal, tformula_is_prop_const, tformula_is_prop_false, tformula_is_prop_true,
+        tformula_is_quantified, tformula_is_quantified_nl, tformula_is_unary, tformula_is_untyped,
+        tformula_lift_ite, tformula_lift_lets, tformula_lit_alloc, tformula_mark_polarity,
+        tformula_mini_scope, tformula_mini_scope3, tformula_neg_alloc, tformula_negate,
+        tformula_nnf, tformula_preload_types, tformula_prop_constant_alloc, tformula_quantor_alloc,
         tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
         tformula_simplify_decoded, tformula_skolemize_outermost, tformula_stack_to_form,
         tformula_to_cnf, tformula_tptp_parse, tformula_tptp_string, tformula_tstp_parse,
@@ -6534,6 +6577,63 @@ mod tests {
         assert_eq!(
             pstack_clause_print_lop_string(&bank, &stack, None),
             "stack_a=stack_b <- .\nstack_b=stack_c <- stack_c=stack_a.\n"
+        );
+    }
+
+    #[test]
+    fn pstack_clause_print_format_string_dispatches_clause_output() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "format_stack_a");
+        let second = typed_const(&mut bank, "format_stack_b");
+        let third = typed_const(&mut bank, "format_stack_c");
+        let unit = clause_from(vec![literal(&mut bank, &first, &second, true)]);
+        let mixed = clause_from(vec![
+            literal(&mut bank, &second, &third, true),
+            literal(&mut bank, &third, &first, false),
+        ]);
+        let mut stack = PStack::new();
+        stack.push(&unit);
+        stack.push(&mixed);
+
+        let input_clause_stack = pstack_clause_print_format_string(
+            &bank,
+            &stack,
+            Some(" # stack-extra"),
+            IoFormat::Tptp,
+            ProblemType::FirstOrder,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(input_clause_stack.matches(" # stack-extra\n").count(), 2);
+        assert_eq!(input_clause_stack.matches("input_clause(").count(), 2);
+        assert!(input_clause_stack.contains("++equal(format_stack_a, format_stack_b)"));
+        assert!(!input_clause_stack.contains("<-"));
+
+        let wrapped_clause_stack = pstack_clause_print_format_string(
+            &bank,
+            &stack,
+            None,
+            IoFormat::Tstp,
+            ProblemType::FirstOrder,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            wrapped_clause_stack.matches("cnf(").count()
+                + wrapped_clause_stack.matches("tcf(").count(),
+            2
+        );
+        assert!(wrapped_clause_stack.contains("format_stack_a"));
+        assert!(!wrapped_clause_stack.contains("<-"));
+
+        assert_eq!(
+            pstack_clause_print_format_string(
+                &bank,
+                &stack,
+                Some(" # extra"),
+                IoFormat::Auto,
+                ProblemType::FirstOrder,
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            pstack_clause_print_lop_string(&bank, &stack, Some(" # extra"))
         );
     }
 
