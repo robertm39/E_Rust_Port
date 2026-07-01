@@ -155,7 +155,8 @@ Source files reviewed: `CLAUSES/ccl_freqvectors.h`, `CLAUSES/ccl_freqvectors.c`.
 
 ### C Behaviors To Revisit After Compatibility
 
-- `FreqVectorPrint` owns only a raw `vec->clause` pointer for optional clause rendering; Rust keeps vector storage independent and requires callers to pass the optional clause explicitly for LOP-backed printing. Use stable clause handles rather than raw aliasing once clause-set ownership is fully ported.
+- `FreqVectorPrint` owns only a raw `vec->clause` pointer for optional clause rendering; Rust keeps vector storage independent and requires callers to pass the optional clause explicitly for default LOP or explicit LOP/TPTP/TSTP printing. Use stable clause handles rather than raw aliasing once clause-set ownership is fully ported.
+- `FreqVectorPrint` is documented with no global variables, but its optional `ClausePrint` call observes the process-global `OutputFormat` and TSTP printing observes the process-global problem type. Rust keeps those dependencies explicit through output-format and problem-type parameters.
 - The existing Rust identifier-based vector debug string is not the C `FreqVectorPrint` shape when a clause pointer is present. Prefer the explicit optional-clause renderer for compatibility-facing output.
 
 ### Porting Focus

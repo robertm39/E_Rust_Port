@@ -1,5 +1,10 @@
+use crate::basics::error::Diagnostic;
 use crate::basics::fixdarrays::FixedDArray;
-use crate::clauses::clause::{clause_print_lop_format_string, Clause};
+use crate::basics::simple_stuff::ProblemType;
+use crate::clauses::clause::{
+    clause_print_lop_format_string, clause_print_tptp_format_string, clause_tstp_string, Clause,
+};
+use crate::inout::scanner::IoFormat;
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
@@ -290,6 +295,32 @@ impl FreqVector {
         self.print_string_with_clause_text(clause_text.as_deref())
     }
 
+    /// Returns the C `FreqVectorPrint` shape with explicit `ClausePrint` dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if TSTP rendering rejects the optional clause.
+    pub fn print_format_string(
+        &self,
+        bank: &TermBank,
+        clause: Option<&Clause>,
+        full_terms: bool,
+        output_format: IoFormat,
+        problem_type: ProblemType,
+    ) -> Result<String, Diagnostic> {
+        let clause_text = match clause {
+            Some(clause) => Some(freq_vector_clause_rendered_string(
+                bank,
+                clause,
+                full_terms,
+                output_format,
+                problem_type,
+            )?),
+            None => None,
+        };
+        Ok(self.print_string_with_clause_text(clause_text.as_deref()))
+    }
+
     #[must_use]
     pub fn print_string_with_clause_text(&self, clause_text: Option<&str>) -> String {
         let mut result = match clause_text {
@@ -319,6 +350,22 @@ impl FreqVector {
             self.len(),
             "right frequency vector size must match destination"
         );
+    }
+}
+
+fn freq_vector_clause_rendered_string(
+    bank: &TermBank,
+    clause: &Clause,
+    full_terms: bool,
+    output_format: IoFormat,
+    problem_type: ProblemType,
+) -> Result<String, Diagnostic> {
+    match output_format {
+        IoFormat::Tptp => Ok(clause_print_tptp_format_string(bank, clause)),
+        IoFormat::Tstp => clause_tstp_string(bank, clause, full_terms, true, problem_type),
+        IoFormat::Lop | IoFormat::Auto => {
+            Ok(clause_print_lop_format_string(bank, clause, full_terms))
+        }
     }
 }
 
@@ -863,9 +910,11 @@ mod tests {
         var_freq_vector_compute, FreqVector, FvCollect, FvCollectLayout, FvIndexType,
         FvOverflowSpec, FV_CLAUSE_FEATURES,
     };
+    use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::inout::scanner::IoFormat;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1049,6 +1098,65 @@ mod tests {
         assert_eq!(
             vector.print_lop_string(&bank, None, true),
             "% FV, no clause given.\n% FV(len=3): 3 1 4\n"
+        );
+    }
+
+    #[test]
+    fn frequency_vector_format_print_dispatches_optional_clause_output() {
+        let mut bank = test_bank();
+        let first = typed_const(&mut bank, "fv_format_a");
+        let second = typed_const(&mut bank, "fv_format_b");
+        let clause = clause_from(vec![literal(&mut bank, &first, &second, true)]);
+        let vector = FreqVector::from_values(vec![2, 7, 1]);
+
+        let input_clause_vector = vector
+            .print_format_string(
+                &bank,
+                Some(&clause),
+                true,
+                IoFormat::Tptp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(input_clause_vector.starts_with("% FV for: input_clause("));
+        assert!(input_clause_vector.contains("++equal(fv_format_a, fv_format_b)"));
+        assert!(input_clause_vector.ends_with("% FV(len=3): 2 7 1\n"));
+        assert!(!input_clause_vector.contains("<-"));
+
+        let wrapped_clause_vector = vector
+            .print_format_string(
+                &bank,
+                Some(&clause),
+                true,
+                IoFormat::Tstp,
+                ProblemType::FirstOrder,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert!(
+            wrapped_clause_vector.starts_with("% FV for: cnf(")
+                || wrapped_clause_vector.starts_with("% FV for: tcf(")
+        );
+        assert!(wrapped_clause_vector.contains("fv_format_a"));
+        assert!(wrapped_clause_vector.ends_with("% FV(len=3): 2 7 1\n"));
+        assert!(!wrapped_clause_vector.contains("<-"));
+
+        assert_eq!(
+            vector
+                .print_format_string(
+                    &bank,
+                    Some(&clause),
+                    true,
+                    IoFormat::Auto,
+                    ProblemType::FirstOrder,
+                )
+                .unwrap_or_else(|err| panic!("{err}")),
+            vector.print_lop_string(&bank, Some(&clause), true)
+        );
+        assert_eq!(
+            vector
+                .print_format_string(&bank, None, true, IoFormat::Tptp, ProblemType::FirstOrder)
+                .unwrap_or_else(|err| panic!("{err}")),
+            "% FV, no clause given.\n% FV(len=3): 2 7 1\n"
         );
     }
 
