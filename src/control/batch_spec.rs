@@ -744,7 +744,7 @@ impl BatchSpec {
                 )));
             }
             parsed += problem.formulas.cardinality();
-            ctrl.add_problem(bank.signature(), problem.clauses, problem.formulas, false);
+            ctrl.push_problem_sets_without_distribution(problem.clauses, problem.formulas);
             ctrl.mark_include_parsed(include);
         }
         ctrl.mark_shared_axioms(bank.signature());
@@ -814,6 +814,73 @@ impl BatchSpec {
             solved: problem.solved,
             problem,
         })
+    }
+
+    pub fn process_problems_with_runner_backend<WGlobal, C, B>(
+        &self,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        config: BatchProcessProblemsConfig<'_>,
+        global_output: &mut WGlobal,
+        mut clock_seconds: C,
+        backend: &mut B,
+    ) -> Result<BatchProcessProblemsReport, Diagnostic>
+    where
+        WGlobal: Write,
+        C: FnMut() -> i64,
+        B: BatchRunnerBackend,
+    {
+        if self.source_files.len() != self.dest_files.len() {
+            return Err(batch_process_error(format!(
+                "Batch spec has {} source files but {} destination files",
+                self.source_files.len(),
+                self.dest_files.len()
+            )));
+        }
+
+        let start = clock_seconds();
+        let mut report = BatchProcessProblemsReport::default();
+        let problem_count = self.source_files.len();
+
+        for (index, (source, dest)) in self.source_files.iter().zip(&self.dest_files).enumerate() {
+            let now = if config.total_wtc_limit != 0 {
+                clock_seconds()
+            } else {
+                start
+            };
+            let wct_limit = self.problem_wct_limit(
+                config.total_wtc_limit,
+                start,
+                now,
+                problem_count.saturating_sub(index),
+            );
+            let dest_name = batch_problem_dest_name(config.dest_dir, dest);
+            let file = self.process_file_with_runner_backend(
+                bank,
+                ctrl,
+                BatchProcessFileConfig {
+                    wct_limit,
+                    default_dir: config.default_dir,
+                    source,
+                    dest: &dest_name,
+                },
+                global_output,
+                &mut clock_seconds,
+                backend,
+            )?;
+            if file.solved {
+                report.solved += 1;
+            }
+            report.records.push(BatchProcessProblemRecord {
+                index,
+                source: source.clone(),
+                dest: dest_name,
+                wct_limit,
+                solved: file.solved,
+            });
+        }
+
+        Ok(report)
     }
 
     pub fn process_file_with_runner_backend<WGlobal, C, B>(
@@ -1225,7 +1292,9 @@ impl BatchSpec {
         })();
 
         let backtrack = ctrl.backtrack_to_spec(bank.signature());
+        let cleanup = backend.clear(true);
         let (solved, completed) = process_result?;
+        cleanup?;
 
         Ok(BatchProcessProblemReport {
             solved,
@@ -1999,6 +2068,7 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::typebanks::TypeBank;
+    use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::fs;
     use std::io::Write;
@@ -2437,7 +2507,7 @@ mod tests {
         assert!(backend.payloads[0].contains("cnf("));
         assert!(backend.payloads[0].contains("$false"));
         assert_eq!(backend.polls, 1);
-        assert_eq!(backend.active, MAX_CORES - 1);
+        assert_eq!(backend.active, 0);
 
         let global = String::from_utf8(global).unwrap();
         assert!(global.contains("% Filtering for Threshold(10000) (100)\n"));
@@ -2782,6 +2852,20 @@ mod tests {
         assert_eq!(ctrl.clause_set_count(), 1);
         assert_eq!(ctrl.formula_set_count(), 1);
         assert_eq!(ctrl.shared_ax_sp(), 1);
+        let p_code = [
+            bank.signature().find_f_code("p"),
+            bank.signature().find_f_code("$p"),
+        ]
+        .into_iter()
+        .find(|f_code| *f_code != 0)
+        .expect("shared predicate was parsed");
+        assert_eq!(
+            ctrl.f_distrib()
+                .entry(p_code)
+                .expect("parsed predicate has a distribution entry")
+                .term_freq(),
+            1
+        );
         assert!(ctrl.has_parsed_include(&include_name));
         assert!(!ctrl.has_parsed_include("definitely-missing.ax"));
         let output = String::from_utf8(output).unwrap();
@@ -2880,6 +2964,100 @@ mod tests {
         assert_eq!(backend.requests.len(), 0);
         assert_eq!(ctrl.clause_set_count(), 1);
         assert!(global.is_empty());
+    }
+
+    #[test]
+    fn process_problems_with_runner_backend_processes_concrete_files() {
+        let _guard = temp_file_test_lock();
+        let temp_dir = test_temp_dir();
+        let _tmpdir_guard = TmpDirGuard::set(&temp_dir);
+        let out_dir = temp_dir.join(format!("batch-real-out-{}", std::process::id()));
+        fs::create_dir_all(&out_dir).unwrap();
+        let include_name = format!("batch-shared-{}.ax", std::process::id());
+        let first_name = format!("batch-concrete-one-{}.p", std::process::id());
+        let second_name = format!("batch-concrete-two-{}.p", std::process::id());
+        fs::write(temp_dir.join(&include_name), "fof(shared, axiom, p(a)).\n").unwrap();
+        fs::write(
+            temp_dir.join(&first_name),
+            "cnf(goal_one, axiom, $false).\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.join(&second_name),
+            "cnf(goal_two, axiom, $false).\n",
+        )
+        .unwrap();
+
+        let mut bank = test_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.per_prob_limit = 12;
+        spec.includes = vec![include_name.clone()];
+        spec.source_files = vec![first_name.clone(), second_name.clone()];
+        spec.dest_files = vec!["one.out".to_owned(), "two.out".to_owned()];
+        let mut global = Vec::new();
+        let mut init_output = Vec::new();
+        let default_dir = format!("{}/", temp_dir.to_string_lossy().replace('\\', "/"));
+        let out_dir_name = out_dir.to_string_lossy().replace('\\', "/");
+
+        spec.init_struct_fof_spec_from_files(
+            &mut bank,
+            &mut ctrl,
+            Some(&default_dir),
+            &mut init_output,
+        )
+        .unwrap();
+
+        let mut backend = FakeRunnerBackend::with_completions([
+            theorem_completion("% proof one\n"),
+            theorem_completion("% proof two\n"),
+        ]);
+
+        let report = spec
+            .process_problems_with_runner_backend(
+                &mut bank,
+                &mut ctrl,
+                BatchProcessProblemsConfig {
+                    default_dir: Some(&default_dir),
+                    dest_dir: Some(&out_dir_name),
+                    ..BatchProcessProblemsConfig::default()
+                },
+                &mut global,
+                || 100,
+                &mut backend,
+            )
+            .unwrap();
+
+        assert_eq!(report.solved, 2);
+        assert_eq!(report.records.len(), 2);
+        assert_eq!(report.records[0].source, first_name);
+        assert_eq!(report.records[0].wct_limit, 12);
+        assert_eq!(report.records[0].dest, format!("{out_dir_name}/one.out"));
+        assert!(report.records[0].solved);
+        assert_eq!(report.records[1].source, second_name);
+        assert_eq!(report.records[1].dest, format!("{out_dir_name}/two.out"));
+        assert!(report.records[1].solved);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert_eq!(backend.requests.len(), MAX_CORES * 2);
+        assert_eq!(backend.polls, 2);
+        assert_eq!(backend.active, 0);
+        assert!(backend
+            .payloads
+            .iter()
+            .any(|payload| payload.contains("goal_one")));
+        assert!(backend
+            .payloads
+            .iter()
+            .any(|payload| payload.contains("goal_two")));
+        assert_eq!(
+            fs::read_to_string(out_dir.join("one.out")).unwrap(),
+            format!("% SZS status Theorem for {first_name}\n% proof one\n")
+        );
+        assert_eq!(
+            fs::read_to_string(out_dir.join("two.out")).unwrap(),
+            format!("% SZS status Theorem for {second_name}\n% proof two\n")
+        );
     }
 
     #[test]
@@ -3180,18 +3358,34 @@ mod tests {
         polls: usize,
         requests: Vec<BatchRunnerRequest>,
         payloads: Vec<String>,
-        completed: Option<BatchCompletedRunner>,
+        completions: VecDeque<BatchCompletedRunner>,
     }
 
     impl FakeRunnerBackend {
         fn new(completed: Option<BatchCompletedRunner>) -> Self {
+            Self::with_completions(completed)
+        }
+
+        fn with_completions(completions: impl IntoIterator<Item = BatchCompletedRunner>) -> Self {
             Self {
                 active: 0,
                 polls: 0,
                 requests: Vec::new(),
                 payloads: Vec::new(),
-                completed,
+                completions: completions.into_iter().collect(),
             }
+        }
+    }
+
+    fn theorem_completion(output: &str) -> BatchCompletedRunner {
+        BatchCompletedRunner {
+            runner: BatchSpawnedRunner {
+                name: "Threshold(10000) => --satauto-schedule --assume-incompleteness".to_owned(),
+                start_time: 100,
+                prob_time: 6,
+            },
+            result: ProverResult::Theorem,
+            output: output.to_owned(),
         }
     }
 
@@ -3222,10 +3416,11 @@ mod tests {
             _output: &mut W,
         ) -> Result<Option<BatchCompletedRunner>, Diagnostic> {
             self.polls += 1;
-            if self.completed.is_some() {
+            let completed = self.completions.pop_front();
+            if completed.is_some() {
                 self.active = self.active.saturating_sub(1);
             }
-            Ok(self.completed.take())
+            Ok(completed)
         }
 
         fn clear(&mut self, _delete_files: bool) -> Result<(), Diagnostic> {

@@ -123,6 +123,15 @@ impl StructFofSpec {
         self.formula_sets.push(formulas);
     }
 
+    pub(crate) fn push_problem_sets_without_distribution(
+        &mut self,
+        clauses: ClauseSet,
+        formulas: FormulaSet,
+    ) {
+        self.clause_sets.push(clauses);
+        self.formula_sets.push(formulas);
+    }
+
     pub fn backtrack_to_spec(&mut self, signature: &Signature) -> StructFofSpecBacktrackReport {
         let removed_clause_sets = self.clause_sets.len().saturating_sub(self.shared_ax_sp);
         let removed_formula_sets = self.formula_sets.len().saturating_sub(self.shared_ax_sp);
