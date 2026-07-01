@@ -101,6 +101,18 @@ Source files reviewed: `EXTERNAL/cex_csscpa.h`, `EXTERNAL/cex_csscpa.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/external/csscpa.rs` ports the `ClauseStatusType` discriminants/string rendering, CSSCPA state counters and three clause buckets, state-line rendering, and the core `CSSCPAProcessClause` forced/check acceptance path over the current Rust clause-set and subsumption APIs.
+- The current Rust slice covers tautology rejection, unit/full subsumption rejection, improvement by subsumed-weight and average-weight gates, unit contradiction detection, subsumed-clause removal, CSSCPA source propagation, and `OutputLevel`-style trace text. `CSSCPALoop` command parsing and the standalone filter executable remain pending.
+
+### Change Later
+
+- `CSSCPAStateAlloc` creates separate `terms` and `tmp_terms` term banks that share one mutable signature pointer. Rust currently creates a fresh tautology work bank from the live signature for each processed clause because `TermBank` owns its signature by value; revisit a persistent work-bank design once shared signature ownership is available.
+- `collect_subsumed` stores raw clause pointers on a stack and deletes those entries later. Rust collects clause identifiers plus the owning bucket because `ClauseSet` owns clauses by value; a future pointer-stable clause handle could restore direct handle deletion if CSSCPA becomes a hot executable path.
+- `CSSCPAProcessClause` mixes state transitions with `GlobalOut` printing and unconditional `fflush(GlobalOut)`. Rust returns trace text from the core state operation so output routing stays explicit; executable integration should decide exactly where to preserve C's flush points.
+- `ClauseStatusType` includes `requested`, which is only used by `CSSCPALoop` state requests and never returned by `CSSCPAProcessClause`. A later typed API can keep requested-state reporting separate from clause-processing results after parser compatibility is covered.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -225,6 +225,34 @@ Change-later notes:
 - C `ClausePushACResDerivation` records only `PStackGetSP(sig->ac_axioms)` rather than the AC axiom parents themselves. Rust now records compact AC axiom refs on `Signature` and expands them for context-aware derivation rendering, but the derivation push still takes the C count explicitly; prefer stable proof-state parent handles once full proof-object traversal owns clauses.
 - C proof-documentation pushes are interleaved with inference construction, simplification, archive movement, and global output. Rust now exposes several represented opt-in proof-documentation wrappers, but executable-wide output/session ownership remains separate; the eventual proof object layer should keep metadata creation separate from rendering so compatibility shims can reproduce C streams without making them the core API.
 
+## CSSCPA External Filter Core
+
+Rust files:
+
+- `src/external/csscpa.rs`
+
+C source references:
+
+- `eprover/EXTERNAL/cex_csscpa.c`
+- `eprover/EXTERNAL/cex_csscpa.h`
+- `eprover/EXTERNAL/CSSCPA_filter.c`
+
+Implemented:
+
+- Initial CSSCPA state/process-clause support from `cex_csscpa`, including `ClauseStatusType` discriminants and strings, three clause buckets for positive units, negative units, and non-units, total clause/literal/weight counters, and C-shaped state-line rendering.
+- Core `CSSCPAProcessClause` behavior over current Rust clause sets: forced acceptance, tautology rejection, positive/negative unit and non-unit subsumption rejection, C's unit-subsumption fast path when collecting clauses subsumed by a unit, improvement by removed-weight and average-weight gates, opposite-sign unit contradiction detection, subsumed-clause removal, CSSCPA source preservation, accepted/rejected status return, and optional `OutputLevel`-style trace text.
+
+Pending:
+
+- `CSSCPALoop` command parsing, including `output_level`, `state`, the exact buffering-plea token sequence, `accept`/`check from` source validation, `improve(weight_delta, average_delta)`, and final process-clause dispatch.
+- Standalone `CSSCPA_filter` executable integration, including command-line options, output-file handling, final TSTP clause-set printing, `InitIO`/`ExitIO` behavior, and exact diagnostics.
+
+Change-later notes:
+
+- C keeps `terms` and `tmp_terms` as separate term banks over one shared mutable signature. Rust currently allocates a fresh tautology work bank from the live signature for each processed clause; revisit persistent scratch-bank reuse after shared signature ownership is available.
+- C stores raw subsumed-clause pointers before later deletion. Rust records clause identifiers and the owning CSSCPA bucket because `ClauseSet` owns clauses by value; stable clause handles would make the deletion path closer to C and may matter if CSSCPA becomes performance-critical.
+- C embeds `GlobalOut` printing and unconditional flushing inside `CSSCPAProcessClause`, while Rust returns trace text from the core state operation. Preserve the exact flush points in the future executable wrapper without making process-global output part of the core API.
+
 ## Initial Crate And CLI Foundation
 
 Rust files:

@@ -1,0 +1,580 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+use crate::basics::error::Diagnostic;
+use crate::clauses::clause::Clause;
+use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::subsumption::{
+    clause_set_subsumes_clause, clause_subsume_order_sort_lits, clause_subsumes_clause,
+    unit_clause_set_subsumes_clause, unit_clause_subsumes_clause,
+};
+use crate::clauses::tautologies::clause_is_tautology;
+use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::signature::Signature;
+use crate::terms::subst::Substitution;
+use crate::terms::termbanks::TermBank;
+use crate::terms::typebanks::TypeBank;
+use std::fmt::Write as _;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CsscpaClauseStatus {
+    Contradicts,
+    Improved,
+    Rejected,
+    Forced,
+    Requested,
+    Unknown,
+}
+
+impl CsscpaClauseStatus {
+    #[must_use]
+    pub const fn c_value(self) -> i32 {
+        match self {
+            Self::Contradicts => 0,
+            Self::Improved => 1,
+            Self::Rejected => 2,
+            Self::Forced => 3,
+            Self::Requested => 4,
+            Self::Unknown => 5,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_c_str(self) -> &'static str {
+        match self {
+            Self::Contradicts => "contradicts",
+            Self::Improved => "improved",
+            Self::Rejected => "rejected",
+            Self::Forced => "forced",
+            Self::Requested => "requested",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_accepted(self) -> bool {
+        matches!(self, Self::Contradicts | Self::Improved | Self::Forced)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CsscpaProcessResult {
+    status: CsscpaClauseStatus,
+    accepted: bool,
+    trace: String,
+}
+
+impl CsscpaProcessResult {
+    #[must_use]
+    pub const fn status(&self) -> CsscpaClauseStatus {
+        self.status
+    }
+
+    #[must_use]
+    pub const fn accepted(&self) -> bool {
+        self.accepted
+    }
+
+    #[must_use]
+    pub fn trace(&self) -> &str {
+        &self.trace
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CsscpaState {
+    terms: TermBank,
+    pos_units: ClauseSet,
+    neg_units: ClauseSet,
+    non_units: ClauseSet,
+    literals: i64,
+    clauses: i64,
+    weight: i64,
+}
+
+impl CsscpaState {
+    pub fn new() -> Result<Self, Diagnostic> {
+        let terms = TermBank::new(Signature::new(TypeBank::new()))?;
+        Ok(Self {
+            terms,
+            pos_units: ClauseSet::new(),
+            neg_units: ClauseSet::new(),
+            non_units: ClauseSet::new(),
+            literals: 0,
+            clauses: 0,
+            weight: 0,
+        })
+    }
+
+    #[must_use]
+    pub const fn terms(&self) -> &TermBank {
+        &self.terms
+    }
+
+    pub const fn terms_mut(&mut self) -> &mut TermBank {
+        &mut self.terms
+    }
+
+    #[must_use]
+    pub const fn pos_units(&self) -> &ClauseSet {
+        &self.pos_units
+    }
+
+    #[must_use]
+    pub const fn neg_units(&self) -> &ClauseSet {
+        &self.neg_units
+    }
+
+    #[must_use]
+    pub const fn non_units(&self) -> &ClauseSet {
+        &self.non_units
+    }
+
+    #[must_use]
+    pub const fn literals(&self) -> i64 {
+        self.literals
+    }
+
+    #[must_use]
+    pub const fn clauses(&self) -> i64 {
+        self.clauses
+    }
+
+    #[must_use]
+    pub const fn weight(&self) -> i64 {
+        self.weight
+    }
+
+    #[must_use]
+    pub fn state_line(&self, status: CsscpaClauseStatus, source_clause: Option<&Clause>) -> String {
+        let source = source_clause.map_or(0, Clause::query_csscpa_source);
+        self.state_line_for_source(status, source)
+    }
+
+    #[must_use]
+    pub fn state_line_for_source(&self, status: CsscpaClauseStatus, source: u64) -> String {
+        format!(
+            "{DEFAULT_COMCHAR_RAW} CSSCPAState: {:<10} by {source}, {}, {}, {} (system, clauses,literals,weight)\n",
+            status.as_c_str(),
+            self.clauses,
+            self.literals,
+            self.weight,
+        )
+    }
+
+    pub fn process_clause(
+        &mut self,
+        clause: Clause,
+        accept: bool,
+        weight_delta: f32,
+        average_delta: f32,
+    ) -> Result<bool, Diagnostic> {
+        self.process_clause_with_trace(clause, accept, weight_delta, average_delta, false)
+            .map(|result| result.accepted)
+    }
+
+    pub fn process_clause_with_trace(
+        &mut self,
+        mut clause: Clause,
+        accept: bool,
+        weight_delta: f32,
+        average_delta: f32,
+        output_level: bool,
+    ) -> Result<CsscpaProcessResult, Diagnostic> {
+        let mut trace = String::new();
+        let mut status = if accept {
+            CsscpaClauseStatus::Forced
+        } else {
+            CsscpaClauseStatus::Unknown
+        };
+
+        if self.clause_is_tautology(&clause)? {
+            status = CsscpaClauseStatus::Rejected;
+            if output_level {
+                let _ = writeln!(
+                    trace,
+                    "{DEFAULT_COMCHAR_RAW} Clause {} rejected (Tautology)",
+                    clause.ident()
+                );
+            }
+        }
+
+        if status != CsscpaClauseStatus::Rejected {
+            prepare_clause_for_subsumption(&mut clause, &self.terms);
+            if let Some(handle_id) = self.subsuming_clause_id(&clause) {
+                status = CsscpaClauseStatus::Rejected;
+                if output_level {
+                    let _ = writeln!(
+                        trace,
+                        "{DEFAULT_COMCHAR_RAW} Clause {} rejected (subsumed by {handle_id})",
+                        clause.ident()
+                    );
+                }
+            }
+        }
+
+        if status != CsscpaClauseStatus::Rejected {
+            let subsumed = self.collect_subsumed(&clause);
+            let sub_weight = subsumed.iter().map(|entry| entry.weight).sum::<i64>();
+            let accepted_source = clause.query_csscpa_source();
+            let improves = i64_to_f32(sub_weight - clause.weight())
+                > weight_delta * i64_to_f32(self.weight)
+                || (self.clauses != 0
+                    && (i64_to_f64(self.weight + clause.weight())
+                        / (i64_to_f64(self.clauses) + 1.0))
+                        < ((1.0 - f64::from(average_delta)) * i64_to_f64(self.weight)
+                            / i64_to_f64(self.clauses)));
+            if improves {
+                status = CsscpaClauseStatus::Improved;
+            } else if clause.is_unit() && self.find_unit_contradiction(&clause).is_some() {
+                status = CsscpaClauseStatus::Contradicts;
+                if output_level {
+                    let _ = writeln!(trace, "{DEFAULT_COMCHAR_RAW} Unit contradiction found!");
+                }
+            }
+
+            if status.is_accepted() {
+                for entry in subsumed {
+                    if let Some(removed) = self.remove_subsumed(entry.bucket, entry.ident) {
+                        self.clauses -= 1;
+                        self.literals -= usize_to_i64(removed.literal_number());
+                        self.weight -= removed.weight();
+                        if output_level {
+                            let _ = writeln!(
+                                trace,
+                                "{DEFAULT_COMCHAR_RAW} Clause {} removed from list (subsumed by {})",
+                                removed.ident(),
+                                clause.ident()
+                            );
+                        }
+                    }
+                }
+                self.clauses += 1;
+                self.literals += usize_to_i64(clause.literal_number());
+                self.weight += clause.weight();
+
+                if output_level {
+                    let _ = writeln!(
+                        trace,
+                        "{DEFAULT_COMCHAR_RAW} Clause {} accepted from {} ({})",
+                        clause.ident(),
+                        clause.query_csscpa_source(),
+                        status.as_c_str()
+                    );
+                }
+                self.insert_clause(clause);
+                if matches!(
+                    status,
+                    CsscpaClauseStatus::Contradicts | CsscpaClauseStatus::Improved
+                ) && output_level
+                {
+                    trace.push_str(&self.state_line_for_source(status, accepted_source));
+                }
+            } else {
+                status = CsscpaClauseStatus::Rejected;
+                if output_level {
+                    let _ = writeln!(
+                        trace,
+                        "{DEFAULT_COMCHAR_RAW} Clause {} rejected (weighty)",
+                        clause.ident()
+                    );
+                }
+            }
+        }
+
+        Ok(CsscpaProcessResult {
+            accepted: status.is_accepted(),
+            status,
+            trace,
+        })
+    }
+
+    fn clause_is_tautology(&self, clause: &Clause) -> Result<bool, Diagnostic> {
+        let mut work_bank = TermBank::new(self.terms.signature().clone())?;
+        clause_is_tautology(&mut work_bank, clause)
+    }
+
+    fn subsuming_clause_id(&self, clause: &Clause) -> Option<i64> {
+        if clause.positive_literal_count() != 0 {
+            if let Some(handle) = unit_clause_set_subsumes_clause(&self.pos_units, clause) {
+                return Some(handle.ident());
+            }
+        }
+        if clause.negative_literal_count() != 0 {
+            if let Some(handle) = unit_clause_set_subsumes_clause(&self.neg_units, clause) {
+                return Some(handle.ident());
+            }
+        }
+        if clause.literal_number() > 1 {
+            if let Some(handle) = clause_set_subsumes_clause(&self.non_units, clause, &self.terms) {
+                return Some(handle.ident());
+            }
+        }
+        None
+    }
+
+    fn collect_subsumed(&self, clause: &Clause) -> Vec<SubsumedClause> {
+        let mut result = Vec::new();
+        if clause.is_unit() && clause.is_positive() {
+            collect_unit_subsumed(&mut result, ClauseBucket::Positive, &self.pos_units, clause);
+        } else if clause.is_unit() {
+            collect_unit_subsumed(&mut result, ClauseBucket::Negative, &self.neg_units, clause);
+        }
+        collect_clause_subsumed(
+            &mut result,
+            ClauseBucket::NonUnit,
+            &self.non_units,
+            clause,
+            &self.terms,
+        );
+        result
+    }
+
+    fn find_unit_contradiction(&self, clause: &Clause) -> Option<&Clause> {
+        debug_assert!(clause.is_unit());
+        let literal = clause.literals().as_slice().first()?;
+        let set = if literal.is_positive() {
+            &self.neg_units
+        } else {
+            &self.pos_units
+        };
+        set.iter().find(|candidate| {
+            debug_assert!(candidate.is_unit());
+            let Some(candidate_literal) = candidate.literals().as_slice().first() else {
+                return false;
+            };
+            literal.is_positive() != candidate.is_positive()
+                && literals_unify(literal, candidate_literal)
+        })
+    }
+
+    fn insert_clause(&mut self, clause: Clause) {
+        if clause.is_unit() && clause.is_positive() {
+            self.pos_units
+                .indexed_insert_clause_owned(clause, &self.terms);
+        } else if clause.is_unit() {
+            self.neg_units
+                .indexed_insert_clause_owned(clause, &self.terms);
+        } else {
+            self.non_units
+                .indexed_insert_clause_owned(clause, &self.terms);
+        }
+    }
+
+    fn remove_subsumed(&mut self, bucket: ClauseBucket, ident: i64) -> Option<Clause> {
+        match bucket {
+            ClauseBucket::Positive => self.pos_units.extract_by_id(ident),
+            ClauseBucket::Negative => self.neg_units.extract_by_id(ident),
+            ClauseBucket::NonUnit => self.non_units.extract_by_id(ident),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClauseBucket {
+    Positive,
+    Negative,
+    NonUnit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SubsumedClause {
+    bucket: ClauseBucket,
+    ident: i64,
+    weight: i64,
+}
+
+fn prepare_clause_for_subsumption(clause: &mut Clause, bank: &TermBank) {
+    clause.set_weight(clause.standard_weight());
+    clause_subsume_order_sort_lits(clause, bank);
+}
+
+fn collect_unit_subsumed(
+    result: &mut Vec<SubsumedClause>,
+    bucket: ClauseBucket,
+    set: &ClauseSet,
+    clause: &Clause,
+) {
+    result.extend(
+        set.iter()
+            .filter(|candidate| unit_clause_subsumes_clause(clause, candidate))
+            .map(|candidate| SubsumedClause {
+                bucket,
+                ident: candidate.ident(),
+                weight: candidate.weight(),
+            }),
+    );
+}
+
+fn collect_clause_subsumed(
+    result: &mut Vec<SubsumedClause>,
+    bucket: ClauseBucket,
+    set: &ClauseSet,
+    clause: &Clause,
+    bank: &TermBank,
+) {
+    result.extend(
+        set.iter()
+            .filter(|candidate| {
+                if clause.is_unit() {
+                    unit_clause_subsumes_clause(clause, candidate)
+                } else {
+                    clause_subsumes_clause(clause, candidate, bank)
+                }
+            })
+            .map(|candidate| SubsumedClause {
+                bucket,
+                ident: candidate.ident(),
+                weight: candidate.weight(),
+            }),
+    );
+}
+
+fn literals_unify(left: &crate::clauses::eqn::Eqn, right: &crate::clauses::eqn::Eqn) -> bool {
+    let mut subst = Substitution::new();
+    let direct = subst_mgu_complete(left.left(), right.left(), &mut subst)
+        && subst_mgu_complete(left.right(), right.right(), &mut subst);
+    subst.backtrack();
+    if direct || (left.is_oriented() && right.is_oriented()) {
+        return direct;
+    }
+    let swapped = subst_mgu_complete(left.right(), right.left(), &mut subst)
+        && subst_mgu_complete(left.left(), right.right(), &mut subst);
+    subst.backtrack();
+    swapped
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn i64_to_f32(value: i64) -> f32 {
+    value as f32
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn i64_to_f64(value: i64) -> f64 {
+    value as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CsscpaClauseStatus, CsscpaState};
+    use crate::basics::simple_stuff::ProblemType;
+    use crate::clauses::clause::{clause_parse, Clause};
+    use crate::inout::scanner::{IoFormat, Scanner};
+
+    fn parse_clause(state: &mut CsscpaState, source: &str) -> Clause {
+        let mut scanner = Scanner::from_user_string(source, false).expect("scanner allocation");
+        if source.starts_with("cnf(") {
+            scanner.set_format(IoFormat::Tstp);
+        }
+        clause_parse(&mut scanner, state.terms_mut(), ProblemType::FirstOrder)
+            .expect("CSSCPA test clause parses")
+    }
+
+    #[test]
+    fn status_discriminants_and_strings_match_c_enum() {
+        assert_eq!(CsscpaClauseStatus::Contradicts.c_value(), 0);
+        assert_eq!(CsscpaClauseStatus::Improved.c_value(), 1);
+        assert_eq!(CsscpaClauseStatus::Rejected.c_value(), 2);
+        assert_eq!(CsscpaClauseStatus::Forced.c_value(), 3);
+        assert_eq!(CsscpaClauseStatus::Requested.c_value(), 4);
+        assert_eq!(CsscpaClauseStatus::Unknown.c_value(), 5);
+        assert_eq!(CsscpaClauseStatus::Contradicts.as_c_str(), "contradicts");
+        assert_eq!(CsscpaClauseStatus::Requested.as_c_str(), "requested");
+    }
+
+    #[test]
+    fn forced_clause_enters_matching_unit_bucket_and_updates_counts() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let mut clause = parse_clause(&mut state, "p(a).");
+        clause.set_csscpa_source(3);
+        let ident = clause.ident();
+
+        let result = state
+            .process_clause_with_trace(clause, true, 0.0, 0.0, true)
+            .expect("forced processing succeeds");
+
+        assert!(result.accepted());
+        assert_eq!(result.status(), CsscpaClauseStatus::Forced);
+        assert_eq!(state.clauses(), 1);
+        assert_eq!(state.literals(), 1);
+        assert!(state.pos_units().find_by_id(ident).is_some());
+        assert!(result
+            .trace()
+            .contains(&format!("% Clause {ident} accepted from 3 (forced)\n")));
+    }
+
+    #[test]
+    fn subsumed_checked_clause_is_rejected_without_state_change() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let unit = parse_clause(&mut state, "p(X).");
+        let unit_ident = unit.ident();
+        assert!(state
+            .process_clause(unit, true, 0.0, 0.0)
+            .expect("unit accepted"));
+
+        let candidate = parse_clause(&mut state, "cnf(csscpa_candidate,axiom,(p(a)|q(a))).");
+        let candidate_ident = candidate.ident();
+        let result = state
+            .process_clause_with_trace(candidate, false, 0.0, 0.0, true)
+            .expect("subsumed check succeeds");
+
+        assert!(!result.accepted());
+        assert_eq!(result.status(), CsscpaClauseStatus::Rejected);
+        assert_eq!(state.clauses(), 1);
+        assert!(state.pos_units().find_by_id(unit_ident).is_some());
+        assert!(state.non_units().find_by_id(candidate_ident).is_none());
+        assert!(result.trace().contains(&format!(
+            "% Clause {candidate_ident} rejected (subsumed by {unit_ident})\n"
+        )));
+    }
+
+    #[test]
+    fn improving_checked_clause_removes_subsumed_non_unit() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let wide = parse_clause(&mut state, "cnf(csscpa_wide,axiom,(p(a)|q(a))).");
+        let wide_ident = wide.ident();
+        assert!(state
+            .process_clause(wide, true, 0.0, 0.0)
+            .expect("wide clause accepted"));
+
+        let narrow = parse_clause(&mut state, "p(a).");
+        let narrow_ident = narrow.ident();
+        let result = state
+            .process_clause_with_trace(narrow, false, 0.0, 0.0, true)
+            .expect("improving check succeeds");
+
+        assert!(result.accepted());
+        assert_eq!(result.status(), CsscpaClauseStatus::Improved);
+        assert_eq!(state.clauses(), 1);
+        assert!(state.non_units().find_by_id(wide_ident).is_none());
+        assert!(state.pos_units().find_by_id(narrow_ident).is_some());
+        assert!(result.trace().contains(&format!(
+            "% Clause {wide_ident} removed from list (subsumed by {narrow_ident})\n"
+        )));
+        assert!(result.trace().contains("% CSSCPAState: improved  "));
+    }
+
+    #[test]
+    fn unit_contradiction_accepts_checked_clause() {
+        let mut state = CsscpaState::new().expect("CSSCPA state allocation");
+        let negative = parse_clause(&mut state, "~p(a).");
+        assert!(state
+            .process_clause(negative, true, 0.0, 0.0)
+            .expect("negative unit accepted"));
+
+        let positive = parse_clause(&mut state, "p(a).");
+        let positive_ident = positive.ident();
+        let result = state
+            .process_clause_with_trace(positive, false, 1.0, 0.0, true)
+            .expect("contradiction check succeeds");
+
+        assert!(result.accepted());
+        assert_eq!(result.status(), CsscpaClauseStatus::Contradicts);
+        assert_eq!(state.clauses(), 2);
+        assert!(state.pos_units().find_by_id(positive_ident).is_some());
+        assert!(result.trace().contains("% Unit contradiction found!\n"));
+        assert!(result.trace().contains("% CSSCPAState: contradicts"));
+    }
+}
