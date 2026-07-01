@@ -1643,6 +1643,7 @@ mod tests {
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -2122,6 +2123,7 @@ mod tests {
 
     #[test]
     fn lambda_to_forall_turns_function_lambda_equality_into_universal_formula() {
+        let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
         let i_type = bank.signature().type_bank().default_type();
@@ -2158,6 +2160,8 @@ mod tests {
 
     #[test]
     fn lambda_to_forall_turns_boolean_lambda_equality_into_equivalence() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
         let i_type = bank.signature().type_bank().default_type();
         let bool_type = bank.signature().type_bank().bool_type();

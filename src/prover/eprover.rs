@@ -21281,6 +21281,45 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_expands_selected_tstp_include() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("print-formulas-include-selected-inc");
+        let path = temp_path("print-formulas-include-selected-main");
+        std::fs::write(
+            &include_path,
+            "fof(selected, axiom, p(a)).\nfof(skipped, axiom, r(a)).\n",
+        )
+        .unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}',[selected]).\nfof(main, axiom, q(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--print-formulas",
+                "--tstp-in",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(String::from_utf8(stdout).unwrap(), "p(a) <- .\nq(a) <- .\n");
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&include_path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_uses_tff_formula_entries() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-tff-formula-entries");
