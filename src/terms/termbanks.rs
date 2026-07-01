@@ -1694,20 +1694,18 @@ impl TermBank {
     }
 
     fn parse_tformula_tstp_subset(&mut self, scanner: &mut Scanner) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_literal_tformula_tstp_subset(scanner)?;
+        let mut formula = self.parse_literal_tformula_tstp_with_applications(scanner)?;
         if scanner.test_tok(TokenType::FOF_ASSOC_OP) {
             let op_token = scanner.current_token().kind();
             let op = self.tptp_operator_convert(op_token)?;
             while scanner.test_tok(op_token) {
                 scanner.accept_tok(op_token)?;
-                let right = self.parse_literal_tformula_tstp_subset(scanner)?;
+                let right = self.parse_literal_tformula_tstp_with_applications(scanner)?;
                 formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
             }
-        } else if scanner.test_tok(TokenType::APPLICATION) {
-            formula = self.parse_applied_tformula_tstp_subset(scanner, &formula)?;
         } else if scanner.test_tok(TokenType::FOF_BIN_OP) {
             let mut op = self.tptp_operator_parse(scanner)?;
-            let right = self.parse_literal_tformula_tstp_subset(scanner)?;
+            let right = self.parse_literal_tformula_tstp_with_applications(scanner)?;
             if formula.type_().as_ref().is_some_and(Type::is_bool)
                 && (op == self.sig.eqn_code() || op == self.sig.neqn_code())
             {
@@ -1724,6 +1722,17 @@ impl TermBank {
                 };
             }
             formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+        }
+        Ok(formula)
+    }
+
+    fn parse_literal_tformula_tstp_with_applications(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let mut formula = self.parse_literal_tformula_tstp_subset(scanner)?;
+        if scanner.test_tok(TokenType::APPLICATION) {
+            formula = self.parse_applied_tformula_tstp_subset(scanner, &formula)?;
         }
         Ok(formula)
     }
@@ -1912,7 +1921,7 @@ impl TermBank {
         }
 
         let arg = if expected_type.is_bool() || scanner.test_tok(TokenType::LAMBDA_QUANTOR) {
-            self.parse_literal_tformula_tstp_subset(scanner)?
+            self.parse_literal_tformula_tstp_with_applications(scanner)?
         } else {
             self.parse_term_real(scanner, true)?
         };
@@ -4547,6 +4556,45 @@ mod tests {
             formula.type_(),
             Some(bank.signature().type_bank().bool_type())
         );
+    }
+
+    #[test]
+    fn tstp_formula_application_can_be_equality_operand_under_first_order_global_state() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. b: person. f: person > person.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("f @ a = b", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let left = formula.argument(0).unwrap();
+        assert_eq!(left.arity(), 1);
+        assert_eq!(bank.signature().find_name(left.f_code()), Some("f"));
     }
 
     #[test]

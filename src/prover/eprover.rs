@@ -203,7 +203,7 @@ const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
 const THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE: &str =
-    "THF formula requires the full higher-order formula pipeline; this port currently supports only the simple first-order-shaped THF fragment";
+    "THF formula requires the full higher-order formula pipeline; this port currently supports only simple first-order-shaped and application-based THF fragments";
 const TSTP_FORMULA_FREE_VARIABLES_MESSAGE: &str =
     "Formula has free variables (check parentheses and quantifier precedence)";
 const WATCHLIST_INLINE_STRING: &str = "Use inline watchlist type";
@@ -22711,6 +22711,71 @@ mod tests {
              thf(p_type, type, p: person > $o).\n\
              thf(fact, axiom, p @ a).\n\
              thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_simple_thf_application_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("simple-thf-application-equality-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(b_type, type, b: person).\n\
+             thf(f_type, type, f: person > person).\n\
+             thf(fact, axiom, f @ a = b).\n\
+             thf(goal, conjecture, f @ a = b).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_simple_thf_application_conjunction() {
+        let _guard = global_state_lock();
+        let path = temp_path("simple-thf-application-conjunction-proof");
+        std::fs::write(
+            &path,
+            "thf(person_type, type, person: $tType).\n\
+             thf(a_type, type, a: person).\n\
+             thf(p_type, type, p: person > $o).\n\
+             thf(q_type, type, q: person > $o).\n\
+             thf(p_fact, axiom, p @ a).\n\
+             thf(q_fact, axiom, q @ a).\n\
+             thf(goal, conjecture, p @ a & q @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
