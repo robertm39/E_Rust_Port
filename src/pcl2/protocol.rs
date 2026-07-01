@@ -63,6 +63,12 @@ impl PclProtocol {
         self.steps.iter().map(|step| step.id().clone()).collect()
     }
 
+    #[must_use]
+    pub(crate) fn ordered_steps(&mut self) -> &[PclStep] {
+        self.serialize();
+        &self.steps
+    }
+
     /// C `PCLProtInsertStep`.
     ///
     /// Returns `Ok(false)` when a duplicate C-comparator id is already stored.

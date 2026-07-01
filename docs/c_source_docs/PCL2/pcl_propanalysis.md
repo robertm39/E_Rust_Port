@@ -102,4 +102,14 @@ Source files reviewed: `PCL2/pcl_propanalysis.h`, `PCL2/pcl_propanalysis.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- Initial property-analysis support is ported as `src/pcl2/propanalysis.rs`, including max-step selection by standard weight, strict symbol count, literal count, and depth; protocol-wide FOF/positive/negative/mixed clause counts; literal and symbol-count aggregates; and C-shaped summary rendering through the ported `ClausePropInfoPrint` helper.
+
+### Change Later
+
+- `PCLProtPropDataPrint` divides by clause-category counts without zero guards and then unconditionally prints selected max-step pointers. Empty protocols, FOF-only protocols, or protocols with no positive/negative/mixed clauses can therefore produce infinities/NaNs or dereference invalid logical-content union arms. Rust keeps the C-shaped average formulas but avoids invalid dereferences; after drop-in compatibility is secured, this reporting path should get explicit "not available" output.
+- `pcl_prot_global_count` excludes empty clauses from all aggregate clause and literal counts, while `PCLProtFindMaxStep` can still select empty clauses for max-step fields because it scans all non-FOF steps. Rust preserves that split; a later reporting API should decide whether empty clauses are statistical clauses or just proof sentinels.
+- The C comparators treat FOF steps as smaller and equivalent but assume every non-FOF step has a clause in the `logic` union. Shell PCL steps violate that assumption. Rust treats shell steps as zero-metric non-FOF steps to keep analysis safe until shell-step reporting requirements are covered by reference traces.
 <!-- END MANUAL REVIEW: c_source_docs -->
