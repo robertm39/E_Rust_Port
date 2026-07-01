@@ -347,6 +347,7 @@ where
 
     let positional = state.remaining_args();
     if positional.is_empty() || positional.len() > 2 {
+        open_output_file_before_usage_error(output_file.as_deref())?;
         return Err(Diagnostic::new(ErrorCode::USAGE_ERROR, C_USAGE_ERROR));
     }
 
@@ -374,12 +375,26 @@ fn execute_config_to_configured_output(
         if path == "-" {
             return execute_config(config, stdout);
         }
-        let mut output = File::create(path)
-            .map_err(|error| io_diagnostic(format!("Cannot open file {path}: {error}")))?;
+        let mut output = create_output_file(path)?;
         execute_config(config, &mut output)
     } else {
         execute_config(config, stdout)
     }
+}
+
+fn open_output_file_before_usage_error(path: Option<&str>) -> Result<(), Diagnostic> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if path == "-" {
+        return Ok(());
+    }
+    drop(create_output_file(path)?);
+    Ok(())
+}
+
+fn create_output_file(path: &str) -> Result<File, Diagnostic> {
+    File::create(path).map_err(|error| io_diagnostic(format!("Cannot open file {path}: {error}")))
 }
 
 fn execute_config(config: &LtbRunnerConfig, output: &mut impl Write) -> Result<u8, Diagnostic> {
@@ -1053,6 +1068,58 @@ mod tests {
             process_options([PROGRAM_NAME, "spec", "eprover", "extra"], &mut stdout).unwrap_err();
         assert_eq!(extra.code(), ErrorCode::USAGE_ERROR);
         assert_eq!(extra.message(), C_USAGE_ERROR);
+    }
+
+    #[test]
+    fn usage_error_opens_configured_output_like_c() {
+        let path = test_temp_dir().join(format!("runner-usage-{}.out", std::process::id()));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "old output").unwrap();
+        let mut stdout = Vec::new();
+
+        let error = process_options(
+            [
+                PROGRAM_NAME,
+                "-o",
+                path.to_str().expect("test path is utf8"),
+            ],
+            &mut stdout,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.message(), C_USAGE_ERROR);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert!(stdout.is_empty());
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn output_file_open_failure_precedes_usage_error_like_c() {
+        let path = test_temp_dir().join(format!("runner-output-dir-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(&path);
+        fs::create_dir_all(&path).unwrap();
+        let mut stdout = Vec::new();
+
+        let error = process_options(
+            [
+                PROGRAM_NAME,
+                "-o",
+                path.to_str().expect("test path is utf8"),
+            ],
+            &mut stdout,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", path.display())));
+        assert!(stdout.is_empty());
+
+        fs::remove_dir(path).unwrap();
     }
 
     #[test]

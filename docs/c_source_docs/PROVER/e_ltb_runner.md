@@ -98,6 +98,7 @@ Source files reviewed: `PROVER/e_ltb_runner.c`.
 
 - `e_ltb_runner` parses `division.category.training_data`, but the paired batch-spec printer writes `division.category.training_directory`. Rust should preserve that boundary mismatch for now and revisit only after LTB spec round-trip tests exist.
 - The optional second positional argument is honored here as the prover executable path, unlike `e_stratpar` where the same-looking argument is ignored. Keep those executable-specific differences visible when common runner option handling is introduced.
+- C opens `GlobalOut` after option parsing and before validating the positional argument count, so `-o file` can create or truncate the output file even when the command later reports a usage error. Rust now preserves that side effect in the compatibility wrapper; a future cleaned CLI should avoid it only outside the drop-in mode.
 - A global wall-clock limit from `-w/--wtc-limit` is copied into a parsed spec only when the spec omits `limit.time.overall.wc`; the per-problem limit is still required unless one of those total limits is positive. Later configuration code should represent that precedence explicitly instead of mutating parsed specs in place.
 - Runner state is stored in process globals such as `outname`, `outdir`, `total_wtc_limit`, `interactive`, `use_variants`, and `provers`. A future Rust runner should make those fields explicit while preserving option timing and output behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->
