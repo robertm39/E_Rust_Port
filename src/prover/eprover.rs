@@ -6869,12 +6869,10 @@ fn write_proof_object_list_graph(
 
 fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Clause, bool)> {
     let root_indices: BTreeSet<usize> = graph.root_indices.iter().copied().collect();
-    let print_clauses: Vec<(usize, &Clause)> = graph
-        .clauses
+    let display_order = proof_object_list_display_order(graph);
+    let print_clauses: Vec<(usize, &Clause)> = display_order
         .iter()
-        .enumerate()
-        .rev()
-        .map(|(index, clause)| (index, *clause))
+        .map(|index| (*index, graph.clauses[*index]))
         .collect();
     let mut display_ids_by_index = vec![0; graph.clauses.len()];
     let mut fallback_display_ids = BTreeMap::new();
@@ -6904,6 +6902,47 @@ fn proof_object_list_display_clauses(graph: &ProofObjectGraph<'_>) -> Vec<(Claus
             (display, is_root)
         })
         .collect()
+}
+
+fn proof_object_list_display_order(graph: &ProofObjectGraph<'_>) -> Vec<usize> {
+    let mut children_by_parent = vec![Vec::new(); graph.clauses.len()];
+    let mut remaining_parent_counts = vec![0_usize; graph.clauses.len()];
+    for edge in &graph.edges {
+        if edge.parent_index < graph.clauses.len() && edge.child_index < graph.clauses.len() {
+            children_by_parent[edge.parent_index].push(edge.child_index);
+            remaining_parent_counts[edge.child_index] =
+                remaining_parent_counts[edge.child_index].saturating_add(1);
+        }
+    }
+
+    let mut ready = BTreeSet::new();
+    for (index, count) in remaining_parent_counts.iter().copied().enumerate() {
+        if count == 0 {
+            ready.insert(index);
+        }
+    }
+
+    let mut order = Vec::with_capacity(graph.clauses.len());
+    while let Some(index) = ready.pop_last() {
+        order.push(index);
+        for child_index in &children_by_parent[index] {
+            let remaining = &mut remaining_parent_counts[*child_index];
+            *remaining = remaining.saturating_sub(1);
+            if *remaining == 0 {
+                ready.insert(*child_index);
+            }
+        }
+    }
+
+    if order.len() != graph.clauses.len() {
+        let ordered: BTreeSet<usize> = order.iter().copied().collect();
+        order.extend(
+            (0..graph.clauses.len())
+                .rev()
+                .filter(|index| !ordered.contains(index)),
+        );
+    }
+    order
 }
 
 fn remap_derivation_for_display(
@@ -11722,15 +11761,16 @@ mod tests {
         auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
         fv_index_params_from_config, heuristic_parms_from_config, order_parms_from_config,
         preprocessing_config_debug_line, process_options, proof_control_from_config,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
-        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
-        PrimEnumMode, SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
+        proof_object_list_display_clauses, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        schedule_heuristic_selection, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_REQUIRES_HOL_MESSAGE,
         TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -11741,9 +11781,11 @@ mod tests {
     use crate::clauses::clause::{clause_parse, Clause};
     use crate::clauses::clause_props::CP_TYPE_AXIOM;
     use crate::clauses::clauseinfo::ClauseInfo;
-    use crate::clauses::derivation::{clause_push_derivation, DC_EQ_RES};
+    use crate::clauses::derivation::{
+        clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_EQ_RES,
+    };
     use crate::clauses::freqvectors::FvIndexType;
-    use crate::clauses::proofstate::proof_state_alloc;
+    use crate::clauses::proofstate::{proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge};
     use crate::heuristics::new_autoschedule::ScheduleCell;
     use crate::heuristics::{hcb as hcb_params, to_params};
     use crate::inout::output::{output_level, set_output_level};
@@ -20150,6 +20192,35 @@ mod tests {
         assert!(root_line.contains("(1)"), "{printed}");
         assert_eq!(printed.matches("'final'").count(), 1);
         assert!(printed.contains("% SZS output end Saturation\n"));
+    }
+
+    #[test]
+    fn proof_object_list_display_clauses_prints_parents_before_children() {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let parent = parse_lop_test_clause(&mut bank, "p(a).", 31);
+        let mut child = parse_lop_test_clause(&mut bank, "q(a).", 32);
+        clause_push_derivation(&mut child, DC_EQ_RES, Some(&parent), None);
+        let graph = ProofObjectGraph {
+            clauses: vec![&parent, &child],
+            edges: vec![ProofObjectGraphEdge {
+                parent_index: 0,
+                child_index: 1,
+            }],
+            root_indices: vec![1],
+        };
+
+        let displayed = proof_object_list_display_clauses(&graph);
+
+        assert_eq!(displayed[0].0.ident(), 1);
+        assert!(!displayed[0].1);
+        assert_eq!(displayed[1].0.ident(), 2);
+        assert!(displayed[1].1);
+        assert!(displayed[1]
+            .0
+            .derivation()
+            .is_some_and(|derivation| derivation.as_slice().contains(
+                &DerivationEntry::ClauseParent(ClauseDerivationRef::new(1, 0)),
+            )));
     }
 
     #[test]
