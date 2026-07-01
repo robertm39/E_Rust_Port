@@ -3,6 +3,7 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 
+pub mod analysis;
 pub mod expressions;
 pub mod idents;
 pub mod miniclauses;

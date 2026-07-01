@@ -482,6 +482,7 @@ Original C references:
 
 Implemented behavior:
 
+- Initial PCL2 `pcl_analysis` support is ported as `src/pcl2/analysis.rs`, including expression/step/protocol proof-distance computation, cached `proof_distance` updates, generation and simplification reference counter updates by C operator class, proof/non-proof reference counter split, example selection by proof-step priority and useless-generation/useless-simplification ratio, and the C loop behavior for zero negative-example budget.
 - A root Rust package with library and `eprover` binary targets.
 - Generic binary-tree traversal support from `clb_avlgeneric`, including left-spine initialization, iterative in-order next-node traversal, empty-root handling, and a function-shaped API matching the generated C traversal pair.
 - The `DStr` byte-buffer behavior from `clb_dstrings`, including append, byte-buffer append, integer append, string-array append, last-character deletion, reset, minimize, line reading, and the distinct C growth rules for string and byte appends.
@@ -640,6 +641,7 @@ Implemented behavior:
 
 Known gaps:
 
+- `pcl_analysis` reports dangling proof-distance references as syntax diagnostics rather than reproducing C's null dereference, preserves silent ignores for dangling direct references during generation/simplification counter updates, uses deterministic PCL-id ordering for equal example-selection scores instead of qsort's unspecified tie order, and keeps f32-shaped example scoring plus the C `neg_examples == 0` no-selection loop behavior.
 - The prover core, full parser/formula printing, clausification, saturation loop, integrated indexing, ordering, full heuristic control, proof output, resource limits, and most CLI option effects are not implemented yet.
 - Scanner support includes both automatic `include_key` stream splicing and explicit `ScannerParseInclude`-style include parsing, but higher-level formula parsers still need to dispatch included scanners.
 - `InitIO` stores the program name for later diagnostics, but Rust diagnostic rendering still mostly passes program names explicitly until the executable-level fatal-error path is completed.
