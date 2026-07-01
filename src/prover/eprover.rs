@@ -19239,6 +19239,41 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_installs_user_weight_and_heuristic_definitions() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-user-heuristic-definitions");
+        std::fs::write(&path, "a!=a.\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--lop-in",
+                "--define-weight-function=custom_fifo=FIFOWeight(ConstPrio)",
+                "--define-heuristic=CustomSearch=(1*custom_fifo)",
+                "--expert-heuristic=CustomSearch",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        assert_eq!(
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\n% Proof found!\n% SZS status Unsatisfiable\n",
+                default_proof_search_prefix()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_prints_saturated_success_clause_like_c() {
         let _guard = global_state_lock();
         let path = temp_path("proof-print-saturated-success");
