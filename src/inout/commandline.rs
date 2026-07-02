@@ -300,6 +300,18 @@ pub fn get_int_arg_check_range<Code>(
     }
 }
 
+pub fn get_float_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<f64, Diagnostic> {
+    parse_c_double(arg).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!(
+                "{} expects float instead of '{arg}'",
+                append_option_desc(option)
+            ),
+        )
+    })
+}
+
 pub fn get_bool_arg<Code>(option: &OptCell<Code>, arg: &str) -> Result<bool, Diagnostic> {
     match arg {
         "true" => Ok(true),
@@ -430,6 +442,30 @@ fn parse_c_long(argument: &str) -> Option<i64> {
     value.checked_mul(sign)
 }
 
+fn parse_c_double(argument: &str) -> Option<f64> {
+    if argument.is_empty() {
+        return Some(0.0);
+    }
+
+    let trimmed = argument.trim_start_matches(|character: char| character.is_ascii_whitespace());
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let value = trimmed.parse::<f64>().ok()?;
+    if value.is_infinite() && !is_named_infinite(trimmed) {
+        return None;
+    }
+    Some(value)
+}
+
+fn is_named_infinite(argument: &str) -> bool {
+    matches!(
+        argument.to_ascii_lowercase().as_str(),
+        "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
+    )
+}
+
 fn wrap_c_style(text: &str, width: usize) -> Vec<String> {
     let mut remaining = text;
     let mut lines = Vec::new();
@@ -475,8 +511,8 @@ fn split_c_style(text: &str, width: usize) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_bool_arg, get_int_arg, get_int_arg_check_range, print_options, CommandLineState,
-        OptArgType, OptCell,
+        get_bool_arg, get_float_arg, get_int_arg, get_int_arg_check_range, print_options,
+        CommandLineState, OptArgType, OptCell,
     };
     use crate::basics::error::ErrorCode;
 
@@ -597,6 +633,26 @@ mod tests {
             get_bool_arg(option, "yes").unwrap_err().code(),
             ErrorCode::USAGE_ERROR
         );
+    }
+
+    #[test]
+    fn float_arg_matches_c_strtod_shape() {
+        let option = &OPTIONS[1];
+        assert_eq!(
+            get_float_arg(option, "").unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
+        assert_eq!(
+            get_float_arg(option, " 1.25e2").unwrap().to_bits(),
+            125.0_f64.to_bits()
+        );
+        assert!(get_float_arg(option, "1.25x").is_err());
+        assert!(get_float_arg(option, " ").is_err());
+        assert_eq!(
+            get_float_arg(option, "1e9999").unwrap_err().code(),
+            ErrorCode::USAGE_ERROR
+        );
+        assert!(get_float_arg(option, "inf").unwrap().is_infinite());
     }
 
     #[test]
