@@ -2353,7 +2353,18 @@ fn eqn_parse_infix_terms(
     Ok((positive, left, right))
 }
 
-fn prepare_predicate_literal(bank: &mut TermBank, term: &Term) -> Result<(), Diagnostic> {
+/// Marks a parsed atom as a predicate literal when the syntax did not include
+/// an explicit equality right side.
+///
+/// # Errors
+///
+/// Returns a diagnostic if a non-predicate variable is used at predicate
+/// position or if predicate type declaration conflicts with existing symbol
+/// use.
+pub(crate) fn prepare_predicate_literal(
+    bank: &mut TermBank,
+    term: &Term,
+) -> Result<(), Diagnostic> {
     if term.is_free_var() {
         if term.type_().as_ref().is_some_and(type_is_predicate) {
             return Ok(());

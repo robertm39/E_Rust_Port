@@ -47,7 +47,9 @@ use crate::clauses::derivation::{
     deriv_stack_tstp_string_with_ac_axioms, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
     op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE,
 };
-use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
+use crate::clauses::eqn::{
+    eqn_fof_parse, eqn_write_app_encode, prepare_predicate_literal, Eqn, EqnPrintOptions,
+};
 use crate::clauses::eqnlist::EqnList;
 use crate::clauses::f_generality::GenDistrib;
 use crate::clauses::fcvindexing::FvIndexParams;
@@ -102,7 +104,8 @@ use crate::inout::commandline::{
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{
-    token_pos_rep, IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
+    test_id as scanner_test_id, test_tok as scanner_test_tok, token_pos_rep, IoFormat, Scanner,
+    TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
 };
 use crate::inout::signals::{
     configure_time_limits, e_signal_setup, finalize_cpu_limit_outcome, silent_time_out,
@@ -12056,8 +12059,7 @@ fn parse_simple_fof_primary_formula(
         } else if let Some(formulas) = parse_simple_fof_fool_term_atom(scanner, bank)? {
             Ok(formulas)
         } else {
-            let literal = eqn_fof_parse(scanner, bank, problem_type)?;
-            Ok(simple_fof_literal_formulas(vec![literal]))
+            parse_simple_fof_atomic_formula_or_literal(scanner, bank, problem_type)
         }
     })() {
         Ok(formulas) => formulas,
@@ -12218,8 +12220,7 @@ fn parse_simple_fof_existential_formula(
                 return Err(simple_fof_unsupported_error(scanner));
             }
 
-            let literal = eqn_fof_parse(scanner, bank, problem_type)?;
-            simple_fof_literal_formulas(vec![literal])
+            parse_simple_fof_atomic_formula_or_literal(scanner, bank, problem_type)?
         };
         Ok((bound, formulas))
     })();
@@ -12331,6 +12332,54 @@ fn parse_simple_fof_non_boolean_fool_literal(
     let right = bank.parse_term_with_distinct_checks(scanner)?;
     let literal = Eqn::alloc(left, right, bank, positive)?;
     Ok(simple_fof_literal_formulas(vec![literal]))
+}
+
+fn parse_simple_fof_atomic_formula_or_literal(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if scanner.format() != IoFormat::Tstp {
+        let literal = eqn_fof_parse(scanner, bank, problem_type)?;
+        return Ok(simple_fof_literal_formulas(vec![literal]));
+    }
+
+    let left = bank.parse_term_with_distinct_checks(scanner)?;
+    if simple_fof_tstp_equality_right_starts_formula_operand(scanner) {
+        prepare_predicate_literal(bank, &left)?;
+        let literal = Eqn::alloc(left, bank.true_term().clone(), bank, true)?;
+        return Ok(simple_fof_literal_formulas(vec![literal]));
+    }
+
+    let mut positive = true;
+    let right = if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+        if scanner.test_tok(TokenType::NEG_EQUAL_SIGN) {
+            positive = false;
+        }
+        scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
+        bank.parse_term_with_distinct_checks(scanner)?
+    } else {
+        prepare_predicate_literal(bank, &left)?;
+        bank.true_term().clone()
+    };
+
+    let literal = Eqn::alloc(left, right, bank, positive)?;
+    Ok(simple_fof_literal_formulas(vec![literal]))
+}
+
+fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner) -> bool {
+    if !scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
+        return false;
+    }
+
+    let right = scanner.look_token(1);
+    scanner_test_tok(
+        right,
+        TokenType::OPEN_BRACKET
+            | TokenType::UNIV_QUANTOR
+            | TokenType::EXIST_QUANTOR
+            | TokenType::TILDE_SIGN,
+    ) || scanner_test_id(right, "$true|$false|$distinct")
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -14892,6 +14941,38 @@ mod tests {
     }
 
     #[test]
+    fn run_app_encode_accepts_atomic_left_formula_equality_right_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-atomic-left-formula-equality");
+        std::fs::write(
+            &path,
+            "fof(eq_right, axiom, p(a) = (q(a)|r(a))).\n\
+             fof(ne_right, axiom, p(a) != ![X]:q(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_right, axiom, (app_"));
+        assert!(printed.contains("<=>"));
+        assert!(printed.contains("tff(ne_right, axiom, (app_"));
+        assert!(printed.contains("<~>"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_rejects_tcf_parenthesized_non_clause_body() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-tcf-non-clause-body");
@@ -15930,6 +16011,38 @@ mod tests {
             &path,
             "fof(eq, axiom, (((p(a) | q(a)) = r(a)))).\n\
              fof(ne, axiom, (((s(a) & t(a)) != u(a)))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_atomic_left_formula_equality_right_operands() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-atomic-left-formula-equality");
+        std::fs::write(
+            &path,
+            "fof(eq_group, axiom, p(a) = (q(a)|r(a))).\n\
+             fof(ne_univ, axiom, p(a) != ![X]:q(X)).\n\
+             fof(eq_exists, axiom, p(a) = ?[X]:q(X)).\n\
+             fof(eq_neg, axiom, p(a) = ~q(a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -18290,6 +18403,31 @@ mod tests {
             "fof(rule, axiom, (((p(a) | q(a)) = r(a)))).\n\
              fof(fact, axiom, p(a)).\n\
              fof(goal, conjecture, r(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_fof_formula_equality_with_atomic_left() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-fof-formula-equality-atomic-left");
+        std::fs::write(
+            &path,
+            "fof(rule, axiom, p(a) = (q(a)|r(a))).\n\
+             fof(fact, axiom, p(a)).\n\
+             fof(goal, conjecture, (q(a)|r(a))).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23158,6 +23296,42 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert!(printed.starts_with("cnf(i_0_"));
         assert!(printed.ends_with(", axiom, (~p(a))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_atomic_left_formula_equality_right_operand() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-atomic-left-formula-equality");
+        std::fs::write(&path, "fof(eq_right, axiom, p(a) = (q(a)|r(a))).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 3, "{printed}");
+        assert!(cnf_lines
+            .iter()
+            .any(|line| line.contains("q(a)") && line.contains("r(a)") && line.contains("~p(a)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
+            && line.contains("~q(a)")
+            && !line.contains("~p(a)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(a)")
+            && line.contains("~r(a)")
+            && !line.contains("~p(a)")));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
