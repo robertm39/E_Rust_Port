@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io;
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 
@@ -32,6 +33,8 @@ use crate::terms::{
 
 pub const PROGRAM_NAME: &str = "e_axfilter";
 const C_USAGE_ERROR: &str = "Usage: e_axfilter <problem> [<options>]\n";
+const OUTPUT_CLOSE_ERROR: &str =
+    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -318,7 +321,7 @@ where
     exit_io();
     stdout
         .flush()
-        .map_err(|error| io_diagnostic(format!("Cannot flush output: {error}")))?;
+        .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     stderr
         .flush()
         .map_err(|error| io_diagnostic(format!("Cannot flush stderr: {error}")))?;
@@ -434,7 +437,7 @@ fn execute_config(config: &EAxFilterConfig, stdout: &mut impl IoWrite) -> Result
         execute_with_output(config, output_file, Some(stdout))?;
         output_file
             .flush()
-            .map_err(|error| io_diagnostic(format!("Cannot flush output file: {error}")))?;
+            .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     } else {
         execute_with_output(config, stdout, None)?;
     }
@@ -922,7 +925,7 @@ fn load_filters(filter_file: Option<&Path>) -> Result<AxFilterSet, Diagnostic> {
     let Some(path) = filter_file else {
         return AxFilterSet::default_set();
     };
-    let mut scanner = Scanner::from_file(path, true)?;
+    let mut scanner = Scanner::from_file(path, true).map_err(e_axfilter_scanner_open_diagnostic)?;
     let mut filters = AxFilterSet::new();
     filters.parse(&mut scanner)?;
     Ok(filters)
@@ -1032,9 +1035,9 @@ fn open_output_file(path: Option<&Path>) -> Result<Option<File>, Diagnostic> {
     if path == Path::new("-") {
         return Ok(None);
     }
-    File::create(path)
-        .map(Some)
-        .map_err(|error| io_diagnostic(format!("Cannot open file {}: {error}", path.display())))
+    File::create(path).map(Some).map_err(|error| {
+        e_axfilter_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
+    })
 }
 
 fn write_all(output: &mut (impl IoWrite + ?Sized), bytes: &[u8]) -> Result<(), Diagnostic> {
@@ -1052,18 +1055,39 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn e_axfilter_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
+fn e_axfilter_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+        return error;
+    }
+    let Some((prefix, source_error)) = error.message().split_once(": ") else {
+        return error;
+    };
+    Diagnostic::new(
+        error.code(),
+        format!("{prefix}\n{PROGRAM_NAME}: {source_error}"),
+    )
+}
+
 fn i64_to_i32_saturating(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
     use std::path::{Path, PathBuf};
 
     use super::{
         init_struct_fof_spec, parse_seed_subsample_arg, process_options, run,
         subsample_seed_symbols, EAxFilterConfig, RunCommand, SubsampleMethod, C_USAGE_ERROR,
-        PROGRAM_NAME,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::reset_jkiss_for_tests;
@@ -1084,6 +1108,18 @@ mod tests {
 
     fn remove_if_present(path: &Path) {
         _ = std::fs::remove_file(path);
+    }
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        }
     }
 
     fn slash_path(path: &Path) -> String {
@@ -1251,6 +1287,88 @@ mod tests {
         assert!(output.contains("threshold010000 = Threshold(10000)"));
         assert!(stdout.is_empty());
         remove_if_present(&output_path);
+    }
+
+    #[test]
+    fn output_dash_routes_configured_output_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME, "--dump-filter", "-o", "-"],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.message(), C_USAGE_ERROR);
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        assert!(output.contains("threshold010000 = Threshold(10000)"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("output-dir");
+        remove_if_present(&output_path);
+        _ = std::fs::remove_dir(&output_path);
+        std::fs::create_dir(&output_path).expect("output fixture directory is created");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        std::fs::remove_dir(output_path).expect("output fixture directory is removed");
+    }
+
+    #[test]
+    fn filter_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let missing_filter = temp_path("missing-filter");
+        remove_if_present(&missing_filter);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-f",
+                missing_filter.to_str().expect("path is utf8"),
+                "problem.p",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_filter.display()
+        )));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[test]
@@ -1572,6 +1690,42 @@ mod tests {
             .expect("stdout is utf8")
             .contains("% Parsing "));
         remove_if_present(&problem_path);
+    }
+
+    #[test]
+    fn configured_output_close_failure_uses_c_outclose_diagnostic() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("flush-problem");
+        let filter_path = temp_path("flush-filters");
+        let generated_path = generated_path(&problem_path, "tiny");
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(&problem_path, "fof(a, axiom, p(a)).\n").expect("problem written");
+        std::fs::write(&filter_path, "tiny=Threshold(10000)\n").expect("filters written");
+        let mut stdout = FlushFailWriter;
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
+        assert!(stderr.is_empty());
+
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
     }
 
     #[test]
