@@ -2,7 +2,7 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::basics::verbose::set_verbose_level;
-use crate::external::csscpa::{csscpa_loop, CsscpaState};
+use crate::external::csscpa::{csscpa_loop, CsscpaLoopResult, CsscpaState};
 use crate::inout::commandline::{
     get_int_arg, get_int_arg_check_range, print_options, CommandLineState, OptArgType, OptCell,
 };
@@ -221,7 +221,7 @@ fn execute_filter(
         scanner.set_format(IoFormat::Tstp);
         let result = csscpa_loop(&mut scanner, &mut state, output_level)?;
         output_level = result.output_level();
-        write_all(&mut output, result.trace().as_bytes())?;
+        write_loop_trace(&mut output, &result)?;
     }
 
     write_all(&mut output, b"\n")?;
@@ -256,6 +256,24 @@ fn write_clause_set(
 ) -> Result<(), Diagnostic> {
     let rendered = clauses.tstp_print_string(terms, true, ProblemType::FirstOrder)?;
     write_all(output, rendered.as_bytes())
+}
+
+fn write_loop_trace(output: &mut impl Write, result: &CsscpaLoopResult) -> Result<(), Diagnostic> {
+    let trace = result.trace();
+    let mut start = 0;
+    for &end in result.trace_flush_offsets() {
+        debug_assert!(start <= end && end <= trace.len());
+        let segment = trace
+            .get(start..end)
+            .expect("CSSCPA trace flush offset must be a valid string boundary");
+        write_all(output, segment.as_bytes())?;
+        _ = output.flush();
+        start = end;
+    }
+    let remainder = trace
+        .get(start..)
+        .expect("CSSCPA trace flush offset must be a valid string boundary");
+    write_all(output, remainder.as_bytes())
 }
 
 #[must_use]
@@ -386,6 +404,24 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+        }
+    }
+
+    #[derive(Default)]
+    struct FlushCountingWriter {
+        bytes: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl Write for FlushCountingWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            Ok(())
         }
     }
 
@@ -641,6 +677,32 @@ check improve(1.0,0.0): cnf(csscpa_pos,axiom,p(a)).\n"
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
         assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn filter_flushes_after_csscpa_state_and_clause_events() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(
+            b"state:
+output_level 0
+accept: cnf(csscpa_unit,axiom,p(a)).
+Please process clauses now, I beg you, great shining CSSCPA,
+wonder of the world, most beautiful program ever written.
+"
+            .to_vec(),
+        );
+        let mut stdout = FlushCountingWriter::default();
+        let mut stderr = Vec::new();
+
+        let status = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect("CSSCPA filter succeeds");
+
+        assert_eq!(status, 0);
+        assert_eq!(stdout.flushes, 3);
+        let output = String::from_utf8(stdout.bytes).expect("CSSCPA output is utf8");
+        assert!(output.starts_with("% CSSCPAState: requested  by 0, 0, 0, 0"));
+        assert!(output.contains("% Resulting clause set:\n"));
         assert!(stderr.is_empty());
     }
 

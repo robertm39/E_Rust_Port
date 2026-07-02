@@ -63,9 +63,19 @@ pub struct CsscpaProcessResult {
     status: CsscpaClauseStatus,
     accepted: bool,
     trace: String,
+    trace_flush_offsets: Vec<usize>,
 }
 
 impl CsscpaProcessResult {
+    fn new(status: CsscpaClauseStatus, trace: String, trace_flush_offsets: Vec<usize>) -> Self {
+        Self {
+            accepted: status.is_accepted(),
+            status,
+            trace,
+            trace_flush_offsets,
+        }
+    }
+
     #[must_use]
     pub const fn status(&self) -> CsscpaClauseStatus {
         self.status
@@ -80,6 +90,11 @@ impl CsscpaProcessResult {
     pub fn trace(&self) -> &str {
         &self.trace
     }
+
+    #[must_use]
+    pub fn trace_flush_offsets(&self) -> &[usize] {
+        &self.trace_flush_offsets
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,6 +103,7 @@ pub struct CsscpaLoopResult {
     processed: usize,
     accepted: usize,
     trace: String,
+    trace_flush_offsets: Vec<usize>,
 }
 
 impl CsscpaLoopResult {
@@ -109,6 +125,11 @@ impl CsscpaLoopResult {
     #[must_use]
     pub fn trace(&self) -> &str {
         &self.trace
+    }
+
+    #[must_use]
+    pub fn trace_flush_offsets(&self) -> &[usize] {
+        &self.trace_flush_offsets
     }
 }
 
@@ -213,6 +234,7 @@ impl CsscpaState {
         output_level: i64,
     ) -> Result<CsscpaProcessResult, Diagnostic> {
         let mut trace = String::new();
+        let mut trace_flush_offsets = Vec::new();
         let mut status = if accept {
             CsscpaClauseStatus::Forced
         } else {
@@ -300,6 +322,7 @@ impl CsscpaState {
                 ) && output_level_is_enabled(output_level)
                 {
                     trace.push_str(&self.state_line_for_source(status, accepted_source));
+                    trace_flush_offsets.push(trace.len());
                 }
             } else {
                 status = CsscpaClauseStatus::Rejected;
@@ -313,11 +336,8 @@ impl CsscpaState {
             }
         }
 
-        Ok(CsscpaProcessResult {
-            accepted: status.is_accepted(),
-            status,
-            trace,
-        })
+        trace_flush_offsets.push(trace.len());
+        Ok(CsscpaProcessResult::new(status, trace, trace_flush_offsets))
     }
 
     pub fn process_loop(
@@ -329,6 +349,7 @@ impl CsscpaState {
         let mut processed = 0;
         let mut accepted = 0;
         let mut trace = String::new();
+        let mut trace_flush_offsets = Vec::new();
 
         while !scanner.test_tok(TokenType::NO_TOKEN) {
             if scanner.test_id("output_level") {
@@ -341,6 +362,7 @@ impl CsscpaState {
                 scanner.next_token()?;
                 scanner.accept_tok(TokenType::COLON)?;
                 trace.push_str(&self.state_line_for_source(CsscpaClauseStatus::Requested, 0));
+                trace_flush_offsets.push(trace.len());
                 continue;
             }
 
@@ -367,7 +389,14 @@ impl CsscpaState {
             if result.accepted() {
                 accepted += 1;
             }
+            let trace_base = trace.len();
             trace.push_str(result.trace());
+            trace_flush_offsets.extend(
+                result
+                    .trace_flush_offsets()
+                    .iter()
+                    .map(|offset| trace_base + offset),
+            );
         }
 
         Ok(CsscpaLoopResult {
@@ -375,6 +404,7 @@ impl CsscpaState {
             processed,
             accepted,
             trace,
+            trace_flush_offsets,
         })
     }
 
@@ -788,6 +818,8 @@ mod tests {
         assert!(state.pos_units().find_by_id(positive_ident).is_some());
         assert!(result.trace().contains("% Unit contradiction found!\n"));
         assert!(result.trace().contains("% CSSCPAState: contradicts"));
+        let trace_len = result.trace().len();
+        assert_eq!(result.trace_flush_offsets(), &[trace_len, trace_len]);
     }
 
     #[test]
@@ -811,6 +843,8 @@ mod tests {
         )));
         assert!(result.trace().contains("% CSSCPAState: contradicts"));
         assert!(!result.trace().contains("% Unit contradiction found!\n"));
+        let trace_len = result.trace().len();
+        assert_eq!(result.trace_flush_offsets(), &[trace_len, trace_len]);
     }
 
     #[test]
@@ -846,6 +880,17 @@ state:",
         assert!(result
             .trace()
             .ends_with(" (system, clauses,literals,weight)\n"));
+        let flush_offsets = result.trace_flush_offsets();
+        assert_eq!(flush_offsets.len(), 4);
+        assert!(flush_offsets
+            .windows(2)
+            .all(|window| window[0] <= window[1]));
+        let first_flush_segment = result
+            .trace()
+            .get(..flush_offsets[0])
+            .expect("first CSSCPA flush offset is a string boundary");
+        assert!(first_flush_segment.ends_with("0, 0, 0 (system, clauses,literals,weight)\n"));
+        assert_eq!(flush_offsets.last().copied(), Some(result.trace().len()));
     }
 
     #[test]
@@ -867,6 +912,7 @@ accept: cnf(csscpa_hidden,axiom,p(a)).",
         assert_eq!(result.processed(), 1);
         assert_eq!(result.accepted(), 1);
         assert!(result.trace().is_empty());
+        assert_eq!(result.trace_flush_offsets(), &[0]);
     }
 
     #[test]
