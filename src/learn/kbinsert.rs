@@ -5,7 +5,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::learn::annotations::{Annotation, AnnotationTree};
-use crate::learn::annoterms::AnnoTerm;
+use crate::learn::annoterms::{AnnoSet, AnnoTerm};
 use crate::learn::clauseenc::rec_encode_clause_list_rep;
 use crate::learn::examplerep::{ExampleRep, ExampleSet};
 use crate::learn::numfeatures::{compute_clause_set_num_features, Features};
@@ -13,6 +13,37 @@ use crate::learn::patterns::{pattern_clause_compute, pattern_translate_sig, Patt
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::DerefType;
+use crate::terms::typebanks::TypeBank;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KbParseExampleFileResult {
+    ident: i64,
+    axiom_count: i64,
+    parsed_example_clauses: i64,
+    added_example_terms: i64,
+}
+
+impl KbParseExampleFileResult {
+    #[must_use]
+    pub const fn ident(self) -> i64 {
+        self.ident
+    }
+
+    #[must_use]
+    pub const fn axiom_count(self) -> i64 {
+        self.axiom_count
+    }
+
+    #[must_use]
+    pub const fn parsed_example_clauses(self) -> i64 {
+        self.parsed_example_clauses
+    }
+
+    #[must_use]
+    pub const fn added_example_terms(self) -> i64 {
+        self.added_example_terms
+    }
+}
 
 /// Parse one knowledge-base example clause into an annotated recursive clause
 /// representation.
@@ -69,6 +100,51 @@ pub fn kb_axioms_insert(
     ident
 }
 
+/// Parse one C `KBParseExampleFile` stream into example metadata and annotated
+/// clause-pattern terms.
+///
+/// C allocates a temporary axiom term bank, frees it after feature extraction,
+/// consumes one standalone full stop, then allocates a new parser term bank over
+/// the caller's result signature and translates parsed examples into
+/// `examples->terms`. Rust keeps the same parse phases but accepts the second
+/// parser and destination term banks explicitly so ownership remains visible.
+pub fn kb_parse_example_file(
+    scanner: &mut Scanner,
+    name: impl Into<String>,
+    set: &mut ExampleSet,
+    examples: &mut AnnoSet,
+    parse_terms: &mut TermBank,
+    internal_terms: &mut TermBank,
+    problem_type: ProblemType,
+) -> Result<KbParseExampleFileResult, Diagnostic> {
+    let mut axiom_terms = TermBank::new(Signature::new(TypeBank::new()))?;
+    let mut axioms = ClauseSet::new();
+    let axiom_count = axioms.parse_list(scanner, &mut axiom_terms, problem_type)?;
+    let ident = kb_axioms_insert(set, &axioms, axiom_terms.signature(), name);
+
+    scanner.accept_tok(TokenType::FULLSTOP)?;
+
+    let mut parsed_example_clauses = 0;
+    let mut added_example_terms = 0;
+    while !scanner.test_tok(TokenType::NO_TOKEN) {
+        let parsed =
+            parse_example_clause(scanner, parse_terms, internal_terms, ident, problem_type)?;
+        parsed_example_clauses += 1;
+        if let Some(term) = parsed {
+            if examples.add_term(term) {
+                added_example_terms += 1;
+            }
+        }
+    }
+
+    Ok(KbParseExampleFileResult {
+        ident,
+        axiom_count,
+        parsed_example_clauses,
+        added_example_terms,
+    })
+}
+
 fn parse_example_clause_annotation(
     scanner: &mut Scanner,
     ident: i64,
@@ -119,13 +195,14 @@ fn u64_to_f64(value: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{kb_axioms_insert, parse_example_clause};
+    use super::{kb_axioms_insert, kb_parse_example_file, parse_example_clause};
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
     use crate::inout::scanner::{Scanner, TokenType};
+    use crate::learn::annoterms::AnnoSet;
     use crate::learn::examplerep::{ExampleRep, ExampleSet};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
@@ -225,6 +302,91 @@ mod tests {
         assert_eq!(set.count(), 1);
         assert!(set.find_ident(2).is_some());
         assert_eq!(set.find_name("dup").map(ExampleRep::ident), Some(1));
+    }
+
+    #[test]
+    fn kb_parse_example_file_reads_axioms_separator_and_example_clauses() {
+        let mut scanner = Scanner::from_user_string(
+            "\
+a=b.
+f(a)=b.
+.
+0:(0): a=b.
+1:(3,4.5): f(a)=b.
+",
+            false,
+        )
+        .expect("scanner allocation");
+        let mut examples = AnnoSet::new();
+        let mut set = ExampleSet::new();
+        let mut parse_terms = test_bank();
+        let mut internal_terms = test_bank();
+
+        let result = kb_parse_example_file(
+            &mut scanner,
+            "problem",
+            &mut set,
+            &mut examples,
+            &mut parse_terms,
+            &mut internal_terms,
+            ProblemType::FirstOrder,
+        )
+        .expect("KB example file parses");
+
+        assert_eq!(result.ident(), 1);
+        assert_eq!(result.axiom_count(), 2);
+        assert_eq!(result.parsed_example_clauses(), 2);
+        assert_eq!(result.added_example_terms(), 2);
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        assert_eq!(set.count(), 1);
+        let rep = set.find_ident(1).expect("example metadata inserted");
+        assert_eq!(rep.name(), "problem");
+        assert_close(rep.features().value(0).expect("unit count"), 2.0);
+        assert_eq!(rep.features().func_max_arity(), 1);
+        assert_eq!(examples.nodes(), 2);
+        assert!(examples
+            .iter()
+            .all(|(_key, term)| term.annotations().find(1).is_some()));
+    }
+
+    #[test]
+    fn kb_parse_example_file_merges_duplicate_pattern_terms_like_anno_set_add_term() {
+        let mut scanner = Scanner::from_user_string(
+            "\
+a=b.
+.
+0:(0): a=b.
+1:(2): a=b.
+",
+            false,
+        )
+        .expect("scanner allocation");
+        let mut examples = AnnoSet::new();
+        let mut set = ExampleSet::new();
+        let mut parse_terms = test_bank();
+        let mut internal_terms = test_bank();
+
+        let result = kb_parse_example_file(
+            &mut scanner,
+            "dup-pattern",
+            &mut set,
+            &mut examples,
+            &mut parse_terms,
+            &mut internal_terms,
+            ProblemType::FirstOrder,
+        )
+        .expect("KB example file parses");
+
+        assert_eq!(result.ident(), 1);
+        assert_eq!(result.axiom_count(), 1);
+        assert_eq!(result.parsed_example_clauses(), 2);
+        assert_eq!(result.added_example_terms(), 1);
+        assert_eq!(examples.nodes(), 1);
+        let (_term_key, term) = examples.iter().next().expect("merged annotated term");
+        let annotation = &term.annotations().find(1).expect("source annotation").val1;
+        assert_close(annotation.count(), 2.0);
+        assert_close(annotation.value(1).expect("proof count"), 0.5);
+        assert_close(annotation.value(2).expect("proof distance"), 1.0);
     }
 
     #[test]
