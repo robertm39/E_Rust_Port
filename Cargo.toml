@@ -57,4 +57,8 @@ path = "src/bin/ekb_create.rs"
 name = "ekb_delete"
 path = "src/bin/ekb_delete.rs"
 
+[[bin]]
+name = "ekb_insert"
+path = "src/bin/ekb_insert.rs"
+
 [dependencies]
