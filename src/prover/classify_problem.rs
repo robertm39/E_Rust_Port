@@ -1743,6 +1743,69 @@ mod tests {
     }
 
     #[test]
+    fn output_dash_routes_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let input = feature_line("dashout");
+        let mut stdin = Cursor::new(input.into_bytes());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [PROGRAM_NAME, "--parse-features", "-o", "-"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("dash output run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        assert!(output.starts_with("dashout : ("));
+        assert!(output.contains(" : F"));
+    }
+
+    #[test]
+    fn output_file_is_created_before_later_input_open_failure() {
+        let _guard = global_state_lock();
+        let missing_path = temp_path("missing-after-output-open");
+        let output_path = temp_path("early-output");
+        remove_if_present(&missing_path);
+        remove_if_present(&output_path);
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "--parse-features",
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+                missing_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("missing input is still reported after output creation");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&output_path).expect("output file was created"),
+            ""
+        );
+
+        remove_if_present(&output_path);
+    }
+
+    #[test]
     fn feature_input_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
         let missing_path = temp_path("missing-feature-input");
