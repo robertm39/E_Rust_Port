@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::basics::error::{Diagnostic, ErrorCode};
@@ -564,9 +564,9 @@ fn open_output_file(path: Option<&Path>) -> Result<Option<File>, Diagnostic> {
     if path == Path::new("-") {
         return Ok(None);
     }
-    File::create(path)
-        .map(Some)
-        .map_err(|error| io_diagnostic(format!("Cannot open file {}: {error}", path.display())))
+    File::create(path).map(Some).map_err(|error| {
+        e_server_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
+    })
 }
 
 fn write_all(output: &mut (impl Write + ?Sized), bytes: &[u8]) -> Result<(), Diagnostic> {
@@ -584,6 +584,13 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn e_server_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
 fn i64_to_i32_saturating(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
 }
@@ -594,9 +601,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        init_domain_spec, load_filters, parse_port, print_help, process_legacy_connection,
-        process_options, run, EServerConfig, LegacyServerReport, RunCommand, C_USAGE_ERROR,
-        DEFAULT_PORT, DEFAULT_PROVER, PROGRAM_NAME,
+        init_domain_spec, load_filters, open_output_file, parse_port, print_help,
+        process_legacy_connection, process_options, run, EServerConfig, LegacyServerReport,
+        RunCommand, C_USAGE_ERROR, DEFAULT_PORT, DEFAULT_PROVER, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -651,6 +658,10 @@ mod tests {
 
     fn remove_if_present(path: &Path) {
         _ = std::fs::remove_file(path);
+    }
+
+    fn remove_dir_if_present(path: &Path) {
+        _ = std::fs::remove_dir(path);
     }
 
     fn sent_strings(bytes: &[u8]) -> Vec<String> {
@@ -786,6 +797,35 @@ mod tests {
         assert!(output_path.exists());
         assert!(stdout.is_empty());
         remove_if_present(&output_path);
+    }
+
+    #[test]
+    fn output_dash_uses_stdout_route_like_c() {
+        let _guard = global_state_lock();
+
+        assert!(open_output_file(Some(Path::new("-")))
+            .expect("- output opens")
+            .is_none());
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("output-dir");
+        remove_if_present(&output_path);
+        remove_dir_if_present(&output_path);
+        std::fs::create_dir(&output_path).expect("output fixture directory is created");
+
+        let error =
+            open_output_file(Some(&output_path)).expect_err("directory output path is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+
+        remove_dir_if_present(&output_path);
     }
 
     #[test]
