@@ -87,4 +87,17 @@ Source files reviewed: `PROVER/ekb_create.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `src/prover/ekb_create.rs` and `src/bin/ekb_create.rs` port the standalone KB creation executable over the Rust `learn::kbdesc` helper.
+- The Rust wrapper preserves the default basename `E_KNOWLEDGE`, short/long `-V`/`--version`, optional `--verbose`, negative-example count/proportion options, the one-argument limit, and the C typo in the negative-proportion diagnostic.
+- File creation is intentionally C-shaped: create the base directory, write `description`, `signature`, `problems`, and `clausepatterns`, then create the `FILES` subdirectory. Later failures do not roll back earlier filesystem changes.
+
+### Change Later
+
+- Consider making KB creation transactional after compatibility mode exists. The C executable leaves partial KB directories if a later seed file or the `FILES` subdirectory cannot be created.
+- The first `mkdir()` failure is reported with `SYNTAX_ERROR`, while the `FILES` subdirectory failure uses `FILE_ERROR` and passes the base directory name rather than the failing subdirectory path. A cleaned interface should report path-specific filesystem errors consistently.
+- `--negative-example-number` accepts negative values even though the generated `FailExamples` field is later parsed as a positive integer by `KBDescParse`. Tighten this only after compatibility tests cover legacy KB files.
+- `OPT_SELECT_EVAL` is present in the local option enum but has no option table entry or switch arm; remove that dead enum slot in any future C cleanup.
 <!-- END MANUAL REVIEW: c_source_docs -->

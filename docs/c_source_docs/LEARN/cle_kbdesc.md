@@ -97,6 +97,12 @@ Source files reviewed: `LEARN/cle_kbdesc.h`, `LEARN/cle_kbdesc.c`.
 - `KBDescParse` compares the parsed version against `KB_VERSION` with plain `strcmp`, so "newer" is lexicographic string ordering rather than semantic version ordering.
 - The "knowledge base is younger" diagnostic concatenates `" update from"` directly with `E_URL`, producing no space before the URL. Preserve the message shape unless user-facing diagnostics are intentionally cleaned up after compatibility is covered.
 - `KBFileName` appends `"/"` between `basename` and `file` unconditionally; do not replace it with a platform path separator while learned KB file layout compatibility matters.
+- `KBDescPrint` uses the build's `COMCHAR`; the default configured C checkout leaves `UNIX_COMMENTS` disabled, so generated KB description comments begin with `%`.
+
+### Change Later
+
+- Replace lexicographic version comparison with semantic version handling once old KB compatibility and migration behavior are defined.
+- Make the comment-character policy explicit in KB file formats instead of inheriting it from the global `COMCHAR` build option.
 
 ### Porting Focus
 

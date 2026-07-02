@@ -49,4 +49,8 @@ path = "src/bin/edpll.rs"
 name = "tsm_classify"
 path = "src/bin/tsm_classify.rs"
 
+[[bin]]
+name = "ekb_create"
+path = "src/bin/ekb_create.rs"
+
 [dependencies]

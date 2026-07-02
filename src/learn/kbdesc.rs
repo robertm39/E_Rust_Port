@@ -1,3 +1,4 @@
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::inout::basicparser::parse_float;
@@ -45,10 +46,10 @@ impl KbDesc {
         let mut result = String::new();
         let write_result = writeln!(
             &mut result,
-            "# E theorem prover knowledge base description\n\
+            "{DEFAULT_COMCHAR_RAW} E theorem prover knowledge base description\n\
 Version     : \"{}\"\n\
-NegProp     : {:8.6}  # Negative example proportion (successful proof search)\n\
-FailExamples: {:8}  # Number of clauses from a failed proof search",
+NegProp     : {:8.6}  {DEFAULT_COMCHAR_RAW} Negative example proportion (successful proof search)\n\
+FailExamples: {:8}  {DEFAULT_COMCHAR_RAW} Number of clauses from a failed proof search",
             self.version, self.neg_proportion, self.fail_neg_examples
         );
         debug_assert!(write_result.is_ok());
@@ -157,10 +158,10 @@ mod tests {
         assert_eq!(desc.fail_neg_examples(), 42);
         assert_eq!(
             kb_desc_print_string(&desc),
-            "# E theorem prover knowledge base description\n\
+            "% E theorem prover knowledge base description\n\
 Version     : \"0.20dev\"\n\
-NegProp     : 0.250000  # Negative example proportion (successful proof search)\n\
-FailExamples:       42  # Number of clauses from a failed proof search\n"
+NegProp     : 0.250000  % Negative example proportion (successful proof search)\n\
+FailExamples:       42  % Number of clauses from a failed proof search\n"
         );
     }
 
