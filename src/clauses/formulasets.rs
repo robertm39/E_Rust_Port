@@ -2391,9 +2391,10 @@ impl FormulaSet {
     /// Applies C `TFormulaSetLiftLambdas` in insertion order.
     ///
     /// Generated definition wrappers are appended after the original traversal,
-    /// so the definitions are not lifted again by the same pass. Formula-level
-    /// derivation storage and proof output are deferred; this returns the
-    /// `DCIntroDef` opcodes that should be attached by a future owner.
+    /// so the definitions are not lifted again by the same pass.
+    /// Proof-document output is deferred. Rewritten source formulas store the
+    /// validated no-parent `DCIntroDef` entries and this still returns those
+    /// opcodes as staged metadata.
     ///
     /// # Errors
     ///
@@ -2427,6 +2428,7 @@ impl FormulaSet {
                 for definition in formula_defs.into_iter().rev() {
                     result.lambda_lift_definitions_inserted += 1;
                     result.formula_derivation_ops.push(DC_INTRO_DEF);
+                    formula.push_formula_derivation(DC_INTRO_DEF, None, None);
                     lifted_definitions
                         .entry(definition.entry_id())
                         .or_insert(definition);
@@ -4724,6 +4726,7 @@ mod tests {
         assert!(first_order_result.formula_derivation_ops.is_empty());
         assert_eq!(first_order.cardinality(), 1);
         assert_eq!(first_order.iter().next().unwrap().formula(), &formula);
+        assert_eq!(first_order.iter().next().unwrap().derivation_entries(), &[]);
 
         let mut higher_order = FormulaSet::new();
         higher_order.insert(WrappedFormula::wt_formula_alloc(formula));
@@ -4806,8 +4809,13 @@ mod tests {
         assert_eq!(higher_order.cardinality(), 2);
         let formulas = higher_order.iter().collect::<Vec<_>>();
         assert!(!formulas[0].formula().has_lambda_subterm());
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
         assert_eq!(formulas[1].formula().f_code(), bank.signature().qall_code());
         assert!(!formulas[1].formula().has_lambda_subterm());
+        assert_eq!(formulas[1].derivation_entries(), &[]);
     }
 
     #[test]
