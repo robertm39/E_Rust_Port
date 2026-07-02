@@ -6,6 +6,7 @@ use crate::basics::stringtrees::StrTree;
 use crate::inout::fileops::{file_name_base_name, file_name_dir_name, file_name_is_absolute};
 use crate::inout::initio::tptp_dir;
 use crate::inout::streams::{InputStream, InputStreamStack, StreamType};
+use std::borrow::Cow;
 use std::io;
 use std::path::Path;
 
@@ -1026,9 +1027,10 @@ fn create_file_stream(
     name: &str,
     default_dir: Option<&str>,
 ) -> Result<(InputStream, String), Diagnostic> {
-    if file_name_is_absolute(name) {
+    let scanner_name = scanner_file_name(name);
+    if file_name_is_absolute(&scanner_name) || Path::new(name).is_absolute() {
         let stream = InputStream::from_file(Path::new(name))?;
-        return Ok((stream, file_name_dir_name(name)));
+        return Ok((stream, file_name_dir_name(&scanner_name)));
     }
 
     let mut local_default_dir = String::new();
@@ -1036,8 +1038,12 @@ fn create_file_stream(
         local_default_dir.push_str(default_dir);
         debug_assert!(local_default_dir.is_empty() || local_default_dir.ends_with('/'));
     }
-    local_default_dir.push_str(&file_name_dir_name(name));
-    let local_name = format!("{}{}", local_default_dir, file_name_base_name(name));
+    local_default_dir.push_str(&file_name_dir_name(&scanner_name));
+    let local_name = format!(
+        "{}{}",
+        local_default_dir,
+        file_name_base_name(&scanner_name)
+    );
 
     match InputStream::from_file(Path::new(&local_name)) {
         Ok(stream) => Ok((stream, local_default_dir)),
@@ -1045,11 +1051,26 @@ fn create_file_stream(
             let Some(mut fallback_default_dir) = tptp_dir() else {
                 return Err(local_error);
             };
-            fallback_default_dir.push_str(&file_name_dir_name(name));
-            let fallback_name = format!("{}{}", fallback_default_dir, file_name_base_name(name));
+            fallback_default_dir.push_str(&file_name_dir_name(&scanner_name));
+            let fallback_name = format!(
+                "{}{}",
+                fallback_default_dir,
+                file_name_base_name(&scanner_name)
+            );
             let stream = InputStream::from_file(Path::new(&fallback_name))?;
             Ok((stream, fallback_default_dir))
         }
+    }
+}
+
+fn scanner_file_name(name: &str) -> Cow<'_, str> {
+    #[cfg(windows)]
+    {
+        Cow::Owned(name.replace('\\', "/"))
+    }
+    #[cfg(not(windows))]
+    {
+        Cow::Borrowed(name)
     }
 }
 
@@ -1264,6 +1285,42 @@ mod tests {
             nested.default_dir(),
             format!("{}/nested/", slash_path(&dir))
         );
+
+        remove_dir_if_present(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn file_scanner_resolves_windows_native_default_directory_for_includes() {
+        let dir = temp_dir("windows-default-dir");
+        remove_dir_if_present(&dir);
+        let axioms_dir = dir.join("Axioms");
+        std::fs::create_dir_all(&axioms_dir).unwrap();
+        let root_path = dir.join("main.p");
+        let child_path = axioms_dir.join("child.ax");
+        std::fs::write(&root_path, b"include('Axioms/child.ax'). tail").unwrap();
+        std::fs::write(&child_path, b"cnf(child,axiom,p).").unwrap();
+
+        let root_name = root_path.to_string_lossy().into_owned();
+        assert!(root_name.contains('\\'));
+        let mut scanner = Scanner::from_file(Path::new(&root_name), false).unwrap();
+        scanner.set_format(IoFormat::Tstp);
+        assert_eq!(scanner.default_dir(), format!("{}/", slash_path(&dir)));
+        let mut selectors = StrTree::new();
+        let skip = StrTree::new();
+
+        let included = scanner
+            .parse_include(&mut selectors, &skip)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(scanner.current_token().literal(), "tail");
+        assert_eq!(included.current_token().literal(), "cnf");
+        assert_eq!(
+            included.default_dir(),
+            format!("{}/Axioms/", slash_path(&dir))
+        );
+        assert_eq!(included.format(), IoFormat::Tstp);
 
         remove_dir_if_present(&dir);
     }

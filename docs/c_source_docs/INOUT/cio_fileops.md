@@ -109,7 +109,7 @@ Source files reviewed: `INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`.
 
 ### Change-Later Observations
 
-- C `FileNameIsAbsolute`, `FileNameDirName`, `FileFindBaseName`, `FileNameBaseName`, and `FileNameStrip` treat only `/` as a separator. Rust preserves this even on Windows; native path-aware wrappers should be added separately if executable parity ever requires Windows path normalization.
+- C `FileNameIsAbsolute`, `FileNameDirName`, `FileFindBaseName`, `FileNameBaseName`, and `FileNameStrip` treat only `/` as a separator. Rust preserves this in the low-level helper API even on Windows, while scanner file opening now applies a narrow Windows-native path normalization before C-style default-directory/include resolution; keep any broader path-aware behavior at explicit executable or scanner boundaries instead of changing these compatibility helpers.
 - C `FileExists` is a race-prone readability probe implemented by opening the path. Rust keeps the same observable "can open for reading" meaning; avoid replacing it with metadata-only existence checks in compatibility paths.
 - Rust closes `InputSource::File` via raw file descriptors/handles rather than a C `FILE*`; if a future scanner or parser backend introduces real `FILE*` ownership, re-audit `fclose` versus OS-handle close semantics before sharing the helper.
 
