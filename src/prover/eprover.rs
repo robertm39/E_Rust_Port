@@ -25227,6 +25227,40 @@ mod tests {
     }
 
     #[test]
+    fn run_syntax_only_accepts_lfhol_partial_application_term_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-lfhol-partial-application-term-equality");
+        std::fs::write(
+            &path,
+            "thf(bool_type, type, bool: $tType).\n\
+             thf(set_type, type, set: $tType).\n\
+             thf(prod_type, type, prod: $tType).\n\
+             thf(col_type, type, col: (prod > bool) > set).\n\
+             thf(lam_type, type, lam: set > prod > bool).\n\
+             thf(goal, axiom, ![A: set]: ((col @ (lam @ A)) = A)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proves_simple_thf_atomic_conjecture() {
         let _guard = global_state_lock();
         let path = temp_path("simple-thf-proof");

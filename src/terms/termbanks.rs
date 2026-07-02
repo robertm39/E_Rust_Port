@@ -1697,10 +1697,11 @@ impl TermBank {
         let mut formula = self.parse_tformula_tstp_disjunction(scanner)?;
         if scanner.test_tok(TokenType::FOF_BIN_OP) && !scanner.test_tok(TokenType::FOF_ASSOC_OP) {
             let mut op = self.tptp_operator_parse(scanner)?;
-            let right = if (op == self.sig.eqn_code() || op == self.sig.neqn_code())
-                && !formula.type_().as_ref().is_some_and(Type::is_bool)
-            {
-                self.parse_literal_tformula_tstp_with_applications(scanner)?
+            let equality_is_term_literal = (op == self.sig.eqn_code()
+                || op == self.sig.neqn_code())
+                && !formula.type_().as_ref().is_some_and(Type::is_bool);
+            let right = if equality_is_term_literal {
+                self.parse_tformula_equality_right_term_arg(scanner)?
             } else {
                 self.parse_tformula_tstp_disjunction(scanner)?
             };
@@ -1719,7 +1720,11 @@ impl TermBank {
                     self.sig.xor_code()
                 };
             }
-            formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+            formula = if equality_is_term_literal {
+                self.encode_equality_term(formula, right, op == self.sig.eqn_code())?
+            } else {
+                self.tformula_fcode_alloc(op, formula, Some(right))?
+            };
         }
         Ok(formula)
     }
@@ -4822,6 +4827,41 @@ mod tests {
         let right = formula.argument(1).unwrap();
         assert_eq!(right.arity(), 1);
         assert_eq!(bank.signature().find_name(right.f_code()), Some("f"));
+    }
+
+    #[test]
+    fn tstp_formula_equality_accepts_partial_application_with_user_bool_result_sort() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "bool: $tType. set: $tType. prod: $tType. \
+             col: (prod > bool) > set. lam: set > prod > bool.",
+            false,
+        )
+        .unwrap();
+        for _ in 0..5 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let mut scanner =
+            Scanner::from_user_string("![A: set]: ((col @ (lam @ A)) = A)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().qall_code());
+        let body = formula.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+        let left = body.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(left.f_code()), Some("col"));
+        let partial = left.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(partial.f_code()), Some("lam"));
+        assert_eq!(partial.arity(), 1);
+        assert!(partial
+            .type_()
+            .expect("partial application type")
+            .is_arrow());
     }
 
     #[test]
