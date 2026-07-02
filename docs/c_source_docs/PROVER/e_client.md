@@ -102,12 +102,14 @@ Source files reviewed: `PROVER/e_client.c`.
 ### Rust Port Notes
 
 - `src/prover/e_client.rs` and `src/bin/e_client.rs` port the standalone client executable over the Rust TCP string-message helpers from `cio_network`.
-- The Rust wrapper preserves the C option surface, including `-V`/`--version`, optional `--verbose`, `-o`, `-S`/`--server`, both `--service-port` and `--port`, default server `localhost`, default port `3666`, and the warning-but-continue behavior for ports below `IPPORT_RESERVED`.
-- The executable loads all positional inputs, defaulting to `-`, concatenates them without inserted separators, opens the output route before connecting, sends `hello`, waits while echoing `% Server: ...` until `ready`, sends `add`, the problem text, and `prove`, then echoes until `result`.
+- The Rust wrapper preserves the C option surface, including `-V`/`--version`, optional `--verbose`, `-o` including `-o -`, `-S`/`--server`, both `--service-port` and `--port`, default server `localhost`, default port `3666`, and the warning-but-continue behavior for ports below `IPPORT_RESERVED`.
+- The executable loads all positional inputs, defaulting to `-`, concatenates them without inserted separators, preserves C-shaped `InputOpen` stat/non-regular/open diagnostics, opens the output route before loading inputs or connecting, sends `hello`, waits while echoing `% Server: ...` until `ready`, sends `add`, the problem text, and `prove`, then echoes until `result`.
+- Output-file open and final output-flush failures preserve the C `OutOpen`/`OutClose` diagnostic wording.
 
 ### Change Later
 
 - `e_client.c` targets the legacy `e_server` handshake rather than the newer interactive deduction-server command protocol. Keep the old handshake for drop-in compatibility, but decide later whether a modern client should speak `ADD`/`RUN`/`QUIT` once `e_server` and `e_deduction_server` executable parity is covered.
 - `tcp_msg_wait()` prints every server message, including the expected terminal reply, through `GlobalOut`. Rust preserves this visible echo; a cleaned API should return structured server events separately from presentation.
 - The C client accepts reserved ports after a warning and opens/truncates `GlobalOut` before loading input or connecting. Rust keeps both side effects; change them only behind an explicit compatibility-mode decision.
+- `FileLoad()` uses `InputOpen()`, which attempts a stat/non-regular-file check separately from file opening. Missing inputs therefore report `Cannot stat file ...`, while directories report `... it is not a regular file`. Keep the split for compatibility; a modernized client should report a single structured input-open failure.
 <!-- END MANUAL REVIEW: c_source_docs -->

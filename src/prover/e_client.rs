@@ -8,7 +8,8 @@ use crate::inout::network::{
     create_client_socket, tcp_string_recv_from_or_error, tcp_string_send_to_or_error,
 };
 use crate::prover::version::{E_NICKNAME, E_URL, STS_MAIL, VERSION};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "e_client";
@@ -233,15 +234,28 @@ fn execute_e_client(
     let problem = load_problem_files(&config.files, stdin)?;
     verbout_diag(stderr, "Problem input read\n")?;
     let mut stream = create_client_socket(&config.server, config.port)?;
-    let output: &mut dyn Write = match output_file.as_mut() {
+    execute_protocol_and_flush_output(output_file.as_mut(), stdout, &mut stream, &problem)?;
+    Ok(0)
+}
+
+fn execute_protocol_and_flush_output<S>(
+    output_file: Option<&mut File>,
+    stdout: &mut impl Write,
+    stream: &mut S,
+    problem: &str,
+) -> Result<(), Diagnostic>
+where
+    S: Read + Write,
+{
+    let output: &mut dyn Write = match output_file {
         Some(file) => file,
         None => stdout,
     };
-    execute_client_protocol(&mut stream, output, &problem)?;
+    execute_client_protocol(stream, output, problem)?;
     output
         .flush()
         .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
-    Ok(0)
+    Ok(())
 }
 
 fn execute_client_protocol<S, W>(
@@ -283,13 +297,33 @@ fn load_problem_files(files: &[String], stdin: &mut impl Read) -> Result<String,
                 .read_to_end(&mut result)
                 .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         } else {
-            let mut data = std::fs::read(Path::new(file))
-                .map_err(|error| io_diagnostic(format!("Cannot read file {file}: {error}")))?;
-            result.append(&mut data);
+            load_problem_file(Path::new(file), &mut result)?;
         }
     }
     String::from_utf8(result)
         .map_err(|error| io_diagnostic(format!("Invalid UTF-8 input: {error}")))
+}
+
+fn load_problem_file(path: &Path, result: &mut Vec<u8>) -> Result<(), Diagnostic> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        e_client_sys_error_diagnostic(format!("Cannot stat file {}", path.display()), &error)
+    })?;
+    if !metadata.is_file() {
+        return Err(io_diagnostic(format!(
+            "{} it is not a regular file",
+            path.display()
+        )));
+    }
+
+    let mut file = File::open(path).map_err(|error| {
+        e_client_sys_error_diagnostic(
+            format!("Cannot open file {} for reading", path.display()),
+            &error,
+        )
+    })?;
+    file.read_to_end(result)
+        .map_err(|error| io_diagnostic(format!("Cannot read file {}: {error}", path.display())))?;
+    Ok(())
 }
 
 #[must_use]
@@ -356,9 +390,9 @@ fn open_output_file(path: Option<&Path>) -> Result<Option<std::fs::File>, Diagno
     if path == Path::new("-") {
         return Ok(None);
     }
-    std::fs::File::create(path)
-        .map(Some)
-        .map_err(|error| io_diagnostic(format!("Cannot open file {}: {error}", path.display())))
+    std::fs::File::create(path).map(Some).map_err(|error| {
+        e_client_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
+    })
 }
 
 fn verbout_diag(output: &mut impl Write, message: &str) -> Result<(), Diagnostic> {
@@ -382,6 +416,13 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn e_client_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
 fn i64_to_i32_saturating(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
 }
@@ -389,8 +430,9 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        execute_client_protocol, load_problem_files, parse_port, print_help, process_options, run,
-        EClientConfig, RunCommand, DEFAULT_PORT, DEFAULT_SERVER, PROGRAM_NAME,
+        execute_client_protocol, execute_protocol_and_flush_output, load_problem_files,
+        open_output_file, parse_port, print_help, process_options, run, EClientConfig, RunCommand,
+        DEFAULT_PORT, DEFAULT_SERVER, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -399,7 +441,7 @@ mod tests {
     };
     use crate::prover::version::{E_NICKNAME, VERSION};
     use crate::test_support::global_state_lock;
-    use std::io::{Cursor, Read, Write};
+    use std::io::{self, Cursor, Read, Write};
     use std::path::{Path, PathBuf};
 
     #[derive(Debug)]
@@ -439,6 +481,18 @@ mod tests {
         }
     }
 
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        }
+    }
+
     fn temp_path(name: &str) -> PathBuf {
         std::env::current_dir()
             .expect("current directory is available")
@@ -448,6 +502,10 @@ mod tests {
 
     fn remove_if_present(path: &Path) {
         _ = std::fs::remove_file(path);
+    }
+
+    fn remove_dir_if_present(path: &Path) {
+        _ = std::fs::remove_dir(path);
     }
 
     fn sent_strings(bytes: &[u8]) -> Vec<String> {
@@ -604,6 +662,136 @@ mod tests {
 
         remove_if_present(&file_a);
         remove_if_present(&file_b);
+    }
+
+    #[test]
+    fn missing_input_file_uses_c_stat_syserror_shape() {
+        let _guard = global_state_lock();
+        let missing_path = temp_path("missing-input");
+        remove_if_present(&missing_path);
+        remove_dir_if_present(&missing_path);
+        let mut stdin = Cursor::new(Vec::new());
+        let files = vec![missing_path.to_str().expect("path is utf8").to_owned()];
+
+        let error = load_problem_files(&files, &mut stdin).expect_err("missing file is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+    }
+
+    #[test]
+    fn directory_input_file_uses_c_non_regular_error_shape() {
+        let _guard = global_state_lock();
+        let input_path = temp_path("input-dir");
+        remove_if_present(&input_path);
+        remove_dir_if_present(&input_path);
+        std::fs::create_dir(&input_path).expect("input fixture directory is created");
+        let mut stdin = Cursor::new(Vec::new());
+        let files = vec![input_path.to_str().expect("path is utf8").to_owned()];
+
+        let error = load_problem_files(&files, &mut stdin).expect_err("directory is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(
+            error.message(),
+            format!("{} it is not a regular file", input_path.display())
+        );
+
+        remove_dir_if_present(&input_path);
+    }
+
+    #[test]
+    fn output_dash_routes_server_echoes_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let mut stream = Duplex::new(&["ready", "result"]);
+        let mut stdout = Vec::new();
+        let mut output_file = open_output_file(Some(Path::new("-"))).expect("- output opens");
+
+        execute_protocol_and_flush_output(
+            output_file.as_mut(),
+            &mut stdout,
+            &mut stream,
+            "cnf(c,axiom,p).\n",
+        )
+        .expect("protocol succeeds");
+
+        assert_eq!(
+            String::from_utf8(stdout).expect("stdout utf8"),
+            "% Server: ready\n% Server: result\n"
+        );
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("output-dir");
+        remove_if_present(&output_path);
+        remove_dir_if_present(&output_path);
+        std::fs::create_dir(&output_path).expect("output fixture directory is created");
+
+        let error =
+            open_output_file(Some(&output_path)).expect_err("directory output path is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+
+        remove_dir_if_present(&output_path);
+    }
+
+    #[test]
+    fn output_file_is_created_before_input_load_failure() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("input-failure-output");
+        let missing_path = temp_path("missing-before-network");
+        remove_if_present(&output_path);
+        remove_if_present(&missing_path);
+        remove_dir_if_present(&missing_path);
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+                missing_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("missing input is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot stat file {}", missing_path.display())));
+        assert!(output_path.exists());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        remove_if_present(&output_path);
+    }
+
+    #[test]
+    fn output_close_failure_uses_c_outclose_diagnostic() {
+        let _guard = global_state_lock();
+        let mut stream = Duplex::new(&["ready", "result"]);
+        let mut stdout = FlushFailWriter;
+
+        let error =
+            execute_protocol_and_flush_output(None, &mut stdout, &mut stream, "cnf(c,axiom,p).\n")
+                .expect_err("flush failure is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
     }
 
     #[test]
