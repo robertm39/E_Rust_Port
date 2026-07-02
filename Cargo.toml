@@ -78,6 +78,10 @@ name = "enormalizer"
 path = "src/bin/enormalizer.rs"
 
 [[bin]]
+name = "epatternize"
+path = "src/bin/epatternize.rs"
+
+[[bin]]
 name = "ekb_create"
 path = "src/bin/ekb_create.rs"
 

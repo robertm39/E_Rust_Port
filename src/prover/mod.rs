@@ -13,6 +13,7 @@ pub mod ekb_delete;
 pub mod ekb_ginsert;
 pub mod ekb_insert;
 pub mod enormalizer;
+pub mod epatternize;
 pub mod epclanalyse;
 pub mod epclextract;
 pub mod epcllemma;

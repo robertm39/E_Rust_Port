@@ -779,6 +779,38 @@ Change-later notes:
 - C silently does nothing when no target file is supplied. Rust preserves that no-output execution path; a user-facing normalization tool should probably require at least one of `--terms`, `--clauses`, or `--formulas` outside compatibility mode.
 - C allocates dummy clause/formula/watchlist containers and runs the broad formula preprocessing/CNF bridge just to harvest rewrite rules. Rust routes rule files through the existing shared parser bridge; a cleaned API should expose a direct rewrite-rule loader once formula ownership is stable.
 
+## epatternize Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/epatternize.rs`
+- `src/bin/epatternize.rs`
+
+C source references:
+
+- `eprover/PROVER/epatternize.c`
+- `eprover/LEARN/cle_patterns.c`
+- `eprover/LEARN/cle_clauseenc.c`
+- `eprover/CLAUSES/ccl_formulafunc.c`
+
+Implemented:
+
+- Standalone `epatternize` binary registration and wrapper, including C-shaped help text with the historical `Usage: classify_problem` typo, long-only `--version`, verbosity parsing, output-file redirection, default stdin input through `-`, LOP/TPTP/TSTP parse-format options and TPTP3 aliases, exact C mask-length validation for `--class-mask` and `--raw-mask`, `--free-numbers`/`--free-objects` proof-state signature policy, explicit `--sine` filtering through the shared SInE helper, and acceptance/validation for the classification and preprocessing options parsed by the C source.
+- Pattern output for supported clause/formula parser fragments: the executable parses each input file through the shared clause/formula bridge, accumulates axioms in a `ProofState`, computes `PatternClauseCompute`-compatible literal order through the ported pattern helper, initializes flat clause-encoding special symbols before substitution snapshots, flat-encodes the clause-list representation, and prints `PatternTermPrint`-compatible pattern terms. Unit coverage locks option quirks, stdin/file output paths, `NoSInE`, and exact single-clause output such as `$or1($eq(f1_1(f0_1),$true))`.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `epatternize` executable remains pending for malformed-input diagnostics, include handling, branch-limit skipped-clause behavior, output-close behavior, and larger mixed formula/clause corpora.
+- Exact replay of the C `FormulaSetPreprocConjectures` plus `FormulaSetCNF2` owner pipeline remains pending. The Rust executable currently uses the shared parse-only clause/formula bridge, so parsed `--definitional-cnf`, `--miniscope-limit`, `--no-preprocessing`, and equation-unfolding options are accepted/validated but not wired into an executable-local formula-set preprocessing pass.
+
+Change-later notes:
+
+- `epatternize.c` copies a large classification option surface, but `main()` never branches on `parse_features`, `raw_classify`, `specsig_classify`, `tptp_header`, the class masks, or the parsed classification limits. Rust preserves these as accepted compatibility options; a cleaned tool should remove them or split patternization from classification.
+- C parses `--no-preprocessing`, equation-unfolding controls, and formula-CNF limits, but its visible main path still unconditionally runs formula conjecture preprocessing and CNF conversion, then never calls clause preprocessing/equational unfolding. The Rust wrapper keeps the options visible while exact FormulaSet-level replay is deferred.
+- The help text names `classify_problem`, not `epatternize`. Rust preserves the typo; shared support-tool help generation should only replace it outside drop-in compatibility mode.
+- C allocates one `PatternSubst` per file and backtracks it to zero for every clause, while flat clause encoding can introduce signature specials during printing. Rust pre-initializes the needed flat-encoding symbols before taking each substitution snapshot; keep this ordering explicit if the pattern/encoding APIs are later merged.
+
 ## LTB Batch Specification Surface
 
 Rust files:
