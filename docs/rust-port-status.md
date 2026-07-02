@@ -638,11 +638,11 @@ C source references:
 
 Implemented:
 
-- Standalone `checkproof` binary integration over the ported PCL2 full-protocol and proof-checking modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, prover-type, executable, and prover CPU-limit options, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, signal setup for temp-file cleanup compatibility, external prover dispatch through E/Otter/SPASS command shapes, `scheme-setheo` unchecked behavior, warning output, explicit stdout/file routing, final verification summary, and unit coverage for assumption-only verification, unchecked partial verification, silent mode, output files, option compatibility, verbosity side effect, invalid prover diagnostics, and trailing-token diagnostics.
+- Standalone `checkproof` binary integration over the ported PCL2 full-protocol and proof-checking modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, prover-type, executable, and prover CPU-limit options, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, signal setup for temp-file cleanup compatibility, external prover dispatch through E/Otter/SPASS command shapes, `scheme-setheo` unchecked behavior, warning output, explicit stdout/file routing including `-o -`, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, final verification summary, and unit coverage for assumption-only verification, unchecked partial verification, silent mode, output files, option compatibility, verbosity side effect, invalid prover diagnostics, trailing-token diagnostics, and diagnostic edge cases.
 
 Pending:
 
-- Byte-for-byte comparison against a built C `checkproof` executable remains pending for real E/Otter/SPASS subprocess success and failure traces, full-FOF warning routing, compressed/shell UPCL2 inputs, exact temporary-file diagnostics, platform-specific command rendering, and broken-pipe/output-close behavior.
+- Byte-for-byte comparison against a built C `checkproof` executable remains pending for real E/Otter/SPASS subprocess success and failure traces, full-FOF warning routing, compressed/shell UPCL2 inputs, exact temporary-file diagnostics, platform-specific command rendering, and platform-specific file/broken-pipe suffixes.
 
 Change-later notes:
 
@@ -651,6 +651,7 @@ Change-later notes:
 - C prover selection mutates global output-format and equation-printing flags for Otter/SPASS. Rust keeps those effects localized in proof-check rendering helpers; revisit if a shared Rust global output-format surface is introduced.
 - `scheme-setheo` remains accepted but unimplemented, matching C proof-check behavior. A cleaned CLI should mark it deprecated only after drop-in compatibility is secured.
 - C relies on process-global signal handlers and temporary-file cleanup for proof-check subprocesses. Rust additionally removes each temporary problem file at the run boundary; a later process-owner abstraction could make that cleanup lifecycle explicit.
+- C calls `OpenGlobalOut(outname)` before inserting the default `-` input and before opening or parsing proof files, so `-o` can create or truncate an output file even when a later input step fails. Rust preserves this ordering for compatibility; transactional output should be a separate cleaned mode.
 
 ## epcllemma Executable
 

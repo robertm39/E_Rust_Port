@@ -88,7 +88,7 @@ Source files reviewed: `PROVER/checkproof.c`.
 
 ### Rust Port Notes
 
-- `src/prover/checkproof.rs` and `src/bin/checkproof.rs` port the standalone `checkproof` executable over the existing Rust PCL2 proof-checking core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file`, `-s`/`--silent`, `-l`/`--output-level`, `-p`/`--prover-type`, `-x`/`--executable`, `-t`/`--prover-cpu-limit`, default stdin input through `-`, TPTP-format UPCL2 parsing, strict end-of-input checks, external-prover verification dispatch, warning output, and the C-shaped final verification summary.
+- `src/prover/checkproof.rs` and `src/bin/checkproof.rs` port the standalone `checkproof` executable over the existing Rust PCL2 proof-checking core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file` including `-o -`, `-s`/`--silent`, `-l`/`--output-level`, `-p`/`--prover-type`, `-x`/`--executable`, `-t`/`--prover-cpu-limit`, default stdin input through `-`, TPTP-format UPCL2 parsing, strict end-of-input checks, external-prover verification dispatch, warning output, C-shaped file-open and output-close diagnostics, and the C-shaped final verification summary.
 
 ### Change Later
 
@@ -97,6 +97,7 @@ Source files reviewed: `PROVER/checkproof.c`.
 - The C executable mutates global `OutputFormat`, `EqnUseInfix`, and `ClausesHaveLocalVariables` while selecting Otter/SPASS checking. Rust keeps those effects localized in explicit proof-check rendering/parsing paths; audit again if shared global output-format state becomes part of the public Rust API.
 - `scheme-setheo` is accepted by C but verification is not implemented in `pcl_proofcheck`. Rust preserves it as an unchecked prover type; remove or rename only after compatibility mode can report deprecated options.
 - C installs SIGTERM/SIGINT handlers mainly to clean temporary prover problem files. Rust uses owned temporary-file registration/removal around each prover run and still sets the equivalent handlers for executable compatibility; a later process-management layer could make cleanup ownership explicit and avoid global signal setup in library-facing paths.
+- `main()` calls `OpenGlobalOut(outname)` before inserting the default `-` argument and before scanner creation, so output redirection can create or truncate a file even if proof input later fails. Rust keeps this side effect for compatibility; a future user-facing mode could delay or atomically commit output.
 
 ### Porting Focus
 
