@@ -94,10 +94,19 @@ Source files reviewed: `PROVER/enormalizer.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `src/prover/enormalizer.rs` and `src/bin/enormalizer.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin rule file, LOP/TPTP/TSTP parse/print aliases, left-to-right demodulator orientation, non-rule warnings, term/clause/formula normalization, output-file routing, resource-limit parsing, and resource-usage printing.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `--print-statistics`, `print_result`, `app_encode`, `give_up`, `initial_literals`, and `initial_clauses` are parsed or initialized but not used by `enormalizer.c`. Rust accepts the visible flag as a no-op for compatibility; a cleaned CLI should either remove these surfaces or attach real behavior.
+- If no positional rule files are provided, C inserts `"-"` as the rule source. Target options can also use `-`, so some option combinations compete for stdin and depend on read order. A modernized mode should reject ambiguous stdin use.
+- `build_rw_system()` treats any positive unit as a demodulator and force-sets `EPIsOriented` in the natural left-to-right direction, independent of ordering. Keep this for compatibility, but a future rewrite-rule API should make trusted orientation explicit.
+- Missing `--terms`, `--clauses`, and `--formulas` targets are not an error; the program can parse rules and exit without normalizing anything. A user-facing cleanup should require at least one target outside drop-in compatibility mode.
+- The C driver allocates dummy clause/formula containers and runs the broad `FormulaAndClauseSetParse`/preprocess/CNF path to extract rewrite rules. Once formula ownership is stable, a direct rewrite-rule loader would make this boundary clearer.
 <!-- END MANUAL REVIEW: c_source_docs -->

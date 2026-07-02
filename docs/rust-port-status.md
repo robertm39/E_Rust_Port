@@ -747,6 +747,38 @@ Change-later notes:
 - C's `--version` reports `classify_problem VERSION`, not `edpll VERSION`. Rust keeps the typo for drop-in compatibility; modernized support tools should share a consistent version helper only outside compatibility mode.
 - The executable duplicates resource-limit options from larger prover tools despite doing no search. A cleaned implementation should share `eprover`'s resource-limit/warning pipeline or drop those options after compatibility requirements are clear.
 
+## enormalizer Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/enormalizer.rs`
+- `src/bin/enormalizer.rs`
+
+C source references:
+
+- `eprover/PROVER/enormalizer.c`
+- `eprover/CLAUSES/ccl_rewrite.c`
+- `eprover/CLAUSES/ccl_clausefunc.c`
+- `eprover/CLAUSES/ccl_formulafunc.c`
+
+Implemented:
+
+- Standalone `enormalizer` binary integration over the ported term-bank, clause parser, formula parser/renderer, clause-set parser bridge, and leftmost-innermost rewrite helpers, including C-shaped help, long-only `--version`, verbosity, term/clause/formula target options, output-file, silent/output-level, LOP/TPTP/TSTP parse and print aliases, memory/CPU option parsing, default stdin rule file through `-`, rule-file parsing through the shared clause/formula-to-clause bridge, non-demodulator warnings, left-to-right demodulator orientation, term/clause/formula normalization, resource-usage output, and unit coverage for option compatibility, term normalization, clause normalization, formula normalization, ignored non-rule warnings, output files, and default rule input.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `enormalizer` executable remains pending for exact malformed-input diagnostics, include handling across multiple stdin consumers, old-TPTP formula records, output-close behavior, and resource-limit warning/failure behavior.
+- Formula target parsing currently uses the ported term-formula parser and skips TSTP type-declaration records before normalizing later formulas. Exact `WFormulaParse` parity for every accepted TPTP/TSTP record shape should be revisited after full formula ownership and parser coverage land.
+
+Change-later notes:
+
+- C inserts `"-"` as a default rule file when no positional rule file is supplied, while `--terms=-`, `--clauses=-`, or `--formulas=-` may also request stdin. This can make option combinations compete for one input stream. Rust preserves the same single-stream shape; a modernized CLI should reject ambiguous stdin consumers or require explicit sections.
+- C's `--print-statistics`, `print_result`, `app_encode`, `give_up`, `initial_literals`, and `initial_clauses` variables are dead in this executable. Rust accepts `--print-statistics` as a no-op for compatibility; a cleaned CLI should remove or wire these surfaces deliberately.
+- `build_rw_system()` accepts every positive unit clause as a rewrite rule and force-marks all literals oriented left-to-right without consulting the ordering. Rust preserves that behavior; a future explicit rewrite-rule importer should distinguish "trusted rule direction" from "ordered demodulator" construction.
+- C silently does nothing when no target file is supplied. Rust preserves that no-output execution path; a user-facing normalization tool should probably require at least one of `--terms`, `--clauses`, or `--formulas` outside compatibility mode.
+- C allocates dummy clause/formula/watchlist containers and runs the broad formula preprocessing/CNF bridge just to harvest rewrite rules. Rust routes rule files through the existing shared parser bridge; a cleaned API should expose a direct rewrite-rule loader once formula ownership is stable.
+
 ## LTB Batch Specification Surface
 
 Rust files:
