@@ -7765,7 +7765,7 @@ fn count_in_range(count: usize, min: i64, max: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_terms, compute_ext_eq_fact, compute_ext_eq_res, compute_ext_sup,
+        apply_terms, close_with_db_var, compute_ext_eq_fact, compute_ext_eq_res, compute_ext_sup,
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
         proof_control_alloc, proof_control_clause_set_filter_reweigth,
         proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
@@ -9307,9 +9307,12 @@ mod tests {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
         let mut clause = {
             let terms = state.terms_mut();
-            let predicate = unary_predicate_var(terms, -4_092);
+            let binder_type = terms.signature().type_bank().default_type();
+            let body = terms.true_term().clone();
+            let lambda =
+                close_with_db_var(terms, &binder_type, &body).unwrap_or_else(|err| panic!("{err}"));
             let arg = typed_const(terms, "pc_ho_order_lambda_app_arg");
-            let applied = apply_terms(terms, &predicate, std::slice::from_ref(&arg))
+            let applied = apply_terms(terms, &lambda, std::slice::from_ref(&arg))
                 .unwrap_or_else(|err| panic!("{err}"));
             let truth = terms.true_term().clone();
             Clause::alloc(EqnList::from_vec(vec![literal(
