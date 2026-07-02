@@ -46,6 +46,10 @@ name = "edpll"
 path = "src/bin/edpll.rs"
 
 [[bin]]
+name = "eground"
+path = "src/bin/eground.rs"
+
+[[bin]]
 name = "classify_problem"
 path = "src/bin/classify_problem.rs"
 

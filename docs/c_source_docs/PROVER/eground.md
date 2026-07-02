@@ -91,6 +91,15 @@ Source files reviewed: `PROVER/eground.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- `--miniscope-limit` is parsed into `miniscope_limit`, and the help advertises a default of 1000, but `main()` passes the hard-coded value `1048576` to `FormulaSetCNF2`. Keep this as a compatibility quirk until exact formula-set clausification is ported, then decide whether the option should actually control the call.
+- `--local-constraints` sets `constraints`, `local_constraints`, `ClausesHaveDisjointVariables`, and `ClausesHaveLocalVariables`, but `local_constraints` is not read later in this file. Revisit whether the global clause-variable flags are still needed once the parser and grounding state have explicit Rust ownership.
+- `app_encode` is initialized but unused. Remove it only after the executable option surface and any historical scripts depending on it are audited.
+- DIMACS output goes through `GroundSetPrintDimacs`, which delegates non-empty non-unit clause literal printing to `ClausePrintDimacs`; that helper writes literal integers to `stdout` while writing only terminators to the passed `FILE* out`. This is surprising for `--output-file` and should be cleaned only outside drop-in compatibility mode.
+- Equational clauses are recoded into predicate literals after a warning, shifting equality semantics onto explicit equality axioms supplied by the user. Keep the warning/output order for compatibility, but consider a clearer user-facing mode after parity.
+- The completion-status switch handles complete, low-memory, and timeout, then asserts on any unknown state. Release builds may not surface a helpful diagnostic for impossible states; a modernized path should use an explicit error or internal invariant check.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

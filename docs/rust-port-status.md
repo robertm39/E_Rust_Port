@@ -747,6 +747,40 @@ Change-later notes:
 - C's `--version` reports `classify_problem VERSION`, not `edpll VERSION`. Rust keeps the typo for drop-in compatibility; modernized support tools should share a consistent version helper only outside compatibility mode.
 - The executable duplicates resource-limit options from larger prover tools despite doing no search. A cleaned implementation should share `eprover`'s resource-limit/warning pipeline or drop those options after compatibility requirements are clear.
 
+## eground Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/eground.rs`
+- `src/bin/eground.rs`
+
+C source references:
+
+- `eprover/PROVER/eground.c`
+- `eprover/CLAUSES/ccl_grounding.c`
+- `eprover/CLAUSES/ccl_splitting.c`
+- `eprover/HEURISTICS/che_clausesetfeatures.c`
+
+Implemented:
+
+- Standalone `eground` binary registration and wrapper over the ported parser bridge, clause-set cleanup, feature extraction, equality-literal recoding, optional splitting, finite-Herbrand-universe guard, ground-instance generation, constrained instance generation, add-one-instance retry, DIMACS/LOP/TPTP/TSTP rendering, output-file routing, resource options, and statistics/resource-report output.
+- C-shaped option surface for help/version, verbosity/output level, parse/print/format aliases, `--dimacs`, `--definitional-cnf`, `--miniscope-limit`, `--split-tries`, unit-subsumption/unit-resolution/tautology toggles, memory/CPU limits, `--add-one-instance`, `--give-up`, `--constraints`, `--local-constraints`, `--fix-minisat`, default stdin input through `-`, and output format auto-upgrade to TSTP for TSTP-detected auto input.
+- Unit coverage for help/version text, option defaults and aliases, negative split validation, stdin grounding, DIMACS header/result output, suppressed result with statistics, output-file routing, and rejection of non-ground inputs with non-constant functions.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `eground` executable remains pending for malformed-input diagnostics, include handling, formula-owner preprocessing/CNF parity, exact progress-output timing, resource-limit stop behavior, and DIMACS file-output stream leaks.
+- The Rust executable currently uses the shared parse-only clause/formula bridge instead of replaying `FormulaSetPreprocConjectures` plus `FormulaSetCNF2` with executable-local ownership. Parsed `--definitional-cnf` is stored for compatibility, while exact formula-set clausification control remains deferred until the full formula-owner pipeline is available.
+
+Change-later notes:
+
+- C parses `--miniscope-limit` into `miniscope_limit`, but the main CNF call passes a hard-coded `1048576` miniscope limit. Rust accepts and validates the option as a compatibility no-op until exact formula-set CNF replay is wired in.
+- `--local-constraints` sets `constraints`, `local_constraints`, and two global clause-variable-shape flags, but `local_constraints` is never read by `eground.c` afterward. Rust preserves the observable constrained-grounding path and should revisit the global flag side effects once parser/grounding shared state is modeled explicitly.
+- DIMACS output inherits `ccl_grounding.c`'s split-stream behavior: non-empty non-unit clause literals are written to `stdout` even when the passed `FILE* out` is the global output file. Rust preserves that path for file output through explicit split writers; a cleaned DIMACS renderer should use a single destination outside compatibility mode.
+- Equational inputs are recoded into predicate literals after a warning, so users must provide equality axioms separately. This is visible compatibility behavior, but a future UX pass should consider making the semantic shift harder to miss.
+- If grounding leaves an unrecognized completion state, C falls through to `assert(false && "Unknown incompleteness?!?")`. Rust reports a generic incomplete message for the extra internal `Unknown` state; exact release-mode C behavior should be checked before deciding whether to expose or eliminate this fallback.
+
 ## enormalizer Executable
 
 Rust files:
