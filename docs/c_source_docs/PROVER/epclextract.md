@@ -90,6 +90,16 @@ Source files reviewed: `PROVER/epclextract.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/epclextract.rs` and `src/bin/epclextract.rs` port the standalone `epclextract` executable over the existing Rust PCL2 full and mini protocol owners. The port covers `-h`/`--help`, `-V`/`--version`, `-v`/`--verbose`, `-f`/`--fast-extract`, `-C`/`--forward-comments`, `-c`/`--competition-framing`, `-n`/`--no-extract`, `--tstp-out`, `--tptp3-out`, `-o`/`--output-file`, and `-s`/`--silent`; default stdin input through `-`; TPTP-format PCL parsing; end-of-input checking; full-protocol recursive proof-step marking; mini-protocol fast suffix marking; optional comment forwarding before proof-clause output; PCL/TSTP proof-clause printing; and C-shaped SZS framing text, including the missing period after the closing `CNFRefutation` line.
+
+### Change Later
+
+- The C `FAST_EXIT` compile-time branch skips protocol freeing, `CLStateFree`, output close, and `ExitIO` by calling `exit(0)` immediately after printing. Rust always flushes and unwinds owned state; only add a compatibility knob if a build profile proves that early-exit performance or leak behavior matters.
+- `--silent` sets C's global `OutputLevel` to `0`, but this executable's main extraction output is not level-gated. Rust accepts the option as a no-op for command-line compatibility; a later cleaned interface can remove or document it if no shared output layer needs the side effect.
+- `--fast-extract` relies on the C mini-protocol assumption that all `proof`/`final`/`extract` seeds are a contiguous suffix of the positive numeric id range. Rust preserves that suffix behavior in the mini-protocol path; do not broaden it to a full scan without reference tests because it changes which proof steps are emitted.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

@@ -448,6 +448,32 @@ Change-later notes:
 
 - The C `com` probe reads a second argument from a child whose arity was just checked to be one. Rust does not reproduce that undefined memory access; decide later whether to remove the flag, preserve the safe false result, or implement the likely intended first-child comparison behind compatibility tests.
 
+## epclextract Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/epclextract.rs`
+- `src/bin/epclextract.rs`
+
+C source references:
+
+- `eprover/PROVER/epclextract.c`
+
+Implemented:
+
+- Standalone `epclextract` binary integration over the ported PCL2 protocol owners, including C-shaped help/version/verbosity/output options, full and fast extraction modes, comment forwarding, competition SZS framing, no-extract syntax-check/printing mode, `--tstp-out`/`--tptp3-out`, default stdin input through `-`, explicit output-file routing, TPTP-format PCL parsing, end-of-input checks, recursive full-protocol proof-step marking, mini-protocol contiguous-suffix fast proof marking, PCL/TSTP selected-step printing, and unit coverage for stdin, file output, comments, TSTP aliasing, framing, fast extraction, and trailing-token diagnostics.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `epclextract` executable remains pending for shell PCL, formula-valued PCL steps, multi-file comment interleaving, exact file/open close diagnostics, and platform-specific broken-pipe behavior.
+
+Change-later notes:
+
+- C's optional `FAST_EXIT` build path exits immediately after printing and skips ordinary cleanup and output close. Rust always flushes and drops owned protocol state; only add an early-exit compatibility mode if a C reference build demonstrates observable performance or diagnostics differences.
+- `--silent` mutates C's global `OutputLevel`, but the extraction output in this executable is not level-gated. Rust accepts it as a no-op for command-line compatibility; revisit only if shared PCL warning/output plumbing gains observable level handling.
+- The fast mini-protocol path intentionally trusts C's contiguous proof/final/extract suffix assumption instead of scanning every step. Preserve this until reference traces prove users expect the more complete slow extraction semantics under `--fast-extract`.
+
 ## LTB Batch Specification Surface
 
 Rust files:
