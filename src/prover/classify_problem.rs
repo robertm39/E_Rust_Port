@@ -1,13 +1,15 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::proofstate::{proof_state_alloc, ProofState};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, spec_features_add_eval, spec_features_parse,
     spec_features_print_string, spec_type_print_string, SpecFeatureCell, SpecLimits,
 };
 use crate::heuristics::rawspecfeatures::{
-    raw_spec_features_classify, raw_spec_features_format, raw_spec_features_parse,
-    RawSpecFeatureCell,
+    raw_spec_features_classify, raw_spec_features_compute, raw_spec_features_format,
+    raw_spec_features_parse, RawSpecFeatureCell,
 };
 use crate::inout::basicparser::parse_plain_filename;
 use crate::inout::commandline::{
@@ -15,7 +17,13 @@ use crate::inout::commandline::{
 };
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::prover::eprover::{
+    apply_proof_state_sine_silent, parse_clause_scanner_into_sets, FoolUnroll, FormulaPreprocessing,
+};
 use crate::prover::version::{E_URL, STS_MAIL, VERSION};
+use crate::terms::signature::{
+    FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
+};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -571,6 +579,7 @@ struct ClassifyProblemConfig {
     miniscope_limit: i64,
     formula_def_limit: i64,
     cnf_timeout: Option<i64>,
+    free_symbol_properties: FunctionProperties,
     files: Vec<String>,
     limits: SpecLimits,
 }
@@ -593,6 +602,7 @@ impl Default for ClassifyProblemConfig {
             miniscope_limit: MINISCOPE_LIMIT_DEFAULT,
             formula_def_limit: FORMULA_DEF_LIMIT_DEFAULT,
             cnf_timeout: None,
+            free_symbol_properties: FP_IGNORE_PROPS,
             files: Vec::new(),
             limits: create_default_spec_limits(),
         }
@@ -686,11 +696,13 @@ where
             OptionCode::TptpParse | OptionCode::TptpFormat => {
                 config.parse_format = IoFormat::Tptp;
             }
-            OptionCode::TptpPrint
-            | OptionCode::TstpPrint
-            | OptionCode::FreeNumbers
-            | OptionCode::FreeObjects
-            | OptionCode::OldCnf => {}
+            OptionCode::TptpPrint | OptionCode::TstpPrint | OptionCode::OldCnf => {}
+            OptionCode::FreeNumbers => {
+                config.free_symbol_properties |= FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT;
+            }
+            OptionCode::FreeObjects => {
+                config.free_symbol_properties |= FP_IS_OBJECT;
+            }
             OptionCode::TstpParse | OptionCode::TstpFormat => config.parse_format = IoFormat::Tstp,
             OptionCode::RawClass => config.raw_classify = true,
             OptionCode::SpecSigFeatures => config.specsig_classify = true,
@@ -835,9 +847,23 @@ fn execute_classify_problem(
         return Ok(0);
     }
 
+    if config.cnf_timeout.is_some() {
+        return Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "classify_problem merged real-input classification is not ported yet",
+        ));
+    }
+    if config.raw_classify {
+        process_raw_real_input_files(config, stdin, &mut output)?;
+        output
+            .flush()
+            .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
+        return Ok(0);
+    }
+
     Err(Diagnostic::new(
         ErrorCode::OTHER_ERROR,
-        "classify_problem real problem classification is not ported yet; use --parse-features for the ported feature-line path",
+        "classify_problem non-raw real problem classification is not ported yet; use --raw-class or --parse-features for the ported paths",
     ))
 }
 
@@ -885,6 +911,57 @@ fn process_raw_feature_files(
     Ok(())
 }
 
+fn process_raw_real_input_files(
+    config: &ClassifyProblemConfig,
+    stdin: &mut impl Read,
+    output: &mut impl Write,
+) -> Result<(), Diagnostic> {
+    for file in &config.files {
+        let mut state = proof_state_alloc(config.free_symbol_properties)?;
+        parse_real_input_file(config, file, stdin, &mut state)?;
+        apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
+        let mut features = RawSpecFeatureCell::default();
+        raw_spec_features_compute(&mut features, &state);
+        raw_spec_features_classify(&mut features, &config.limits, Some(&config.raw_mask));
+        write_all(output, file.as_bytes())?;
+        write_all(output, b" : ")?;
+        write_all(output, raw_spec_features_format(&features).as_bytes())?;
+        write_all(output, b"\n")?;
+    }
+    Ok(())
+}
+
+fn parse_real_input_file(
+    config: &ClassifyProblemConfig,
+    file: &str,
+    stdin: &mut impl Read,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let mut scanner = real_input_scanner(file, stdin)?;
+    let mut parsed = ClauseSet::new();
+    let mut parsed_watchlist = ClauseSet::new();
+    let parsed_file = parse_clause_scanner_into_sets(
+        &mut scanner,
+        config.parse_format,
+        FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
+        state.terms_mut(),
+        &mut parsed,
+        &mut parsed_watchlist,
+    )?;
+    state.add_raw_formula_features(parsed_file.raw_formula_features);
+    state.axioms_mut().insert_set(&mut parsed);
+    if !parsed_watchlist.is_empty() {
+        let watchlist = state.watchlist_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "Cannot store inline watchlist clauses after the watchlist has been disabled",
+            )
+        })?;
+        watchlist.insert_set(&mut parsed_watchlist);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct ParsedFeatureLine {
     name: String,
@@ -925,6 +1002,18 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
         Scanner::from_file_content("-", data, true)
     } else {
         Scanner::from_file(Path::new(name), true)
+    }
+}
+
+fn real_input_scanner(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagnostic> {
+    if name == "-" {
+        let mut data = Vec::new();
+        stdin
+            .read_to_end(&mut data)
+            .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
+        Scanner::from_file_content("-", data, false)
+    } else {
+        Scanner::from_file(Path::new(name), false)
     }
 }
 
@@ -1067,6 +1156,7 @@ mod tests {
     };
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::prover::version::VERSION;
+    use crate::terms::signature::{FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL};
     use crate::test_support::global_state_lock;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
@@ -1138,6 +1228,8 @@ mod tests {
                 "--raw-class",
                 "--verbose=2",
                 "--tstp-format",
+                "--free-numbers",
+                "--free-objects",
                 "--class-mask=aaaaaaaaaaaaa",
                 "--raw-mask=aaaaaaaaaaaaaaa",
                 "--ngu-absolute=false",
@@ -1160,6 +1252,7 @@ mod tests {
             parse_format,
             mask,
             raw_mask,
+            free_symbol_properties,
             files,
             limits,
             ..
@@ -1169,6 +1262,8 @@ mod tests {
         assert_eq!(parse_format, IoFormat::Tstp);
         assert_eq!(mask, "aaaaaaaaaaaaa");
         assert_eq!(raw_mask, "aaaaaaaaaaaaaaa");
+        assert!(free_symbol_properties
+            .contains_all(FP_IS_INTEGER | FP_IS_RATIONAL | FP_IS_FLOAT | FP_IS_OBJECT));
         assert_eq!(files, ["features.txt"]);
         assert!(!limits.ngu_absolute);
         assert!((limits.ngu_few_limit - 0.125).abs() < f64::EPSILON);
@@ -1319,12 +1414,34 @@ mod tests {
     }
 
     #[test]
-    fn real_problem_path_is_explicitly_pending() {
+    fn stdin_raw_class_parses_real_tstp_problem() {
         let _guard = global_state_lock();
-        let mut stdin = Cursor::new(b"p.".to_vec());
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) =
+            run_with_stdin(&[PROGRAM_NAME, "--raw-class", "--tstp-format"], input)
+                .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stdout.starts_with("- : ("));
+        assert!(stdout.ends_with('\n'));
+        assert!(stdout.contains(" : F"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn non_raw_real_problem_path_is_explicitly_pending() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"cnf(c1, axiom, (p(a))).\n".to_vec());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr).unwrap_err();
+        let error = run(
+            [PROGRAM_NAME, "--tstp-format"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
         assert!(error.message().contains("not ported yet"));

@@ -6550,24 +6550,52 @@ fn apply_proof_state_sine<W: Write + ?Sized>(
     configured_filter: Option<&str>,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
-    let Some(mut filter_name) = configured_filter else {
+    let Some(configured_filter) = configured_filter else {
         return Ok(0);
     };
-    if filter_name == "NoSInE" {
+    if configured_filter == "NoSInE" {
         return Ok(0);
     }
-    if filter_name == "Auto" {
-        let Some(auto_filter) = auto_sine_filter_name(state) else {
-            write_comment_line(output, "No SInE strategy applied")?;
-            return Ok(0);
-        };
-        filter_name = auto_filter;
-    }
+    let Some(filter_name) = proof_state_sine_filter_name(Some(configured_filter), state) else {
+        write_comment_line(output, "No SInE strategy applied")?;
+        return Ok(0);
+    };
 
     writeln!(
         output,
         "{DEFAULT_COMCHAR_RAW} SinE strategy is {filter_name}"
     )?;
+    Ok(apply_proof_state_sine_filter(filter_name, state)?)
+}
+
+pub(crate) fn apply_proof_state_sine_silent(
+    configured_filter: Option<&str>,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<i64, Diagnostic> {
+    let Some(filter_name) = proof_state_sine_filter_name(configured_filter, state) else {
+        return Ok(0);
+    };
+    apply_proof_state_sine_filter(filter_name, state)
+}
+
+fn proof_state_sine_filter_name<'a>(
+    configured_filter: Option<&'a str>,
+    state: &crate::clauses::proofstate::ProofState,
+) -> Option<&'a str> {
+    let filter_name = configured_filter?;
+    if filter_name == "NoSInE" {
+        None
+    } else if filter_name == "Auto" {
+        auto_sine_filter_name(state)
+    } else {
+        Some(filter_name)
+    }
+}
+
+fn apply_proof_state_sine_filter(
+    filter_name: &str,
+    state: &mut crate::clauses::proofstate::ProofState,
+) -> Result<i64, Diagnostic> {
     let resolution = sine_get_filter(filter_name)?;
     match resolution.filter().type_ {
         AxFilterType::Threshold => Ok(apply_threshold_sine_filter(
@@ -6579,8 +6607,7 @@ fn apply_proof_state_sine<W: Write + ?Sized>(
         AxFilterType::NoFilter => Err(Diagnostic::new(
             ErrorCode::OTHER_ERROR,
             "resolved SInE filter has no concrete type",
-        )
-        .into()),
+        )),
     }
 }
 
@@ -8467,7 +8494,6 @@ fn parse_clause_file(
     clauses: &mut ClauseSet,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
-    set_problem_type(ProblemType::FirstOrder)?;
     let mut scanner = if file == "-" {
         let mut input = Vec::new();
         io::stdin().read_to_end(&mut input).map_err(|error| {
@@ -8480,6 +8506,25 @@ fn parse_clause_file(
     } else {
         Scanner::from_file(Path::new(file), false)?
     };
+    parse_clause_scanner_into_sets(
+        &mut scanner,
+        parse_format,
+        formula_preprocessing,
+        bank,
+        clauses,
+        watchlist,
+    )
+}
+
+pub(crate) fn parse_clause_scanner_into_sets(
+    scanner: &mut Scanner,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
+    set_problem_type(ProblemType::FirstOrder)?;
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
     let start_clause_count = clauses.len();
@@ -8489,7 +8534,7 @@ fn parse_clause_file(
     match detected_format {
         IoFormat::Tstp => {
             let parsed = parse_tstp_entry_list(
-                &mut scanner,
+                scanner,
                 bank,
                 clauses,
                 watchlist,
@@ -8502,7 +8547,7 @@ fn parse_clause_file(
         }
         IoFormat::Tptp => {
             let parsed = parse_tptp_entry_list(
-                &mut scanner,
+                scanner,
                 bank,
                 clauses,
                 watchlist,
@@ -8514,7 +8559,7 @@ fn parse_clause_file(
             input_owner_seen = parsed.input_owner_seen;
         }
         _ => {
-            clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
+            clauses.parse_list(scanner, bank, ProblemType::FirstOrder)?;
             input_owner_seen = clauses.len() != start_clause_count;
         }
     }
@@ -8589,11 +8634,11 @@ fn parse_app_encode_file(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ParsedClauseFile {
-    detected_format: IoFormat,
-    input_owner_seen: bool,
-    formula_conjecture_seen: bool,
-    raw_formula_features: RawFormulaFeatures,
+pub(crate) struct ParsedClauseFile {
+    pub(crate) detected_format: IoFormat,
+    pub(crate) input_owner_seen: bool,
+    pub(crate) formula_conjecture_seen: bool,
+    pub(crate) raw_formula_features: RawFormulaFeatures,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -8983,7 +9028,7 @@ struct SimpleFofBoundVariable {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FormulaPreprocessing {
+pub(crate) struct FormulaPreprocessing {
     annotate_questions: bool,
     add_answer_literals: bool,
     conjectures_are_questions: bool,
@@ -8991,6 +9036,15 @@ struct FormulaPreprocessing {
 }
 
 impl FormulaPreprocessing {
+    pub(crate) const fn parse_only(fool_unroll: FoolUnroll) -> Self {
+        Self {
+            annotate_questions: false,
+            add_answer_literals: false,
+            conjectures_are_questions: false,
+            fool_unroll,
+        }
+    }
+
     fn from_config(config: &EProverConfig) -> Self {
         Self {
             annotate_questions: true,
@@ -9001,12 +9055,7 @@ impl FormulaPreprocessing {
     }
 
     fn parse_only_from_config(config: &EProverConfig) -> Self {
-        Self {
-            annotate_questions: false,
-            add_answer_literals: false,
-            conjectures_are_questions: false,
-            fool_unroll: config.preprocessing.fool_unroll,
-        }
+        Self::parse_only(config.preprocessing.fool_unroll)
     }
 
     fn fool_unroll_enabled(self) -> bool {
