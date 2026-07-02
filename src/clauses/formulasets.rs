@@ -1064,7 +1064,7 @@ impl WrappedFormula {
     ///
     /// C calls `TFormulaSimplify` with a quantifier-optimization limit of zero.
     /// The staged Rust wrapper updates the formula term and reports whether it
-    /// changed; the `DCFofSimplify` stack push remains staged result metadata.
+    /// changed while pushing `DCFofSimplify` onto the formula derivation stack.
     ///
     /// # Errors
     ///
@@ -1082,6 +1082,7 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(simplified);
+        self.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
         Ok(true)
     }
 
@@ -1109,6 +1110,7 @@ impl WrappedFormula {
         )?;
         self.set_formula(negated);
         self.set_tptp_type(CP_TYPE_NEG_CONJECTURE);
+        self.push_formula_derivation(DC_NEGATE_CONJECTURE, None, None);
         Ok(true)
     }
 
@@ -1142,6 +1144,7 @@ impl WrappedFormula {
             self.set_formula(annotated);
         }
         self.set_tptp_type(CP_TYPE_CONJECTURE);
+        self.push_formula_derivation(DC_ANNO_QUESTION, None, None);
         Ok(true)
     }
 
@@ -1165,6 +1168,7 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(replaced);
+        self.push_formula_derivation(DC_EQ_TO_EQ, None, None);
         Ok(true)
     }
 
@@ -1188,6 +1192,9 @@ impl WrappedFormula {
         let result = tformula_unroll_fool_result(bank, self.formula())?;
         if result.formula() != self.formula() {
             self.set_formula(result.formula().clone());
+        }
+        if result.fool_unrolled() {
+            self.push_formula_derivation(DC_FOOL_UNROLL, None, None);
         }
         Ok(result.fool_unrolled())
     }
@@ -1213,6 +1220,7 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(converted);
+        self.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
         Ok(true)
     }
 
@@ -1233,6 +1241,7 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(lifted);
+        self.push_formula_derivation(DC_LIFT_ITE, None, None);
         Ok(true)
     }
 
@@ -1286,6 +1295,7 @@ impl WrappedFormula {
             return Ok(false);
         }
         self.set_formula(normalized);
+        self.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
         Ok(true)
     }
 
@@ -2119,9 +2129,8 @@ impl FormulaSet {
     /// without the optional term-bank garbage collection side effect.
     ///
     /// This stages the mutating simplification and changed-count behavior.
-    /// Changed formulas are represented by `DCFofSimplify` opcodes in the
-    /// result metadata; the formula derivation stack remains deferred until
-    /// formula owners are ported.
+    /// Changed formulas receive `DCFofSimplify` stack entries and are also
+    /// represented by opcodes in the result metadata.
     ///
     /// # Errors
     ///
@@ -2140,10 +2149,10 @@ impl FormulaSet {
     /// Applies C `FormulaSetSimplify` to each formula in insertion order.
     ///
     /// When `do_garbage_collect` is true, this mirrors C's thresholded
-    /// `TBGCCollect` checks using this set as the formula root set. Formula
-    /// derivation stacks and proof-document output remain deferred; changed
-    /// formulas are represented by `DCFofSimplify` opcodes in the result
-    /// metadata.
+    /// `TBGCCollect` checks using this set as the formula root set. Changed
+    /// formulas receive `DCFofSimplify` stack entries and are also represented
+    /// by opcodes in the result metadata; proof-document output remains
+    /// deferred.
     ///
     /// # Errors
     ///
@@ -2188,9 +2197,9 @@ impl FormulaSet {
     /// Applies C `FormulaSetPreprocConjectures` in insertion order.
     ///
     /// Each formula is first annotated as a question when applicable, then
-    /// conjectures are negated. Formula-level derivation storage is deferred, so
-    /// this returns the C derivation opcodes that should be attached by a future
-    /// owner.
+    /// conjectures are negated. Mutated formulas receive the corresponding
+    /// formula-owned derivation entries and this also returns the C derivation
+    /// opcodes as result metadata.
     ///
     /// # Errors
     ///
@@ -2223,9 +2232,9 @@ impl FormulaSet {
     /// Applies C `WFormulaSetUnrollFOOL` in insertion order.
     ///
     /// Each formula first runs `WFormulaReplaceEqnWithEquiv`, then
-    /// `TFormulaUnrollFOOL`. Formula-level derivation storage is deferred, so
-    /// this returns the C derivation opcodes that should be attached by a future
-    /// owner.
+    /// `TFormulaUnrollFOOL`. Mutated formulas receive the corresponding
+    /// formula-owned derivation entries and this also returns the C derivation
+    /// opcodes as result metadata.
     ///
     /// # Errors
     ///
@@ -2257,9 +2266,9 @@ impl FormulaSet {
     /// Applies C `TFormulaSetNamedToDBLambdas` in insertion order.
     ///
     /// This is gated to higher-order problems, matching the `FormulaSetCNF2`
-    /// `ENABLE_LFHO` branch. Formula-level derivation storage and proof output
-    /// are deferred, so this returns the `DCFofSimplify` opcodes that should be
-    /// attached by a future owner.
+    /// `ENABLE_LFHO` branch. Changed formulas receive `DCFofSimplify` stack
+    /// entries and this also returns the opcodes as result metadata; proof
+    /// output remains deferred.
     ///
     /// # Errors
     ///
@@ -2291,9 +2300,9 @@ impl FormulaSet {
     /// Applies C `TFormulaSetLiftItes` in insertion order.
     ///
     /// This is gated to higher-order problems, matching the `FormulaSetCNF2`
-    /// `ENABLE_LFHO` branch. Formula-level derivation storage and proof output
-    /// are deferred, so this returns the `DCLiftIte` opcodes that should be
-    /// attached by a future owner.
+    /// `ENABLE_LFHO` branch. Changed formulas receive `DCLiftIte` stack entries
+    /// and this also returns the opcodes as result metadata; proof output
+    /// remains deferred.
     ///
     /// # Errors
     ///
@@ -2547,9 +2556,9 @@ impl FormulaSet {
     /// Applies C `TFormulaSetLambdaNormalize` in insertion order.
     ///
     /// This is gated to higher-order problems and mirrors C's
-    /// `BetaNormalizeDB` followed by `LambdaToForall`. Formula-level
-    /// derivation storage and proof output are deferred, so this returns the
-    /// `DCFofSimplify` opcodes that should be attached by a future owner.
+    /// `BetaNormalizeDB` followed by `LambdaToForall`. Changed formulas receive
+    /// `DCFofSimplify` stack entries and this also returns the opcodes as
+    /// result metadata; proof output remains deferred.
     ///
     /// # Errors
     ///
@@ -4149,6 +4158,10 @@ mod tests {
 
         assert!(wrapped.simplify(&mut bank).unwrap());
         assert_eq!(wrapped.formula(), &atom);
+        assert_eq!(
+            wrapped.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
         assert!(!wrapped.simplify(&mut bank).unwrap());
     }
 
@@ -4188,8 +4201,13 @@ mod tests {
         assert_eq!(formulas[0].entry_id(), changed_entry);
         assert_eq!(formulas[0].query_tptp_type(), CP_TYPE_AXIOM);
         assert_eq!(formulas[0].formula(), &changed_atom);
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
         assert_eq!(formulas[1].entry_id(), stable_entry);
         assert_eq!(formulas[1].formula(), &stable_atom);
+        assert_eq!(formulas[1].derivation_entries(), &[]);
     }
 
     #[test]
@@ -4219,6 +4237,10 @@ mod tests {
         let simplified = set.iter().next().unwrap().formula().clone();
         assert_eq!(simplified.f_code(), neqn_code);
         assert!(bank.find(&simplified).is_some());
+        assert_eq!(
+            set.iter().next().unwrap().derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
     }
 
     fn assert_answer_annotation_shape(bank: &TermBank, annotated: &Term, expected_body: &Term) {
@@ -4261,6 +4283,10 @@ mod tests {
 
         assert_eq!(wrapped.query_tptp_type(), CP_TYPE_CONJECTURE);
         assert_answer_annotation_shape(&bank, wrapped.formula(), &body);
+        assert_eq!(
+            wrapped.derivation_entries(),
+            &[DerivationEntry::Operation(DC_ANNO_QUESTION)]
+        );
     }
 
     #[test]
@@ -4304,16 +4330,31 @@ mod tests {
         assert_eq!(formulas[0].query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
         assert_eq!(formulas[0].formula().f_code(), bank.signature().not_code());
         assert_eq!(
+            formulas[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_ANNO_QUESTION),
+                DerivationEntry::Operation(DC_NEGATE_CONJECTURE)
+            ]
+        );
+        assert_eq!(
             formulas[0].formula().argument(0).as_ref(),
             Some(&question_formula)
         );
         assert_eq!(formulas[1].query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_ANNO_QUESTION),
+                DerivationEntry::Operation(DC_NEGATE_CONJECTURE)
+            ]
+        );
         assert_eq!(
             formulas[1].formula().argument(0).as_ref(),
             Some(&conjecture_formula)
         );
         assert_eq!(formulas[2].query_tptp_type(), CP_TYPE_AXIOM);
         assert_eq!(formulas[2].formula(), &axiom_formula);
+        assert_eq!(formulas[2].derivation_entries(), &[]);
     }
 
     #[test]
@@ -4330,6 +4371,10 @@ mod tests {
         assert_eq!(wrapped.formula().f_code(), bank.signature().equiv_code());
         assert_eq!(wrapped.formula().argument(0).as_ref(), Some(&left));
         assert_eq!(wrapped.formula().argument(1).as_ref(), Some(&right));
+        assert_eq!(
+            wrapped.derivation_entries(),
+            &[DerivationEntry::Operation(DC_EQ_TO_EQ)]
+        );
     }
 
     #[test]
@@ -4348,6 +4393,7 @@ mod tests {
         assert_eq!(equality.f_code(), bank.signature().eqn_code());
         assert_eq!(equality.argument(0).as_ref(), Some(&left));
         assert_eq!(equality.argument(1).as_ref(), Some(&right));
+        assert_eq!(wrapped.derivation_entries(), &[]);
     }
 
     #[test]
@@ -4404,8 +4450,17 @@ mod tests {
             formulas[0].formula().f_code(),
             bank.signature().equiv_code()
         );
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[DerivationEntry::Operation(DC_EQ_TO_EQ)]
+        );
         assert_eq!(formulas[1].formula().f_code(), bank.signature().and_code());
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOOL_UNROLL)]
+        );
         assert_eq!(formulas[2].formula(), &stable_formula);
+        assert_eq!(formulas[2].derivation_entries(), &[]);
     }
 
     #[test]
@@ -4517,6 +4572,7 @@ mod tests {
         assert_eq!(first_order_result.formulas_named_to_db, 0);
         assert!(first_order_result.formula_derivation_ops.is_empty());
         assert_eq!(first_order.iter().next().unwrap().formula(), &named_lambda);
+        assert_eq!(first_order.iter().next().unwrap().derivation_entries(), &[]);
 
         let mut higher_order = FormulaSet::new();
         higher_order.insert(WrappedFormula::wt_formula_alloc(named_lambda));
@@ -4527,7 +4583,12 @@ mod tests {
 
         assert_eq!(result.formulas_named_to_db, 1);
         assert_eq!(result.formula_derivation_ops, vec![DC_FOF_SIMPLIFY]);
-        let converted = higher_order.iter().next().unwrap().formula();
+        let converted_wrapper = higher_order.iter().next().unwrap();
+        assert_eq!(
+            converted_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        let converted = converted_wrapper.formula();
         assert_eq!(converted.f_code(), SIG_DB_LAMBDA_CODE);
         let matrix = converted.argument(1).unwrap();
         assert_eq!(matrix.f_code(), eqn_code);
@@ -4561,6 +4622,7 @@ mod tests {
         assert_eq!(first_order_result.formulas_ites_lifted, 0);
         assert!(first_order_result.formula_derivation_ops.is_empty());
         assert_eq!(first_order.iter().next().unwrap().formula(), &ite);
+        assert_eq!(first_order.iter().next().unwrap().derivation_entries(), &[]);
 
         let mut higher_order = FormulaSet::new();
         higher_order.insert(WrappedFormula::wt_formula_alloc(ite));
@@ -4571,10 +4633,12 @@ mod tests {
 
         assert_eq!(result.formulas_ites_lifted, 1);
         assert_eq!(result.formula_derivation_ops, vec![DC_LIFT_ITE]);
+        let lifted = higher_order.iter().next().unwrap();
         assert_eq!(
-            higher_order.iter().next().unwrap().formula().f_code(),
-            and_code
+            lifted.derivation_entries(),
+            &[DerivationEntry::Operation(DC_LIFT_ITE)]
         );
+        assert_eq!(lifted.formula().f_code(), and_code);
     }
 
     #[test]
@@ -4689,6 +4753,7 @@ mod tests {
         assert_eq!(first_order_result.formulas_lambda_normalized, 0);
         assert!(first_order_result.formula_derivation_ops.is_empty());
         assert_eq!(set.iter().next().unwrap().formula(), &formula);
+        assert_eq!(set.iter().next().unwrap().derivation_entries(), &[]);
 
         let result = set
             .lambda_normalize_forall(&mut bank, ProblemType::HigherOrder)
@@ -4696,7 +4761,12 @@ mod tests {
 
         assert_eq!(result.formulas_lambda_normalized, 1);
         assert_eq!(result.formula_derivation_ops, vec![DC_FOF_SIMPLIFY]);
-        let normalized = set.iter().next().unwrap().formula();
+        let normalized_wrapper = set.iter().next().unwrap();
+        assert_eq!(
+            normalized_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        let normalized = normalized_wrapper.formula();
         assert_eq!(normalized.f_code(), bank.signature().qall_code());
         assert_eq!(normalized.argument(1).unwrap().f_code(), eqn_code);
     }
