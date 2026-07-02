@@ -16,6 +16,8 @@ Rust files:
 - `src/bin/ekb_insert.rs`
 - `src/prover/tsm_classify.rs`
 - `src/bin/tsm_classify.rs`
+- `src/prover/direct_examples.rs`
+- `src/bin/direct_examples.rs`
 
 C source references:
 
@@ -26,6 +28,7 @@ C source references:
 - `eprover/LEARN/cle_kbdesc.c`
 - `eprover/LEARN/cle_examplerep.c`
 - `eprover/LEARN/cle_kbinsert.c`
+- `eprover/PROVER/direct_examples.c`
 - `eprover/PCL2/pcl_analysis.c`
 - `eprover/PCL2/pcl_protocol.c`
 - `eprover/PROVER/tsm_classify.c`
@@ -44,11 +47,12 @@ Implemented:
 - Standalone `ekb_ginsert` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, first-input basename selection before stdin defaulting, generated `FILES/<name>` training examples from EPCL/PCL input, proof-step marking, proof-distance/reference analysis, negative-example selection from KB description parameters, duplicate-name rejection before generation, generated-file reparsing through `KBParseExampleFile`, and metadata rewrite order.
 - Standalone `ekb_insert` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, no-argument stdin insertion, first-input-only explicit naming, file-basename naming, old-KB parsing, duplicate-name rejection before copy, stored example-file copying, `KBParseExampleFile` integration, and metadata rewrite order.
 - Standalone `tsm_classify` executable wrapper, including C-compatible help/version text, index/TSM option parsing, output-file handling, concatenated input scanning, `Training:`/`Test:` annotated-term parsing, annotation flattening, fixed class-weight translation, TSM build/evaluation setup, per-term classification progress, and final source-weighted success summary.
+- Standalone `direct_examples` executable wrapper, including C-compatible help/version text, `-V` version shorthand, verbosity, output-file redirection, default stdin input through `-`, multi-file PCL parsing in TPTP scanner mode, FOF stripping, proof-step marking, proof-distance/reference analysis, C-shaped positive/negative example budget selection, LOP axiom/example rendering, and unit coverage for stdin, output files, option compatibility, and verbose progress.
 
 Pending:
 
-- Remaining KB consumers still need executable wrappers and filesystem regression coverage.
-- Reference executable comparison on a larger learned-data corpus and performance coverage for the TSM build/classification path.
+- Remaining learning/support consumers outside the KB and direct-example path still need executable wrappers and filesystem regression coverage.
+- Reference executable comparison on a larger learned-data corpus, direct-example protocol corpus, and performance coverage for the TSM build/classification path.
 
 Change-later notes:
 
@@ -59,6 +63,9 @@ Change-later notes:
 - `ExampleSetInsert` can partially mutate the numeric index before a duplicate-name failure, and `ExampleSet`'s `count` field is a maximum inserted identifier rather than the current size. Keep both accidents visible until generated-id compatibility is settled.
 - C `TSMClassifySet` owns progress printing to stdout while `tsm_classify.c` writes only the final summary through `GlobalOut`; Rust preserves that split for compatibility, but a modernized API should separate classifier results from presentation.
 - The executable hardcodes the `(Sources, Class)` annotation shape through a generic weight vector with only slot `0` set. A cleaned interface should use typed field names once learned-data compatibility is established.
+- `direct_examples.c` opens the output path before parsing input and writes both generated sections through `GlobalOut`; Rust preserves the early create/truncate side effect with one explicit writer rather than carrying C's paired `OutOpen`/`OpenGlobalOut` global-output setup.
+- `direct_examples.c` disables the global `ClausesHaveLocalVariables` switch so compressed PCL input shares name-to-variable mappings across clauses. The current Rust PCL path has no equivalent global parser switch; compressed/local-variable-sensitive PCL traces should stay in the compatibility backlog until the full clause parser owner exposes that policy.
+- `direct_examples.c` computes the negative-example budget as `proof_steps ? neg_proportion*proof_steps : neg_examples`, with C double-to-long truncation and no upper clamp. Rust preserves that branch and truncation; a modernized selector should expose separate positive and negative limits explicitly.
 
 ## Factoring
 

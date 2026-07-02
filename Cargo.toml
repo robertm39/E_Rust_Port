@@ -54,6 +54,10 @@ name = "tsm_classify"
 path = "src/bin/tsm_classify.rs"
 
 [[bin]]
+name = "direct_examples"
+path = "src/bin/direct_examples.rs"
+
+[[bin]]
 name = "ekb_create"
 path = "src/bin/ekb_create.rs"
 
