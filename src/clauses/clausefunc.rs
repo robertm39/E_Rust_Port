@@ -67,6 +67,7 @@ pub struct TFormulaDefEntry {
     rename_atom: Term,
     real_definition_id: Option<i64>,
     archived_definition: Option<Term>,
+    archived_definition_ref: Option<FormulaDerivationRef>,
 }
 
 impl TFormulaDefEntry {
@@ -90,9 +91,20 @@ impl TFormulaDefEntry {
         self.archived_definition.as_ref()
     }
 
-    pub fn set_definition_metadata(&mut self, real_definition_id: i64, archived_definition: Term) {
+    #[must_use]
+    pub const fn archived_definition_ref(&self) -> Option<FormulaDerivationRef> {
+        self.archived_definition_ref
+    }
+
+    pub fn set_definition_metadata(
+        &mut self,
+        real_definition_id: i64,
+        archived_definition: Term,
+        archived_definition_ref: FormulaDerivationRef,
+    ) {
         self.real_definition_id = Some(real_definition_id);
         self.archived_definition = Some(archived_definition);
+        self.archived_definition_ref = Some(archived_definition_ref);
     }
 }
 
@@ -3275,6 +3287,7 @@ pub fn tformula_def_rename(
             rename_atom: rename_atom.clone(),
             real_definition_id: None,
             archived_definition: None,
+            archived_definition_ref: None,
         },
     );
     form.set_prop(TP_CHECK_FLAG);
@@ -3397,7 +3410,7 @@ pub fn tformula_copy_def(
     form: &Term,
     blocked: i64,
     defs: &TFormulaDefinitions,
-    defs_used: &mut Vec<Term>,
+    defs_used: &mut Vec<FormulaDerivationRef>,
 ) -> Result<Term, Diagnostic> {
     if tformula_is_literal(bank, form)
         || form.is_applied_free_var()
@@ -3419,13 +3432,13 @@ pub fn tformula_copy_def(
             .real_definition_id
             .unwrap_or_else(|| panic!("definition {} must have a real id", form.entry_no()));
         if real_definition_id != blocked {
-            let archived_definition = definition.archived_definition.clone().unwrap_or_else(|| {
+            let archived_definition_ref = definition.archived_definition_ref.unwrap_or_else(|| {
                 panic!(
-                    "definition {} must have an archived polarity-zero formula",
+                    "definition {} must have an archived formula ref",
                     form.entry_no()
                 )
             });
-            defs_used.push(archived_definition);
+            defs_used.push(archived_definition_ref);
             return Ok(definition.rename_atom.clone());
         }
     }
@@ -7722,9 +7735,10 @@ mod tests {
         let mut renamed_forms = Vec::new();
         let rename_atom =
             tformula_def_rename(&mut bank, &marked, 1, &mut defs, &mut renamed_forms).unwrap();
+        let archived_ref = FormulaDerivationRef::new(77);
         defs.get_mut(&marked.entry_no())
             .unwrap()
-            .set_definition_metadata(77, marked.clone());
+            .set_definition_metadata(77, marked.clone(), archived_ref);
         let mut defs_used = Vec::new();
 
         let copied = tformula_copy_def(&mut bank, &formula, 99, &defs, &mut defs_used).unwrap();
@@ -7732,7 +7746,7 @@ mod tests {
         assert_eq!(copied.f_code(), bank.signature().and_code());
         assert_eq!(copied.argument(0).as_ref(), Some(&rename_atom));
         assert_eq!(copied.argument(1).as_ref(), Some(&tail));
-        assert_eq!(defs_used, vec![marked.clone()]);
+        assert_eq!(defs_used, vec![archived_ref]);
 
         let mut blocked_used = Vec::new();
         let blocked = tformula_copy_def(&mut bank, &formula, 77, &defs, &mut blocked_used).unwrap();

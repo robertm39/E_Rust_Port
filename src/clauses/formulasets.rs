@@ -1301,8 +1301,8 @@ impl WrappedFormula {
 
     /// Applies C `TFormulaApplyDefs` to this wrapper.
     ///
-    /// Definition parents are reported as the archived neutral-definition terms
-    /// until full formula-derivation ownership can store stable formula handles.
+    /// Definition parents are reported as the archived neutral-definition
+    /// formula refs.
     ///
     /// # Errors
     ///
@@ -1316,7 +1316,7 @@ impl WrappedFormula {
         &mut self,
         bank: &mut TermBank,
         defs: &TFormulaDefinitions,
-    ) -> Result<Vec<Term>, Diagnostic> {
+    ) -> Result<Vec<FormulaDerivationRef>, Diagnostic> {
         let mut defs_used = Vec::new();
         let reduced = tformula_copy_def(bank, self.formula(), self.ident, defs, &mut defs_used)?;
         if !defs_used.is_empty() {
@@ -2607,9 +2607,9 @@ impl FormulaSet {
     /// active definitions into the set, and apply the definitions across the
     /// resulting set in insertion order.
     ///
-    /// Formula-level derivation stacks and proof-document output are deferred,
-    /// so this returns the C derivation opcodes that should be attached by a
-    /// future owner.
+    /// Proof-document output is deferred. The owner stores formula-owned
+    /// derivation entries that can be represented with stable formula ids and
+    /// still returns the C opcodes as staged metadata.
     ///
     /// # Errors
     ///
@@ -2655,8 +2655,10 @@ impl FormulaSet {
                 .rename_atom()
                 .clone();
             let neutral_def = tformula_create_def(bank, &def_atom, &form, 0)?;
-            let neutral_wrapper = WrappedFormula::wt_formula_alloc(neutral_def);
-            let archived_wrapper = neutral_wrapper.flat_copy();
+            let mut neutral_wrapper = WrappedFormula::wt_formula_alloc(neutral_def);
+            let mut archived_wrapper = neutral_wrapper.flat_copy();
+            let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
+            archived_wrapper.push_formula_derivation(DC_INTRO_DEF, None, None);
             let archived_formula = archived_wrapper.formula().clone();
             archive.insert(archived_wrapper);
             result.archived_definitions += 1;
@@ -2666,17 +2668,19 @@ impl FormulaSet {
                 let real_definition_id = neutral_wrapper.ident();
                 defs.get_mut(&entry_no)
                     .unwrap_or_else(|| panic!("definition {entry_no} disappeared"))
-                    .set_definition_metadata(real_definition_id, archived_formula);
+                    .set_definition_metadata(real_definition_id, archived_formula, archived_ref);
+                neutral_wrapper.push_formula_derivation(DC_FOF_QUOTE, Some(archived_ref), None);
                 self.insert(neutral_wrapper);
                 result.active_definitions_inserted += 1;
                 result.formula_derivation_ops.push(DC_FOF_QUOTE);
             } else {
                 let active_def = tformula_create_def(bank, &def_atom, &form, polarity)?;
-                let active_wrapper = WrappedFormula::wt_formula_alloc(active_def);
+                let mut active_wrapper = WrappedFormula::wt_formula_alloc(active_def);
                 let real_definition_id = active_wrapper.ident();
                 defs.get_mut(&entry_no)
                     .unwrap_or_else(|| panic!("definition {entry_no} disappeared"))
-                    .set_definition_metadata(real_definition_id, archived_formula);
+                    .set_definition_metadata(real_definition_id, archived_formula, archived_ref);
+                active_wrapper.push_formula_derivation(DC_SPLIT_EQUIV, Some(archived_ref), None);
                 self.insert(active_wrapper);
                 result.active_definitions_inserted += 1;
                 result.formula_derivation_ops.push(DC_SPLIT_EQUIV);
@@ -2689,6 +2693,9 @@ impl FormulaSet {
                 result.formulas_rewritten += 1;
                 let used_count = usize_to_i64(defs_used.len());
                 result.definition_applications += used_count;
+                for parent in &defs_used {
+                    formula.push_formula_derivation(DC_APPLY_DEF, Some(*parent), None);
+                }
                 result
                     .formula_derivation_ops
                     .extend(std::iter::repeat_n(DC_APPLY_DEF, defs_used.len()));
@@ -4509,19 +4516,39 @@ mod tests {
         let formulas = set.iter().collect::<Vec<_>>();
         assert_eq!(formulas.len(), 2);
         assert_eq!(archive.cardinality(), 1);
+        let archived_wrapper = archive.iter().next().unwrap();
+        let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
+        assert_eq!(
+            archived_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
 
         let rewritten = formulas[0].formula();
         assert_eq!(rewritten.f_code(), bank.signature().or_code());
         let rename_atom = rewritten.argument(0).unwrap();
         assert_eq!(rename_atom.f_code(), bank.signature().eqn_code());
         assert_eq!(rewritten.argument(1).as_ref(), Some(&tail));
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(archived_ref)
+            ]
+        );
 
         let active_definition = formulas[1].formula();
         assert_eq!(active_definition.f_code(), bank.signature().impl_code());
         assert_eq!(active_definition.argument(0).as_ref(), Some(&rename_atom));
         assert_eq!(active_definition.argument(1).as_ref(), Some(&expensive));
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_SPLIT_EQUIV),
+                DerivationEntry::FormulaParent(archived_ref)
+            ]
+        );
 
-        let archived_definition = archive.iter().next().unwrap().formula();
+        let archived_definition = archived_wrapper.formula();
         assert_eq!(archived_definition.f_code(), bank.signature().equiv_code());
         assert_eq!(archived_definition.argument(0).as_ref(), Some(&rename_atom));
         assert_eq!(archived_definition.argument(1).as_ref(), Some(&expensive));
@@ -4555,14 +4582,36 @@ mod tests {
         );
 
         let formulas = set.iter().collect::<Vec<_>>();
+        assert_eq!(formulas.len(), 2);
+        assert_eq!(archive.cardinality(), 1);
+        let archived_wrapper = archive.iter().next().unwrap();
+        let archived_ref = FormulaDerivationRef::new(archived_wrapper.ident());
+        assert_eq!(
+            archived_wrapper.derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
+
         let rewritten = formulas[0].formula();
         let rename_atom = rewritten.argument(0).unwrap();
         assert_eq!(rename_atom.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(archived_ref)
+            ]
+        );
         let active_definition = formulas[1].formula();
         assert_eq!(active_definition.f_code(), bank.signature().equiv_code());
         assert_eq!(active_definition.argument(0).as_ref(), Some(&rename_atom));
         assert_eq!(active_definition.argument(1).as_ref(), Some(&expensive));
-        assert_eq!(archive.cardinality(), 1);
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(archived_ref)
+            ]
+        );
     }
 
     #[test]
