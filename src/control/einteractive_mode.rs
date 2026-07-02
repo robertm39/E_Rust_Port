@@ -4,7 +4,10 @@ use std::{ffi::OsStr, fmt::Write as _, fs, path::Path};
 
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
-use crate::control::batch_spec::{BatchProblemData, BatchSpec};
+use crate::control::batch_spec::{
+    BatchCompletedRunner, BatchProblemData, BatchProcessProblemConfig, BatchProcessProblemOutputs,
+    BatchProcessProblemReport, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
+};
 use crate::control::sine::StructFofSpec;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::signature::Signature;
@@ -136,6 +139,13 @@ pub struct InteractiveCommandOutput {
 pub struct InteractiveDispatchResult {
     pub output: String,
     pub done: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveRunReport {
+    pub command: InteractiveCommandOutput,
+    pub process: BatchProcessProblemReport,
+    pub global_output: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -475,7 +485,13 @@ impl InteractiveSpec {
     ) -> Result<InteractiveDispatchResult, Diagnostic>
     where
         B: FnMut(&str) -> Result<String, Diagnostic>,
-        R: FnMut(&str, &str) -> Result<InteractiveCommandOutput, Diagnostic>,
+        R: FnMut(
+            &BatchSpec,
+            &mut TermBank,
+            &mut StructFofSpec,
+            &str,
+            &str,
+        ) -> Result<InteractiveCommandOutput, Diagnostic>,
     {
         let mut scanner = Scanner::from_user_string(command_input, true)?;
         scanner.set_format(IoFormat::Tstp);
@@ -526,7 +542,7 @@ impl InteractiveSpec {
             scanner.accept_tok(TokenType::IDENTIFIER)?;
             let input_axioms = read_block(END_OF_BLOCK_TOKEN)?;
             Ok(dispatch_command_output(
-                run_command(&job_name, &input_axioms)?,
+                run_command(spec, bank, ctrl, &job_name, &input_axioms)?,
                 false,
             ))
         } else if scanner.test_id(LIST_COMMAND) {
@@ -549,6 +565,73 @@ impl InteractiveSpec {
             Ok(dispatch_status(ERR_UNKNOWN_COMMAND_MESSAGE, false))
         }
     }
+}
+
+/// C `run_command`, staged over injectable runner spawning and polling.
+///
+/// The C implementation forks before parsing the job and writes progress to
+/// the connection from the child while the parent later returns
+/// `OK_SUCCESS_MESSAGE`. This Rust helper performs the same logical work
+/// synchronously and returns captured connection/global output so transport
+/// owners can decide where to write it.
+///
+/// # Errors
+///
+/// Returns parser diagnostics or batch runner diagnostics.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The interactive RUN port must thread parser, control, clock, and runner hooks"
+)]
+pub fn run_command_with<C, S, P>(
+    job_name: &str,
+    input_axioms: &str,
+    spec: &BatchSpec,
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    clock_seconds: C,
+    spawn_runner: S,
+    poll_runners: P,
+) -> Result<InteractiveRunReport, Diagnostic>
+where
+    C: FnMut() -> i64,
+    S: FnMut(BatchRunnerRequest) -> Result<BatchSpawnedRunner, Diagnostic>,
+    P: FnMut(&mut Vec<BatchSpawnedRunner>) -> Result<Option<BatchCompletedRunner>, Diagnostic>,
+{
+    let mut global_output = Vec::new();
+    global_output.extend_from_slice(job_name.as_bytes());
+    let mut outstream_output = format!("\n% Processing started for {job_name}\n").into_bytes();
+
+    let problem = parse_interactive_axioms(job_name, input_axioms, spec, bank, ctrl)?;
+    let mut ignored_external_output = Vec::new();
+    let process = spec.process_problem_with(
+        bank.signature(),
+        ctrl,
+        problem,
+        BatchProcessProblemConfig {
+            wct_limit: run_command_wct_limit(spec),
+            jobname: job_name,
+            interactive: true,
+        },
+        BatchProcessProblemOutputs {
+            global_output: &mut global_output,
+            external_output: Some(&mut ignored_external_output),
+            socket_output: Some(&mut outstream_output),
+        },
+        clock_seconds,
+        spawn_runner,
+        poll_runners,
+    )?;
+    outstream_output
+        .extend_from_slice(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
+
+    Ok(InteractiveRunReport {
+        command: InteractiveCommandOutput {
+            output: bytes_to_string(outstream_output)?,
+            status: OK_SUCCESS_MESSAGE,
+        },
+        process,
+        global_output: bytes_to_string(global_output)?,
+    })
 }
 
 /// C `AXIOM_SET_NAME_TOKENS`.
@@ -602,6 +685,23 @@ fn dispatch_command_output(
     InteractiveDispatchResult { output, done }
 }
 
+const fn run_command_wct_limit(spec: &BatchSpec) -> i64 {
+    if spec.per_prob_limit != 0 {
+        spec.per_prob_limit
+    } else {
+        30
+    }
+}
+
+fn bytes_to_string(bytes: Vec<u8>) -> Result<String, Diagnostic> {
+    String::from_utf8(bytes).map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            format!("Interactive command output was not UTF-8: {error}"),
+        )
+    })
+}
+
 /// C `get_directory_listings`: return a stack-shaped list of regular file
 /// names in the directory.
 ///
@@ -650,8 +750,8 @@ fn parse_interactive_axioms(
 #[cfg(test)]
 mod tests {
     use super::{
-        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, AxiomSet,
-        InteractiveCommandOutput, InteractiveSpec, ADD_COMMAND, DOWNLOAD_COMMAND,
+        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, run_command_with,
+        AxiomSet, InteractiveCommandOutput, InteractiveSpec, ADD_COMMAND, DOWNLOAD_COMMAND,
         END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
         ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
         ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE,
@@ -662,8 +762,11 @@ mod tests {
         RUN_COMMAND, STAGE_COMMAND, UNSTAGE_COMMAND,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
+    use crate::basics::simple_stuff::ProverResult;
     use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
-    use crate::control::batch_spec::{BatchProblemData, BatchSpec};
+    use crate::control::batch_spec::{
+        BatchCompletedRunner, BatchProblemData, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
+    };
     use crate::control::sine::StructFofSpec;
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
@@ -715,7 +818,13 @@ mod tests {
         panic!("block reader should not run")
     }
 
-    fn unused_run_command(_: &str, _: &str) -> Result<InteractiveCommandOutput, Diagnostic> {
+    fn unused_run_command(
+        _: &BatchSpec,
+        _: &mut TermBank,
+        _: &mut StructFofSpec,
+        _: &str,
+        _: &str,
+    ) -> Result<InteractiveCommandOutput, Diagnostic> {
         panic!("run command should not run")
     }
 
@@ -1340,7 +1449,7 @@ mod tests {
                     terminators.push(terminator.to_owned());
                     Ok(String::from("fof(run_formula, axiom, q(a)).\n"))
                 },
-                |job_name, input_axioms| {
+                |_, _, _, job_name, input_axioms| {
                     seen_run = Some((job_name.to_owned(), input_axioms.to_owned()));
                     Ok(InteractiveCommandOutput {
                         output: String::from("run output\n"),
@@ -1360,6 +1469,109 @@ mod tests {
         );
         assert_eq!(result.output, format!("run output\n{OK_SUCCESS_MESSAGE}"));
         assert!(!result.done);
+    }
+
+    #[test]
+    fn run_command_with_parses_job_runs_batch_process_and_backtracks() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("shared", "shared raw", false)),
+            OK_ADDED_MESSAGE
+        );
+        assert_eq!(
+            interactive.stage_command(&mut ctrl, bank.signature(), "shared"),
+            OK_STAGED_MESSAGE
+        );
+        let mut requests = Vec::<BatchRunnerRequest>::new();
+
+        let report = run_command_with(
+            "job1",
+            "fof(job_formula, axiom, q(a)).\n",
+            &spec,
+            &mut bank,
+            &mut ctrl,
+            || 100,
+            |request| {
+                requests.push(request.clone());
+                Ok(BatchSpawnedRunner {
+                    name: request.name,
+                    start_time: 100,
+                    prob_time: request.cpu_time,
+                })
+            },
+            |active| {
+                assert!(!active.is_empty());
+                Ok(Some(BatchCompletedRunner {
+                    runner: active[0].clone(),
+                    result: ProverResult::Theorem,
+                    output: String::from("% run proof\n"),
+                }))
+            },
+        )
+        .unwrap();
+
+        assert!(report.process.solved);
+        assert!(!requests.is_empty());
+        assert_eq!(requests[0].cpu_time, 15);
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert!(interactive.axiom_set_mut("shared").unwrap().is_staged());
+        assert_eq!(report.command.status, OK_SUCCESS_MESSAGE);
+        assert_eq!(
+            report.command.output,
+            "\n% Processing started for job1\n% run proof\n\n% Processing finished for job1\n\n"
+        );
+        assert!(report.global_output.starts_with("job1"));
+        assert!(report
+            .global_output
+            .contains("% SZS status Theorem for job1\n"));
+        assert!(report.global_output.ends_with("% run proof\n"));
+    }
+
+    #[test]
+    fn run_command_with_uses_configured_per_problem_limit() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let mut spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        spec.per_prob_limit = 12;
+        let mut requests = Vec::<BatchRunnerRequest>::new();
+
+        let report = run_command_with(
+            "limited",
+            "fof(job_formula, axiom, q(a)).\n",
+            &spec,
+            &mut bank,
+            &mut ctrl,
+            || 200,
+            |request| {
+                requests.push(request.clone());
+                Ok(BatchSpawnedRunner {
+                    name: request.name,
+                    start_time: 200,
+                    prob_time: request.cpu_time,
+                })
+            },
+            |active| {
+                Ok(Some(BatchCompletedRunner {
+                    runner: active[0].clone(),
+                    result: ProverResult::Theorem,
+                    output: String::from("% limited proof\n"),
+                }))
+            },
+        )
+        .unwrap();
+
+        assert!(report.process.solved);
+        assert!(!requests.is_empty());
+        assert_eq!(requests[0].cpu_time, 6);
+        assert_eq!(report.command.status, OK_SUCCESS_MESSAGE);
+        assert!(report
+            .command
+            .output
+            .contains("% Processing finished for limited\n\n"));
     }
 
     #[test]
