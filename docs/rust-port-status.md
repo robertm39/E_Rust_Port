@@ -8,13 +8,17 @@ Rust files:
 
 - `src/prover/ekb_create.rs`
 - `src/bin/ekb_create.rs`
+- `src/prover/ekb_delete.rs`
+- `src/bin/ekb_delete.rs`
 - `src/prover/tsm_classify.rs`
 - `src/bin/tsm_classify.rs`
 
 C source references:
 
 - `eprover/PROVER/ekb_create.c`
+- `eprover/PROVER/ekb_delete.c`
 - `eprover/LEARN/cle_kbdesc.c`
+- `eprover/LEARN/cle_examplerep.c`
 - `eprover/PROVER/tsm_classify.c`
 - `eprover/LEARN/cle_annotations.c`
 - `eprover/LEARN/cle_annoterms.c`
@@ -27,16 +31,19 @@ C source references:
 Implemented:
 
 - Standalone `ekb_create` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, negative-example options, one-argument validation, C-shaped directory/file creation order, seeded KB description/signature/problems/clausepatterns files, and verbose progress output.
+- Standalone `ekb_delete` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, one-argument validation, old-KB parsing, example-name lookup, annotation removal by source id, problem-list deletion, stored example-file removal, and metadata rewrite order.
 - Standalone `tsm_classify` executable wrapper, including C-compatible help/version text, index/TSM option parsing, output-file handling, concatenated input scanning, `Training:`/`Test:` annotated-term parsing, annotation flattening, fixed class-weight translation, TSM build/evaluation setup, per-term classification progress, and final source-weighted success summary.
 
 Pending:
 
-- Remaining KB maintenance tools: `ekb_insert`, `ekb_ginsert`, `ekb_delete`, and the KB consumers still need executable wrappers and filesystem regression coverage.
+- Remaining KB maintenance tools: `ekb_insert`, `ekb_ginsert`, and the KB consumers still need executable wrappers and filesystem regression coverage.
 - Reference executable comparison on a larger learned-data corpus and performance coverage for the TSM build/classification path.
 
 Change-later notes:
 
 - `ekb_create` mirrors C's partial filesystem side effects and inconsistent mkdir diagnostics. A modernized mode should make creation transactional and report the exact failing path.
+- `ekb_delete` mirrors C's non-transactional delete order: metadata is removed in memory, the stored example file is unlinked, and only then are `clausepatterns` and `problems` rewritten. A modernized KB API should stage these updates or make recovery behavior explicit.
+- `ExampleSetInsert` can partially mutate the numeric index before a duplicate-name failure, and `ExampleSet`'s `count` field is a maximum inserted identifier rather than the current size. Keep both accidents visible until generated-id compatibility is settled.
 - C `TSMClassifySet` owns progress printing to stdout while `tsm_classify.c` writes only the final summary through `GlobalOut`; Rust preserves that split for compatibility, but a modernized API should separate classifier results from presentation.
 - The executable hardcodes the `(Sources, Class)` annotation shape through a generic weight vector with only slot `0` set. A cleaned interface should use typed field names once learned-data compatibility is established.
 

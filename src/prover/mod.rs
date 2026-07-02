@@ -3,6 +3,7 @@ pub mod e_ltb_runner;
 pub mod e_stratpar;
 pub mod edpll;
 pub mod ekb_create;
+pub mod ekb_delete;
 pub mod epclanalyse;
 pub mod epclextract;
 pub mod epcllemma;

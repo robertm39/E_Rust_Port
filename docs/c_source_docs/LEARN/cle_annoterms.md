@@ -131,7 +131,7 @@ Source files reviewed: `LEARN/cle_annoterms.h`, `LEARN/cle_annoterms.c`.
 
 - `AnnoSetAlloc` eagerly creates the equality and recursive-clause representation symbols in the supplied term-bank signature (`$eq`, `$neq`, `$or`, `$cnil`) even when the set remains empty. Preserve this side effect when parsing knowledge-base annotation sets.
 - `AnnoTermParse` delegates term syntax to checked `TBTermParse`, then consumes `:`, an annotation list with an exact expected element count, and `.`. `AnnoSetParse` keeps parsing while the current token is `TermStartToken`, including `[` only when list support is enabled, so an extra term-like token after the last annotated term is parsed as a malformed annotated term rather than ignored as trailing data. Rust mirrors this by using the checked term-bank parser and the same list-support-sensitive start-token rule.
-- `AnnoTermPrint` writes `term : annotations.` and `AnnotationListPrint` concatenates annotation entries without separators; set printing prefixes entries with a blank line and `# Annotated terms:`.
+- `AnnoTermPrint` writes `term : annotations.` and `AnnotationListPrint` concatenates annotation entries without separators; set printing prefixes entries with a blank line and the configured `COMCHAR` marker, which is `% Annotated terms:` in this checkout.
 - `AnnoSetComputePatternSubst` traverses every stored annotated term and calls `PatternTermCompute` even if earlier terms already changed the substitution; the return value is the OR of all per-term change results.
 - `AnnoSetFlatten` documents a return value of "number of terms remaining", but the local `count` is never incremented and the function always returns zero. Rust preserves this result for the ported flatten helper.
 - `AnnoSetRemoveExceptIdentList` checks `PStackGetSP(stack)` where `stack` is the NumTree traversal stack, not the caller's `set_idents` stack. Rust exposes the useful id-retention helper with an explicit id-list bound because the current sorted-map owner has no equivalent raw traversal stack; revisit only if learned-data reference tests expose dependence on the C accident.
@@ -141,6 +141,7 @@ Source files reviewed: `LEARN/cle_annoterms.h`, `LEARN/cle_annoterms.c`.
 
 - Fix or retire return values whose C implementation does not match the comments. In particular, `AnnoSetFlatten` documents a remaining-term count but always returns zero, so callers should not be encouraged to use it as a meaningful status.
 - Make annotation-list separators explicit in any modernized printer. The C printer concatenates multiple annotations without a delimiter, which is compact but hard for humans to scan.
+- Keep comment-character policy explicit if the printer is reused outside E-compatible KB files. This checkout uses `%`, but the C macro can be compiled as `#` with `UNIX_COMMENTS`.
 
 ### Porting Focus
 

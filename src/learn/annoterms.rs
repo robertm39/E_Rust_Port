@@ -1,4 +1,5 @@
 use crate::basics::ddarrays::{DDArray, DDArrayIndex};
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::Diagnostic;
 use crate::basics::numtrees::NumTree;
 use crate::inout::scanner::{Scanner, TokenType};
@@ -305,7 +306,7 @@ pub fn anno_set_parse(
 
 #[must_use]
 pub fn anno_set_print_string(set: &AnnoSet, bank: &TermBank) -> String {
-    let mut result = "\n# Annotated terms:\n".to_owned();
+    let mut result = format!("\n{DEFAULT_COMCHAR_RAW} Annotated terms:\n");
     for (_key, term) in set.iter() {
         result.push_str(&anno_term_print_string(term, bank, true));
         result.push('\n');
@@ -727,7 +728,7 @@ mod tests {
         assert_close(annotation.value(1).unwrap(), 16.0);
         assert_eq!(
             anno_set_print_string(&set, &bank),
-            "\n# Annotated terms:\nf(a) : 1:(5.000000,16.000000).\ng(a) : 2:(1.000000,30.000000).\n"
+            "\n% Annotated terms:\nf(a) : 1:(5.000000,16.000000).\ng(a) : 2:(1.000000,30.000000).\n"
         );
     }
 
