@@ -12345,7 +12345,7 @@ fn parse_simple_fof_atomic_formula_or_literal(
     }
 
     let left = bank.parse_term_with_distinct_checks(scanner)?;
-    if simple_fof_tstp_equality_right_starts_formula_operand(scanner) {
+    if simple_fof_tstp_equality_right_starts_formula_operand(scanner, &left) {
         prepare_predicate_literal(bank, &left)?;
         let literal = Eqn::alloc(left, bank.true_term().clone(), bank, true)?;
         return Ok(simple_fof_literal_formulas(vec![literal]));
@@ -12367,7 +12367,7 @@ fn parse_simple_fof_atomic_formula_or_literal(
     Ok(simple_fof_literal_formulas(vec![literal]))
 }
 
-fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner) -> bool {
+fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left: &Term) -> bool {
     if !scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
         return false;
     }
@@ -12380,6 +12380,8 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner) -> b
             | TokenType::EXIST_QUANTOR
             | TokenType::TILDE_SIGN,
     ) || scanner_test_id(right, "$true|$false|$distinct")
+        || (left.type_().as_ref().is_some_and(Type::is_bool)
+            && scanner_test_tok(right, TokenType::ITE_TOKEN | TokenType::LET_TOKEN))
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -14968,6 +14970,53 @@ mod tests {
         assert!(printed.contains("<=>"));
         assert!(printed.contains("tff(ne_right, axiom, (app_"));
         assert!(printed.contains("<~>"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_treats_typed_atomic_left_fool_rhs_as_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-atomic-left-fool-rhs-equality");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             tff(r_type, type, r: $i > $o).\n\
+             tff(s_type, type, s: $i > $o).\n\
+             fof(eq_ite, axiom, p(a) = $ite(q(a), r(a), s(a))).\n\
+             fof(ne_let, axiom, p(a) != $let(f:$o, f := q(a), f)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(eq_ite, axiom, (app_"));
+        assert!(printed.contains("<=>$ite("));
+        assert!(printed.contains("tff(ne_let, axiom, (app_"));
+        assert!(printed.contains("<~>$let("));
+        let eq_line = printed
+            .lines()
+            .find(|line| line.starts_with("tff(eq_ite, "))
+            .unwrap();
+        let ne_line = printed
+            .lines()
+            .find(|line| line.starts_with("tff(ne_let, "))
+            .unwrap();
+        assert!(!eq_line.contains("=$ite("));
+        assert!(!ne_line.contains("!=$let("));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
