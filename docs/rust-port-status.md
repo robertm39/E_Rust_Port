@@ -334,9 +334,12 @@ Rust files:
 - `src/control/einteractive_mode.rs`
 - `src/control/eserver.rs`
 - `src/control/esession.rs`
+- `src/prover/e_client.rs`
+- `src/bin/e_client.rs`
 
 C source references:
 
+- `eprover/PROVER/e_client.c`
 - `eprover/CONTROL/cco_einteractive_mode.c`
 - `eprover/CONTROL/cco_einteractive_mode.h`
 - `eprover/CONTROL/cco_eserver.c`
@@ -349,13 +352,14 @@ Implemented:
 - Initial E server/session owner surface, including `ESessionState` discriminants, session allocation over the ported queued `TcpChannel`, explicit read/write descriptor-interest sets corresponding to the C `fd_set` inputs, C-shaped active/stale/no-state readiness filtering, write readiness when outbound messages are queued, read-side `"wait"` reply queuing after a complete inbound message, stale transition and channel close on read/write error or closed connection, and testable `ESessionProcessCmds`-style received-message rendering.
 - Initial `EServer` allocation/listen/accept/readiness support over the safe `TcpListener`/`TcpStream` wrappers, including the C not-listening default, listener descriptor registration, accepted-session queuing, and maximum-descriptor calculation over listener and sessions.
 - Initial deduction-server interactive-mode surface from `cco_einteractive_mode`, including command names, block terminator, success/error response strings, help text, the whitespace-tolerant `AcceptAxiomSetName` token loop, `AxiomSet`/`InteractiveSpec` state over parsed clause/formula sets, `ADD`/`LOAD` through the currently ported batch-parser subset with C-shaped duplicate handling and `OK_ADDED` to `OK_LOADED` status rewriting, C-shaped `STAGE`, `UNSTAGE`, `LIST`, `DOWNLOAD`, `REMOVE`, `QUIT`, single-message `StartDeductionServer` command dispatch over injected block readers and `RUN` handlers, `ReadTextBlock`/`TCPReadTextBlock`-style adapters for `ADD`/`RUN` payloads, a TCP-string receive/send loop adapter for socket-mode command sessions, staged `RUN` job parsing plus `BatchProcessProblem` execution over injected runner hooks with C-shaped 30-second fallback limits and start/finish output, and the unsorted regular-file-only `get_directory_listings` helper used by server-library `LIST`/`LOAD`.
+- Standalone `e_client` executable wrapper for the legacy `e_server` handshake, including C-shaped help/version text, verbosity, output-file redirection, server/port option aliases, low-reserved-port warning, default stdin input through `-`, multi-file problem concatenation, `CreateClientSock`-style connection through the ported TCP-string transport, the `hello`/`add`/problem/`prove` send sequence, `% Server: ...` echoing while waiting for `ready` and `result`, and unit coverage over the injectable stream protocol.
 
 Pending:
 
 - Full `FormulaAndClauseSetParse` coverage for every input form accepted by the C server, executable server wiring around the represented socket-mode command loop, the intentionally-unimplemented stdout command path, and the final concrete fork/process backend for `RUN` job execution.
 - Exact event-loop integration for `select`/`fd_set` or a compatible platform abstraction.
 - Full subprocess I/O in session processing; `cco_proc_ctrl` descriptor registration is represented, but the C session code leaves actual subprocess I/O as a TODO.
-- Server executable/control wiring, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
+- Server executable/control wiring, legacy `e_server` protocol compatibility, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
 
 Change-later notes:
 
@@ -376,6 +380,9 @@ Change-later notes:
 - `quit_command` pushes staged axiom-set names in increasing stack order and then pops that temporary stack, so cleanup unstages in reverse staged-stack order and ignores individual unstage status returns. Rust preserves the reverse cleanup order; a cleaned shutdown path should report or prevent inconsistent control-stack state after compatibility tests cover server close behavior.
 - C `run_command` forks before parsing the uploaded job, prints the job name directly to stdout, sends start/finish messages through the server outstream from the child, then has the parent send `OK_SUCCESS_MESSAGE` after waiting. Rust currently stages the same logical parsing, `BatchProcessProblem` call, 30-second fallback limit, socket-style proof-output mirroring, and success status synchronously over injected runner hooks; the exact fork boundary, stdout side effect, and parent/child output ordering still need final transport/process integration.
 - C `StartDeductionServer` sends one TCP string for each `print_to_outstream` call and sends no response for `QUIT`. Rust's socket-loop adapter preserves the non-empty-response shape for the already-staged command outputs, including no `QUIT` response, but final byte-level ordering around forked `RUN` child output still needs reference coverage.
+- `e_client.c` speaks the older `e_server` protocol (`hello`, wait for `ready`, `add`, problem text, `prove`, wait for `result`) rather than the newer interactive deduction-server command set. Rust preserves that client handshake; unifying the client with `StartDeductionServer` should wait until both server executables have protocol compatibility tests.
+- `e_client.c` echoes every received server message through `GlobalOut`, including the terminal `ready` and `result` messages, and opens `GlobalOut` before loading files or connecting. Rust keeps the echo and early output-file creation side effect, while routing through explicit writers.
+- `e_client.c` accepts privileged/reserved ports after printing a warning. Rust preserves acceptance and warning routing; a cleaned CLI should make this a structured warning after compatibility checks.
 
 ## E Process Control
 

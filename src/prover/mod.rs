@@ -1,6 +1,7 @@
 pub mod checkproof;
 pub mod classify_problem;
 pub mod direct_examples;
+pub mod e_client;
 pub mod e_ltb_runner;
 pub mod e_stratpar;
 pub mod edpll;

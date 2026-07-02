@@ -58,6 +58,10 @@ name = "direct_examples"
 path = "src/bin/direct_examples.rs"
 
 [[bin]]
+name = "e_client"
+path = "src/bin/e_client.rs"
+
+[[bin]]
 name = "ekb_create"
 path = "src/bin/ekb_create.rs"
 
