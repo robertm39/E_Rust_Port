@@ -417,12 +417,12 @@ C source references:
 
 Implemented:
 
-- Standalone `e_axfilter` executable wrapper, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, output-file creation before filter parsing and missing-problem usage errors, default/custom ax-filter parsing, filter dumping before the missing-problem usage check, LOP/TPTP/TSTP/Auto input-format options, structured problem parsing through the ported `StructFOFSpecParseAxioms` equivalent, C-shaped reset of the shared boundary after distribution initialization, first-input `FileNameStrip` corename derivation, non-seeded application of all configured filters, artificial seeded filtering through `--seed-symbols`/`--seeds` with `--seed-subsample` and `--seed-method`, generated `<corename>_<filter>.p` and seeded `<corename>_S[ALD]_<P|F><arity>_<symbol>_<filter>.p` TSTP files, signature type-declaration emission, selected clause/formula stack printing, and unit coverage for option defaults, seed-option parsing, output-file side effects, custom filters, generated problem files, seeded explicit-symbol filtering, and unknown explicit seed diagnostics.
+- Standalone `e_axfilter` executable wrapper, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, output-file creation before filter parsing and missing-problem usage errors, default/custom ax-filter parsing, filter dumping before the missing-problem usage check, LOP/TPTP/TSTP/Auto input-format options, structured problem parsing through the ported `StructFOFSpecParseAxioms` equivalent, C-shaped reset of the shared boundary after distribution initialization, first-input `FileNameStrip` corename derivation, non-seeded application of all configured filters, artificial seeded filtering through `--seed-symbols`/`--seeds` with `--seed-subsample` and `--seed-method`, generated `<corename>_<filter>.p` and seeded `<corename>_S[ALD]_<P|F><arity>_<symbol>_<filter>.p` TSTP files, signature type-declaration emission, selected clause/formula stack printing, and unit coverage for option defaults, seed-option parsing, output-file side effects, custom filters, generated problem files, seeded explicit-symbol filtering, duplicate explicit seed symbols, mixed largest/diverse seed methods, random subsampling's process-global JKISS ordering, and unknown explicit seed diagnostics.
 
 Pending:
 
 - Exact reference comparison for formula-aware GSinE/LambdaDef output should wait until full formula ownership replaces the current temporary formula bridge.
-- Byte-for-byte reference comparison for seeded filtering remains pending for mixed seed methods, duplicate explicit seed symbols, and random subsampling's process-global JKISS state.
+- Direct byte-for-byte comparison against a built C `e_axfilter` executable remains pending for seeded and non-seeded output across larger formula-aware GSinE/LambdaDef corpora.
 
 Change-later notes:
 

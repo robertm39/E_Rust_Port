@@ -1060,13 +1060,18 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        init_struct_fof_spec, parse_seed_subsample_arg, process_options, run, EAxFilterConfig,
-        RunCommand, SubsampleMethod, C_USAGE_ERROR, PROGRAM_NAME,
+        init_struct_fof_spec, parse_seed_subsample_arg, process_options, run,
+        subsample_seed_symbols, EAxFilterConfig, RunCommand, SubsampleMethod, C_USAGE_ERROR,
+        PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::simple_stuff::reset_jkiss_for_tests;
     use crate::basics::verbose::verbose_level;
+    use crate::control::sine::StructFofSpec;
     use crate::inout::output::output_level;
     use crate::inout::scanner::IoFormat;
+    use crate::terms::signature::Signature;
+    use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
 
     fn temp_path(name: &str) -> PathBuf {
@@ -1090,6 +1095,14 @@ mod tests {
             .expect("test input has a stem")
             .to_string_lossy();
         PathBuf::from(format!("{stem}_{filter}.p"))
+    }
+
+    fn seed_names(output: &str) -> Vec<String> {
+        output
+            .lines()
+            .filter_map(|line| line.strip_prefix("Name: "))
+            .map(str::to_owned)
+            .collect()
     }
 
     #[test]
@@ -1399,6 +1412,133 @@ mod tests {
         for path in [&problem_path, &filter_path, &output_path, &generated_path] {
             remove_if_present(path);
         }
+    }
+
+    #[test]
+    fn seeded_duplicate_explicit_symbols_repeat_generated_seed_work() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("seeded-duplicate-problem");
+        let filter_path = temp_path("seeded-duplicate-filters");
+        for path in [&problem_path, &filter_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(&problem_path, "fof(seed, axiom, p(a)).\n").expect("problem written");
+        std::fs::write(
+            &filter_path,
+            "seed=GSinE(CountTerms,hypos,false,1.0,100,100,10000,1.0)\n",
+        )
+        .expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                "--seeds=p,p",
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("seeded run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        let names = seed_names(&output);
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], names[1]);
+        assert_eq!(
+            output.matches("% Filter: seed goes into file").count(),
+            2,
+            "duplicate explicit seed symbols should rerun the same generated work"
+        );
+
+        let generated_path = PathBuf::from(format!("{}_seed.p", names[0]));
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn seeded_large_and_diverse_methods_generate_distinct_outputs() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("seeded-ld-problem");
+        let filter_path = temp_path("seeded-ld-filters");
+        for path in [&problem_path, &filter_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(
+            &problem_path,
+            "fof(small, axiom, p(a)).\nfof(large, axiom, p(f(g(a)))).\n",
+        )
+        .expect("problem written");
+        std::fs::write(
+            &filter_path,
+            "seed=GSinE(CountTerms,hypos,false,1.0,100,100,10000,1.0)\n",
+        )
+        .expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                "--seed-method=ld",
+                "--seeds=p",
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("seeded run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        let names = seed_names(&output);
+        assert_eq!(names.len(), 2);
+        assert!(names[0].contains("_SL_P1_"));
+        assert!(names[1].contains("_SD_P1_"));
+
+        let largest_path = PathBuf::from(format!("{}_seed.p", names[0]));
+        let diverse_path = PathBuf::from(format!("{}_seed.p", names[1]));
+        let largest = std::fs::read_to_string(&largest_path).expect("largest output exists");
+        let diverse = std::fs::read_to_string(&diverse_path).expect("diverse output exists");
+        assert!(largest.contains("% Seeds      : Largest"));
+        assert!(diverse.contains("% Seeds      : Diverse"));
+
+        for path in [&problem_path, &filter_path, &largest_path, &diverse_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn seeded_random_subsample_uses_global_jkiss_order() {
+        let _guard = global_state_lock();
+        reset_jkiss_for_tests();
+        let signature = Signature::new(TypeBank::new());
+        let ctrl = StructFofSpec::new(&signature);
+        let config = EAxFilterConfig {
+            subsample: SubsampleMethod::Random,
+            sample_size: 2,
+            ..EAxFilterConfig::default()
+        };
+        let mut seed_symbols = vec![11, 12, 13];
+
+        subsample_seed_symbols(&ctrl, &mut seed_symbols, &config);
+
+        assert_eq!(
+            seed_symbols,
+            vec![13, 11],
+            "C pops seeds before assigning JKISS weights, sorts ascending, and pushes the selected symbols back"
+        );
     }
 
     #[test]

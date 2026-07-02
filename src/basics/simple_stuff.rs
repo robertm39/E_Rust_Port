@@ -303,7 +303,7 @@ fn reset_problem_type_for_tests() {
 }
 
 #[cfg(test)]
-fn reset_jkiss_for_tests() {
+pub(crate) fn reset_jkiss_for_tests() {
     *lock_or_recover(global_jkiss_state()) = RandState::default();
     *lock_or_recover(jkiss_seed_shadow()) = RandState::default();
 }
