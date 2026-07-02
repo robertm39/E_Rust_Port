@@ -96,7 +96,7 @@ Source files reviewed: `PROVER/direct_examples.c`.
 ### Rust Port Notes
 
 - `src/prover/direct_examples.rs` and `src/bin/direct_examples.rs` port the standalone executable over the shared Rust PCL protocol and analysis modules used by `ekb_ginsert`.
-- The Rust wrapper preserves the C command-line surface, including `-V`/`--version`, optional `--verbose`, `-o` output redirection, default stdin input through `-`, negative-example count/proportion options, and the typo-preserving negative-proportion diagnostic.
+- The Rust wrapper preserves the C command-line surface, including `-V`/`--version`, optional `--verbose`, `-o` output redirection including `-o -`, C-shaped file-open and output-close diagnostics, default stdin input through `-`, negative-example count/proportion options, and the typo-preserving negative-proportion diagnostic.
 - The executable parses each input as TPTP-format PCL, strips FOF steps, resets tree data, marks proof clauses, computes proof distance/reference data, selects examples, then prints `% Axioms:` followed by initial clauses, a standalone `.`, and `% Examples:` followed by selected training examples.
 
 ### Change Later

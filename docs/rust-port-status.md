@@ -47,12 +47,12 @@ Implemented:
 - Standalone `ekb_ginsert` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, first-input basename selection before stdin defaulting, generated `FILES/<name>` training examples from EPCL/PCL input, proof-step marking, proof-distance/reference analysis, negative-example selection from KB description parameters, duplicate-name rejection before generation, generated-file reparsing through `KBParseExampleFile`, and metadata rewrite order.
 - Standalone `ekb_insert` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, no-argument stdin insertion, first-input-only explicit naming, file-basename naming, old-KB parsing, duplicate-name rejection before copy, stored example-file copying, `KBParseExampleFile` integration, and metadata rewrite order.
 - Standalone `tsm_classify` executable wrapper, including C-compatible help/version text, index/TSM option parsing, output-file handling, concatenated input scanning, `Training:`/`Test:` annotated-term parsing, annotation flattening, fixed class-weight translation, TSM build/evaluation setup, per-term classification progress, and final source-weighted success summary.
-- Standalone `direct_examples` executable wrapper, including C-compatible help/version text, `-V` version shorthand, verbosity, output-file redirection, default stdin input through `-`, multi-file PCL parsing in TPTP scanner mode, FOF stripping, proof-step marking, proof-distance/reference analysis, C-shaped positive/negative example budget selection, LOP axiom/example rendering, and unit coverage for stdin, output files, option compatibility, and verbose progress.
+- Standalone `direct_examples` executable wrapper, including C-compatible help/version text, `-V` version shorthand, verbosity, output-file redirection including `-o -`, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, default stdin input through `-`, multi-file PCL parsing in TPTP scanner mode, FOF stripping, proof-step marking, proof-distance/reference analysis, C-shaped positive/negative example budget selection, LOP axiom/example rendering, and unit coverage for stdin, output files, option compatibility, verbose progress, and diagnostic edge cases.
 
 Pending:
 
 - Remaining learning/support consumers outside the KB and direct-example path still need executable wrappers and filesystem regression coverage.
-- Reference executable comparison on a larger learned-data corpus, direct-example protocol corpus, and performance coverage for the TSM build/classification path.
+- Reference executable comparison on a larger learned-data corpus, direct-example protocol corpus, platform-specific file/broken-pipe suffixes, and performance coverage for the TSM build/classification path.
 
 Change-later notes:
 
