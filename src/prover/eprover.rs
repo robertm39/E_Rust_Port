@@ -14856,6 +14856,7 @@ mod tests {
 
     #[test]
     fn run_version_prints_c_compatible_version_line() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(["eprover", "-V"], &mut stdout, &mut stderr).unwrap();
@@ -14869,6 +14870,7 @@ mod tests {
 
     #[test]
     fn run_help_prints_usage() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = run(["eprover", "-h"], &mut stdout, &mut stderr).unwrap();

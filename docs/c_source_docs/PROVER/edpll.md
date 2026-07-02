@@ -97,10 +97,13 @@ Source files reviewed: `PROVER/edpll.c`.
 - The C executable parses input clauses, prints the `DPLLFormulaParseLOP` `New clause: ...accepted` / `...discarded (tautology)` trace, allocates a `DPLLState`, and exits without calling a solver. The Rust executable intentionally preserves that incomplete behavior.
 - `--dimacs` sets C's `dimacs_format` global but no later code reads it; Rust accepts the flag as a parsed no-op and keeps output identical to the default trace.
 - `--version` prints `classify_problem VERSION` in C even though the executable name is `edpll`; Rust keeps that visible typo for drop-in CLI compatibility.
+- The Rust wrapper preserves default stdin through `-`, output-file routing, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, and the C loop's loose treatment of non-clause trailing input.
 
 ### Change Later
 
 - Decide whether `edpll` should become a working standalone DPLL driver or remain a legacy parser/state-construction helper. Completing it will require changing user-visible behavior from the current "Not completed yet!" C path.
 - If a completed driver is desired, wire `--dimacs` to actual `DPLLFormulaPrint`/DIMACS output deliberately instead of treating the currently unused flag as a hidden output mode.
+- `OpenGlobalOut(outname)` runs before the default `-` input is inserted and before any scanner is created, so output paths can be created or truncated even if later input opening or parsing fails. Rust preserves this order; a cleanup mode could stage output before replacing the destination.
+- `DPLLFormulaParseLOP()` stops when `ClauseStartsMaybe()` is false and does not require end-of-file, so trailing non-clause tokens are silently ignored. Rust preserves this parser boundary; strict validation should be a deliberate non-compatibility behavior.
 - Resource-limit handling is copied into this small C program even though the current executable does not run a search loop. A cleaned CLI could share one resource-limit owner with `eprover` after compatibility mode is separated from modernized behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->
