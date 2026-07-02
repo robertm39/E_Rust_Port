@@ -1,15 +1,23 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clausefunc::clause_set_archive_copy;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::proofstate::{proof_state_alloc, ProofState};
+use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
 use crate::heuristics::clausesetfeatures::{
-    create_default_spec_limits, spec_features_add_eval, spec_features_parse,
-    spec_features_print_string, spec_type_print_string, SpecFeatureCell, SpecLimits,
+    clause_set_count_eqn_literals, clause_set_count_range_restricted, clause_set_count_singletons,
+    clause_set_count_variables, clause_set_max_literal_number, create_default_spec_limits,
+    spec_features_add_eval, spec_features_compute_with_choice_recognition, spec_features_parse,
+    spec_features_print_string, spec_type_print_string, SpecFeatureCell, SpecFeatureClass,
+    SpecLimits,
 };
 use crate::heuristics::rawspecfeatures::{
     raw_spec_features_classify, raw_spec_features_compute, raw_spec_features_format,
-    raw_spec_features_parse, RawSpecFeatureCell,
+    raw_spec_features_parse, RawSpecFeatureCell, RAW_DEFAULT_MASK,
+};
+use crate::heuristics::specsigfeatures::{
+    clause_set_collect_sig_features, spec_sig_feature_format, SpecSigFeatureCell,
 };
 use crate::inout::basicparser::parse_plain_filename;
 use crate::inout::commandline::{
@@ -24,6 +32,7 @@ use crate::prover::version::{E_URL, STS_MAIL, VERSION};
 use crate::terms::signature::{
     FunctionProperties, FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
 };
+use crate::terms::termbanks::TermBank;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -861,10 +870,11 @@ fn execute_classify_problem(
         return Ok(0);
     }
 
-    Err(Diagnostic::new(
-        ErrorCode::OTHER_ERROR,
-        "classify_problem non-raw real problem classification is not ported yet; use --raw-class or --parse-features for the ported paths",
-    ))
+    process_standard_real_input_files(config, stdin, &mut output)?;
+    output
+        .flush()
+        .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
+    Ok(0)
 }
 
 fn process_feature_files(
@@ -911,6 +921,32 @@ fn process_raw_feature_files(
     Ok(())
 }
 
+fn process_standard_real_input_files(
+    config: &ClassifyProblemConfig,
+    stdin: &mut impl Read,
+    output: &mut impl Write,
+) -> Result<(), Diagnostic> {
+    for file in &config.files {
+        let mut state = proof_state_alloc(config.free_symbol_properties)?;
+        parse_real_input_file(config, file, stdin, &mut state)?;
+        apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
+        let raw_features = raw_features_for_standard_classification(config, &state);
+        preprocess_real_input_clauses(config, &mut state)?;
+        if config.specsig_classify {
+            write_specs_sig_real_input(file, output, &mut state)?;
+        } else {
+            write_standard_real_input_classification(
+                config,
+                file,
+                output,
+                &mut state,
+                &raw_features,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn process_raw_real_input_files(
     config: &ClassifyProblemConfig,
     stdin: &mut impl Read,
@@ -929,6 +965,218 @@ fn process_raw_real_input_files(
         write_all(output, b"\n")?;
     }
     Ok(())
+}
+
+fn raw_features_for_standard_classification(
+    config: &ClassifyProblemConfig,
+    state: &ProofState,
+) -> RawSpecFeatureCell {
+    let mut features = RawSpecFeatureCell::default();
+    raw_spec_features_compute(&mut features, state);
+    raw_spec_features_classify(&mut features, &config.limits, Some(RAW_DEFAULT_MASK));
+    features
+}
+
+fn preprocess_real_input_clauses(
+    config: &ClassifyProblemConfig,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
+    {
+        let (bank, axioms, ax_archive) = state.terms_axioms_ax_archive_mut();
+        let _archived = clause_set_archive_copy(ax_archive, axioms, bank)?;
+    }
+    let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
+    if !config.no_preprocessing {
+        let _removed = clause_set_preprocess(
+            axioms,
+            archive,
+            &mut tmp_bank,
+            bank,
+            false,
+            config.eqdef_incrlimit,
+            config.eqdef_maxclauses,
+        )?;
+    }
+    let _unfolded = clause_set_unfold_eq_def_normalize(
+        axioms,
+        watchlist,
+        archive,
+        &mut tmp_bank,
+        bank,
+        config.eqdef_incrlimit,
+        config.eqdef_maxclauses,
+    )?;
+    Ok(())
+}
+
+fn write_standard_real_input_classification(
+    config: &ClassifyProblemConfig,
+    file: &str,
+    output: &mut impl Write,
+    state: &mut ProofState,
+    raw_features: &RawSpecFeatureCell,
+) -> Result<(), Diagnostic> {
+    let mut features = SpecFeatureCell::default();
+    {
+        let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_mut();
+        spec_features_compute_with_choice_recognition(
+            &mut features,
+            axioms,
+            Some(f_axioms),
+            Some(f_ax_archive),
+            bank,
+        )?;
+    }
+    features.order = raw_features.order;
+    features.goal_order = raw_features.conj_order;
+    features.num_of_definitions = raw_features.num_of_definitions;
+    features.perc_of_form_defs = raw_features.perc_of_form_defs;
+    spec_features_add_eval(&mut features, &config.limits);
+
+    if config.tptp_header {
+        write_tptp_header(output, state, &features)
+    } else {
+        write_all(output, file.as_bytes())?;
+        write_all(output, b" : ")?;
+        write_all(output, spec_features_print_string(&features).as_bytes())?;
+        write_all(output, b" : ")?;
+        write_all(
+            output,
+            spec_type_print_string(&features, &config.mask).as_bytes(),
+        )?;
+        write_all(output, b"\n")
+    }
+}
+
+fn write_specs_sig_real_input(
+    file: &str,
+    output: &mut impl Write,
+    state: &mut ProofState,
+) -> Result<(), Diagnostic> {
+    let mut features = SpecSigFeatureCell::new();
+    let (bank, axioms) = state.terms_and_axioms_mut();
+    clause_set_collect_sig_features(bank, axioms, &mut features);
+    write_all(output, file.as_bytes())?;
+    write_all(output, b" : ")?;
+    write_all(output, spec_sig_feature_format(&features).as_bytes())?;
+    write_all(output, b" : \n")
+}
+
+fn write_tptp_header(
+    output: &mut impl Write,
+    state: &ProofState,
+    features: &SpecFeatureCell,
+) -> Result<(), Diagnostic> {
+    let axioms = state.axioms();
+    let signature = state.terms().signature();
+    writeln_diag(
+        output,
+        &format!(
+            "% Syntax   : Number of clauses    : {:4} ({:4} non-Horn; {:3} unit; {:3} RR)",
+            features.clauses,
+            features.clauses - features.horn,
+            features.unit,
+            clause_set_count_range_restricted(axioms)
+        ),
+    )?;
+    writeln_diag(
+        output,
+        &format!(
+            "%            Number of literals   : {:4} ({:4} equality)",
+            features.literals,
+            clause_set_count_eqn_literals(axioms)
+        ),
+    )?;
+    let average_clause_size = if features.clauses == 0 {
+        "-".to_owned()
+    } else {
+        format!("{:4}", features.literals / features.clauses)
+    };
+    writeln_diag(
+        output,
+        &format!(
+            "%            Maximal clause size  : {:4} ({average_clause_size} average)",
+            clause_set_max_literal_number(axioms)
+        ),
+    )?;
+
+    let mut predicate_count = signature.count_symbols(true);
+    let mut min_predicate_arity = signature.find_min_predicate_arity();
+    let mut max_predicate_arity = signature.find_max_predicate_arity();
+    if features.eq_content != SpecFeatureClass::NoEq {
+        predicate_count += 1;
+        min_predicate_arity = min_predicate_arity.min(2);
+        max_predicate_arity = max_predicate_arity.max(2);
+    }
+    write_symbol_arity_line(
+        output,
+        "predicates",
+        predicate_count,
+        signature.count_arity_symbols(0, true),
+        min_predicate_arity,
+        max_predicate_arity,
+        "propositional",
+    )?;
+
+    write_symbol_arity_line(
+        output,
+        "functors",
+        signature.count_symbols(false),
+        signature.count_arity_symbols(0, false),
+        signature.find_min_function_arity(),
+        signature.find_max_function_arity(),
+        "constant",
+    )?;
+
+    writeln_diag(
+        output,
+        &format!(
+            "%            Number of variables  : {:4} ({:4} singleton)",
+            clause_set_count_variables(axioms),
+            clause_set_count_singletons(axioms)
+        ),
+    )?;
+    if features.literals != 0 {
+        writeln_diag(
+            output,
+            &format!(
+                "%            Maximal term depth   : {:4} ({:4} average)",
+                features.clause_max_depth, features.clause_avg_depth
+            ),
+        )
+    } else {
+        writeln_diag(
+            output,
+            "%            Maximal term depth   :    - (   - average)",
+        )
+    }
+}
+
+fn write_symbol_arity_line(
+    output: &mut impl Write,
+    label: &str,
+    symbol_count: i32,
+    arity_zero_count: i32,
+    min_arity: i32,
+    max_arity: i32,
+    zero_label: &str,
+) -> Result<(), Diagnostic> {
+    if symbol_count == 0 {
+        writeln_diag(
+            output,
+            &format!(
+                "%            Number of {label:<10} : {symbol_count:4} ({arity_zero_count:4} {zero_label}; --- arity)"
+            ),
+        )
+    } else {
+        writeln_diag(
+            output,
+            &format!(
+                "%            Number of {label:<10} : {symbol_count:4} ({arity_zero_count:4} {zero_label}; {min_arity}-{max_arity} arity)"
+            ),
+        )
+    }
 }
 
 fn parse_real_input_file(
@@ -1430,13 +1678,62 @@ mod tests {
     }
 
     #[test]
-    fn non_raw_real_problem_path_is_explicitly_pending() {
+    fn stdin_standard_real_problem_classifies_supported_tstp_input() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) =
+            run_with_stdin(&[PROGRAM_NAME, "--tstp-format"], input).expect("run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stdout.starts_with("- : ("));
+        assert!(stdout.contains(" : F"));
+        assert!(stdout.ends_with('\n'));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn stdin_standard_real_problem_can_print_specs_sig_features() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) =
+            run_with_stdin(&[PROGRAM_NAME, "--tstp-format", "--specsig"], input)
+                .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stdout.starts_with("- : "));
+        assert!(stdout.ends_with(" : \n"));
+        assert!(stdout.matches(',').count() > 80);
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn stdin_standard_real_problem_can_print_tptp_header() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--tstp-format", "--generate-tptp-header"],
+            input,
+        )
+        .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stdout.starts_with("% Syntax   : Number of clauses"));
+        assert!(stdout.contains("%            Number of predicates"));
+        assert!(stdout.contains("%            Maximal term depth"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn merged_real_problem_path_is_explicitly_pending() {
         let _guard = global_state_lock();
         let mut stdin = Cursor::new(b"cnf(c1, axiom, (p(a))).\n".to_vec());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let error = run(
-            [PROGRAM_NAME, "--tstp-format"],
+            [PROGRAM_NAME, "--tstp-format", "--merged-classification=1"],
             &mut stdin,
             &mut stdout,
             &mut stderr,
@@ -1444,7 +1741,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("not ported yet"));
+        assert!(error.message().contains("merged"));
         assert!(stdout.is_empty());
         assert!(String::from_utf8(stderr)
             .expect("stderr is utf8")

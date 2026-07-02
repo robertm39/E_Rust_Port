@@ -115,6 +115,7 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - `process_feature_files()` calls `SpecFeaturesAddEval()` after parsing and then prints the feature vector and `SpecTypePrint()` classification. `process_raw_feature_files()` calls `RawSpecFeaturesClassify()` and prints only `RawSpecFeaturesPrint()`, whose output already includes the raw class.
 - `--parse-features` is described as conflicting with `--generate-tptp-header`, but the C control flow does not reject the combination; the parse-feature branch ignores header generation.
 - The real-input `--raw-class` branch still runs the normal real-input parser and `ProofStateSinE()` before computing `RawSpecFeaturesCompute()`, but stops before formula CNF, clause preprocessing, spec-signature output, or TPTP header generation.
+- The non-raw real-input branch computes raw features before formula CNF/preprocessing, then copies the raw order and formula-definition fields back into the final `SpecFeatureCell` after `SpecFeaturesCompute()`.
 
 ### Change Later
 
@@ -123,4 +124,5 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - `process_options()` mutates many globals that are used only by the real-input branch. A Rust cleanup should keep parse-feature options separate from clausification/preprocessing options once drop-in behavior is covered.
 - `do_raw_classification()` depends on global `raw_mask` even though the mask is otherwise parsed as command-line state. A cleaned API should pass all classification inputs explicitly after the drop-in executable behavior is covered.
 - The real-input path shares one `skip_includes` tree across all files in `main()`. Preserve this while matching C include semantics, but revisit whether cross-file include suppression is intentional for a modern API.
+- `print_tptp_header()` calls `ClauseSetTPTPDepthInfoAdd()` to fill local depth variables, but the printed depth fields come from the already-computed `SpecFeatureCell`. Keep the visible output for compatibility, then remove or explain the unused local computation in a cleanup pass.
 <!-- END MANUAL REVIEW: c_source_docs -->

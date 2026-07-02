@@ -640,11 +640,12 @@ Implemented:
 - Ported `--parse-features` consumer for ordinary `SpecFeature` lines: it parses `<name> : <features> : <old-class>`, recomputes threshold-based evaluation fields with `SpecFeaturesAddEval`, prints `SpecFeaturesPrint`, and appends `SpecTypePrint` using the current class mask.
 - Ported `--parse-features --raw-class` consumer for `RawSpecFeature` lines: it parses `<name> : <raw-features> : <old-class>`, recomputes the raw class with the current raw mask, and prints `RawSpecFeaturesPrint`.
 - Ported real-input `--raw-class` classification for the currently supported problem parser fragments. The executable allocates a `ProofState` with `--free-numbers`/`--free-objects` symbol properties, parses each input file or stdin through the shared clause/TPTP/TSTP parser, applies silent `--sine` filtering, computes `RawSpecFeaturesCompute`, and prints the C-shaped `<name> : <RawSpecFeaturesPrint>` line.
+- Ported standard real-input classification for the currently supported parser fragments: it computes the raw formula metadata used by C, archives/preprocesses clauses with C-shaped equation-definition unfolding controls, computes `SpecFeaturesCompute`, restores formula-derived order/definition fields from the raw pass, applies `SpecFeaturesAddEval`, and prints either `<name> : <SpecFeaturesPrint> : <SpecTypePrint>`, `--specsig` signature features, or `--generate-tptp-header` syntax lines.
 
 Pending:
 
-- Full real problem parsing/classification remains pending: exact `FormulaAndClauseSetParse` parity beyond the parser fragments already shared with `eprover`, non-raw formula preprocessing/CNF, clause-set preprocessing, specsig output, TPTP header generation, and merged classification with clausification timeout are not wired into this executable yet.
-- Byte-for-byte comparison against a built C `classify_problem` executable remains pending for malformed feature lines, stdin/file diagnostics, output-close behavior, raw real-input formula edge cases, and all non-raw real-input classification modes.
+- Full real problem parsing/classification remains pending: exact `FormulaAndClauseSetParse` parity beyond the parser fragments already shared with `eprover`, formula-owner preservation through C's full `FormulaSetPreprocConjectures`/`FormulaSetCNF2` pipeline, and merged classification with clausification timeout are not wired into this executable yet.
+- Byte-for-byte comparison against a built C `classify_problem` executable remains pending for malformed feature lines, stdin/file diagnostics, output-close behavior, raw real-input formula edge cases, standard/specsig/header real-input edge cases, and merged classification.
 
 Change-later notes:
 
@@ -652,6 +653,7 @@ Change-later notes:
 - The C option table exposes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case, so release builds effectively ignore it while assertion-enabled builds can trip the default case. Rust accepts it as a no-op for now and documents the real-input path as pending.
 - The C help text states `--parse-features` conflicts with `--generate-tptp-header`, but the parse-feature branch simply ignores header generation. Rust keeps parse-feature output focused on the C branch behavior.
 - C raw real-input classification computes raw features before clausification over formula sets. The Rust path currently reuses the shared parser's formula-to-clause bridge plus raw-formula correction counters; this keeps the executable moving but should be revisited once exact `FormulaAndClauseSetParse` formula-set preservation is ported.
+- `print_tptp_header()` computes local depth aggregates with `ClauseSetTPTPDepthInfoAdd()` but prints the already-computed `SpecFeatureCell` depth fields. Rust preserves the visible output; a cleanup can remove the unused local depth calculation after compatibility checks.
 
 ## edpll Executable
 
