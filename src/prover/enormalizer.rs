@@ -1461,6 +1461,44 @@ mod tests {
     }
 
     #[test]
+    fn output_file_is_created_before_later_rule_open_failure() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("early_output");
+        let missing_path = temp_path("missing_rules_after_output");
+        let _ = fs::remove_file(&output_path);
+        let _ = fs::remove_file(&missing_path);
+        let stdin_data = empty_stdin();
+        let mut stdin = stdin_data.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("utf8 path"),
+                missing_path.to_str().expect("utf8 path"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("missing rule file is reported after output creation");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(output_path.exists());
+        assert_eq!(fs::read_to_string(&output_path).expect("output read"), "");
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
     fn output_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
         let output_path = temp_path("output_dir");

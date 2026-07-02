@@ -1225,6 +1225,43 @@ mod tests {
     }
 
     #[test]
+    fn output_file_is_created_before_later_input_open_failure() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("epatternize-early-output");
+        let missing_path = temp_path("epatternize-missing-after-output");
+        let _ = fs::remove_file(&output_path);
+        let _ = fs::remove_file(&missing_path);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"";
+
+        let error = run(
+            [
+                "epatternize",
+                "-o",
+                output_path.to_str().unwrap(),
+                missing_path.to_str().unwrap(),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(output_path.exists());
+        assert_eq!(fs::read_to_string(&output_path).unwrap(), "");
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
     fn output_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
         let output_path = temp_path("epatternize-output-dir");
