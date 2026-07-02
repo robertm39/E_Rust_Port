@@ -37,8 +37,8 @@ use crate::clauses::clause_props::{
     CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
-    clause_set_archive_copy, clause_set_recognize_choice, tformula_fcode_alloc, tformula_lit_alloc,
-    tformula_prop_constant_alloc,
+    clause_set_archive_copy, clause_set_recognize_choice, tcf_tstp_parse, tformula_fcode_alloc,
+    tformula_lit_alloc, tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -9027,7 +9027,8 @@ fn parse_simple_tstp_app_encode_formula(
 
     let formula_type = clause_type_from_identifier(&role, formula_problem_type);
     let formula_position = token_pos_rep(scanner.current_token());
-    let formulas = parse_simple_fof_formulas(scanner, bank, formula_problem_type)?;
+    let formulas =
+        parse_simple_tstp_body_formulas(scanner, bank, &formula_kind, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
@@ -9134,7 +9135,8 @@ fn parse_simple_tstp_formula_clause(
         clause_type = CP_TYPE_NEG_CONJECTURE;
     }
     let formula_position = token_pos_rep(scanner.current_token());
-    let mut formulas = parse_simple_fof_formulas(scanner, bank, formula_problem_type)?;
+    let mut formulas =
+        parse_simple_tstp_body_formulas(scanner, bank, &formula_kind, formula_problem_type)?;
     if !simple_fof_global_free_variables(&formulas).is_empty() {
         return Err(tstp_formula_free_variables_error(&formula_position));
     }
@@ -11841,6 +11843,24 @@ fn parse_simple_fof_formulas(
     problem_type: ProblemType,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     parse_simple_fof_connective_formulas(scanner, bank, problem_type)
+}
+
+fn parse_simple_tstp_body_formulas(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+    formula_kind: &str,
+    problem_type: ProblemType,
+) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
+    if formula_kind != "tcf" {
+        return parse_simple_fof_formulas(scanner, bank, problem_type);
+    }
+
+    let formula = tcf_tstp_parse(scanner, bank, problem_type)?;
+    simple_fof_bool_term_to_formulas(
+        &formula,
+        SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
+        bank,
+    )
 }
 
 fn parse_simple_fof_connective_formulas(
@@ -14779,6 +14799,33 @@ mod tests {
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("SZS status"));
         assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_rejects_tcf_parenthesized_non_clause_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tcf-non-clause-body");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(q_type, type, q: person > $o).\n\
+             tcf(bad, axiom, ![X: person]:(p(X)&q(X))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -23903,6 +23950,35 @@ mod tests {
 
         assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
         assert!(error.message().contains("did not contain any clauses"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_rejects_tcf_parenthesized_non_clause_body() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tcf-non-clause-body");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(p_type, type, p: person > $o).\n\
+             tff(q_type, type, q: person > $o).\n\
+             tcf(bad, axiom, ![X: person]:(p(X)&q(X))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
