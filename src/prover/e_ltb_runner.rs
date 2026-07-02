@@ -20,7 +20,7 @@ use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::typebanks::TypeBank;
 use std::fs::File;
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -394,7 +394,9 @@ fn open_output_file_before_usage_error(path: Option<&str>) -> Result<(), Diagnos
 }
 
 fn create_output_file(path: &str) -> Result<File, Diagnostic> {
-    File::create(path).map_err(|error| io_diagnostic(format!("Cannot open file {path}: {error}")))
+    File::create(path).map_err(|error| {
+        e_ltb_runner_sys_error_diagnostic(format!("Cannot open file {path}"), &error)
+    })
 }
 
 fn execute_config(config: &LtbRunnerConfig, output: &mut impl Write) -> Result<u8, Diagnostic> {
@@ -925,10 +927,17 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn e_ltb_runner_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        execute_config_with_processor, execute_config_with_processors,
+        create_output_file, execute_config_with_processor, execute_config_with_processors,
         execute_variant_child_with_backend, new_term_bank, parse_variant_child_args, print_help,
         process_interactive_batch_with_backend, process_options, remaining_total_wtc_limit, run,
         LtbBatchJob, LtbRunnerConfig, LtbVariantChildConfig, LtbVariantMode, RunCommand,
@@ -1117,7 +1126,40 @@ mod tests {
         assert!(error
             .message()
             .starts_with(&format!("Cannot open file {}", path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
+
+        fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn output_dash_does_not_create_literal_dash_file_before_usage_error() {
+        let dash_path = PathBuf::from("-");
+        let _ = fs::remove_file(&dash_path);
+        let mut stdout = Vec::new();
+
+        let error = process_options([PROGRAM_NAME, "-o", "-"], &mut stdout).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(error.message(), C_USAGE_ERROR);
+        assert!(!dash_path.exists());
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn create_output_file_failure_uses_c_syserror_shape() {
+        let path = test_temp_dir().join(format!("runner-create-output-dir-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(&path);
+        fs::create_dir_all(&path).unwrap();
+
+        let error = create_output_file(path.to_str().expect("test path is utf8")).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
 
         fs::remove_dir(path).unwrap();
     }
