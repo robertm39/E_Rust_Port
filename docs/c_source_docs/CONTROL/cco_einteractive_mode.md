@@ -137,6 +137,19 @@ Source files reviewed: `CONTROL/cco_einteractive_mode.h`, `CONTROL/cco_einteract
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/control/einteractive_mode.rs` starts the Rust port of `cco_einteractive_mode` with the deduction-server command names, block terminator, success/error response strings, help text, and the C `AXIOM_SET_NAME_TOKENS`/`AcceptAxiomSetName` scanner loop.
+- Tests cover the command/response string surface, token-mask membership, whitespace-tolerant name concatenation, stopping before unaccepted tokens, and the C-compatible empty-name acceptance path.
+- Full interactive-server ownership remains pending: axiom-set storage over clause/formula owners, directory-library listing, staged/unstaged problem mutation, socket/stdout transport, block command parsing, and forked `RUN` job execution are not wired yet.
+
+### Change-Later Observations
+
+- `AcceptAxiomSetName` accepts zero tokens and uses ordinary scanner token tests, so whitespace between name fragments is silently removed while slashes stop the name. Command words such as `GO` are still acceptable name tokens if they appear in the same token run; the protocol relies on block terminators being on their own line. Rust preserves this parser shape, but a cleaned server protocol should require a nonempty name and probably use a single filename/name grammar.
+- `AxiomSetAlloc` takes a `staged` argument but ignores it and always initializes `handle->staged = 0`. Preserve that when porting allocation, but treat the parameter as an obsolete API artifact once compatibility is covered.
+- `get_directory_listings` allocates the result stack before `opendir()` and returns `NULL` without freeing it on open failure; it also depends on `dirent.d_type == DT_REG` except on Solaris. A Rust port should preserve visible regular-file filtering and output ordering where needed while avoiding the leak and handling filesystems that report unknown `d_type`.
+- `StartDeductionServer` has a stdout/file-pointer path in its signature, but the implementation prints "Server mode not implemented yet for stdout" and exits unless `sock_fd != -1`. Keep socket-only behavior for drop-in compatibility until reference server tests cover the stdout path.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

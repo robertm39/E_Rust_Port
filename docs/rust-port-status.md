@@ -266,11 +266,14 @@ Change-later notes:
 Rust files:
 
 - `src/control/mod.rs`
+- `src/control/einteractive_mode.rs`
 - `src/control/eserver.rs`
 - `src/control/esession.rs`
 
 C source references:
 
+- `eprover/CONTROL/cco_einteractive_mode.c`
+- `eprover/CONTROL/cco_einteractive_mode.h`
 - `eprover/CONTROL/cco_eserver.c`
 - `eprover/CONTROL/cco_eserver.h`
 - `eprover/CONTROL/cco_esession.c`
@@ -280,9 +283,11 @@ Implemented:
 
 - Initial E server/session owner surface, including `ESessionState` discriminants, session allocation over the ported queued `TcpChannel`, explicit read/write descriptor-interest sets corresponding to the C `fd_set` inputs, C-shaped active/stale/no-state readiness filtering, write readiness when outbound messages are queued, read-side `"wait"` reply queuing after a complete inbound message, stale transition and channel close on read/write error or closed connection, and testable `ESessionProcessCmds`-style received-message rendering.
 - Initial `EServer` allocation/listen/accept/readiness support over the safe `TcpListener`/`TcpStream` wrappers, including the C not-listening default, listener descriptor registration, accepted-session queuing, and maximum-descriptor calculation over listener and sessions.
+- Initial deduction-server interactive-mode surface from `cco_einteractive_mode`, including command names, block terminator, success/error response strings, help text, and the whitespace-tolerant `AcceptAxiomSetName` token loop.
 
 Pending:
 
+- Full deduction-server interactive command dispatch, including axiom-set clause/formula ownership, server-library loading/listing, stage/unstage/remove/download mutations, socket/stdout output transport, block command reads, and forked `RUN` job execution.
 - Exact event-loop integration for `select`/`fd_set` or a compatible platform abstraction.
 - Full subprocess I/O in session processing; `cco_proc_ctrl` descriptor registration is represented, but the C session code leaves actual subprocess I/O as a TODO.
 - Server executable/control wiring, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
@@ -293,6 +298,7 @@ Change-later notes:
 - `EServerInitFDSet` does not guard against `listening == -1` before `FD_SET(server->listening, rd_fds)`. Rust only registers a listener descriptor when one exists; preserve the invalid C call surface only in a low-level compatibility shim if a reference path depends on it.
 - `ESessionProcessCmds` only prints `Received: ...` for queued messages and does not dispatch commands. Rust routes this through an explicit writer for testability; executable server integration should decide where the C direct-stdout behavior belongs.
 - C `fd_set` handling and raw integer socket ownership are represented as safe descriptor-interest collection plus owned Rust sockets. Keep this as an adapter boundary so later platform event loops can target either exact `select` behavior or a cleaner poll abstraction without changing session state semantics.
+- `AcceptAxiomSetName` accepts empty names and concatenates accepted token fragments across whitespace, with no special stop for command words such as `GO`, while `AxiomSetAlloc` ignores its `staged` parameter. Rust keeps both visible for now; a cleaned server API should validate names and remove dead allocation parameters after server compatibility tests exist.
 
 ## E Process Control
 
