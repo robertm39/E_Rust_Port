@@ -2,9 +2,7 @@ use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
-use crate::heuristics::prefixweight::{
-    prefix_code_match_counts, prefix_code_ref_count, prefix_compute_term_code, PrefixToken,
-};
+use crate::clauses::pdtrees::{prefix_compute_term_code, PdTree};
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::termweights::{
     parse_c_int, parse_related_term_set, parse_term_weight_extension_style, parse_var_norm_style,
@@ -25,8 +23,7 @@ use std::cell::RefCell;
 struct TfIdfEvalState {
     eval_bank: TermBank,
     eval_freqs: TermFrequencyTree,
-    document_terms: Vec<Term>,
-    document_codes: Vec<Vec<PrefixToken>>,
+    document_index: PdTree,
 }
 
 impl TfIdfEvalState {
@@ -35,14 +32,12 @@ impl TfIdfEvalState {
             eval_bank: TermBank::new(signature.clone())
                 .unwrap_or_else(|err| panic!("ConjectureTermTfIdfWeight eval bank init: {err}")),
             eval_freqs: TermFrequencyTree::new(),
-            document_terms: Vec::new(),
-            document_codes: Vec::new(),
+            document_index: PdTree::new(),
         }
     }
 
     fn document_count(&self) -> usize {
-        debug_assert_eq!(self.document_terms.len(), self.document_codes.len());
-        self.document_terms.len()
+        self.document_index.term_count()
     }
 }
 
@@ -170,9 +165,9 @@ impl TfIdfWeightParam {
             .unwrap_or(0);
         let tf = (self.tf_fact * (i64_to_f64(term_frequency) - 1.0)) + 1.0;
         let code = prefix_compute_term_code(&norm);
-        let (_, remains) = prefix_code_match_counts(&code, &state.document_codes);
-        let df = if remains == 0 {
-            prefix_code_ref_count(&code, &state.document_codes)
+        let prefix_match = state.document_index.match_code_prefix(&code);
+        let df = if prefix_match.remains == 0 {
+            state.document_index.prefix_ref_count(&code)
         } else {
             0
         };
@@ -406,9 +401,7 @@ fn tfidf_documents_add_term_to_state(
     var_norm: VarNormStyle,
 ) {
     let norm = term_copy_normalize_vars(state.eval_bank.vars(), term, var_norm);
-    let code = prefix_compute_term_code(&norm);
-    state.document_terms.push(norm);
-    state.document_codes.push(code);
+    state.document_index.insert_term(&norm);
 }
 
 #[allow(clippy::cast_precision_loss)]
