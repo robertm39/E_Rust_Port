@@ -97,6 +97,10 @@ impl StructFofSpec {
         self.shared_ax_f_count = signature.f_count();
     }
 
+    pub fn mark_current_problem_stack_shared(&mut self) {
+        self.shared_ax_sp = self.clause_sets.len();
+    }
+
     pub fn init_distrib(&mut self, signature: &Signature, trim_implications: bool) {
         self.f_distrib.size_adjust(signature);
         let f_distrib = &mut self.f_distrib;
@@ -130,6 +134,44 @@ impl StructFofSpec {
     ) {
         self.clause_sets.push(clauses);
         self.formula_sets.push(formulas);
+    }
+
+    pub fn remove_problem_by_identifier(
+        &mut self,
+        signature: &Signature,
+        identifier: &str,
+    ) -> bool {
+        debug_assert_eq!(self.clause_sets.len(), self.formula_sets.len());
+
+        let mut clause_spare_stack = Vec::new();
+        let mut formula_spare_stack = Vec::new();
+        let mut found = false;
+
+        while let (Some(clauses), Some(formulas)) =
+            (self.clause_sets.pop(), self.formula_sets.pop())
+        {
+            debug_assert_eq!(clauses.identifier(), formulas.identifier());
+            if clauses.identifier() == identifier {
+                self.f_distrib
+                    .add_formula_set(signature, &formulas, false, -1);
+                self.f_distrib.add_clause_set(&clauses, -1);
+                found = true;
+                break;
+            }
+
+            clause_spare_stack.push(clauses);
+            formula_spare_stack.push(formulas);
+        }
+
+        while let (Some(clauses), Some(formulas)) =
+            (clause_spare_stack.pop(), formula_spare_stack.pop())
+        {
+            self.clause_sets.push(clauses);
+            self.formula_sets.push(formulas);
+        }
+
+        self.shared_ax_sp = self.clause_sets.len();
+        found
     }
 
     pub fn backtrack_to_spec(&mut self, signature: &Signature) -> StructFofSpecBacktrackReport {
@@ -435,6 +477,36 @@ mod tests {
         assert_eq!(report.signature_backtrack_to, signature_target);
         assert_eq!(spec.clause_set_count(), 1);
         assert_eq!(spec.formula_set_count(), 1);
+    }
+
+    #[test]
+    fn remove_problem_by_identifier_restores_nonmatching_stack_entries() {
+        let mut bank = test_bank();
+        let mut spec = StructFofSpec::new(bank.signature());
+        for (name, ident) in [("first", 1), ("remove_me", 2), ("last", 3)] {
+            let mut clauses = clause_set_with_clause(&mut bank, name, ident, CP_TYPE_AXIOM);
+            clauses.set_identifier(name);
+            let mut formulas = FormulaSet::new();
+            formulas.set_identifier(name);
+            spec.add_problem(bank.signature(), clauses, formulas, false);
+        }
+        spec.mark_current_problem_stack_shared();
+
+        assert!(spec.remove_problem_by_identifier(bank.signature(), "remove_me"));
+
+        assert_eq!(spec.clause_set_count(), 2);
+        assert_eq!(spec.formula_set_count(), 2);
+        assert_eq!(spec.shared_ax_sp(), 2);
+        let selection = spec
+            .get_problem(bank.signature(), &AxFilter::threshold(10))
+            .unwrap();
+        let clause_ids = selection
+            .clauses
+            .as_slice()
+            .iter()
+            .map(|clause| clause.ident())
+            .collect::<Vec<_>>();
+        assert_eq!(clause_ids, [1, 3]);
     }
 
     #[test]

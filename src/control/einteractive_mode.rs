@@ -4,7 +4,9 @@ use std::{ffi::OsStr, fmt::Write as _, fs, path::Path};
 
 use crate::basics::error::Diagnostic;
 use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
+use crate::control::sine::StructFofSpec;
 use crate::inout::scanner::{Scanner, TokenType};
+use crate::terms::signature::Signature;
 
 pub const STAGE_COMMAND: &str = "STAGE";
 pub const UNSTAGE_COMMAND: &str = "UNSTAGE";
@@ -173,6 +175,63 @@ impl InteractiveSpec {
         }
     }
 
+    /// C `stage_command`.
+    pub fn stage_command(
+        &mut self,
+        ctrl: &mut StructFofSpec,
+        signature: &Signature,
+        axiom_set: &str,
+    ) -> &'static str {
+        let Some(index) = self
+            .axiom_sets
+            .iter()
+            .position(|handle| handle.name() == axiom_set)
+        else {
+            return ERR_UNKNOWN_AXIOM_SET_MESSAGE;
+        };
+
+        if self.axiom_sets[index].is_staged() {
+            return ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE;
+        }
+
+        ctrl.add_problem(
+            signature,
+            self.axiom_sets[index].clause_set().clone(),
+            self.axiom_sets[index].formula_set().clone(),
+            false,
+        );
+        self.axiom_sets[index].set_staged(true);
+        ctrl.mark_current_problem_stack_shared();
+        OK_STAGED_MESSAGE
+    }
+
+    /// C `unstage_command`.
+    pub fn unstage_command(
+        &mut self,
+        ctrl: &mut StructFofSpec,
+        signature: &Signature,
+        axiom_set: &str,
+    ) -> &'static str {
+        let Some(index) = self
+            .axiom_sets
+            .iter()
+            .position(|handle| handle.name() == axiom_set)
+        else {
+            return ERR_UNKNOWN_AXIOM_SET_MESSAGE;
+        };
+
+        if !self.axiom_sets[index].is_staged() {
+            return ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE;
+        }
+
+        self.axiom_sets[index].set_staged(false);
+        if ctrl.remove_problem_by_identifier(signature, axiom_set) {
+            OK_UNSTAGED_MESSAGE
+        } else {
+            ERR_UNKNOWN_AXIOM_SET_MESSAGE
+        }
+    }
+
     /// C `list_command`.
     #[must_use]
     pub fn list_command(&self) -> InteractiveCommandOutput {
@@ -336,13 +395,17 @@ pub fn get_directory_listings(dirname: impl AsRef<Path>) -> Option<Vec<String>> 
 mod tests {
     use super::{
         accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, AxiomSet,
-        InteractiveSpec, ADD_COMMAND, END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
+        InteractiveSpec, ADD_COMMAND, END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
+        ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
         ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_UNKNOWN_AXIOM_SET_MESSAGE,
         ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_ADDED_MESSAGE, OK_DOWNLOADED_MESSAGE,
-        OK_REMOVED_MESSAGE, OK_SUCCESS_MESSAGE, STAGE_COMMAND,
+        OK_REMOVED_MESSAGE, OK_STAGED_MESSAGE, OK_SUCCESS_MESSAGE, OK_UNSTAGED_MESSAGE,
+        STAGE_COMMAND,
     };
     use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
+    use crate::control::sine::StructFofSpec;
     use crate::inout::scanner::{Scanner, TokenType};
+    use crate::terms::{signature::Signature, typebanks::TypeBank};
     use std::{
         collections::BTreeSet,
         fs,
@@ -367,6 +430,10 @@ mod tests {
             .axiom_sets()
             .map(|axiom_set| axiom_set.name().to_owned())
             .collect()
+    }
+
+    fn test_signature() -> Signature {
+        Signature::new(TypeBank::new())
     }
 
     struct ScratchDir {
@@ -519,6 +586,129 @@ mod tests {
 
         assert_eq!(interactive.axiom_set_count(), 1);
         assert_eq!(interactive.download_command("dup").output, "first");
+    }
+
+    #[test]
+    fn stage_command_adds_problem_to_control_and_marks_shared_boundary() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("stage_me", "raw", false)),
+            OK_ADDED_MESSAGE
+        );
+
+        assert_eq!(
+            interactive.stage_command(&mut ctrl, &signature, "stage_me"),
+            OK_STAGED_MESSAGE
+        );
+
+        assert!(interactive.axiom_set_mut("stage_me").unwrap().is_staged());
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+    }
+
+    #[test]
+    fn stage_command_reports_unknown_or_already_staged_without_extra_problem() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("once", "raw", false)),
+            OK_ADDED_MESSAGE
+        );
+
+        assert_eq!(
+            interactive.stage_command(&mut ctrl, &signature, "missing"),
+            ERR_UNKNOWN_AXIOM_SET_MESSAGE
+        );
+        assert_eq!(
+            interactive.stage_command(&mut ctrl, &signature, "once"),
+            OK_STAGED_MESSAGE
+        );
+        assert_eq!(
+            interactive.stage_command(&mut ctrl, &signature, "once"),
+            ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE
+        );
+
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+    }
+
+    #[test]
+    fn unstage_command_removes_matching_control_problem_and_updates_boundary() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let mut interactive = InteractiveSpec::new("");
+        for name in ["first", "second"] {
+            assert_eq!(
+                interactive.add_axiom_set(axiom_set(name, name, false)),
+                OK_ADDED_MESSAGE
+            );
+            assert_eq!(
+                interactive.stage_command(&mut ctrl, &signature, name),
+                OK_STAGED_MESSAGE
+            );
+        }
+
+        assert_eq!(
+            interactive.unstage_command(&mut ctrl, &signature, "first"),
+            OK_UNSTAGED_MESSAGE
+        );
+
+        assert!(!interactive.axiom_set_mut("first").unwrap().is_staged());
+        assert!(interactive.axiom_set_mut("second").unwrap().is_staged());
+        assert_eq!(ctrl.clause_set_count(), 1);
+        assert_eq!(ctrl.formula_set_count(), 1);
+        assert_eq!(ctrl.shared_ax_sp(), 1);
+    }
+
+    #[test]
+    fn unstage_command_reports_unknown_or_already_unstaged() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("plain", "raw", false)),
+            OK_ADDED_MESSAGE
+        );
+
+        assert_eq!(
+            interactive.unstage_command(&mut ctrl, &signature, "missing"),
+            ERR_UNKNOWN_AXIOM_SET_MESSAGE
+        );
+        assert_eq!(
+            interactive.unstage_command(&mut ctrl, &signature, "plain"),
+            ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE
+        );
+
+        assert_eq!(ctrl.clause_set_count(), 0);
+        assert_eq!(ctrl.shared_ax_sp(), 0);
+    }
+
+    #[test]
+    fn unstage_command_preserves_c_flag_clear_before_missing_control_set_error() {
+        let signature = test_signature();
+        let mut ctrl = StructFofSpec::new(&signature);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("orphan", "raw", false)),
+            OK_ADDED_MESSAGE
+        );
+        interactive
+            .axiom_set_mut("orphan")
+            .unwrap()
+            .set_staged(true);
+
+        assert_eq!(
+            interactive.unstage_command(&mut ctrl, &signature, "orphan"),
+            ERR_UNKNOWN_AXIOM_SET_MESSAGE
+        );
+
+        assert!(!interactive.axiom_set_mut("orphan").unwrap().is_staged());
+        assert_eq!(ctrl.clause_set_count(), 0);
+        assert_eq!(ctrl.shared_ax_sp(), 0);
     }
 
     #[test]

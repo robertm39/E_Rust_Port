@@ -283,11 +283,11 @@ Implemented:
 
 - Initial E server/session owner surface, including `ESessionState` discriminants, session allocation over the ported queued `TcpChannel`, explicit read/write descriptor-interest sets corresponding to the C `fd_set` inputs, C-shaped active/stale/no-state readiness filtering, write readiness when outbound messages are queued, read-side `"wait"` reply queuing after a complete inbound message, stale transition and channel close on read/write error or closed connection, and testable `ESessionProcessCmds`-style received-message rendering.
 - Initial `EServer` allocation/listen/accept/readiness support over the safe `TcpListener`/`TcpStream` wrappers, including the C not-listening default, listener descriptor registration, accepted-session queuing, and maximum-descriptor calculation over listener and sessions.
-- Initial deduction-server interactive-mode surface from `cco_einteractive_mode`, including command names, block terminator, success/error response strings, help text, the whitespace-tolerant `AcceptAxiomSetName` token loop, `AxiomSet`/`InteractiveSpec` state over parsed clause/formula sets, duplicate-name add handling for already parsed axiom sets, C-shaped `LIST`, `DOWNLOAD`, and `REMOVE` helpers, and the unsorted regular-file-only `get_directory_listings` helper used by server-library `LIST`/`LOAD`.
+- Initial deduction-server interactive-mode surface from `cco_einteractive_mode`, including command names, block terminator, success/error response strings, help text, the whitespace-tolerant `AcceptAxiomSetName` token loop, `AxiomSet`/`InteractiveSpec` state over parsed clause/formula sets, duplicate-name add handling for already parsed axiom sets, C-shaped `STAGE`, `UNSTAGE`, `LIST`, `DOWNLOAD`, and `REMOVE` helpers, and the unsorted regular-file-only `get_directory_listings` helper used by server-library `LIST`/`LOAD`.
 
 Pending:
 
-- Full deduction-server interactive command dispatch, including uploaded/server-library axiom parsing in `ADD`/`LOAD`, proof-control stage/unstage mutation, socket/stdout output transport, block command reads, and forked `RUN` job execution.
+- Full deduction-server interactive command dispatch, including uploaded/server-library axiom parsing in `ADD`/`LOAD`, socket/stdout output transport, block command reads, and forked `RUN` job execution.
 - Exact event-loop integration for `select`/`fd_set` or a compatible platform abstraction.
 - Full subprocess I/O in session processing; `cco_proc_ctrl` descriptor registration is represented, but the C session code leaves actual subprocess I/O as a TODO.
 - Server executable/control wiring, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
@@ -302,6 +302,8 @@ Change-later notes:
 - `get_directory_listings` returns `NULL` on open failure, leaks the preallocated stack in that branch, filters only `DT_REG` entries except on Solaris, and leaves output in raw directory iteration order for callers to pop. Rust preserves the visible open-failure, regular-file filtering, and unsorted stack-shaped order while avoiding the leak; sorted output and structured I/O diagnostics should wait until server-library compatibility tests cover `LIST` and `LOAD`.
 - `remove_command` mutates the axiom-set stack even when it returns `ERR_AXIOM_SET_IS_STAGED_MESSAGE`: the staged target and any newer popped sets are not restored in C. Rust preserves that visible side effect for now; a later cleaned command API should make failed removal non-mutating after drop-in server tests are stable.
 - `list_command` uses two different orderings: staged/unstaged memory sets print by increasing stack index, while disk files print by popping the directory-listing stack. Rust keeps that ordering split; sorted display should wait for a protocol-compatibility decision.
+- `stage_command` aliases axiom-set clause/formula pointers into `StructFOFSpec` and updates `shared_ax_sp` without updating `shared_ax_f_count`. Rust currently clones the sets into the proof-control owner as a safe bridge and preserves the shared-boundary update; stable shared handles should replace the clone bridge once the full server owner model is available.
+- `unstage_command` clears the axiom set's staged flag before proving that the control stack contains a matching problem set. Rust preserves that side effect; later command handling should become transactional only after compatibility tests cover desynchronized server state.
 
 ## E Process Control
 
