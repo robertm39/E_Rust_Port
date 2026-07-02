@@ -10,6 +10,8 @@ Rust files:
 - `src/bin/ekb_create.rs`
 - `src/prover/ekb_delete.rs`
 - `src/bin/ekb_delete.rs`
+- `src/prover/ekb_ginsert.rs`
+- `src/bin/ekb_ginsert.rs`
 - `src/prover/ekb_insert.rs`
 - `src/bin/ekb_insert.rs`
 - `src/prover/tsm_classify.rs`
@@ -19,10 +21,13 @@ C source references:
 
 - `eprover/PROVER/ekb_create.c`
 - `eprover/PROVER/ekb_delete.c`
+- `eprover/PROVER/ekb_ginsert.c`
 - `eprover/PROVER/ekb_insert.c`
 - `eprover/LEARN/cle_kbdesc.c`
 - `eprover/LEARN/cle_examplerep.c`
 - `eprover/LEARN/cle_kbinsert.c`
+- `eprover/PCL2/pcl_analysis.c`
+- `eprover/PCL2/pcl_protocol.c`
 - `eprover/PROVER/tsm_classify.c`
 - `eprover/LEARN/cle_annotations.c`
 - `eprover/LEARN/cle_annoterms.c`
@@ -36,18 +41,20 @@ Implemented:
 
 - Standalone `ekb_create` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, negative-example options, one-argument validation, C-shaped directory/file creation order, seeded KB description/signature/problems/clausepatterns files, and verbose progress output.
 - Standalone `ekb_delete` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, one-argument validation, old-KB parsing, example-name lookup, annotation removal by source id, problem-list deletion, stored example-file removal, and metadata rewrite order.
+- Standalone `ekb_ginsert` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, first-input basename selection before stdin defaulting, generated `FILES/<name>` training examples from EPCL/PCL input, proof-step marking, proof-distance/reference analysis, negative-example selection from KB description parameters, duplicate-name rejection before generation, generated-file reparsing through `KBParseExampleFile`, and metadata rewrite order.
 - Standalone `ekb_insert` executable wrapper, including C-compatible help/version text, default `E_KNOWLEDGE` basename, no-argument stdin insertion, first-input-only explicit naming, file-basename naming, old-KB parsing, duplicate-name rejection before copy, stored example-file copying, `KBParseExampleFile` integration, and metadata rewrite order.
 - Standalone `tsm_classify` executable wrapper, including C-compatible help/version text, index/TSM option parsing, output-file handling, concatenated input scanning, `Training:`/`Test:` annotated-term parsing, annotation flattening, fixed class-weight translation, TSM build/evaluation setup, per-term classification progress, and final source-weighted success summary.
 
 Pending:
 
-- Remaining KB maintenance tools: `ekb_ginsert` and the KB consumers still need executable wrappers and filesystem regression coverage.
+- Remaining KB consumers still need executable wrappers and filesystem regression coverage.
 - Reference executable comparison on a larger learned-data corpus and performance coverage for the TSM build/classification path.
 
 Change-later notes:
 
 - `ekb_create` mirrors C's partial filesystem side effects and inconsistent mkdir diagnostics. A modernized mode should make creation transactional and report the exact failing path.
 - `ekb_delete` mirrors C's non-transactional delete order: metadata is removed in memory, the stored example file is unlinked, and only then are `clausepatterns` and `problems` rewritten. A modernized KB API should stage these updates or make recovery behavior explicit.
+- `ekb_ginsert` mirrors C's non-transactional generated-file flow: it writes `FILES/<name>` before parsing `signature`/`clausepatterns` and before metadata integration, so later parse or write failures can leave an orphan generated example. It also preserves the single-example multi-input behavior and derives the default name only from the first non-stdin input.
 - `ekb_insert` mirrors C's copy-before-parse flow and delayed metadata writes, so failed insertion can leave `FILES/` payloads without matching metadata. It also keeps the C quirk where `--name` applies only to the first input file.
 - `ExampleSetInsert` can partially mutate the numeric index before a duplicate-name failure, and `ExampleSet`'s `count` field is a maximum inserted identifier rather than the current size. Keep both accidents visible until generated-id compatibility is settled.
 - C `TSMClassifySet` owns progress printing to stdout while `tsm_classify.c` writes only the final summary through `GlobalOut`; Rust preserves that split for compatibility, but a modernized API should separate classifier results from presentation.

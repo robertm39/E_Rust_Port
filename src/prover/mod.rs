@@ -4,6 +4,7 @@ pub mod e_stratpar;
 pub mod edpll;
 pub mod ekb_create;
 pub mod ekb_delete;
+pub mod ekb_ginsert;
 pub mod ekb_insert;
 pub mod epclanalyse;
 pub mod epclextract;
