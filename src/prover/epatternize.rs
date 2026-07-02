@@ -973,6 +973,7 @@ mod tests {
     use crate::inout::scanner::IoFormat;
     use crate::prover::version::VERSION;
     use crate::terms::signature::{FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL};
+    use crate::test_support::global_state_lock;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1062,6 +1063,7 @@ mod tests {
 
     #[test]
     fn patternizes_lop_stdin() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"p(a).\n";
@@ -1082,6 +1084,7 @@ mod tests {
 
     #[test]
     fn patternizes_tstp_file_to_output_file() {
+        let _guard = global_state_lock();
         let input_path = temp_path("epatternize-input");
         let output_path = temp_path("epatternize-output");
         fs::write(&input_path, "cnf(c1, axiom, (p(a))).\n").unwrap();
@@ -1115,6 +1118,7 @@ mod tests {
 
     #[test]
     fn explicit_no_sine_keeps_patternization_path() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"cnf(c1, axiom, (p(a))).\n";

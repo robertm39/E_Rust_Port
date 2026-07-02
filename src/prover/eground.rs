@@ -1051,6 +1051,7 @@ mod tests {
     use crate::basics::error::ErrorCode;
     use crate::inout::scanner::IoFormat;
     use crate::prover::version::VERSION;
+    use crate::test_support::global_state_lock;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1141,6 +1142,7 @@ mod tests {
 
     #[test]
     fn grounds_lop_stdin() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"p(a).\n";
@@ -1164,6 +1166,7 @@ mod tests {
 
     #[test]
     fn dimacs_output_prints_header_and_complete_status() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"p(a).\n";
@@ -1188,6 +1191,7 @@ mod tests {
 
     #[test]
     fn suppress_result_still_prints_success_and_statistics() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"p(a).\n";
@@ -1215,6 +1219,7 @@ mod tests {
 
     #[test]
     fn output_file_redirects_main_stream() {
+        let _guard = global_state_lock();
         let output_path = temp_path("eground-output");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1246,6 +1251,7 @@ mod tests {
 
     #[test]
     fn rejects_non_ground_infinite_herbrand_universe() {
+        let _guard = global_state_lock();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut stdin: &[u8] = b"p(f(X)).\n";

@@ -117,6 +117,7 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - The real-input `--raw-class` branch still runs the normal real-input parser and `ProofStateSinE()` before computing `RawSpecFeaturesCompute()`, but stops before formula CNF, clause preprocessing, spec-signature output, or TPTP header generation.
 - The non-raw real-input branch computes raw features before formula CNF/preprocessing, then copies the raw order and formula-definition fields back into the final `SpecFeatureCell` after `SpecFeaturesCompute()`.
 - `--merged-classification=N` wins over `--raw-class` when `N != -1`: it prints the raw classification prefix plus a child-computed CNF classification string, and uses an all-hyphen CNF class if the child cannot write the full fixed-width buffer.
+- `src/prover/classify_problem.rs` and `src/bin/classify_problem.rs` port the executable wrapper over the feature-line consumers and supported real-input parser fragments. The Rust wrapper preserves default stdin through `-`, output-file routing, two-line `SysError`-style file-open diagnostics for feature-line and real-input scanners, C `OutClose` wording on final flush failure, and no-partial-output behavior for malformed feature lines.
 
 ### Change Later
 
@@ -127,4 +128,5 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - The real-input path shares one `skip_includes` tree across all files in `main()`. Preserve this while matching C include semantics, but revisit whether cross-file include suppression is intentional for a modern API.
 - `print_tptp_header()` calls `ClauseSetTPTPDepthInfoAdd()` to fill local depth variables, but the printed depth fields come from the already-computed `SpecFeatureCell`. Keep the visible output for compatibility, then remove or explain the unused local computation in a cleanup pass.
 - `ClausifyAndClassifyWTimeout()` hard-codes POSIX `pipe()`, `fork()`, and `RLIMIT_CPU` around a deterministic classification computation. A cleaned implementation should make timeout/process isolation an explicit portability boundary instead of burying it inside the feature classifier.
+- `OpenGlobalOut(outname)` runs before either feature-line or real-input parsing, so output paths can be created or truncated even if later input parsing fails. Rust preserves this order; a cleanup mode could stage output in memory or a temporary file before replacing the destination.
 <!-- END MANUAL REVIEW: c_source_docs -->
