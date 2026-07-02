@@ -2363,11 +2363,15 @@ fn open_configured_output<'a, W: Write + ?Sized>(
             stdout,
         })
         .map_err(|error| {
-            Diagnostic::new(
-                ErrorCode::FILE_ERROR,
-                format!("Cannot open file {}: {error}", path.display()),
-            )
+            eprover_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
         })
+}
+
+fn eprover_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
 }
 
 #[allow(clippy::cast_sign_loss)]
@@ -12661,9 +12665,9 @@ mod tests {
     use super::{
         apply_choice_axiom_recognition, apply_clause_set_preprocessing,
         auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
-        fv_index_params_from_config, heuristic_parms_from_config, order_parms_from_config,
-        parse_app_encode_file, preprocessing_config_debug_line, process_options,
-        proof_control_from_config, proof_object_list_display_clauses,
+        fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
+        order_parms_from_config, parse_app_encode_file, preprocessing_config_debug_line,
+        process_options, proof_control_from_config, proof_object_list_display_clauses,
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
         simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
@@ -12714,6 +12718,7 @@ mod tests {
     use crate::test_support::global_state_lock;
     use std::ffi::OsString;
     use std::fmt::Write as _;
+    use std::io::Write as _;
 
     struct EnvGuard {
         name: &'static str,
@@ -16187,6 +16192,48 @@ mod tests {
             )
         );
         std::fs::remove_file(&input_path).unwrap();
+    }
+
+    #[test]
+    fn open_configured_output_dash_uses_stdout() {
+        let mut stdout = Vec::new();
+        {
+            let mut output = open_configured_output(&mut stdout, Some("-")).unwrap();
+            output.write_all(b"% routed\n").unwrap();
+            output.flush().unwrap();
+        }
+
+        assert_eq!(std::str::from_utf8(&stdout).unwrap(), "% routed\n");
+    }
+
+    #[test]
+    fn open_configured_output_failure_uses_c_syserror_shape() {
+        let path = temp_path("output-open-dir");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&path);
+        std::fs::create_dir(&path).unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+
+        let Err(error) = open_configured_output(&mut stdout, Some(path_arg.as_str())) else {
+            panic!("directory output target should fail like C OutOpen");
+        };
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(
+            error
+                .message()
+                .starts_with(&format!("Cannot open file {}", path.display())),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("\neprover: "),
+            "{}",
+            error.message()
+        );
+        assert!(stdout.is_empty());
+        std::fs::remove_dir(&path).unwrap();
     }
 
     #[test]
