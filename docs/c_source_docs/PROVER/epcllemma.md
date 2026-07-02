@@ -90,6 +90,18 @@ Source files reviewed: `PROVER/epcllemma.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/epcllemma.rs` and `src/bin/epcllemma.rs` port the standalone `epcllemma` executable over the existing Rust PCL2 lemma-selection core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file`, `-s`/`--silent`, `-l`/`--output-level`, PCL/TPTP/TSTP/LOP output selection, iterative/recursive/flat lemma algorithms, absolute and relative lemma count/quality thresholds, lemma-quality weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing, strict end-of-input checks, stdout status lines, and output-level-controlled lemma/full-protocol printing.
+
+### Change Later
+
+- C exposes `--version` without a `-V` shorthand. Rust preserves that option table; add a short alias only outside drop-in compatibility mode.
+- C prints the `% Selecting at most ...` and `% Minimum lemma quality ...` status lines with `printf`, so they always go to stdout even when `-o` redirects lemma output. Rust preserves this visible split; a cleaner UI could route all non-diagnostic output through one selected stream after compatibility baselines exist.
+- `OPT_LOP_PRINT` lacks a `break` and falls through into `OPT_ITERATIVE_LEMMAS`, so `--lop-out` also resets the algorithm to iterative unless a later option changes it again. Rust preserves that order-sensitive behavior.
+- `--no-reference-weights` is documented as clearing all reference weights, but C assigns `pas_simpl_w` twice and leaves `act_simpl_w` unchanged. Rust preserves the effective assignments; revisit only with lemma-selection trace comparisons.
+- `print_help(FILE* out)` prints the option table to `stdout` instead of `out`, and the footer uses the old 2003-2005 support-tool copyright block. Rust keeps the visible executable text but not the internal helper-output bug.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

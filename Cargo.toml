@@ -37,4 +37,8 @@ path = "src/bin/epclanalyse.rs"
 name = "checkproof"
 path = "src/bin/checkproof.rs"
 
+[[bin]]
+name = "epcllemma"
+path = "src/bin/epcllemma.rs"
+
 [dependencies]
