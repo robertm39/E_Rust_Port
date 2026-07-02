@@ -104,14 +104,13 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors including `CreateStream`-style fail-or-null file opening, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing.
+- `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors including `CreateStream`-style fail-or-null file opening and `NULL`/`"-"` stdin labeling as `"<stdin>"`, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing.
 - Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, and pops back to the previous stream in LIFO order; `Scanner` uses this stack for automatic include splicing.
-- Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, fail-or-null missing-file opening, file-named in-memory sources for stdin-like data, and stacked stream push/pop restoration.
+- Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, fail-or-null missing-file opening, C-shaped stdin source labeling, string-source construction, file-named in-memory sources for stdin-like data, and stacked stream push/pop restoration.
 
 ### Change-Later Observations
 
-- `CreateStream(StreamTypeFile, NULL/"-", ...)` treats the source as stdin and stores the source label `"<stdin>"`. Rust's in-memory file-content helper preserves the caller-provided label for tests and wrappers; a direct C-shaped stdin stream wrapper should map that label to `"<stdin>"` once lazy stdin ownership is represented.
-- Rust file streams still load the bytes eagerly after opening. Revisit lazy streaming if large-problem parsing or include-stack behavior makes the C `FILE*` window observable.
+- Rust file and stdin streams still load the bytes eagerly during construction. Revisit lazy streaming if large-problem parsing, interactive stdin use, or include-stack behavior makes the C `FILE*` window observable.
 - C `CloseStackedInput` asserts that the stack is nonempty and destroys the popped stream. Rust returns `None` on an empty stack, which is safer for reusable callers; add an asserting compatibility wrapper only if a direct C-shaped API becomes necessary.
 - C `DestroyStream` can report `fclose` failures for file streams. Rust owns file-backed stream bytes eagerly, so close-time diagnostics are not represented; revisit only if a lazy `FILE*`-style stream backend is introduced.
 

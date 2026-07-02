@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 pub const MAX_LOOKAHEAD: usize = 64;
@@ -103,6 +104,46 @@ impl InputStream {
             Err(error) if fail => Err(error),
             Err(_) => Ok(None),
         }
+    }
+
+    pub fn create_stream(
+        stream_type: StreamType,
+        source: Option<&str>,
+        fail: bool,
+    ) -> Result<Option<Self>, Diagnostic> {
+        let mut stdin = std::io::stdin().lock();
+        Self::create_stream_with_stdin(stream_type, source, fail, &mut stdin)
+    }
+
+    pub fn create_stream_with_stdin(
+        stream_type: StreamType,
+        source: Option<&str>,
+        fail: bool,
+        stdin: &mut impl Read,
+    ) -> Result<Option<Self>, Diagnostic> {
+        if stream_type != StreamType::File {
+            return Ok(Some(Self::from_string(stream_type, source.unwrap_or(""))));
+        }
+
+        let Some(source) = source else {
+            return Self::from_stdin_reader(stdin);
+        };
+        if source == "-" {
+            return Self::from_stdin_reader(stdin);
+        }
+
+        Self::from_file_optional(Path::new(source), fail)
+    }
+
+    fn from_stdin_reader(reader: &mut impl Read) -> Result<Option<Self>, Diagnostic> {
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read <stdin> for stream: {error}"),
+            )
+        })?;
+        Ok(Some(Self::from_file_content("<stdin>", data)))
     }
 
     #[must_use]
@@ -310,6 +351,48 @@ mod tests {
         assert_eq!(stream.current_char(), Some(b'o'));
 
         remove_if_present(&path);
+    }
+
+    #[test]
+    fn create_stream_maps_stdin_sources_to_c_label() {
+        let mut stdin = std::io::Cursor::new(b"stdin-bytes".to_vec());
+        let stream =
+            InputStream::create_stream_with_stdin(super::StreamType::File, None, true, &mut stdin)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(stream.source_bytes(), b"<stdin>");
+        assert_eq!(stream.current_char(), Some(b's'));
+
+        let mut stdin = std::io::Cursor::new(b"dash".to_vec());
+        let stream = InputStream::create_stream_with_stdin(
+            super::StreamType::File,
+            Some("-"),
+            false,
+            &mut stdin,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(stream.source_bytes(), b"<stdin>");
+        assert_eq!(stream.current_char(), Some(b'd'));
+    }
+
+    #[test]
+    fn create_stream_preserves_string_source_shape() {
+        let mut stdin = std::io::Cursor::new(Vec::new());
+        let stream = InputStream::create_stream_with_stdin(
+            super::StreamType::OptionString,
+            Some("abc"),
+            true,
+            &mut stdin,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(stream.stream_type(), super::StreamType::OptionString);
+        assert_eq!(stream.source_bytes(), b"abc");
+        assert_eq!(stream.current_char(), Some(b'a'));
     }
 
     #[test]
