@@ -1200,7 +1200,7 @@ impl std::fmt::Display for UnsupportedLiteralSelection {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "literal selection strategy '{}' is not ported yet",
+            "literal selection strategy '{}' is unavailable in this call context",
             self.strategy
         )
     }
@@ -2580,8 +2580,9 @@ pub fn select_diversification_prefer_into_literals(
 ///
 /// # Errors
 ///
-/// Returns `UnsupportedLiteralSelection` for valid C selector names whose
-/// selector bodies have not been ported yet.
+/// Returns `UnsupportedLiteralSelection` for unknown selector names or for
+/// selector bodies that require a term bank or ordering control block when
+/// this bankless entry point is used.
 pub fn apply_ported_literal_selector(
     name: &str,
     ocb: Option<&mut OrderControlBlock>,
@@ -2595,9 +2596,9 @@ pub fn apply_ported_literal_selector(
 ///
 /// # Errors
 ///
-/// Returns `UnsupportedLiteralSelection` for valid C selector names whose
-/// selector bodies have not been ported yet, and for bank-aware selectors when
-/// the required `OCB` or term bank is not supplied.
+/// Returns `UnsupportedLiteralSelection` for unknown selector names, and for
+/// ordering-dependent selectors when the required `OCB` or term bank is not
+/// supplied.
 pub fn apply_ported_literal_selector_with_bank(
     name: &str,
     ocb: Option<&mut OrderControlBlock>,
@@ -6577,6 +6578,6 @@ mod tests {
             apply_ported_literal_selector("UnknownLiteralSelector", None, &mut clause).unwrap_err();
 
         assert_eq!(error.strategy(), "UnknownLiteralSelector");
-        assert!(error.to_string().contains("not ported yet"));
+        assert!(error.to_string().contains("unavailable"));
     }
 }

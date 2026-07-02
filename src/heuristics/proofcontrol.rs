@@ -2771,8 +2771,8 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if the configured literal-selection strategy has not
-/// been ported yet.
+/// Returns a diagnostic if the configured literal-selection strategy needs
+/// ordering context that has not been initialized.
 pub fn proof_state_queue_generated_clause_for_eval(
     state: &mut ProofState,
     control: &mut ProofControl,
@@ -7687,12 +7687,12 @@ where
 }
 
 /// Runs the C `DoLiteralSelection` wrapper using the literal-selection bodies
-/// that have already been ported.
+/// through the bankless selector entry point.
 ///
 /// # Errors
 ///
-/// Returns `UnsupportedLiteralSelection` if the configured selector body has
-/// not been ported yet and the wrapper reaches the selector call.
+/// Returns `UnsupportedLiteralSelection` if the configured selector is unknown,
+/// or if the wrapper reaches a selector that requires a term bank.
 pub fn do_literal_selection(
     control: &mut ProofControl,
     clause: &mut Clause,
@@ -7706,8 +7706,9 @@ pub fn do_literal_selection(
 ///
 /// # Errors
 ///
-/// Returns `UnsupportedLiteralSelection` if the configured selector body has
-/// not been ported yet and the wrapper reaches the selector call.
+/// Returns `UnsupportedLiteralSelection` if the configured selector is unknown,
+/// or if the wrapper reaches an ordering-dependent selector without an
+/// initialized proof-control OCB.
 pub fn do_literal_selection_with_bank(
     control: &mut ProofControl,
     bank: &TermBank,
@@ -15000,7 +15001,7 @@ mod tests {
     }
 
     #[test]
-    fn do_literal_selection_reports_unported_strategy_only_if_reached() {
+    fn do_literal_selection_bankless_reports_missing_context_only_if_reached() {
         let mut control = proof_control_alloc();
         control.heuristic_parms_mut().selection_strategy = "SelectUnlessUniqMax".to_owned();
 
@@ -15013,6 +15014,7 @@ mod tests {
         let mut mixed = mixed_clause();
         let error = do_literal_selection(&mut control, &mut mixed).unwrap_err();
         assert_eq!(error.strategy(), "SelectUnlessUniqMax");
+        assert!(error.to_string().contains("unavailable"));
     }
 
     #[test]
