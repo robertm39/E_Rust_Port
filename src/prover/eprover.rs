@@ -60,7 +60,7 @@ use crate::clauses::inferencedoc::{
     PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
 };
 use crate::clauses::pred_elim::{
-    eliminate_predicates_singular_with_output, predicate_elimination_needs_gate_validation,
+    eliminate_predicates_singular_with_output,
     PredicateEliminationConfig as ClausePredicateEliminationConfig,
 };
 use crate::clauses::proofstate::{
@@ -611,7 +611,6 @@ impl Default for PredicateEliminationConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PredicateEliminationPreprocessingConfig {
     enabled: bool,
-    recognize_gates: bool,
     clause_config: ClausePredicateEliminationConfig,
 }
 
@@ -5659,9 +5658,6 @@ fn run_prune_only<W: Write + ?Sized>(
         output,
         PredicateEliminationPreprocessingConfig {
             enabled: pred_elim.enabled,
-            recognize_gates: pred_elim
-                .flags
-                .contains(PredicateEliminationFlag::RecognizeGates),
             clause_config: ClausePredicateEliminationConfig {
                 max_occs: pred_elim.max_occs,
                 tolerance: pred_elim.tolerance,
@@ -5671,6 +5667,9 @@ fn run_prune_only<W: Write + ?Sized>(
                 ignore_conj_syms: pred_elim
                     .flags
                     .contains(PredicateEliminationFlag::IgnoreConjectureSymbols),
+                recognize_gates: pred_elim
+                    .flags
+                    .contains(PredicateEliminationFlag::RecognizeGates),
             },
         },
         &mut state,
@@ -5725,12 +5724,12 @@ fn run_proof_search<W: Write + ?Sized>(
         output,
         PredicateEliminationPreprocessingConfig {
             enabled: heuristic_params.pred_elim,
-            recognize_gates: heuristic_params.pred_elim_gates,
             clause_config: ClausePredicateEliminationConfig {
                 max_occs: i64::from(heuristic_params.pred_elim_max_occs),
                 tolerance: i64::from(heuristic_params.pred_elim_tolerance),
                 force_mu_decrease: heuristic_params.pred_elim_force_mu_decrease,
                 ignore_conj_syms: heuristic_params.pred_elim_ignore_conj_syms,
+                recognize_gates: heuristic_params.pred_elim_gates,
             },
         },
         &mut state,
@@ -6817,15 +6816,6 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     let mut pred_elim_output = String::new();
     let result = {
         let (bank, axioms, archive) = state.terms_axioms_archive_mut();
-        if config.recognize_gates
-            && predicate_elimination_needs_gate_validation(axioms, bank, config.clause_config)
-        {
-            return Err(Diagnostic::new(
-                ErrorCode::OTHER_ERROR,
-                "Predicate elimination gate validation is not yet ported",
-            )
-            .into());
-        }
         eliminate_predicates_singular_with_output(
             axioms,
             archive,
@@ -16214,7 +16204,7 @@ mod tests {
     }
 
     #[test]
-    fn run_prune_only_reports_pred_elim_gate_validation_requirement() {
+    fn run_prune_only_validates_pred_elim_gates() {
         let _guard = global_state_lock();
         let path = temp_path("prune-pred-elim-gate-validation");
         std::fs::write(
@@ -16227,11 +16217,13 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let error = run(
+        let status = run(
             [
                 "eprover",
                 "--prune",
                 "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
                 "--pred-elim=true",
                 "--pred-elim-recognize-gates=true",
                 path_arg.as_str(),
@@ -16239,14 +16231,12 @@ mod tests {
             &mut stdout,
             &mut stderr,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error
-            .message()
-            .contains("Predicate elimination gate validation is not yet ported"));
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         let printed = String::from_utf8(stdout).unwrap();
-        assert!(!printed.contains("% PE start:"));
+        assert!(printed.contains("% PE start: 2\n% PE eliminated: 2\n"));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }

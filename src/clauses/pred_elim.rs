@@ -6,9 +6,10 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_PE_RESOLVE};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
-use crate::clauses::tautologies::clause_is_tautology;
+use crate::clauses::satinterface::SatClauseSet;
+use crate::clauses::tautologies::{clause_is_tautology, clause_is_tautology_real};
 use crate::terms::functypes::FunCode;
-use crate::terms::match_mgu::subst_mgu_complete;
+use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{term_identity_id, Term};
@@ -27,6 +28,7 @@ pub struct PredicateEliminationConfig {
     pub tolerance: i64,
     pub force_mu_decrease: bool,
     pub ignore_conj_syms: bool,
+    pub recognize_gates: bool,
 }
 
 impl Default for PredicateEliminationConfig {
@@ -36,6 +38,7 @@ impl Default for PredicateEliminationConfig {
             tolerance: 0,
             force_mu_decrease: false,
             ignore_conj_syms: false,
+            recognize_gates: false,
         }
     }
 }
@@ -59,10 +62,20 @@ struct PredicateEliminationTask {
     positive_singular: BTreeSet<ClauseId>,
     negative_singular: BTreeSet<ClauseId>,
     offending_cls: BTreeSet<ClauseId>,
+    positive_gates: BTreeSet<ClauseId>,
+    negative_gates: BTreeSet<ClauseId>,
+    gate_status: GateStatus,
     num_lit: i64,
     sq_vars: f64,
     size: i64,
     blocked: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GateStatus {
+    Unknown,
+    IsGate,
+    NotGate,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -92,6 +105,9 @@ impl PredicateEliminationTask {
             positive_singular: BTreeSet::new(),
             negative_singular: BTreeSet::new(),
             offending_cls: BTreeSet::new(),
+            positive_gates: BTreeSet::new(),
+            negative_gates: BTreeSet::new(),
+            gate_status: GateStatus::Unknown,
             num_lit: 0,
             sq_vars: 0.0,
             size: 0,
@@ -100,19 +116,26 @@ impl PredicateEliminationTask {
     }
 
     fn can_schedule(&self) -> bool {
-        !self.blocked && self.offending_cls.is_empty()
+        !self.blocked && (self.offending_cls.is_empty() || self.gate_status == GateStatus::IsGate)
     }
 
     fn max_cardinality(&self) -> usize {
-        self.positive_singular.len() * self.negative_singular.len()
+        if self.gate_status == GateStatus::IsGate {
+            self.positive_gates.len() * self.negative_singular.len()
+                + self.negative_gates.len() * self.positive_singular.len()
+                + self.positive_gates.len() * self.offending_cls.len()
+                + self.negative_gates.len() * self.offending_cls.len()
+        } else {
+            self.positive_singular.len() * self.negative_singular.len()
+        }
     }
 
     fn signed_occurrences(&self, positive: bool) -> usize {
         self.offending_cls.len()
             + if positive {
-                self.positive_singular.len()
+                self.positive_singular.len() + self.positive_gates.len()
             } else {
-                self.negative_singular.len()
+                self.negative_singular.len() + self.negative_gates.len()
             }
     }
 
@@ -150,6 +173,7 @@ impl ClauseMeasure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RequiredSign {
+    Any,
     Negative,
     Positive,
 }
@@ -160,12 +184,18 @@ enum ResolverKind {
     Equational,
 }
 
-/// Performs the currently ported singular predicate-elimination path.
+#[derive(Debug, Default)]
+struct TaskElimination {
+    generated: Vec<Clause>,
+    archive_intermediates: Vec<Clause>,
+}
+
+/// Performs the currently ported predicate-elimination path.
 ///
-/// This mirrors the `ccl_pred_elim` singular branch with gate recognition
-/// disabled. If any equality literal is present in the passive set, the C code
-/// globally switches to the equality-aware resolver; Rust preserves that
-/// behavior.
+/// This mirrors the `ccl_pred_elim` singular branch and the first-order
+/// SAT-core gate-recognition branch. If any equality literal is present in the
+/// passive set, the C code globally switches singular elimination to the
+/// equality-aware resolver; Rust preserves that behavior.
 ///
 /// # Errors
 ///
@@ -185,7 +215,8 @@ pub fn eliminate_predicates_singular(
     let mut generated_count = 0;
 
     loop {
-        let (tasks, eqn_found) = build_task_map(passive, bank, &config, &mut blocked_symbols);
+        let (tasks, eqn_found) =
+            build_task_map(passive, bank, tmp_bank, &config, &mut blocked_symbols)?;
         let resolver = if eqn_found {
             ResolverKind::Equational
         } else {
@@ -202,16 +233,20 @@ pub fn eliminate_predicates_singular(
                     sq_vars: task.sq_vars,
                 },
             );
-            let mut generated = do_singular_elimination(&task, passive, bank, tmp_bank, resolver)?;
+            let mut elimination =
+                do_task_elimination(&task, passive, bank, tmp_bank, fresh_vars, resolver)?;
+            while let Some(clause) = elimination.archive_intermediates.pop() {
+                archive.insert(clause);
+            }
             if measure_decreases(
                 &task,
-                &generated,
+                &elimination.generated,
                 config.tolerance,
                 config.force_mu_decrease,
             ) {
                 move_task_clauses_to_archive(&task, passive, archive);
-                generated_count += i64_from_usize(generated.len());
-                while let Some(mut clause) = generated.pop() {
+                generated_count += i64_from_usize(elimination.generated.len());
+                while let Some(mut clause) = elimination.generated.pop() {
                     clause.normalize_vars(bank, fresh_vars)?;
                     passive.insert(clause);
                 }
@@ -406,10 +441,11 @@ fn term_vars_from_set(term: &Term, vars: &BTreeSet<usize>) -> bool {
 
 fn build_task_map(
     passive: &ClauseSet,
-    bank: &TermBank,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
     config: &PredicateEliminationConfig,
     blocked_symbols: &mut BTreeSet<FunCode>,
-) -> (BTreeMap<FunCode, PredicateEliminationTask>, bool) {
+) -> Result<(BTreeMap<FunCode, PredicateEliminationTask>, bool), Diagnostic> {
     let mut tasks = BTreeMap::new();
     let mut eqn_found = false;
     for clause in passive.iter() {
@@ -422,7 +458,14 @@ fn build_task_map(
             &mut eqn_found,
         );
     }
-    (tasks, eqn_found)
+    if config.recognize_gates {
+        update_gate_status(&mut tasks, passive, bank, tmp_bank)?;
+    } else {
+        for task in tasks.values_mut() {
+            declare_not_gate(task);
+        }
+    }
+    Ok((tasks, eqn_found))
 }
 
 fn scan_clause_for_predicates(
@@ -459,10 +502,23 @@ fn scan_clause_for_predicates(
 
         let inserted = if clause_has_other_predicate_literal(clause, bank, literal_index, sym) {
             task.offending_cls.insert(clause.ident())
-        } else if literal.is_positive() {
-            task.positive_singular.insert(clause.ident())
         } else {
-            task.negative_singular.insert(clause.ident())
+            let mut clause_inserted = false;
+            if config.recognize_gates
+                && is_potential_gate_clause(clause, bank, literal_index, literal)
+            {
+                clause_inserted = if literal.is_positive() {
+                    task.positive_gates.insert(clause.ident())
+                } else {
+                    task.negative_gates.insert(clause.ident())
+                };
+            }
+            let singular_inserted = if literal.is_positive() {
+                task.positive_singular.insert(clause.ident())
+            } else {
+                task.negative_singular.insert(clause.ident())
+            };
+            singular_inserted || clause_inserted
         };
 
         if inserted {
@@ -488,6 +544,216 @@ fn should_schedule(task: &PredicateEliminationTask, last_check: Option<&LastChec
     last_check.is_none_or(|last| task.num_lit < last.num_lit && task.sq_vars < last.sq_vars)
 }
 
+fn update_gate_status(
+    tasks: &mut BTreeMap<FunCode, PredicateEliminationTask>,
+    passive: &ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    for task in tasks.values_mut() {
+        if !task.positive_gates.is_empty() && !task.negative_gates.is_empty() {
+            check_unsat_and_tauto(task, passive, bank, tmp_bank)?;
+        } else {
+            declare_not_gate(task);
+        }
+    }
+    Ok(())
+}
+
+fn declare_not_gate(task: &mut PredicateEliminationTask) {
+    task.positive_gates.clear();
+    task.negative_gates.clear();
+    task.gate_status = GateStatus::NotGate;
+}
+
+fn check_unsat_and_tauto(
+    task: &mut PredicateEliminationTask,
+    passive: &ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    let mut gate_ids = task
+        .positive_gates
+        .iter()
+        .chain(&task.negative_gates)
+        .copied()
+        .collect::<Vec<_>>();
+    let Some(pivot_id) = gate_ids.pop() else {
+        declare_not_gate(task);
+        return Ok(());
+    };
+    let Some(pivot) = passive.find_by_id(pivot_id) else {
+        declare_not_gate(task);
+        return Ok(());
+    };
+
+    let pivot_fresh = pivot.copy_disjoint(bank)?;
+    let Some((fresh_lit, rest_fresh)) =
+        split_first_literal_with_head(pivot_fresh, bank, task.sym, RequiredSign::Any)
+    else {
+        declare_not_gate(task);
+        return Ok(());
+    };
+
+    let mut environment = SatClauseSet::new();
+    let pivot_environment = Clause::alloc(rest_fresh);
+    environment.import_clause_with_source(bank, &pivot_environment, pivot.clone())?;
+
+    let mut subst = Substitution::new();
+    for gate_id in gate_ids {
+        let Some(clause) = passive.find_by_id(gate_id) else {
+            subst.delete();
+            declare_not_gate(task);
+            return Ok(());
+        };
+        let Some(sym_index) =
+            first_literal_index_with_head(clause, bank, task.sym, RequiredSign::Any)
+        else {
+            subst.delete();
+            declare_not_gate(task);
+            return Ok(());
+        };
+        let sym_term = clause.literals().as_slice()[sym_index].left().clone();
+        let matched = subst_match_complete(&sym_term, fresh_lit.left(), &mut subst);
+        debug_assert!(
+            matched,
+            "potential-gate predicate patterns should match the fresh pivot"
+        );
+        if !matched {
+            subst.delete();
+            declare_not_gate(task);
+            return Ok(());
+        }
+
+        let rest = clause.literals().copy_except_index(Some(sym_index), bank)?;
+        subst.backtrack();
+        let environment_clause = Clause::alloc(rest);
+        environment.import_clause_with_source(bank, &environment_clause, clause.clone())?;
+    }
+    subst.delete();
+
+    if let Some(core) = environment.check_and_get_core() {
+        check_gate_core_tautologies(task, &core, bank, tmp_bank)
+    } else {
+        declare_not_gate(task);
+        Ok(())
+    }
+}
+
+fn check_gate_core_tautologies(
+    task: &mut PredicateEliminationTask,
+    unsat_core: &[Clause],
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    let mut positive = Vec::new();
+    let mut negative = Vec::new();
+    for clause in unsat_core {
+        if let Some(index) =
+            first_literal_index_with_head(clause, bank, task.sym, RequiredSign::Any)
+        {
+            if clause.literals().as_slice()[index].is_positive() {
+                positive.push(clause.clone());
+            } else {
+                negative.push(clause.clone());
+            }
+        }
+    }
+
+    let mut all_tautologies = true;
+    if let (Some(positive_clause), Some(negative_clause)) = (positive.first(), negative.first()) {
+        for _ in 0..negative.len() {
+            let Some(resolvent) =
+                build_neq_resolvent(positive_clause, negative_clause, task.sym, bank)?
+            else {
+                all_tautologies = false;
+                break;
+            };
+            all_tautologies = clause_is_tautology_real(tmp_bank, &resolvent, false)?;
+            if !all_tautologies {
+                break;
+            }
+        }
+    }
+
+    declare_not_gate(task);
+    if all_tautologies {
+        task.gate_status = GateStatus::IsGate;
+        for clause in positive {
+            let ident = clause.ident();
+            task.positive_gates.insert(ident);
+            task.positive_singular.remove(&ident);
+        }
+        for clause in negative {
+            let ident = clause.ident();
+            task.negative_gates.insert(ident);
+            task.negative_singular.remove(&ident);
+        }
+    }
+    Ok(())
+}
+
+fn do_task_elimination(
+    task: &PredicateEliminationTask,
+    passive: &ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    resolver: ResolverKind,
+) -> Result<TaskElimination, Diagnostic> {
+    if task.gate_status == GateStatus::IsGate {
+        do_gate_elimination(task, passive, bank, tmp_bank, fresh_vars)
+    } else {
+        debug_assert!(task.offending_cls.is_empty());
+        Ok(TaskElimination {
+            generated: do_singular_elimination(task, passive, bank, tmp_bank, resolver)?,
+            archive_intermediates: Vec::new(),
+        })
+    }
+}
+
+fn do_gate_elimination(
+    task: &PredicateEliminationTask,
+    passive: &ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+) -> Result<TaskElimination, Diagnostic> {
+    let mut generated = do_singular_elimination_for_sets(
+        &task.positive_gates,
+        &task.negative_singular,
+        task.sym,
+        passive,
+        bank,
+        tmp_bank,
+        ResolverKind::NonEquational,
+    )?;
+    generated.extend(do_singular_elimination_for_sets(
+        &task.positive_singular,
+        &task.negative_gates,
+        task.sym,
+        passive,
+        bank,
+        tmp_bank,
+        ResolverKind::NonEquational,
+    )?);
+
+    let mut archive_intermediates = Vec::new();
+    do_gates_against_offending(
+        task,
+        passive,
+        bank,
+        tmp_bank,
+        fresh_vars,
+        &mut generated,
+        &mut archive_intermediates,
+    )?;
+    Ok(TaskElimination {
+        generated,
+        archive_intermediates,
+    })
+}
+
 fn do_singular_elimination(
     task: &PredicateEliminationTask,
     passive: &ClauseSet,
@@ -495,23 +761,43 @@ fn do_singular_elimination(
     tmp_bank: &mut TermBank,
     resolver: ResolverKind,
 ) -> Result<Vec<Clause>, Diagnostic> {
+    do_singular_elimination_for_sets(
+        &task.positive_singular,
+        &task.negative_singular,
+        task.sym,
+        passive,
+        bank,
+        tmp_bank,
+        resolver,
+    )
+}
+
+fn do_singular_elimination_for_sets(
+    positive_ids: &BTreeSet<ClauseId>,
+    negative_ids: &BTreeSet<ClauseId>,
+    sym: FunCode,
+    passive: &ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    resolver: ResolverKind,
+) -> Result<Vec<Clause>, Diagnostic> {
     let mut generated = Vec::new();
-    for positive_id in &task.positive_singular {
+    for positive_id in positive_ids {
         let Some(positive_clause) = passive.find_by_id(*positive_id) else {
             continue;
         };
-        for negative_id in &task.negative_singular {
+        for negative_id in negative_ids {
             let Some(negative_clause) = passive.find_by_id(*negative_id) else {
                 continue;
             };
             let resolvent = match resolver {
                 ResolverKind::NonEquational => {
-                    build_neq_resolvent(positive_clause, negative_clause, task.sym, bank)?
+                    build_neq_resolvent(positive_clause, negative_clause, sym, bank)?
                 }
                 ResolverKind::Equational => Some(build_eq_resolvent(
                     positive_clause,
                     negative_clause,
-                    task.sym,
+                    sym,
                     bank,
                 )?),
             };
@@ -523,6 +809,75 @@ fn do_singular_elimination(
         }
     }
     Ok(generated)
+}
+
+fn do_gates_against_offending(
+    task: &PredicateEliminationTask,
+    passive: &ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    generated: &mut Vec<Clause>,
+    archive_intermediates: &mut Vec<Clause>,
+) -> Result<(), Diagnostic> {
+    let mut worklist = task
+        .offending_cls
+        .iter()
+        .map(|ident| WorkClause::Original(*ident))
+        .collect::<Vec<_>>();
+
+    while let Some(work) = worklist.pop() {
+        let (offending, original_id) = match work {
+            WorkClause::Original(ident) => {
+                let Some(clause) = passive.find_by_id(ident) else {
+                    continue;
+                };
+                (clause.clone(), Some(ident))
+            }
+            WorkClause::Intermediate(clause) => (*clause, None),
+        };
+
+        let Some(sym_index) =
+            first_literal_index_with_head(&offending, bank, task.sym, RequiredSign::Any)
+        else {
+            generated.push(offending);
+            continue;
+        };
+
+        let positive = offending.literals().as_slice()[sym_index].is_positive();
+        let gate_set = if positive {
+            &task.negative_gates
+        } else {
+            &task.positive_gates
+        };
+        for gate_id in gate_set {
+            let Some(gate_clause) = passive.find_by_id(*gate_id) else {
+                continue;
+            };
+            let resolvent = if positive {
+                build_neq_resolvent(&offending, gate_clause, task.sym, bank)?
+            } else {
+                build_neq_resolvent(gate_clause, &offending, task.sym, bank)?
+            };
+            if let Some(mut resolvent) = resolvent {
+                if !clause_is_tautology(tmp_bank, &resolvent)? {
+                    resolvent.normalize_vars(bank, fresh_vars)?;
+                    worklist.push(WorkClause::Intermediate(Box::new(resolvent)));
+                }
+            }
+        }
+
+        if original_id.is_none() {
+            archive_intermediates.push(offending);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum WorkClause {
+    Original(ClauseId),
+    Intermediate(Box<Clause>),
 }
 
 fn build_neq_resolvent(
@@ -642,9 +997,33 @@ fn split_first_literal_with_head(
     selected.map(|literal| (literal, rest))
 }
 
+fn first_literal_index_with_head(
+    clause: &Clause,
+    bank: &TermBank,
+    sym: FunCode,
+    required_sign: RequiredSign,
+) -> Option<usize> {
+    clause
+        .literals()
+        .as_slice()
+        .iter()
+        .enumerate()
+        .find_map(|(index, literal)| {
+            if !literal.is_equ_lit(bank)
+                && literal.left().f_code() == sym
+                && required_sign.matches(literal.is_positive())
+            {
+                Some(index)
+            } else {
+                None
+            }
+        })
+}
+
 impl RequiredSign {
     const fn matches(self, positive: bool) -> bool {
         match self {
+            Self::Any => true,
             Self::Negative => !positive,
             Self::Positive => positive,
         }
@@ -728,6 +1107,8 @@ fn move_task_clauses_to_archive(
 ) {
     let mut ids = task.positive_singular.clone();
     ids.extend(&task.negative_singular);
+    ids.extend(&task.positive_gates);
+    ids.extend(&task.negative_gates);
     ids.extend(&task.offending_cls);
     for ident in ids {
         if let Some(clause) = passive.extract_by_id(ident) {
@@ -766,6 +1147,16 @@ fn clause_measure(clause: &Clause) -> ClauseMeasure {
 fn compare_tasks(left: &PredicateEliminationTask, right: &PredicateEliminationTask) -> Ordering {
     left.max_cardinality()
         .cmp(&right.max_cardinality())
+        .then_with(|| {
+            match (
+                left.gate_status == GateStatus::IsGate,
+                right.gate_status == GateStatus::IsGate,
+            ) {
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                _ => Ordering::Equal,
+            }
+        })
         .then_with(|| left.sym.cmp(&right.sym))
 }
 
@@ -802,6 +1193,7 @@ mod tests {
     use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_PE_RESOLVE};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::tautologies::clause_is_tautology_real;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -1161,6 +1553,73 @@ mod tests {
             &bank,
             PredicateEliminationConfig::default()
         ));
+    }
+
+    #[test]
+    fn recognized_gate_eliminates_offending_predicate_occurrences() {
+        let mut bank = test_bank();
+        let x = object_var(&bank, -2);
+        let a = object_const(&mut bank, "pe_gate_off_a");
+        let b = object_const(&mut bank, "pe_gate_off_b");
+        let p_x = predicate_atom(&mut bank, "pe_gate_off_p", std::slice::from_ref(&x));
+        let p_a = predicate_atom(&mut bank, "pe_gate_off_p", std::slice::from_ref(&a));
+        let p_b = predicate_atom(&mut bank, "pe_gate_off_p", std::slice::from_ref(&b));
+        let positive_gate = clause(vec![
+            predicate_literal(&mut bank, &p_x, true),
+            Eqn::alloc(a.clone(), a.clone(), &mut bank, true).unwrap(),
+        ]);
+        let negative_gate = clause(vec![
+            predicate_literal(&mut bank, &p_x, false),
+            Eqn::alloc(a.clone(), a.clone(), &mut bank, false).unwrap(),
+        ]);
+        let offending = clause(vec![
+            predicate_literal(&mut bank, &p_a, true),
+            predicate_literal(&mut bank, &p_b, false),
+        ]);
+        let positive_gate_id = positive_gate.ident();
+        let negative_gate_id = negative_gate.ident();
+        let offending_id = offending.ident();
+        let p_code = p_x.f_code();
+        let mut passive = ClauseSet::from_clauses([positive_gate, negative_gate, offending]);
+        let mut archive = ClauseSet::new();
+        let mut tmp = tmp_bank(&bank);
+        let fresh = fresh_vars(&bank);
+        let equality_tautology = clause(vec![
+            Eqn::alloc(a.clone(), a.clone(), &mut bank, true).unwrap(),
+            Eqn::alloc(a.clone(), a.clone(), &mut bank, false).unwrap(),
+        ]);
+        assert!(clause_is_tautology_real(&mut tmp, &equality_tautology, false).unwrap());
+
+        let result = eliminate_predicates_singular(
+            &mut passive,
+            &mut archive,
+            &mut bank,
+            &mut tmp,
+            &fresh,
+            PredicateEliminationConfig {
+                recognize_gates: true,
+                ..PredicateEliminationConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            PredicateEliminationResult {
+                start_count: 3,
+                eliminated_count: 3,
+                generated_count: 0
+            }
+        );
+        assert!(passive.is_empty());
+        assert!(ids(&archive).contains(&positive_gate_id));
+        assert!(ids(&archive).contains(&negative_gate_id));
+        assert!(ids(&archive).contains(&offending_id));
+        assert!(passive.iter().all(|clause| clause
+            .literals()
+            .as_slice()
+            .iter()
+            .all(|literal| literal.is_equ_lit(&bank) || literal.left().f_code() != p_code)));
     }
 
     #[test]

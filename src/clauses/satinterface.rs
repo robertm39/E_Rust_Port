@@ -151,6 +151,26 @@ impl SatClauseSet {
         bank: &mut TermBank,
         clause: &Clause,
     ) -> Result<bool, Diagnostic> {
+        self.import_clause_with_source(bank, clause, clause.clone())
+    }
+
+    /// Encodes `clause` but records `source` as the clause returned for unsat
+    /// core extraction.
+    ///
+    /// C gate-recognition builds fresh SAT environment clauses and then maps
+    /// the extracted core back to the original clauses. This helper keeps that
+    /// ownership transition explicit for Rust callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if literal instantiation or SAT atom encoding
+    /// fails.
+    pub fn import_clause_with_source(
+        &mut self,
+        bank: &mut TermBank,
+        clause: &Clause,
+        source: Clause,
+    ) -> Result<bool, Diagnostic> {
         if self.set_size_limit != -1 && usize_to_i64(self.clauses.len()) >= self.set_size_limit {
             return Ok(false);
         }
@@ -161,7 +181,7 @@ impl SatClauseSet {
         }
         self.clauses.push(SatClause {
             literals,
-            source: clause.clone(),
+            source,
             has_pure_lit: false,
         });
         Ok(true)
