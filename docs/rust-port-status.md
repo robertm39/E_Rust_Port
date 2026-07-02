@@ -21,11 +21,11 @@ Implemented:
 - First-order `ComputeOrderedFactor`, including second-literal side retry, directed unification, post-unifier maximality recheck, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - First-order `ComputeAllOrderedFactors`, including Horn and `CPNoGeneration` gates, clause-set insertion, parent proof-depth/proof-size/TPTP/SOS metadata propagation, `DCOrderedFactor` derivation entries, and opt-in represented `inf_factor` proof-documentation output.
 - First-order equality factor candidate enumeration matching `ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`.
-- First-order MGU subset of `ComputeEqualityFactor` and `ComputeAllEqualityFactors`, including higher-order problem mode when candidate terms have no lambda/DB-variable/phony-application surface and accepted substitutions have no higher-order binding, plus the C free-variable/equational guard, `TOGreater` side check, post-unifier maximality recheck, generated negative condition, Horn and `CPNoGeneration` gates, clause-set insertion, parent metadata propagation, `DCEqFactor` derivation entries, and opt-in represented `inf_efactor` proof-documentation output.
+- First-order MGU subset of `ComputeEqualityFactor` and `ComputeAllEqualityFactors`, including higher-order problem mode when candidate terms have no lambda/DB-variable/phony-application surface and accepted substitutions have no higher-order binding, plus the C free-variable/equational guard, `TOGreater` side check, post-unifier maximality recheck, generated negative condition, DB-lambda beta/eta normalization of generated equality-factor literal lists before cleanup, Horn and `CPNoGeneration` gates, clause-set insertion, parent metadata propagation, `DCEqFactor` derivation entries, and opt-in represented `inf_efactor` proof-documentation output.
 
 Pending:
 
-- Full higher-order CSU enumeration, lambda normalization, higher-order derivation-flag propagation, and multi-CSU equality-factor stack order.
+- Full higher-order CSU enumeration, higher-order derivation-flag propagation, and multi-CSU equality-factor stack order.
 - Reusable fresh-variable-bank behavior may need a performance pass once stable clause/literal ownership is ported.
 
 Change-later notes:

@@ -440,9 +440,9 @@ fn compute_all_ordered_factors_impl<W: fmt::Write>(
 /// Computes all first-order equality factors and inserts them into `store`.
 ///
 /// This mirrors C `ComputeAllEqualityFactors` for the first-order MGU path.
-/// Higher-order CSU enumeration and lambda normalization remain pending. Use
-/// [`compute_all_equality_factors_with_docs`] for represented
-/// proof-documentation output.
+/// Higher-order CSU enumeration remains pending. Use
+/// [`compute_all_equality_factors_with_docs`] for represented proof-documentation
+/// output.
 ///
 /// # Errors
 ///
@@ -589,6 +589,7 @@ fn build_equality_factor(
         .copy_opt_except_index(Some(position.first_literal_index), bank)?;
     subst.backtrack_to_pos(backtrack);
     new_literals.insert_first(new_condition);
+    new_literals.lambda_normalize(bank)?;
     new_literals.remove_resolved(bank);
     new_literals.remove_duplicates(bank);
     Ok(Some(Clause::alloc(new_literals)))
@@ -634,6 +635,7 @@ mod tests {
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -879,6 +881,49 @@ mod tests {
         assert!(literals[1].is_negative());
         assert_eq!(literals[1].left(), &a);
         assert_eq!(literals[1].right(), &c);
+    }
+
+    #[test]
+    fn compute_equality_factor_lambda_normalizes_generated_literals() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let f = typed_arrow_const(&mut bank, "ef_lambda_f");
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "ef_lambda_a");
+        let c = typed_const(&mut bank, "ef_lambda_c");
+        let g_code = typed_unary_code(&mut bank, "ef_lambda_g");
+        let g_of_x = typed_unary(&mut bank, g_code, &x);
+        let g_of_a = typed_unary(&mut bank, g_code, &a);
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&x)).unwrap();
+        let expected = apply_terms(&mut bank, &f, std::slice::from_ref(&a)).unwrap();
+        let mut first = lit(&mut bank, &g_of_x, &c, true);
+        let second = lit(&mut bank, &g_of_a, &applied, true);
+        maximal(&mut first);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo_ocb(&bank);
+
+        let factor = compute_equality_factor(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+        )
+        .unwrap()
+        .expect("matching positive equalities should equality-factor");
+
+        assert!(x.binding().is_none());
+        assert_eq!(factor.literal_number(), 2);
+        let literals = factor.literals().as_slice();
+        assert!(literals[0].is_positive());
+        assert_eq!(literals[0].left(), &g_of_a);
+        assert_eq!(literals[0].right(), &expected);
+        assert!(literals[1].is_negative());
+        assert_eq!(literals[1].left(), &c);
+        assert_eq!(literals[1].right(), &expected);
     }
 
     #[test]
