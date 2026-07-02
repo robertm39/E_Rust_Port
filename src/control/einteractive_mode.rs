@@ -1,5 +1,7 @@
 //! Deduction-server interactive command surface from `cco_einteractive_mode`.
 
+use std::{ffi::OsStr, fs, path::Path};
+
 use crate::basics::error::Diagnostic;
 use crate::inout::scanner::{Scanner, TokenType};
 
@@ -81,16 +83,81 @@ pub fn accept_axiom_set_name(scanner: &mut Scanner, dest: &mut String) -> Result
     Ok(())
 }
 
+/// C `get_directory_listings`: return a stack-shaped list of regular file
+/// names in the directory.
+///
+/// The C helper returns `NULL` when `opendir()` fails, pushes names in raw
+/// directory iteration order, and lets callers pop the stack. This Rust helper
+/// therefore returns `None` on open failure and does not sort the resulting
+/// vector.
+#[must_use]
+pub fn get_directory_listings(dirname: impl AsRef<Path>) -> Option<Vec<String>> {
+    let entries = fs::read_dir(dirname).ok()?;
+    let mut files = Vec::new();
+
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let file_name = entry.file_name();
+        if file_name == OsStr::new(".") || file_name == OsStr::new("..") {
+            continue;
+        }
+
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() {
+            files.push(file_name.to_string_lossy().into_owned());
+        }
+    }
+
+    Some(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        accept_axiom_set_name, axiom_set_name_tokens, ADD_COMMAND, END_OF_BLOCK_TOKEN,
-        ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_SUCCESS_MESSAGE, STAGE_COMMAND,
+        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, ADD_COMMAND,
+        END_OF_BLOCK_TOKEN, ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_SUCCESS_MESSAGE,
+        STAGE_COMMAND,
     };
     use crate::inout::scanner::{Scanner, TokenType};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn scanner(source: &str) -> Scanner {
         Scanner::from_user_string(source, true).unwrap()
+    }
+
+    struct ScratchDir {
+        path: PathBuf,
+    }
+
+    impl ScratchDir {
+        fn new() -> Self {
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "e_rust_port_einteractive_{}_{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]
@@ -153,5 +220,41 @@ mod tests {
 
         assert_eq!(name, "prefix");
         assert_eq!(scanner.current_token().kind(), TokenType::SLASH);
+    }
+
+    #[test]
+    fn get_directory_listings_returns_regular_file_names_only() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("alpha.p"), b"fof(a, axiom, p).").unwrap();
+        fs::write(scratch.path.join("beta.ax"), b"fof(b, axiom, q).").unwrap();
+        fs::write(scratch.path.join(".hidden"), b"fof(c, axiom, r).").unwrap();
+        fs::create_dir(scratch.path.join("nested")).unwrap();
+
+        let listings = get_directory_listings(&scratch.path).unwrap();
+        let names: BTreeSet<_> = listings.into_iter().collect();
+
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                String::from(".hidden"),
+                String::from("alpha.p"),
+                String::from("beta.ax")
+            ])
+        );
+    }
+
+    #[test]
+    fn get_directory_listings_returns_none_when_directory_cannot_open() {
+        let mut missing = std::env::temp_dir();
+        missing.push(format!(
+            "e_rust_port_einteractive_missing_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        assert!(get_directory_listings(missing).is_none());
     }
 }
