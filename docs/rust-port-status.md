@@ -417,18 +417,20 @@ C source references:
 
 Implemented:
 
-- Standalone `e_axfilter` executable wrapper, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, output-file creation before filter parsing and missing-problem usage errors, default/custom ax-filter parsing, filter dumping before the missing-problem usage check, LOP/TPTP/TSTP/Auto input-format options, structured problem parsing through the ported `StructFOFSpecParseAxioms` equivalent, C-shaped reset of the shared boundary after distribution initialization, first-input `FileNameStrip` corename derivation, non-seeded application of all configured filters, generated `<corename>_<filter>.p` TSTP files, signature type-declaration emission, selected clause/formula stack printing, and unit coverage for option defaults, seed-option parsing, output-file side effects, custom filters, generated problem files, and pending seeded-mode diagnostics.
+- Standalone `e_axfilter` executable wrapper, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, output-file creation before filter parsing and missing-problem usage errors, default/custom ax-filter parsing, filter dumping before the missing-problem usage check, LOP/TPTP/TSTP/Auto input-format options, structured problem parsing through the ported `StructFOFSpecParseAxioms` equivalent, C-shaped reset of the shared boundary after distribution initialization, first-input `FileNameStrip` corename derivation, non-seeded application of all configured filters, artificial seeded filtering through `--seed-symbols`/`--seeds` with `--seed-subsample` and `--seed-method`, generated `<corename>_<filter>.p` and seeded `<corename>_S[ALD]_<P|F><arity>_<symbol>_<filter>.p` TSTP files, signature type-declaration emission, selected clause/formula stack printing, and unit coverage for option defaults, seed-option parsing, output-file side effects, custom filters, generated problem files, seeded explicit-symbol filtering, and unknown explicit seed diagnostics.
 
 Pending:
 
-- Artificial seeded filtering from `--seed-symbols`/`--seeds` is parsed but returns an explicit pending diagnostic after problem parsing. Completing it requires stable formula-owner handles and role mutation/restoration matching `seeded_filter_all`, `seeded_filter_largest`, and `seeded_filter_diverse`.
 - Exact reference comparison for formula-aware GSinE/LambdaDef output should wait until full formula ownership replaces the current temporary formula bridge.
+- Byte-for-byte reference comparison for seeded filtering remains pending for mixed seed methods, duplicate explicit seed symbols, and random subsampling's process-global JKISS state.
 
 Change-later notes:
 
 - `e_axfilter.c` opens the generated filter file with `fopen` and immediately writes to the returned pointer without checking for failure. Rust reports a file diagnostic instead; a cleaned C-compatible API should make generated-file failures explicit.
 - `--output-file` affects only `GlobalOut` messages and filter dumps; generated problem files are always named from the first input and filter name in the current working directory. Rust preserves that split, but a modernized interface should expose an output directory or manifest after drop-in behavior is covered.
-- The seeded largest/diverse paths temporarily mutate formula roles to hypotheses and restore them after each filter run. The C code has likely copy/paste mistakes around restoring or setting `handle` instead of `largest`; Rust should implement the intended compatibility only after reference tests pin the observable behavior.
+- The seeded largest/diverse paths temporarily mutate formula roles to hypotheses and restore them after each filter run. The C code has likely copy/paste mistakes around restoring or setting `handle` instead of `largest`; Rust currently preserves those handle/last-candidate effects for compatibility, but a cleaned implementation should mark and restore the selected formula explicitly once reference tests no longer require the bug surface.
+- `seeded_filter_all` restores every non-conjecture seed candidate to axiom after the filter run, even if a candidate entered as a hypothesis or negated conjecture. Rust preserves the C `FormulaStackCondSetType` behavior; a cleaned API should snapshot and restore original roles instead.
+- `e_axfilter.c` prints seeded `Name:` lines with raw `printf`, bypassing `GlobalOut` and therefore `--output-file`. Rust preserves that stdout/file split, but a later API should make progress-output routing explicit rather than depending on mixed global/stdout channels.
 
 ## E Process Control
 

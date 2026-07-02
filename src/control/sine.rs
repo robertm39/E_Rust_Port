@@ -205,6 +205,17 @@ impl StructFofSpec {
             .sum()
     }
 
+    #[must_use]
+    pub fn formula_by_entry_id(&self, entry_id: u64) -> Option<&WrappedFormula> {
+        self.formula_sets.iter().find_map(|set| set.get(entry_id))
+    }
+
+    pub fn formula_by_entry_id_mut(&mut self, entry_id: u64) -> Option<&mut WrappedFormula> {
+        self.formula_sets
+            .iter_mut()
+            .find_map(|set| set.get_mut(entry_id))
+    }
+
     pub fn get_problem<'a>(
         &'a mut self,
         signature: &Signature,

@@ -1936,6 +1936,10 @@ impl FormulaSet {
         self.formulas.iter()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut WrappedFormula> {
+        self.formulas.iter_mut()
+    }
+
     pub fn insert(&mut self, formula: WrappedFormula) -> u64 {
         let entry_id = formula.entry_id();
         self.formulas.push(formula);
@@ -1972,6 +1976,12 @@ impl FormulaSet {
     pub fn get(&self, entry_id: u64) -> Option<&WrappedFormula> {
         self.formulas
             .iter()
+            .find(|formula| formula.entry_id() == entry_id)
+    }
+
+    pub fn get_mut(&mut self, entry_id: u64) -> Option<&mut WrappedFormula> {
+        self.formulas
+            .iter_mut()
             .find(|formula| formula.entry_id() == entry_id)
     }
 

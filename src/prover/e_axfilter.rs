@@ -2,9 +2,15 @@ use std::fs::File;
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 
+use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
-use crate::basics::simple_stuff::ProblemType;
+use crate::basics::simple_stuff::{
+    jkiss_rand_double, sort_weighted_objects, ProblemType, WeightedObject,
+};
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clause_props::{
+    FormulaProperties, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS,
+};
 use crate::clauses::sine::{pstack_clause_print_tstp_string, pstack_formula_print_tstp_string};
 use crate::control::batch_spec::BatchSpec;
 use crate::control::sine::StructFofSpec;
@@ -15,13 +21,17 @@ use crate::inout::commandline::{
 use crate::inout::fileops::file_name_strip;
 use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
-use crate::inout::scanner::{IoFormat, Scanner};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::prover::version::{footer, E_NICKNAME, VERSION};
-use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
+use crate::terms::{
+    functypes::{func_symb_parse, FunCode},
+    signature::Signature,
+    termbanks::TermBank,
+    typebanks::TypeBank,
+};
 
 pub const PROGRAM_NAME: &str = "e_axfilter";
 const C_USAGE_ERROR: &str = "Usage: e_axfilter <problem> [<options>]\n";
-const SEEDED_FILTERING_PENDING: &str = "e_axfilter artificial seed filtering is not yet ported";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -421,12 +431,12 @@ fn execute_config(config: &EAxFilterConfig, stdout: &mut impl IoWrite) -> Result
     apply_global_options(config);
     let mut output_file = open_output_file(config.output_file.as_deref())?;
     if let Some(output_file) = output_file.as_mut() {
-        execute_with_output(config, output_file)?;
+        execute_with_output(config, output_file, Some(stdout))?;
         output_file
             .flush()
             .map_err(|error| io_diagnostic(format!("Cannot flush output file: {error}")))?;
     } else {
-        execute_with_output(config, stdout)?;
+        execute_with_output(config, stdout, None)?;
     }
     Ok(ErrorCode::NO_ERROR.exit_status())
 }
@@ -434,6 +444,7 @@ fn execute_config(config: &EAxFilterConfig, stdout: &mut impl IoWrite) -> Result
 fn execute_with_output<W: IoWrite + ?Sized>(
     config: &EAxFilterConfig,
     output: &mut W,
+    seed_name_output: Option<&mut dyn IoWrite>,
 ) -> Result<(), Diagnostic> {
     let filters = load_filters(config.filter_file.as_deref())?;
     if config.dump_filter {
@@ -446,16 +457,398 @@ fn execute_with_output<W: IoWrite + ?Sized>(
 
     let (mut bank, mut ctrl, _parsed) =
         init_struct_fof_spec(config.parse_format, &config.files, output)?;
+    let corename = file_name_strip(&config.files[0]);
     if config.seed_filtering_requested() {
-        return Err(Diagnostic::new(
-            ErrorCode::INTERFACE_ERROR,
-            SEEDED_FILTERING_PENDING,
-        ));
+        seeded_filters(
+            &mut bank,
+            &mut ctrl,
+            &filters,
+            &corename,
+            config,
+            output,
+            seed_name_output,
+        )
+    } else {
+        all_filters_problem(
+            &mut bank, &mut ctrl, &filters, &corename, false, None, output,
+        )
+    }
+}
+
+fn seeded_filters<W: IoWrite + ?Sized>(
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    filters: &AxFilterSet,
+    corename: &str,
+    config: &EAxFilterConfig,
+    output: &mut W,
+    mut seed_name_output: Option<&mut dyn IoWrite>,
+) -> Result<(), Diagnostic> {
+    let mut seed_symbols = if let Some(seedstr) = &config.seedstr {
+        decode_seed_symbols(bank.signature(), seedstr)?
+    } else {
+        let mut seed_symbols = find_seed_symbols(bank.signature(), config);
+        subsample_seed_symbols(ctrl, &mut seed_symbols, config);
+        seed_symbols
+    };
+
+    while let Some(seed_symbol) = seed_symbols.pop() {
+        let mut formula_ids = Vec::new();
+        let _matches = ctrl.collect_f_code(seed_symbol, &mut formula_ids);
+
+        if config.seed_all {
+            seeded_filter_all(
+                bank,
+                ctrl,
+                filters,
+                corename,
+                seed_symbol,
+                &formula_ids,
+                output,
+                &mut seed_name_output,
+            )?;
+        }
+        if config.seed_large {
+            seeded_filter_largest(
+                bank,
+                ctrl,
+                filters,
+                corename,
+                seed_symbol,
+                &formula_ids,
+                output,
+                &mut seed_name_output,
+            )?;
+        }
+        if config.seed_diverse {
+            seeded_filter_diverse(
+                bank,
+                ctrl,
+                filters,
+                corename,
+                seed_symbol,
+                &formula_ids,
+                output,
+                &mut seed_name_output,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn find_seed_symbols(signature: &Signature, config: &EAxFilterConfig) -> Vec<FunCode> {
+    let mut result = Vec::new();
+    for f_code in signature.internal_symbols() + 1..=signature.f_count() {
+        let is_predicate = signature.is_predicate(f_code);
+        let arity = signature.find_arity(f_code).unwrap_or(0);
+        let selected = if is_predicate {
+            config.seed_preds
+        } else if arity > 0 {
+            config.seed_funs
+        } else {
+            config.seed_consts
+        };
+        if selected {
+            result.push(f_code);
+        }
+    }
+    result
+}
+
+fn subsample_seed_symbols(
+    ctrl: &StructFofSpec,
+    seed_symbols: &mut Vec<FunCode>,
+    config: &EAxFilterConfig,
+) {
+    if config.subsample == SubsampleMethod::None {
+        return;
     }
 
-    let corename = file_name_strip(&config.files[0]);
-    all_filters_problem(
-        &mut bank, &mut ctrl, &filters, &corename, false, None, output,
+    let mut weighted = Vec::with_capacity(seed_symbols.len());
+    while let Some(symbol) = seed_symbols.pop() {
+        let weight = match config.subsample {
+            SubsampleMethod::None => unreachable!("handled before sampling"),
+            SubsampleMethod::Random => jkiss_rand_double(None),
+            SubsampleMethod::Most => ctrl
+                .f_distrib()
+                .entry(symbol)
+                .map_or(0.0, |entry| entry.fc_freq() as f64),
+            SubsampleMethod::Least => ctrl
+                .f_distrib()
+                .entry(symbol)
+                .map_or(0.0, |entry| -(entry.fc_freq() as f64)),
+        };
+        weighted.push(WeightedObject {
+            weight,
+            object: symbol,
+        });
+    }
+
+    sort_weighted_objects(&mut weighted);
+    let limit = usize::try_from(config.sample_size)
+        .unwrap_or(usize::MAX)
+        .min(weighted.len());
+    seed_symbols.extend(weighted.into_iter().take(limit).map(|entry| entry.object));
+}
+
+fn decode_seed_symbols(signature: &Signature, seedstr: &str) -> Result<Vec<FunCode>, Diagnostic> {
+    let mut scanner = Scanner::from_user_string(seedstr, true)?;
+    let mut result = Vec::new();
+
+    loop {
+        let symbol = parse_seed_symbol(signature, &mut scanner)?;
+        result.push(symbol);
+        if !scanner.test_tok(TokenType::COMMA) {
+            break;
+        }
+        scanner.accept_tok(TokenType::COMMA)?;
+    }
+
+    Ok(result)
+}
+
+fn parse_seed_symbol(signature: &Signature, scanner: &mut Scanner) -> Result<FunCode, Diagnostic> {
+    let mut id = DynamicString::new();
+    func_symb_parse(scanner, &mut id)?;
+    let name = id.view();
+    let f_code = signature.find_f_code(name.as_ref());
+    if f_code == 0 {
+        return Err(Diagnostic::new(
+            ErrorCode::USAGE_ERROR,
+            format!("User-requested symbol {name} unknown while parsing option --seeds"),
+        ));
+    }
+    Ok(f_code)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The helper shape mirrors e_axfilter.c seeded_filter_all inputs."
+)]
+fn seeded_filter_all<W: IoWrite + ?Sized>(
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    filters: &AxFilterSet,
+    corename: &str,
+    seed_symbol: FunCode,
+    formula_ids: &[u64],
+    output: &mut W,
+    seed_name_output: &mut Option<&mut dyn IoWrite>,
+) -> Result<(), Diagnostic> {
+    formula_stack_cond_set_type(ctrl, formula_ids, CP_TYPE_HYPOTHESIS)?;
+    let desc = seed_desc(bank.signature(), seed_symbol, "All")?;
+    let name = seed_problem_name(bank.signature(), corename, "SA", seed_symbol)?;
+    write_seed_name(output, seed_name_output, &name)?;
+    all_filters_problem(bank, ctrl, filters, &name, true, Some(&desc), output)?;
+    formula_stack_cond_set_type(ctrl, formula_ids, CP_TYPE_AXIOM)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The helper shape mirrors e_axfilter.c seeded_filter_largest inputs."
+)]
+fn seeded_filter_largest<W: IoWrite + ?Sized>(
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    filters: &AxFilterSet,
+    corename: &str,
+    seed_symbol: FunCode,
+    formula_ids: &[u64],
+    output: &mut W,
+    seed_name_output: &mut Option<&mut dyn IoWrite>,
+) -> Result<(), Diagnostic> {
+    let mut largest = None;
+    let mut last = None;
+    let mut max_size = 0_i64;
+    for &entry_id in formula_ids {
+        let formula = lookup_formula(ctrl, entry_id)?;
+        let size = formula.standard_weight();
+        if size > max_size {
+            largest = Some(entry_id);
+            max_size = size;
+        }
+        last = Some(entry_id);
+    }
+
+    if let Some(entry_id) = largest {
+        if lookup_formula(ctrl, entry_id)?.query_tptp_type() == CP_TYPE_AXIOM {
+            set_formula_type(ctrl, entry_id, CP_TYPE_HYPOTHESIS)?;
+        }
+    }
+
+    let desc = seed_desc(bank.signature(), seed_symbol, "Largest")?;
+    let name = seed_problem_name(bank.signature(), corename, "SL", seed_symbol)?;
+    write_seed_name(output, seed_name_output, &name)?;
+    all_filters_problem(bank, ctrl, filters, &name, true, Some(&desc), output)?;
+
+    if let Some(entry_id) = largest {
+        if lookup_formula(ctrl, entry_id)?.query_tptp_type() == CP_TYPE_HYPOTHESIS {
+            if let Some(last_id) = last {
+                // Preserve e_axfilter.c: it restores the last scanned handle,
+                // not necessarily the largest one that was changed.
+                set_formula_type(ctrl, last_id, CP_TYPE_AXIOM)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The helper shape mirrors e_axfilter.c seeded_filter_diverse inputs."
+)]
+fn seeded_filter_diverse<W: IoWrite + ?Sized>(
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    filters: &AxFilterSet,
+    corename: &str,
+    seed_symbol: FunCode,
+    formula_ids: &[u64],
+    output: &mut W,
+    seed_name_output: &mut Option<&mut dyn IoWrite>,
+) -> Result<(), Diagnostic> {
+    let mut largest = None;
+    let mut last = None;
+    let mut max_size = 0_i64;
+    for &entry_id in formula_ids {
+        let formula = lookup_formula(ctrl, entry_id)?;
+        let size = formula.symbol_diversity();
+        if size > max_size {
+            largest = Some(entry_id);
+            max_size = size;
+        }
+        last = Some(entry_id);
+    }
+
+    if let Some(entry_id) = largest {
+        if lookup_formula(ctrl, entry_id)?.query_tptp_type() == CP_TYPE_AXIOM {
+            if let Some(last_id) = last {
+                // Preserve e_axfilter.c: the diverse mode marks the last
+                // scanned handle after selecting the most diverse formula.
+                set_formula_type(ctrl, last_id, CP_TYPE_HYPOTHESIS)?;
+            }
+        }
+    }
+
+    let desc = seed_desc(bank.signature(), seed_symbol, "Diverse")?;
+    let name = seed_problem_name(bank.signature(), corename, "SD", seed_symbol)?;
+    write_seed_name(output, seed_name_output, &name)?;
+    all_filters_problem(bank, ctrl, filters, &name, true, Some(&desc), output)?;
+
+    if let Some(entry_id) = largest {
+        if lookup_formula(ctrl, entry_id)?.query_tptp_type() == CP_TYPE_HYPOTHESIS {
+            set_formula_type(ctrl, entry_id, CP_TYPE_AXIOM)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_seed_name<W: IoWrite + ?Sized>(
+    fallback: &mut W,
+    seed_name_output: &mut Option<&mut dyn IoWrite>,
+    name: &str,
+) -> Result<(), Diagnostic> {
+    if let Some(output) = seed_name_output.as_deref_mut() {
+        writeln_diag(output, &format!("Name: {name}"))
+    } else {
+        writeln_diag(fallback, &format!("Name: {name}"))
+    }
+}
+
+fn formula_stack_cond_set_type(
+    ctrl: &mut StructFofSpec,
+    formula_ids: &[u64],
+    type_: FormulaProperties,
+) -> Result<(), Diagnostic> {
+    for &entry_id in formula_ids {
+        let formula = lookup_formula_mut(ctrl, entry_id)?;
+        if formula.query_tptp_type() != CP_TYPE_CONJECTURE || type_ == CP_TYPE_CONJECTURE {
+            formula.set_tptp_type(type_);
+        }
+    }
+    Ok(())
+}
+
+fn seed_desc(
+    signature: &Signature,
+    seed_symbol: FunCode,
+    method: &str,
+) -> Result<String, Diagnostic> {
+    let symbol_name = signature
+        .find_name(seed_symbol)
+        .ok_or_else(|| unknown_seed_symbol_diagnostic(seed_symbol))?;
+    let arity = signature
+        .find_arity(seed_symbol)
+        .ok_or_else(|| unknown_seed_symbol_diagnostic(seed_symbol))?;
+    let symbol_type = if signature.is_predicate(seed_symbol) {
+        "Predicate"
+    } else {
+        "Function"
+    };
+    Ok(format!(
+        "% Seed symbol: {symbol_name} = {seed_symbol}\n\
+% Seeds      : {method}\n\
+% Arity      : {arity}\n\
+% Type       : {symbol_type}\n"
+    ))
+}
+
+fn seed_problem_name(
+    signature: &Signature,
+    corename: &str,
+    method_code: &str,
+    seed_symbol: FunCode,
+) -> Result<String, Diagnostic> {
+    let symbol_kind = if signature.is_predicate(seed_symbol) {
+        "P"
+    } else {
+        "F"
+    };
+    let arity = signature
+        .find_arity(seed_symbol)
+        .ok_or_else(|| unknown_seed_symbol_diagnostic(seed_symbol))?;
+    Ok(format!(
+        "{corename}_{method_code}_{symbol_kind}{arity}_{seed_symbol}"
+    ))
+}
+
+fn lookup_formula(
+    ctrl: &StructFofSpec,
+    entry_id: u64,
+) -> Result<&crate::clauses::formulasets::WrappedFormula, Diagnostic> {
+    ctrl.formula_by_entry_id(entry_id).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::INTERFACE_ERROR,
+            format!("Formula entry {entry_id} missing during seeded filtering"),
+        )
+    })
+}
+
+fn lookup_formula_mut(
+    ctrl: &mut StructFofSpec,
+    entry_id: u64,
+) -> Result<&mut crate::clauses::formulasets::WrappedFormula, Diagnostic> {
+    ctrl.formula_by_entry_id_mut(entry_id).ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::INTERFACE_ERROR,
+            format!("Formula entry {entry_id} missing during seeded filtering"),
+        )
+    })
+}
+
+fn set_formula_type(
+    ctrl: &mut StructFofSpec,
+    entry_id: u64,
+    type_: FormulaProperties,
+) -> Result<(), Diagnostic> {
+    lookup_formula_mut(ctrl, entry_id)?.set_tptp_type(type_);
+    Ok(())
+}
+
+fn unknown_seed_symbol_diagnostic(seed_symbol: FunCode) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::INTERFACE_ERROR,
+        format!("Seed symbol {seed_symbol} missing from signature"),
     )
 }
 
@@ -668,7 +1061,7 @@ mod tests {
 
     use super::{
         init_struct_fof_spec, parse_seed_subsample_arg, process_options, run, EAxFilterConfig,
-        RunCommand, SubsampleMethod, C_USAGE_ERROR, PROGRAM_NAME, SEEDED_FILTERING_PENDING,
+        RunCommand, SubsampleMethod, C_USAGE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -892,23 +1285,148 @@ mod tests {
     }
 
     #[test]
-    fn seeded_mode_is_parsed_but_reports_pending_after_problem_parse() {
+    fn seeded_explicit_symbol_generates_hypothesis_seeded_filter_file() {
         let _guard = global_state_lock();
         let problem_path = temp_path("seeded-problem");
+        let filter_path = temp_path("seeded-filters");
+        remove_if_present(&problem_path);
+        remove_if_present(&filter_path);
+        std::fs::write(
+            &problem_path,
+            "fof(seed, axiom, p(a)).\nfof(other, axiom, q(a)).\n",
+        )
+        .expect("problem written");
+        std::fs::write(
+            &filter_path,
+            "seed=GSinE(CountTerms,hypos,false,1.0,100,100,10000,1.0)\n",
+        )
+        .expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                "--seeds=p",
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("seeded run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        assert!(output.contains("% Parsing "));
+        let seeded_name = output
+            .lines()
+            .find_map(|line| line.strip_prefix("Name: "))
+            .expect("seeded name is printed")
+            .to_owned();
+        assert!(seeded_name.contains("_SA_P1_"));
+        assert!(output.contains(&format!(
+            "% Filter: seed goes into file {seeded_name}_seed.p"
+        )));
+
+        let generated_path = PathBuf::from(format!("{seeded_name}_seed.p"));
+        let generated = std::fs::read_to_string(&generated_path).expect("generated output exists");
+        assert!(generated.contains("% Seeds      : All"));
+        assert!(generated.contains("% Type       : Predicate"));
+        assert!(generated.contains("hypothesis"));
+        assert!(generated.contains("p(a)"));
+
+        for path in [&problem_path, &filter_path, &generated_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn seeded_name_uses_stdout_even_with_output_file() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("seeded-output-problem");
+        let filter_path = temp_path("seeded-output-filters");
+        let output_path = temp_path("seeded-global-output");
+        for path in [&problem_path, &filter_path, &output_path] {
+            remove_if_present(path);
+        }
+        std::fs::write(&problem_path, "fof(seed, axiom, p(a)).\n").expect("problem written");
+        std::fs::write(
+            &filter_path,
+            "seed=GSinE(CountTerms,hypos,false,1.0,100,100,10000,1.0)\n",
+        )
+        .expect("filters written");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "-f",
+                &slash_path(&filter_path),
+                "-o",
+                output_path.to_str().expect("test path is utf8"),
+                "--seeds=p",
+                &slash_path(&problem_path),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("seeded run succeeds");
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(stderr.is_empty());
+        let stdout = String::from_utf8(stdout).expect("stdout is utf8");
+        let seeded_name = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("Name: "))
+            .expect("seeded name is printed")
+            .to_owned();
+        assert!(!stdout.contains("% Filter: seed goes into file"));
+
+        let global_output = std::fs::read_to_string(&output_path).expect("global output exists");
+        assert!(global_output.contains("% Parsing "));
+        assert!(global_output.contains(&format!(
+            "% Filter: seed goes into file {seeded_name}_seed.p"
+        )));
+        assert!(!global_output.contains("Name: "));
+
+        let generated_path = PathBuf::from(format!("{seeded_name}_seed.p"));
+        for path in [&problem_path, &filter_path, &output_path, &generated_path] {
+            remove_if_present(path);
+        }
+    }
+
+    #[test]
+    fn seeded_explicit_unknown_symbol_reports_usage_error() {
+        let _guard = global_state_lock();
+        let problem_path = temp_path("seeded-unknown-problem");
         remove_if_present(&problem_path);
         std::fs::write(&problem_path, "fof(a, axiom, p(a)).\n").expect("problem written");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let error = run(
-            [PROGRAM_NAME, "--seed-symbols", &slash_path(&problem_path)],
+            [
+                PROGRAM_NAME,
+                "--tstp-in",
+                "--seeds=missing",
+                &slash_path(&problem_path),
+            ],
             &mut stdout,
             &mut stderr,
         )
         .unwrap_err();
 
-        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
-        assert_eq!(error.message(), SEEDED_FILTERING_PENDING);
+        assert_eq!(error.code(), ErrorCode::USAGE_ERROR);
+        assert_eq!(
+            error.message(),
+            "User-requested symbol missing unknown while parsing option --seeds"
+        );
         assert!(String::from_utf8(stdout)
             .expect("stdout is utf8")
             .contains("% Parsing "));
