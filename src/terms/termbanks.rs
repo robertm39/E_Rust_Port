@@ -2067,13 +2067,7 @@ impl TermBank {
     ) -> Result<Term, Diagnostic> {
         self.vars.push_env();
         let parsed = (|| {
-            let variable = self.parse_term_real(scanner, true)?;
-            if !variable.is_free_var() {
-                return Err(Diagnostic::new(
-                    ErrorCode::SYNTAX_ERROR,
-                    "Variable expected, non-variable term found",
-                ));
-            }
+            let variable = self.parse_tstp_quantified_variable(scanner)?;
             let rest = if scanner.test_tok(TokenType::COMMA) {
                 scanner.accept_tok(TokenType::COMMA)?;
                 self.parse_quantified_tformula_tstp_subset(scanner, quantor)?
@@ -2086,6 +2080,31 @@ impl TermBank {
         })();
         self.vars.pop_env();
         parsed
+    }
+
+    fn parse_tstp_quantified_variable(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let mut id = DynamicString::new();
+        let id_type = term_parse_operator(scanner, &mut id)?;
+        if id_type != FuncSymbType::IdentVar {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Variable expected, non-variable term found",
+            ));
+        }
+
+        let name = id.view().into_owned();
+        if scanner.test_tok(TokenType::COLON) {
+            scanner.accept_tok(TokenType::COLON)?;
+            let type_ = self
+                .sig
+                .type_bank_mut()
+                .parse_type(scanner, ProblemType::HigherOrder)?;
+            return Ok(self.vars.ext_name_assert_alloc_sort(&name, &type_));
+        }
+        Ok(self.vars.ext_name_assert_alloc(&name))
     }
 
     fn parse_ite_tformula_tstp_subset(
@@ -2488,6 +2507,10 @@ impl TermBank {
     }
 
     fn tformula_application_head_code_and_type(&mut self, head: &Term) -> Option<(FunCode, Type)> {
+        if head.is_free_var() {
+            return None;
+        }
+
         if let Some(type_) = self
             .sig
             .get_type(head.f_code())
@@ -4825,6 +4848,41 @@ mod tests {
             Some(bank.signature().type_bank().bool_type())
         );
         let body = formula.argument(1).unwrap();
+        assert_eq!(body.f_code(), bank.signature().eqn_code());
+    }
+
+    #[test]
+    fn tstp_quantified_formula_accepts_arrow_typed_variable_under_first_order_global_state() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("person: $tType. p: person > $o.", false).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner =
+            Scanner::from_user_string("![F: person > person, X: person]: p @ (F @ X)", false)
+                .unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().qall_code());
+        let function_var = formula.argument(0).unwrap();
+        let function_var_type = function_var.type_().expect("typed function variable");
+        assert!(function_var_type.is_arrow());
+        assert_eq!(function_var_type.arity(), 2);
+        assert_eq!(
+            formula.type_(),
+            Some(bank.signature().type_bank().bool_type())
+        );
+        let nested = formula.argument(1).unwrap();
+        assert_eq!(nested.f_code(), bank.signature().qall_code());
+        let body = nested.argument(1).unwrap();
         assert_eq!(body.f_code(), bank.signature().eqn_code());
     }
 
