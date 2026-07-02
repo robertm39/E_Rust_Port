@@ -555,6 +555,7 @@ fn find_seed_symbols(signature: &Signature, config: &EAxFilterConfig) -> Vec<Fun
     result
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn subsample_seed_symbols(
     ctrl: &StructFofSpec,
     seed_symbols: &mut Vec<FunCode>,

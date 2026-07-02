@@ -834,7 +834,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         Scanner::from_file_content("-", data, false)
     } else {
-        Scanner::from_file(Path::new(name), false)
+        Scanner::from_file(Path::new(name), false).map_err(epatternize_scanner_open_diagnostic)
     }
 }
 
@@ -903,11 +903,11 @@ impl<'a, W: Write> EpatternizeOutput<'a, W> {
         let Some(path) = path else {
             return Ok(Self::Stdout(stdout));
         };
+        if path == Path::new("-") {
+            return Ok(Self::Stdout(stdout));
+        }
         let file = File::create(path).map_err(|error| {
-            io_diagnostic(format!(
-                "Cannot open {} for writing: {error}",
-                path.display()
-            ))
+            epatternize_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
         })?;
         Ok(Self::File(file))
     }
@@ -962,23 +962,58 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn epatternize_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
+fn epatternize_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+        return error;
+    }
+    let Some((prefix, source_error)) = error.message().split_once(": ") else {
+        return error;
+    };
+    Diagnostic::new(
+        error.code(),
+        format!("{prefix}\n{PROGRAM_NAME}: {source_error}"),
+    )
+}
+
 fn i64_to_i32_saturating(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{process_options, run, EpatternizeConfig, RunCommand, PROGRAM_NAME};
+    use super::{
+        process_options, run, EpatternizeConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+    };
     use crate::basics::error::ErrorCode;
     use crate::inout::scanner::IoFormat;
     use crate::prover::version::VERSION;
     use crate::terms::signature::{FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL};
     use crate::test_support::global_state_lock;
     use std::fs;
+    use std::io::{self, Write};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        }
+    }
 
     #[test]
     fn help_preserves_c_usage_typo() {
@@ -1117,6 +1152,29 @@ mod tests {
     }
 
     #[test]
+    fn output_dash_routes_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"p(a).\n";
+
+        let status = run(
+            ["epatternize", "--lop-in", "-o", "-"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "$or1($eq(f1_1(f0_1),$true))\n"
+        );
+    }
+
+    #[test]
     fn explicit_no_sine_keeps_patternization_path() {
         let _guard = global_state_lock();
         let mut stdout = Vec::new();
@@ -1137,6 +1195,83 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             "$or1($eq(f1_1(f0_1),$true))\n"
         );
+    }
+
+    #[test]
+    fn input_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let missing_path = temp_path("epatternize-missing-input");
+        let _ = fs::remove_file(&missing_path);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"";
+
+        let error = run(
+            ["epatternize", missing_path.to_str().unwrap()],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("epatternize-output-dir");
+        let _ = fs::remove_file(&output_path);
+        let _ = fs::remove_dir(&output_path);
+        fs::create_dir(&output_path).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"p(a).\n";
+
+        let error = run(
+            ["epatternize", "-o", output_path.to_str().unwrap()],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        fs::remove_dir(output_path).unwrap();
+    }
+
+    #[test]
+    fn output_close_failure_uses_c_outclose_diagnostic() {
+        let _guard = global_state_lock();
+        let mut stdout = FlushFailWriter;
+        let mut stderr = Vec::new();
+        let mut stdin: &[u8] = b"p(a).\n";
+
+        let error = run(
+            ["epatternize", "--lop-in"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
+        assert!(stderr.is_empty());
     }
 
     fn temp_path(label: &str) -> PathBuf {

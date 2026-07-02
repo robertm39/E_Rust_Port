@@ -98,7 +98,7 @@ Source files reviewed: `PROVER/epatternize.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `src/prover/epatternize.rs` and `src/bin/epatternize.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin input, LOP/TPTP/TSTP parse selectors, TPTP3 aliases, output-file routing, exact C mask-length checks, explicit `--sine` filtering, compatibility acceptance of parsed classification/preprocessing options, pattern computation, flat clause-list encoding, and pattern-term output for currently supported parser fragments.
+- `src/prover/epatternize.rs` and `src/bin/epatternize.rs` port the standalone executable wrapper. The Rust path preserves the long-only `--version`, default stdin input, LOP/TPTP/TSTP parse selectors, TPTP3 aliases, output-file routing including `-o -`, C-shaped file-open and output-close diagnostics, exact C mask-length checks, explicit `--sine` filtering, compatibility acceptance of parsed classification/preprocessing options, pattern computation, flat clause-list encoding, and pattern-term output for currently supported parser fragments.
 
 ### Porting Focus
 
@@ -113,4 +113,5 @@ Source files reviewed: `PROVER/epatternize.c`.
 - `process_options()` also sets `no_preproc`, equation-unfolding limits, `FormulaDefLimit`, and `miniscope_limit`; the visible main path ignores the clause-preprocessing flags and always calls formula conjecture preprocessing followed by `FormulaSetCNF2`. The option semantics should be made explicit if a modernized patternizer exposes preprocessing controls.
 - TPTP/TSTP output-format options mutate global formula/equation printing state, but the executable prints only pattern terms after flat clause encoding. Keep the no-op user-visible behavior for compatibility, then remove the confusing print-format surface in a cleaned CLI.
 - `PatternDefaultSubstAlloc()` is called once per file and backtracked before each clause, while `FlatEncodeClauseListRep()` can depend on special signature symbols for the encoded clause term. A future shared pattern/encoding API should make the required special-symbol initialization explicit instead of relying on mutable global signature state.
+- `main()` calls `OpenGlobalOut(outname)` before it inserts the default `-` input and before any scanner is opened, so the requested output file may be created or truncated even when input opening or parsing later fails. Rust preserves this ordering for compatibility; a future cleaned interface could offer atomic or transactional output behavior.
 <!-- END MANUAL REVIEW: c_source_docs -->
