@@ -160,7 +160,7 @@ fn parse_lop_eqn_list(
     sep: TokenType,
 ) -> Result<EqnList, Diagnostic> {
     let mut list = EqnList::new();
-    if lop_eqn_list_starts(scanner) {
+    if lop_eqn_list_starts(scanner, bank) {
         list.push(parse_lop_eqn(scanner, bank)?);
         while scanner.test_tok(sep) {
             scanner.next_token()?;
@@ -170,8 +170,9 @@ fn parse_lop_eqn_list(
     Ok(list)
 }
 
-fn lop_eqn_list_starts(scanner: &Scanner) -> bool {
+fn lop_eqn_list_starts(scanner: &Scanner, bank: &TermBank) -> bool {
     scanner.test_tok(lop_term_start_token() | TokenType::TILDE_SIGN)
+        || (bank.signature().supports_lists() && scanner.test_tok(TokenType::OPEN_SQUARE))
 }
 
 fn lop_term_start_token() -> TokenType {
@@ -188,17 +189,17 @@ fn parse_lop_eqn(scanner: &mut Scanner, bank: &mut TermBank) -> Result<Eqn, Diag
     let (left, right, mut positive) = if scanner.test_id(EQUAL_PREDICATE) {
         scanner.next_token()?;
         scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-        let left = bank.parse_term_simple(scanner)?;
+        let left = bank.parse_term_with_distinct_checks(scanner)?;
         scanner.accept_tok(TokenType::COMMA)?;
-        let right = bank.parse_term_simple(scanner)?;
+        let right = bank.parse_term_with_distinct_checks(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         (left, right, true)
     } else {
-        let left = bank.parse_term_simple(scanner)?;
+        let left = bank.parse_term_with_distinct_checks(scanner)?;
         if scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
             let positive = !scanner.test_tok(TokenType::NEG_EQUAL_SIGN);
             scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
-            let right = bank.parse_term_simple(scanner)?;
+            let right = bank.parse_term_with_distinct_checks(scanner)?;
             type_declare_is_not_predicate(
                 bank.signature_mut(),
                 &left,
@@ -441,6 +442,43 @@ mod tests {
             "p",
             "$true",
         );
+    }
+
+    #[test]
+    fn parse_clause_term_rep_uses_checked_tbtermparse_shape() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("12(a)<-.", false).unwrap();
+
+        let error = parse_clause_term_rep(&mut scanner, &mut bank, true).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+    }
+
+    #[test]
+    fn parse_clause_term_rep_accepts_list_literal_when_signature_supports_lists() {
+        let mut bank =
+            TermBank::new(Signature::new_with_list_support(TypeBank::new(), true)).unwrap();
+        let mut scanner = Scanner::from_user_string("[a,b]=c<-.", false).unwrap();
+
+        let flat = parse_clause_term_rep(&mut scanner, &mut bank, true).unwrap();
+
+        let encoded = flat.argument(0).expect("encoded literal");
+        let left = encoded.argument(0).expect("encoded left term");
+        let right = encoded.argument(1).expect("encoded right term");
+        assert_eq!(bank.term_string(&left, true), "[a,b]");
+        assert_eq!(bank.signature().find_name(right.f_code()), Some("c"));
+    }
+
+    #[test]
+    fn parse_clause_term_rep_keeps_list_literal_outside_start_without_list_support() {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string("[a,b]=c<-.", false).unwrap();
+
+        let error = parse_clause_term_rep(&mut scanner, &mut bank, true).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Lesser than"));
     }
 
     #[test]
