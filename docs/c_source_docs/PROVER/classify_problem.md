@@ -116,6 +116,7 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - `--parse-features` is described as conflicting with `--generate-tptp-header`, but the C control flow does not reject the combination; the parse-feature branch ignores header generation.
 - The real-input `--raw-class` branch still runs the normal real-input parser and `ProofStateSinE()` before computing `RawSpecFeaturesCompute()`, but stops before formula CNF, clause preprocessing, spec-signature output, or TPTP header generation.
 - The non-raw real-input branch computes raw features before formula CNF/preprocessing, then copies the raw order and formula-definition fields back into the final `SpecFeatureCell` after `SpecFeaturesCompute()`.
+- `--merged-classification=N` wins over `--raw-class` when `N != -1`: it prints the raw classification prefix plus a child-computed CNF classification string, and uses an all-hyphen CNF class if the child cannot write the full fixed-width buffer.
 
 ### Change Later
 
@@ -125,4 +126,5 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - `do_raw_classification()` depends on global `raw_mask` even though the mask is otherwise parsed as command-line state. A cleaned API should pass all classification inputs explicitly after the drop-in executable behavior is covered.
 - The real-input path shares one `skip_includes` tree across all files in `main()`. Preserve this while matching C include semantics, but revisit whether cross-file include suppression is intentional for a modern API.
 - `print_tptp_header()` calls `ClauseSetTPTPDepthInfoAdd()` to fill local depth variables, but the printed depth fields come from the already-computed `SpecFeatureCell`. Keep the visible output for compatibility, then remove or explain the unused local computation in a cleanup pass.
+- `ClausifyAndClassifyWTimeout()` hard-codes POSIX `pipe()`, `fork()`, and `RLIMIT_CPU` around a deterministic classification computation. A cleaned implementation should make timeout/process isolation an explicit portability boundary instead of burying it inside the feature classifier.
 <!-- END MANUAL REVIEW: c_source_docs -->

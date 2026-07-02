@@ -10,8 +10,9 @@ use crate::heuristics::clausesetfeatures::{
     clause_set_count_variables, clause_set_max_literal_number, create_default_spec_limits,
     spec_features_add_eval, spec_features_compute_with_choice_recognition, spec_features_parse,
     spec_features_print_string, spec_type_print_string, SpecFeatureCell, SpecFeatureClass,
-    SpecLimits,
+    SpecLimits, SPEC_STRING_MEM,
 };
+use crate::heuristics::new_autoschedule::DEFAULT_MASK as MERGED_CLASSIFY_MASK;
 use crate::heuristics::rawspecfeatures::{
     raw_spec_features_classify, raw_spec_features_compute, raw_spec_features_format,
     raw_spec_features_parse, RawSpecFeatureCell, RAW_DEFAULT_MASK,
@@ -856,11 +857,14 @@ fn execute_classify_problem(
         return Ok(0);
     }
 
-    if config.cnf_timeout.is_some() {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "classify_problem merged real-input classification is not ported yet",
-        ));
+    if let Some(timeout) = config.cnf_timeout {
+        if timeout != -1 {
+            process_merged_real_input_files(config, timeout, stdin, &mut output)?;
+            output
+                .flush()
+                .map_err(|_| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
+            return Ok(0);
+        }
     }
     if config.raw_classify {
         process_raw_real_input_files(config, stdin, &mut output)?;
@@ -921,6 +925,27 @@ fn process_raw_feature_files(
     Ok(())
 }
 
+fn process_merged_real_input_files(
+    config: &ClassifyProblemConfig,
+    cnf_timeout: i64,
+    stdin: &mut impl Read,
+    output: &mut impl Write,
+) -> Result<(), Diagnostic> {
+    for file in &config.files {
+        let mut state = proof_state_alloc(config.free_symbol_properties)?;
+        parse_real_input_file(config, file, stdin, &mut state)?;
+        apply_proof_state_sine_silent(config.sine.as_deref(), &mut state)?;
+        let raw_features = raw_features_for_standard_classification(config, &state);
+        let cnf_class = classify_current_cnf_state(cnf_timeout, &mut state)?;
+        write_all(output, file.as_bytes())?;
+        write_all(output, b" : (NULL) : ")?;
+        write_all(output, raw_features.class.as_bytes())?;
+        write_all(output, cnf_class.as_bytes())?;
+        write_all(output, b"\n")?;
+    }
+    Ok(())
+}
+
 fn process_standard_real_input_files(
     config: &ClassifyProblemConfig,
     stdin: &mut impl Read,
@@ -975,6 +1000,30 @@ fn raw_features_for_standard_classification(
     raw_spec_features_compute(&mut features, state);
     raw_spec_features_classify(&mut features, &config.limits, Some(RAW_DEFAULT_MASK));
     features
+}
+
+fn classify_current_cnf_state(
+    cnf_timeout: i64,
+    state: &mut ProofState,
+) -> Result<String, Diagnostic> {
+    if cnf_timeout <= 0 {
+        return Ok("-".repeat(SPEC_STRING_MEM - 1));
+    }
+
+    let mut features = SpecFeatureCell::default();
+    {
+        let (bank, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_mut();
+        spec_features_compute_with_choice_recognition(
+            &mut features,
+            axioms,
+            Some(f_axioms),
+            Some(f_ax_archive),
+            bank,
+        )?;
+    }
+    let limits = create_default_spec_limits();
+    spec_features_add_eval(&mut features, &limits);
+    Ok(spec_type_print_string(&features, MERGED_CLASSIFY_MASK))
 }
 
 fn preprocess_real_input_clauses(
@@ -1727,24 +1776,56 @@ mod tests {
     }
 
     #[test]
-    fn merged_real_problem_path_is_explicitly_pending() {
+    fn merged_real_problem_classification_combines_raw_and_cnf_classes() {
         let _guard = global_state_lock();
-        let mut stdin = Cursor::new(b"cnf(c1, axiom, (p(a))).\n".to_vec());
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let error = run(
-            [PROGRAM_NAME, "--tstp-format", "--merged-classification=1"],
-            &mut stdin,
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap_err();
+        let input = "cnf(c1, axiom, (p(a))).\n";
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("merged"));
-        assert!(stdout.is_empty());
-        assert!(String::from_utf8(stderr)
-            .expect("stderr is utf8")
-            .is_empty());
+        let (status, stdout, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--tstp-format", "--merged-classification=1"],
+            input,
+        )
+        .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        let classes = stdout
+            .strip_prefix("- : (NULL) : ")
+            .expect("merged output prefix")
+            .trim_end();
+        assert_eq!(classes.len(), 36);
+        assert!(classes.starts_with('F'));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn merged_real_problem_zero_timeout_uses_c_hyphen_fallback_shape() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--tstp-format", "--merged-classification=0"],
+            input,
+        )
+        .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stdout.trim_end().ends_with(&"-".repeat(21)));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn merged_classification_minus_one_uses_standard_real_problem_path() {
+        let _guard = global_state_lock();
+        let input = "cnf(c1, axiom, (p(a))).\n";
+
+        let (status, stdout, stderr) = run_with_stdin(
+            &[PROGRAM_NAME, "--tstp-format", "--merged-classification=-1"],
+            input,
+        )
+        .expect("run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stdout.starts_with("- : ("));
+        assert!(!stdout.contains("(NULL)"));
+        assert!(stderr.is_empty());
     }
 }
