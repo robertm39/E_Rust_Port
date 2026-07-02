@@ -12343,6 +12343,17 @@ fn parse_simple_fof_tstp_application_formula(
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
     let formula = bank.parse_tformula_tstp(scanner)?;
+    let formula = if formula.has_lambda_subterm() {
+        named_to_db(bank, &formula)?
+    } else {
+        formula
+    };
+    if !formula.type_().as_ref().is_some_and(Type::is_bool) {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
+    if formula.has_lambda_subterm() || formula.has_db_subterm() {
+        return Err(simple_fof_unsupported_error(scanner));
+    }
     simple_fof_bool_term_to_formulas(
         &formula,
         SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
@@ -12352,8 +12363,14 @@ fn parse_simple_fof_tstp_application_formula(
 
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
     simple_fof_starts_tstp_logical_head_application(scanner)
+        || simple_fof_starts_tstp_parenthesized_lambda_application(scanner)
         || (scanner.test_tok(TokenType::NAME | TokenType::SEM_IDENT)
             && scanner_test_tok(scanner.look_token(1), TokenType::APPLICATION))
+}
+
+fn simple_fof_starts_tstp_parenthesized_lambda_application(scanner: &Scanner) -> bool {
+    scanner.test_tok(TokenType::OPEN_BRACKET)
+        && scanner_test_tok(scanner.look_token(1), TokenType::LAMBDA_QUANTOR)
 }
 
 fn simple_fof_starts_tstp_logical_head_application(scanner: &Scanner) -> bool {
@@ -15119,6 +15136,36 @@ mod tests {
     }
 
     #[test]
+    fn run_app_encode_accepts_tstp_lambda_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tstp-lambda-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(lambda_app, axiom, app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_treats_typed_atomic_left_fool_rhs_as_formula_equality() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-atomic-left-fool-rhs-equality");
@@ -16305,6 +16352,37 @@ mod tests {
              fof(neg_app, axiom, ~ p @ a).\n\
              fof(and_app, axiom, p @ a & q @ a).\n\
              fof(ex_app, axiom, ?[X]:p @ X).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_lambda_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-tstp-lambda-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23676,6 +23754,40 @@ mod tests {
         assert!(cnf_lines.iter().any(|line| line.contains("(~p(a))")));
         assert!(cnf_lines.iter().any(|line| line.contains("(q(a))")));
         assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_tstp_lambda_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tstp-lambda-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 1, "{printed}");
+        assert!(cnf_lines[0].contains("(p(a))"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
