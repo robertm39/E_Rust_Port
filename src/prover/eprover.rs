@@ -19374,6 +19374,37 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_honors_empty_tstp_include_selector() {
+        let _guard = global_state_lock();
+        let include_path = temp_path("proof-fof-include-empty-selector-inc");
+        let path = temp_path("proof-fof-include-empty-selector-main");
+        std::fs::write(&include_path, "fof(skipped, axiom, p(a)).\n").unwrap();
+        let include_arg = include_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &path,
+            format!("include('{include_arg}',[]).\nfof(goal, conjecture, p(a)).\n"),
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::SATISFIABLE.exit_status());
+        assert_eq!(
+            without_selected_clause_progress(&String::from_utf8(stdout).unwrap()),
+            format!(
+                "{}\n% No proof found!\n% SZS status CounterSatisfiable\n",
+                default_proof_search_prefix()
+            )
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&include_path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_honors_old_tptp_input_formula_include_selector() {
         let _guard = global_state_lock();
         let include_path = temp_path("proof-tptp-input-formula-include-selected-inc");
