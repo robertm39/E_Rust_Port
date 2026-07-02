@@ -101,6 +101,20 @@ Source files reviewed: `PROVER/e_axfilter.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/e_axfilter.rs` and `src/bin/e_axfilter.rs` port the standalone executable wrapper for non-seeded filter generation. The Rust wrapper preserves C-shaped help/version text, output-file creation before filter parsing and missing-problem usage errors, filter dumping before the usage check, default/custom ax-filter parsing, Auto/LOP/TPTP/TSTP input-format options, structured problem parsing through the ported batch-spec loader, reset of the shared boundary after distribution initialization, first-input `FileNameStrip` corename derivation, generated `<corename>_<filter>.p` output names, TSTP type-declaration emission, and selected clause/formula stack printing.
+- `--seed-symbols`, `--seeds`, `--seed-subsample`, and `--seed-method` are parsed with the C option defaults and validation quirks, including `atol`-style prefix parsing for `--seed-subsample`. Artificial seeded filtering currently reports an explicit pending diagnostic after problem parsing because exact role mutation/restoration requires stable formula-owner handles.
+- The corresponding status entry lives in [`../../rust-port-status.md`](../../rust-port-status.md) under `e_axfilter Executable`.
+
+### Change Later
+
+- `filter_problem` opens the generated `<corename>_<filter>.p` file with `fopen` and immediately calls `fprintf` on the result without checking for `NULL`. Rust reports a file diagnostic instead of reproducing the crash surface; a cleaned C API should report generated-file failures explicitly.
+- `--output-file` affects `GlobalOut` messages and filter dumps only. The actual filtered problems are always written to generated names in the current working directory, and pipe-based output is intentionally unsupported. A modernized CLI should offer an output directory or manifest once drop-in behavior is covered.
+- `process_options` keeps `app_encode` and `OPT_PRINT_STATISTICS`-style dead global/enum surfaces in the surrounding file shape even though this executable does not expose or consume them. Do not add cleaned Rust API surface for these unless another compatibility path proves them observable.
+- `seeded_filter_largest` sets `largest` to hypothesis, but its restoration branch calls `FormulaSetType(handle, CPTypeAxiom)`, where `handle` is the last loop element, not necessarily `largest`. `seeded_filter_diverse` has a similar copy/paste hazard in the hypothesis-setting branch. Reference-test seeded output before deciding whether Rust should preserve the bug or the apparent intent.
+- `decode_seed_symbols` reports unknown user seed symbols through the fatal usage-error path after the whole problem has been parsed and the signature is populated. A cleaned interface could validate explicit seeds transactionally, but compatibility mode should keep the current late validation timing.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

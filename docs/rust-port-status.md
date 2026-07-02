@@ -401,6 +401,35 @@ Change-later notes:
 - `e_server.c` sends diagnostic loop text with `printf` to process stdout, while `--output-file` only affects `GlobalOut` users such as domain parsing. Rust keeps parse output separate from loop output; a later API should make this split explicit rather than depending on mixed global/stdout channels.
 - `e_server.c` accepts only one active connection and closes additional accepted sockets while the first is active. Rust currently serves accepted clients sequentially, which preserves single-client processing but not the exact second-client rejection timing; revisit with event-loop tests if this legacy server remains user-facing.
 
+## e_axfilter Executable
+
+Rust files:
+
+- `src/prover/e_axfilter.rs`
+- `src/bin/e_axfilter.rs`
+
+C source references:
+
+- `eprover/PROVER/e_axfilter.c`
+- `eprover/HEURISTICS/che_axfilter.c`
+- `eprover/CONTROL/cco_batch_spec.c`
+- `eprover/CLAUSES/ccl_sine.c`
+
+Implemented:
+
+- Standalone `e_axfilter` executable wrapper, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, output-file creation before filter parsing and missing-problem usage errors, default/custom ax-filter parsing, filter dumping before the missing-problem usage check, LOP/TPTP/TSTP/Auto input-format options, structured problem parsing through the ported `StructFOFSpecParseAxioms` equivalent, C-shaped reset of the shared boundary after distribution initialization, first-input `FileNameStrip` corename derivation, non-seeded application of all configured filters, generated `<corename>_<filter>.p` TSTP files, signature type-declaration emission, selected clause/formula stack printing, and unit coverage for option defaults, seed-option parsing, output-file side effects, custom filters, generated problem files, and pending seeded-mode diagnostics.
+
+Pending:
+
+- Artificial seeded filtering from `--seed-symbols`/`--seeds` is parsed but returns an explicit pending diagnostic after problem parsing. Completing it requires stable formula-owner handles and role mutation/restoration matching `seeded_filter_all`, `seeded_filter_largest`, and `seeded_filter_diverse`.
+- Exact reference comparison for formula-aware GSinE/LambdaDef output should wait until full formula ownership replaces the current temporary formula bridge.
+
+Change-later notes:
+
+- `e_axfilter.c` opens the generated filter file with `fopen` and immediately writes to the returned pointer without checking for failure. Rust reports a file diagnostic instead; a cleaned C-compatible API should make generated-file failures explicit.
+- `--output-file` affects only `GlobalOut` messages and filter dumps; generated problem files are always named from the first input and filter name in the current working directory. Rust preserves that split, but a modernized interface should expose an output directory or manifest after drop-in behavior is covered.
+- The seeded largest/diverse paths temporarily mutate formula roles to hypotheses and restore them after each filter run. The C code has likely copy/paste mistakes around restoring or setting `handle` instead of `largest`; Rust should implement the intended compatibility only after reference tests pin the observable behavior.
+
 ## E Process Control
 
 Rust files:
