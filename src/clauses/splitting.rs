@@ -360,11 +360,25 @@ pub fn clause_split_general(
         let split_literals = assemble_part_literals(&lit_table, part_index);
         let pred = if fresh_defs || !split_vars.is_empty() {
             let pred = bank.signature_mut().get_new_predicate_code(arity);
+            let formula_parent = if split_vars.is_empty() {
+                match store.as_deref_mut() {
+                    Some(store) => {
+                        archive_fresh_split_formula_definition(bank, store, &split_literals, pred)?
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
             let mut clause_literals = Vec::with_capacity(lit_no + 1);
             clause_literals.push(gen_def_lit(bank, pred, true, split_vars)?);
             clause_literals.extend(split_literals);
 
             let mut new_clause = Clause::alloc(EqnList::from_vec(clause_literals));
+            if let Some(parent) = formula_parent {
+                clause_push_formula_derivation(&mut new_clause, DC_SPLIT_EQUIV, Some(parent), None);
+                applied_definition_parents.push(parent);
+            }
             new_clause.set_properties(props);
             split_clauses.push(new_clause);
             pred
@@ -762,6 +776,21 @@ fn archive_split_formula_definition(
             "split definition formula archive requires both an archive and association map",
         )),
     }
+}
+
+fn archive_fresh_split_formula_definition(
+    bank: &mut TermBank,
+    store: &mut SplitDefinitionStore<'_>,
+    split_literals: &[Eqn],
+    pred: i64,
+) -> Result<Option<FormulaDerivationRef>, Diagnostic> {
+    let Some(archive) = store.formula_archive.as_deref_mut() else {
+        return Ok(None);
+    };
+    let formula = get_split_formula_definition(bank, split_literals, pred)?;
+    let parent = FormulaDerivationRef::new(formula.ident());
+    archive.insert(formula);
+    Ok(Some(parent))
 }
 
 fn find_definition_variant(store: &ClauseSet, query: &Clause, bank: &TermBank) -> Option<i64> {
@@ -1165,6 +1194,63 @@ mod tests {
             .map(|literal| literal.pred_code_fo(&bank))
             .collect::<Vec<_>>();
         assert_eq!(second_residual_preds, first_residual_preds);
+    }
+
+    #[test]
+    fn clause_split_archives_fresh_formula_definitions_without_reuse_associations() {
+        let mut bank = test_bank();
+        let first_const = typed_const(&mut bank, "split_fresh_archive_first");
+        let second_const = typed_const(&mut bank, "split_fresh_archive_second");
+        let first_var = typed_var(&bank, -2);
+        let second_var = typed_var(&bank, -4);
+        let clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &first_var, &first_const, true),
+            lit(&mut bank, &second_var, &second_const, true),
+        ]));
+        let mut definitions = ClauseSet::new();
+        let mut predicates = BTreeMap::new();
+        let mut formula_parents = BTreeMap::new();
+        let mut archive = FormulaSet::new();
+
+        let residual_parents = {
+            let mut store = SplitDefinitionStore::with_formula_archive(
+                &mut definitions,
+                &mut predicates,
+                &mut formula_parents,
+                &mut archive,
+            );
+
+            let outcome = clause_split(
+                &mut bank,
+                Some(&mut store),
+                clause,
+                ClauseSplitType::GroundFull,
+                true,
+            )
+            .unwrap();
+            let ClauseSplitOutcome::Split(clauses, count) = outcome else {
+                panic!("fresh clause should split");
+            };
+            assert_eq!(count, 3);
+            assert_eq!(clauses.len(), 3);
+            assert_eq!(store.clauses().members(), 0);
+            assert!(store.predicates().is_empty());
+            assert_eq!(store.formula_archive().unwrap().cardinality(), 2);
+            assert!(store.formula_parents().unwrap().is_empty());
+
+            let definition_parents = clauses[..2]
+                .iter()
+                .flat_map(|clause| formula_parents_for_operation(clause, DC_SPLIT_EQUIV))
+                .collect::<Vec<_>>();
+            assert_eq!(definition_parents.len(), 2);
+            let residual_parents = formula_parents_for_operation(&clauses[2], DC_APPLY_DEF);
+            assert_eq!(residual_parents, definition_parents);
+            residual_parents
+        };
+
+        assert_eq!(archive.cardinality(), 2);
+        assert!(formula_parents.is_empty());
+        assert_eq!(residual_parents.len(), 2);
     }
 
     #[test]

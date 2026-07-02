@@ -65,8 +65,7 @@ use crate::clauses::rewrite::{
 };
 use crate::clauses::satinterface::{sat_check_proof_state, SatCheckReport};
 use crate::clauses::splitting::{
-    clause_split, clause_split_fresh, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod,
-    SplitDefinitionStore,
+    clause_split, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod, SplitDefinitionStore,
 };
 use crate::clauses::subsumption::{
     clause_negative_simplify_reflect, clause_negative_simplify_reflect_with_docs,
@@ -7354,10 +7353,6 @@ fn proof_state_split_clause(
     method: ClauseSplitMethod,
     fresh_defs: bool,
 ) -> Result<ClauseSplitOutcome, Diagnostic> {
-    if fresh_defs {
-        return clause_split_fresh(state.terms_mut(), clause, method);
-    }
-
     let (terms, definitions, predicates, formula_parents, archive) =
         state.terms_and_definition_store_mut();
     let mut store = SplitDefinitionStore::with_formula_archive(
@@ -7366,7 +7361,7 @@ fn proof_state_split_clause(
         formula_parents,
         archive,
     );
-    clause_split(terms, Some(&mut store), clause, method, false)
+    clause_split(terms, Some(&mut store), clause, method, fresh_defs)
 }
 
 /// Evaluates all clauses currently waiting in `eval_store`, matching C
@@ -10970,6 +10965,10 @@ mod tests {
         assert!(empty.is_none());
         assert!(state.tmp_store().is_empty());
         assert!(state.eval_store().is_empty());
+        assert_eq!(state.definition_store().members(), 0);
+        assert_eq!(state.definition_assocs().len(), 0);
+        assert_eq!(state.definition_formula_assocs().len(), 0);
+        assert_eq!(state.f_archive().cardinality(), 2);
         assert_eq!(state.unprocessed().members(), 3);
         assert_eq!(state.statistics().generated_count, 4);
         assert_eq!(state.statistics().generated_lit_count, 2);
@@ -11237,6 +11236,10 @@ mod tests {
         assert!(empty.is_none());
         assert!(state.tmp_store().is_empty());
         assert!(state.eval_store().is_empty());
+        assert_eq!(state.definition_store().members(), 0);
+        assert_eq!(state.definition_assocs().len(), 0);
+        assert_eq!(state.definition_formula_assocs().len(), 0);
+        assert_eq!(state.f_archive().cardinality(), 2);
         assert_eq!(state.unprocessed().members(), 3);
         assert_eq!(state.statistics().generated_count, 3);
         assert_eq!(state.statistics().generated_lit_count, 6);
