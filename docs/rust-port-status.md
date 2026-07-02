@@ -618,6 +618,39 @@ Change-later notes:
 - C `--no-reference-weights` leaves `act_simpl_w` unchanged because it assigns `pas_simpl_w` twice. Rust preserves the effective assignments until lemma-selection trace tests prove a cleanup is acceptable.
 - The C help footer is an old support-tool block with the 2003-2005 copyright range; Rust keeps the visible text for compatibility, but a future documentation pass may want a shared helper for legacy support-tool footers.
 
+## classify_problem Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/classify_problem.rs`
+- `src/bin/classify_problem.rs`
+
+C source references:
+
+- `eprover/PROVER/classify_problem.c`
+- `eprover/HEURISTICS/che_clausesetfeatures.c`
+- `eprover/HEURISTICS/che_clausesetfeatures.h`
+- `eprover/HEURISTICS/che_rawspecfeatures.c`
+- `eprover/HEURISTICS/che_rawspecfeatures.h`
+
+Implemented:
+
+- Standalone `classify_problem` binary registration and wrapper with C-shaped help/version text, verbosity parsing, output-file redirection, default stdin input through `-`, all C option names accepted for the feature-line path, class-mask/raw-mask validation, C default classification limits, and option-driven limit overrides.
+- Ported `--parse-features` consumer for ordinary `SpecFeature` lines: it parses `<name> : <features> : <old-class>`, recomputes threshold-based evaluation fields with `SpecFeaturesAddEval`, prints `SpecFeaturesPrint`, and appends `SpecTypePrint` using the current class mask.
+- Ported `--parse-features --raw-class` consumer for `RawSpecFeature` lines: it parses `<name> : <raw-features> : <old-class>`, recomputes the raw class with the current raw mask, and prints `RawSpecFeaturesPrint`.
+
+Pending:
+
+- Real problem parsing/classification remains pending: `FormulaAndClauseSetParse`, SInE filtering, raw real-input classification, formula preprocessing/CNF, clause-set preprocessing, specsig output, TPTP header generation, and merged classification with clausification timeout are not wired into this executable yet.
+- Byte-for-byte comparison against a built C `classify_problem` executable remains pending for malformed feature lines, stdin/file diagnostics, output-close behavior, and all real-input classification modes.
+
+Change-later notes:
+
+- `classify_problem.c` initializes `raw_mask` to a 10-character string but rejects user-provided `--raw-mask` values shorter than 11 characters. Rust preserves the initialized default for the wrapper; a cleaned CLI should choose one documented raw-class mask width after compatibility is secured.
+- The C option table exposes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case, so release builds effectively ignore it while assertion-enabled builds can trip the default case. Rust accepts it as a no-op for now and documents the real-input path as pending.
+- The C help text states `--parse-features` conflicts with `--generate-tptp-header`, but the parse-feature branch simply ignores header generation. Rust keeps parse-feature output focused on the C branch behavior.
+
 ## edpll Executable
 
 Rust files:

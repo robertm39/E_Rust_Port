@@ -107,4 +107,17 @@ Source files reviewed: `PROVER/classify_problem.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- The executable has two major execution paths. With `--parse-features`, it consumes precomputed feature lines and recomputes only the symbolic class. Without `--parse-features`, it parses real formula/clause inputs, optionally applies SInE, clausifies, preprocesses, and computes feature vectors from the resulting proof state.
+- `parse_feature_line()` and `parse_raw_feature_line()` parse `<name> : <features> : <old-class>` and intentionally ignore the old class after it has supplied any structural fields needed by the feature parser.
+- `process_feature_files()` calls `SpecFeaturesAddEval()` after parsing and then prints the feature vector and `SpecTypePrint()` classification. `process_raw_feature_files()` calls `RawSpecFeaturesClassify()` and prints only `RawSpecFeaturesPrint()`, whose output already includes the raw class.
+- `--parse-features` is described as conflicting with `--generate-tptp-header`, but the C control flow does not reject the combination; the parse-feature branch ignores header generation.
+
+### Change Later
+
+- `raw_mask` is initialized to `"aaaaaaaaaa"` even though `--raw-mask` validation rejects strings shorter than 11 characters. Preserve the initialized default for compatibility, then choose a single documented mask width in a cleanup mode.
+- The option table includes `--old-cnf`, but `process_options()` has no `OPT_DEF_CNF_OLD` case. Release builds effectively ignore it, while assertion-enabled builds can hit the default assertion. Treat this as a compatibility quirk until the real-input classification path is fully ported.
+- `process_options()` mutates many globals that are used only by the real-input branch. A Rust cleanup should keep parse-feature options separate from clausification/preprocessing options once drop-in behavior is covered.
 <!-- END MANUAL REVIEW: c_source_docs -->
