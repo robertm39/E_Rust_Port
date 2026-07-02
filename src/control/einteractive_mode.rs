@@ -4,7 +4,7 @@ use std::{
     ffi::OsStr,
     fmt::Write as _,
     fs,
-    io::{self, BufRead, Read},
+    io::{self, BufRead, Read, Write},
     path::Path,
 };
 
@@ -16,6 +16,7 @@ use crate::control::batch_spec::{
     BatchProcessProblemReport, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
 };
 use crate::control::sine::StructFofSpec;
+use crate::inout::network::{tcp_string_recv_from_or_error, tcp_string_send_to_or_error};
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::inout::simplestuff::{read_text_block, tcp_read_text_block_from};
 use crate::terms::signature::Signature;
@@ -160,6 +161,12 @@ pub struct InteractiveRunReport {
 pub struct InteractiveBlockRead {
     pub input: String,
     pub complete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveServerReport {
+    pub commands: usize,
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -653,6 +660,61 @@ impl InteractiveSpec {
     }
 }
 
+/// C `StartDeductionServer` socket-message loop, with the `RUN` backend
+/// supplied by the caller.
+///
+/// The C implementation has a file/stdout parameter, but exits immediately
+/// for that path. This adapter covers the real socket branch: receive one TCP
+/// string command at a time, use TCP text-block reads for `ADD`/`RUN`, and send
+/// each non-empty command response as one TCP string.
+///
+/// # Errors
+///
+/// Returns TCP receive/send diagnostics or command/parser diagnostics.
+pub fn start_deduction_server_tcp_with<S, R>(
+    stream: &mut S,
+    server_lib: impl Into<String>,
+    spec: &BatchSpec,
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    mut run_command: R,
+) -> Result<InteractiveServerReport, Diagnostic>
+where
+    S: Read + Write,
+    R: FnMut(
+        &BatchSpec,
+        &mut TermBank,
+        &mut StructFofSpec,
+        &str,
+        &str,
+    ) -> Result<InteractiveCommandOutput, Diagnostic>,
+{
+    let mut interactive = InteractiveSpec::new(server_lib);
+    let mut report = InteractiveServerReport {
+        commands: 0,
+        done: false,
+    };
+
+    while !report.done {
+        let command = tcp_string_recv_from_or_error(stream)?;
+        let result = interactive.dispatch_tcp_command_with(
+            &command,
+            stream,
+            spec,
+            bank,
+            ctrl,
+            &mut run_command,
+        )?;
+        report.commands += 1;
+        report.done = result.done;
+        if !result.output.is_empty() {
+            tcp_string_send_to_or_error(stream, &result.output)?;
+        }
+    }
+
+    Ok(report)
+}
+
 /// C `ReadTextBlock` adapter for interactive `ADD`/`RUN` payloads.
 ///
 /// # Errors
@@ -885,9 +947,9 @@ fn parse_interactive_axioms(
 mod tests {
     use super::{
         accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings,
-        read_interactive_tcp_block, read_interactive_text_block, run_command_with, AxiomSet,
-        InteractiveCommandOutput, InteractiveSpec, ADD_COMMAND, DOWNLOAD_COMMAND,
-        END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
+        read_interactive_tcp_block, read_interactive_text_block, run_command_with,
+        start_deduction_server_tcp_with, AxiomSet, InteractiveCommandOutput, InteractiveSpec,
+        ADD_COMMAND, DOWNLOAD_COMMAND, END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
         ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
         ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE,
         ERR_NO_AXIOM_LIBRARY_ON_SERVER_MESSAGE, ERR_UNKNOWN_AXIOM_SET_MESSAGE,
@@ -903,14 +965,14 @@ mod tests {
         BatchCompletedRunner, BatchProblemData, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
     };
     use crate::control::sine::StructFofSpec;
-    use crate::inout::network::TcpMessage;
+    use crate::inout::network::{tcp_string_recv_from, MsgStatus, TcpMessage};
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
     use std::{
         collections::BTreeSet,
         ffi::OsStr,
         fs,
-        io::Cursor,
+        io::{self, Cursor, Read, Write},
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -971,6 +1033,51 @@ mod tests {
             bytes.extend_from_slice(TcpMessage::pack(message).unwrap().content_bytes());
         }
         bytes
+    }
+
+    #[derive(Debug)]
+    struct Duplex {
+        incoming: Cursor<Vec<u8>>,
+        written: Vec<u8>,
+    }
+
+    impl Duplex {
+        fn new(messages: &[&str]) -> Self {
+            Self {
+                incoming: Cursor::new(packed_tcp_messages(messages)),
+                written: Vec::new(),
+            }
+        }
+
+        fn written_messages(&self) -> Vec<String> {
+            let mut cursor = Cursor::new(self.written.clone());
+            let mut messages = Vec::new();
+            loop {
+                let (message, status) = tcp_string_recv_from(&mut cursor, false).unwrap();
+                if status != MsgStatus::Success {
+                    break;
+                }
+                messages.push(message.unwrap());
+            }
+            messages
+        }
+    }
+
+    impl Read for Duplex {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.incoming.read(buffer)
+        }
+    }
+
+    impl Write for Duplex {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     struct ScratchDir {
@@ -1633,6 +1740,68 @@ mod tests {
         let axiom_set = interactive.axiom_sets().next().unwrap();
         assert_eq!(axiom_set.name(), "tcp_upload");
         assert_eq!(axiom_set.formula_set().cardinality(), 1);
+    }
+
+    #[test]
+    fn start_deduction_server_tcp_processes_messages_until_quit() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut stream = Duplex::new(&[
+            "ADD uploaded",
+            "fof(uploaded_formula, axiom, p(a)).\n",
+            END_OF_BLOCK_TOKEN,
+            "LIST",
+            "QUIT",
+        ]);
+
+        let report = start_deduction_server_tcp_with(
+            &mut stream,
+            "",
+            &spec,
+            &mut bank,
+            &mut ctrl,
+            unused_run_command,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            super::InteractiveServerReport {
+                commands: 3,
+                done: true,
+            }
+        );
+        let messages = stream.written_messages();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0], OK_ADDED_MESSAGE);
+        assert!(messages[1].contains("Unstaged :\n  uploaded\n"));
+        assert!(messages[1].ends_with(OK_SUCCESS_MESSAGE));
+    }
+
+    #[test]
+    fn start_deduction_server_tcp_sends_unknown_command_status() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut stream = Duplex::new(&["BOGUS", "QUIT"]);
+
+        let report = start_deduction_server_tcp_with(
+            &mut stream,
+            "",
+            &spec,
+            &mut bank,
+            &mut ctrl,
+            unused_run_command,
+        )
+        .unwrap();
+
+        assert_eq!(report.commands, 2);
+        assert!(report.done);
+        assert_eq!(
+            stream.written_messages(),
+            vec![String::from(ERR_UNKNOWN_COMMAND_MESSAGE)]
+        );
     }
 
     #[test]
