@@ -12044,6 +12044,9 @@ fn parse_simple_fof_primary_formula(
             Ok(formulas)
         } else if scanner.test_tok(TokenType::TILDE_SIGN) {
             scanner.accept_tok(TokenType::TILDE_SIGN)?;
+            if scanner.test_tok(TokenType::APPLICATION) {
+                scanner.accept_tok(TokenType::APPLICATION)?;
+            }
             let formulas = parse_simple_fof_primary_formula(scanner, bank, problem_type)?;
             Ok(vec![SimpleFofFormula::Negation(formulas)])
         } else if let Some(formulas) = parse_simple_fof_truth_constant(scanner)? {
@@ -14859,6 +14862,31 @@ mod tests {
         assert!(printed.contains("%-- person."));
         assert!(printed.contains("tff(ax, axiom, "));
         assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_accepts_tstp_application_negation_marker() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tstp-application-negation");
+        std::fs::write(&path, "fof(ax, axiom, ~ @ p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(ax, axiom, ~(app_"));
+        assert!(printed.contains("(p,a))).\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -23111,6 +23139,30 @@ mod tests {
     }
 
     #[test]
+    fn run_print_formulas_lowers_tstp_application_negation_marker() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tstp-application-negation");
+        std::fs::write(&path, "fof(ax, axiom, ~ @ p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with("cnf(i_0_"));
+        assert!(printed.ends_with(", axiom, (~p(a))).\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_print_formulas_skolemizes_supported_fof_positive_existential_atom() {
         let _guard = global_state_lock();
         let path = temp_path("print-formulas-positive-existential");
@@ -23979,6 +24031,31 @@ mod tests {
              tff(goal, conjecture, q(a)).\n",
         )
         .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_application_negation_marker() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-tstp-application-negation");
+        std::fs::write(&path, "fof(test1, axiom, ~ @ p(a)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
