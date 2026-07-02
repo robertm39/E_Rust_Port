@@ -318,6 +318,18 @@ impl ProofState {
         (terms, axioms)
     }
 
+    pub fn terms_axioms_ax_archive_mut(
+        &mut self,
+    ) -> (&mut TermBank, &mut ClauseSet, &mut ClauseSet) {
+        let Self {
+            terms,
+            axioms,
+            ax_archive,
+            ..
+        } = self;
+        (terms, axioms, ax_archive)
+    }
+
     pub fn terms_and_watchlist_mut(&mut self) -> (&mut TermBank, Option<&mut ClauseSet>) {
         let Self {
             terms, watchlist, ..
@@ -685,7 +697,7 @@ impl ProofState {
     pub fn proof_clause_by_derivation_ref(&self, parent: ClauseDerivationRef) -> Option<&Clause> {
         self.proof_clause_sets()
             .into_iter()
-            .find_map(|set| set.find_by_derivation_ref(parent))
+            .find_map(|set| find_by_derivation_ref_or_sourceless_id(set, parent))
     }
 
     #[must_use]
@@ -695,7 +707,7 @@ impl ProofState {
     ) -> Option<&Clause> {
         self.proof_quote_source_clause_sets()
             .into_iter()
-            .find_map(|set| set.find_by_derivation_ref(parent))
+            .find_map(|set| find_by_derivation_ref_or_sourceless_id(set, parent))
     }
 
     #[must_use]
@@ -802,8 +814,8 @@ impl ProofState {
 
     fn proof_quote_source_clause_sets(&self) -> Vec<&ClauseSet> {
         let mut sets = vec![
-            &self.axioms,
             &self.ax_archive,
+            &self.axioms,
             &self.archive,
             &self.processed_pos_rules,
             &self.processed_pos_eqns,
@@ -1075,6 +1087,9 @@ impl ProofState {
                 break;
             };
             if std::ptr::eq(parent, current) {
+                break;
+            }
+            if !clause_literals_match(current, parent) {
                 break;
             }
             current = parent;
@@ -1748,6 +1763,29 @@ impl ProofState {
     }
 }
 
+fn find_by_derivation_ref_or_sourceless_id(
+    set: &ClauseSet,
+    parent: ClauseDerivationRef,
+) -> Option<&Clause> {
+    set.find_by_derivation_ref(parent).or_else(|| {
+        if parent.source() == 0 {
+            set.find_by_id(parent.ident())
+        } else {
+            None
+        }
+    })
+}
+
+fn clause_literals_match(left: &Clause, right: &Clause) -> bool {
+    left.literal_number() == right.literal_number()
+        && left
+            .literals()
+            .as_slice()
+            .iter()
+            .zip(right.literals().as_slice())
+            .all(|(left, right)| left.literal_equal(right))
+}
+
 fn proof_object_parent_edges(
     derivation: Option<&crate::basics::pstacks::PStack<DerivationEntry>>,
 ) -> Vec<ProofObjectParentEdge> {
@@ -2248,12 +2286,42 @@ mod tests {
     }
 
     #[test]
+    fn proof_state_proof_object_graph_prefers_ax_archive_for_active_quote_source() {
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let original = simple_clause(&mut state, "proof_graph_ax_archive_original", 20_015);
+        let mut active_quote = simple_clause(&mut state, "proof_graph_active_quote", 20_015);
+        clause_push_derivation(&mut active_quote, DC_CNF_QUOTE, Some(&original), None);
+
+        state.ax_archive_mut().insert(original);
+        state.axioms_mut().insert(active_quote);
+
+        let root = state.axioms().find_by_id(20_015).unwrap();
+        let graph = state.proof_object_graph_for_roots([root]);
+
+        assert_eq!(
+            graph
+                .clauses
+                .iter()
+                .map(|clause| clause.derivation().is_some())
+                .collect::<Vec<_>>(),
+            vec![true, false]
+        );
+        assert_eq!(
+            graph.edges,
+            vec![ProofObjectGraphEdge {
+                parent_index: 1,
+                child_index: 0,
+            }]
+        );
+    }
+
+    #[test]
     fn proof_state_proof_object_graph_records_distinct_requested_roots() {
         let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
-        let first_root = simple_clause(&mut state, "proof_graph_first_root", 20_015);
-        let parent = simple_clause(&mut state, "proof_graph_second_parent", 20_016);
+        let first_root = simple_clause(&mut state, "proof_graph_first_root", 20_016);
+        let parent = simple_clause(&mut state, "proof_graph_second_parent", 20_017);
         let mut second_root = Clause::alloc(EqnList::new());
-        second_root.set_ident(20_017);
+        second_root.set_ident(20_018);
         clause_push_derivation(&mut second_root, DC_EQ_RES, Some(&parent), None);
 
         state.axioms_mut().insert(parent);
@@ -2265,7 +2333,7 @@ mod tests {
                 .iter()
                 .map(|clause| clause.ident())
                 .collect::<Vec<_>>(),
-            vec![20_015, 20_017, 20_016]
+            vec![20_016, 20_018, 20_017]
         );
         assert_eq!(graph.root_indices, vec![0, 1]);
         assert_eq!(

@@ -37,7 +37,7 @@ use crate::clauses::clause_props::{
     CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
-    clause_set_recognize_choice, tformula_fcode_alloc, tformula_lit_alloc,
+    clause_set_archive_copy, clause_set_recognize_choice, tformula_fcode_alloc, tformula_lit_alloc,
     tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
@@ -45,7 +45,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
     demodulator_clause_refs, deriv_stack_pcl_string_with_ac_axioms,
     deriv_stack_tstp_string_with_ac_axioms, op_has_arg1, op_has_arg2, op_has_cnf_arg1,
-    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry,
+    op_has_cnf_arg2, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE,
 };
 use crate::clauses::eqn::{eqn_fof_parse, eqn_write_app_encode, Eqn, EqnPrintOptions};
 use crate::clauses::eqnlist::EqnList;
@@ -6734,6 +6734,10 @@ fn apply_clause_set_preprocessing(
     eqdef_maxclauses: i64,
 ) -> Result<i64, EProverError> {
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
+    {
+        let (bank, axioms, ax_archive) = state.terms_axioms_ax_archive_mut();
+        let _archived = clause_set_archive_copy(ax_archive, axioms, bank)?;
+    }
     let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
     let mut removed = 0;
     if !no_preprocessing {
@@ -6874,8 +6878,9 @@ fn write_initial_clause_docs<W: Write + ?Sized>(
         return Ok(1);
     }
 
+    let source_infos = initial_doc_source_infos(state, state.axioms());
     let (bank, axioms) = state.terms_and_axioms_mut();
-    write_clause_set_initial_docs(output, config, bank, axioms, 1)
+    write_clause_set_initial_docs(output, config, bank, axioms, 1, &source_infos)
 }
 
 fn write_watchlist_initial_clause_docs<W: Write + ?Sized>(
@@ -6888,11 +6893,21 @@ fn write_watchlist_initial_clause_docs<W: Write + ?Sized>(
         return Ok(next_doc_ident);
     }
 
+    let source_infos = state.watchlist().map_or_else(Vec::new, |watchlist| {
+        initial_doc_source_infos(state, watchlist)
+    });
     let (bank, watchlist) = state.terms_and_watchlist_mut();
     let Some(watchlist) = watchlist else {
         return Ok(next_doc_ident);
     };
-    write_clause_set_initial_docs(output, config, bank, watchlist, next_doc_ident)
+    write_clause_set_initial_docs(
+        output,
+        config,
+        bank,
+        watchlist,
+        next_doc_ident,
+        &source_infos,
+    )
 }
 
 fn write_clause_set_initial_docs<W: Write + ?Sized>(
@@ -6901,6 +6916,7 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     bank: &TermBank,
     set: &mut ClauseSet,
     start_ident: i64,
+    source_infos: &[Option<ClauseInfo>],
 ) -> Result<i64, EProverError> {
     let mut session = ProofDocSession::new(
         proof_doc_output_format(config),
@@ -6916,7 +6932,17 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     session.step_options = pcl_step_print_options(config);
     session.id_source = ProofDocIdSource::from_current(start_ident.saturating_sub(1));
 
-    for clause in set.iter_mut() {
+    for (index, clause) in set.iter_mut().enumerate() {
+        let original_info = if clause.info().is_none() {
+            if let Some(Some(info)) = source_infos.get(index).cloned() {
+                clause.set_info(Some(info));
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let mut rendered = String::new();
         let result = session.doc_clause_creation(
             &mut rendered,
@@ -6936,8 +6962,73 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
             output.write_all(rendered.as_bytes())?;
             output.write_stdout_side_channel(result.stdout_after.as_bytes())?;
         }
+        if original_info {
+            let _ = clause.take_info();
+        }
     }
     Ok(session.id_source.current_ident().saturating_add(1))
+}
+
+fn initial_doc_source_infos(
+    state: &crate::clauses::proofstate::ProofState,
+    set: &ClauseSet,
+) -> Vec<Option<ClauseInfo>> {
+    set.iter()
+        .map(|clause| {
+            clause
+                .info()
+                .cloned()
+                .or_else(|| quoted_source_info(state, clause))
+        })
+        .collect()
+}
+
+fn quoted_source_info(
+    state: &crate::clauses::proofstate::ProofState,
+    clause: &Clause,
+) -> Option<ClauseInfo> {
+    quoted_clause_parent_ref(clause)
+        .and_then(|parent| state.proof_quote_source_by_derivation_ref(parent))
+        .and_then(|source| source.info().cloned())
+        .or_else(|| {
+            state
+                .ax_archive()
+                .find_by_id(clause.ident())
+                .and_then(|source| source.info().cloned())
+        })
+}
+
+fn quoted_clause_parent_ref(clause: &Clause) -> Option<ClauseDerivationRef> {
+    let entries = clause.derivation()?.as_slice();
+    let mut index = 0;
+    while index < entries.len() {
+        let DerivationEntry::Operation(op) = entries[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+        if op_has_cnf_arg1(op) {
+            if op == DC_CNF_QUOTE {
+                if let Some(DerivationEntry::ClauseParent(parent)) = entries.get(index) {
+                    return Some(*parent);
+                }
+            }
+            index += 1;
+        } else if op_has_arg1(op) {
+            index += 1;
+        }
+        if op_has_cnf_arg2(op) {
+            if op == DC_CNF_QUOTE {
+                if let Some(DerivationEntry::ClauseParent(parent)) = entries.get(index) {
+                    return Some(*parent);
+                }
+            }
+            index += 1;
+        } else if op_has_arg2(op) {
+            index += 1;
+        }
+    }
+    None
 }
 
 fn write_pcl_doc_step_start(
@@ -12320,20 +12411,21 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_choice_axiom_recognition, auto_memory_limit_from_system_mb,
-        core_limit_failure_messages, cpu_rlimit_to_apply, fv_index_params_from_config,
-        heuristic_parms_from_config, order_parms_from_config, parse_app_encode_file,
-        preprocessing_config_debug_line, process_options, proof_control_from_config,
-        proof_object_list_display_clauses, resource_limit_warning_from_outcome,
-        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
-        schedule_heuristic_selection, simple_app_encoded_formula_set,
-        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
-        write_resource_setup_messages, write_saturation_proof_object_clause,
-        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
-        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
-        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
-        PrimEnumMode, ProblemTypeRunGuard, SimpleFofBoolEqnReplacement, SimpleFofFormula,
-        TermOrdering, UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
+        apply_choice_axiom_recognition, apply_clause_set_preprocessing,
+        auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
+        fv_index_params_from_config, heuristic_parms_from_config, order_parms_from_config,
+        parse_app_encode_file, preprocessing_config_debug_line, process_options,
+        proof_control_from_config, proof_object_list_display_clauses,
+        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
+        rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
+        simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
+        temporary_executable_term_bank, write_resource_setup_messages,
+        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
+        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
+        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
+        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
+        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
+        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
         THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -12345,7 +12437,7 @@ mod tests {
     use crate::clauses::clause_props::CP_TYPE_AXIOM;
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::derivation::{
-        clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_EQ_RES,
+        clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE, DC_EQ_RES,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
@@ -15976,6 +16068,37 @@ mod tests {
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn apply_clause_set_preprocessing_archives_original_axioms_like_c() {
+        let _guard = global_state_lock();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let mut clause = parse_lop_test_clause(state.terms_mut(), "p(a).", 23);
+        clause.set_info(Some(ClauseInfo::new(Some("archive_source"), None, -1, -1)));
+        state.axioms_mut().insert(clause);
+
+        let removed = apply_clause_set_preprocessing(&mut state, true, false, 20, 20_000).unwrap();
+
+        assert_eq!(removed, 0);
+        assert_eq!(state.ax_archive().members(), 1);
+        assert_eq!(state.axioms().members(), 1);
+        assert_eq!(
+            state
+                .ax_archive()
+                .find_by_id(23)
+                .and_then(Clause::info)
+                .and_then(ClauseInfo::name),
+            Some("archive_source")
+        );
+        let active = state.axioms().find_by_id(23).unwrap();
+        assert!(active.info().is_none());
+        assert_eq!(
+            active
+                .derivation()
+                .and_then(|derivation| derivation.as_slice().first()),
+            Some(&DerivationEntry::Operation(DC_CNF_QUOTE))
+        );
     }
 
     #[test]
@@ -20744,7 +20867,9 @@ mod tests {
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed.contains("     1 : :[] : cn() : 'proof'\n"));
+        assert!(printed.contains("     1 : :[--equal(a, a)] : initial(\""));
+        assert!(printed.contains("proof-object-success-pcl"));
+        assert!(printed.contains("     2 : :[] : 1 : 'proof'\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -20834,8 +20959,9 @@ mod tests {
         assert!(printed.contains(
             "\n% Proof found!\n% SZS status Unsatisfiable\n% SZS output start CNFRefutation\n"
         ));
-        assert!(printed
-            .contains("cnf(c_0_1, axiom, ($false), inference(cn,[status(thm)],[]), ['proof']).\n"));
+        assert!(printed.contains("cnf(c_0_1, axiom, ($false), file('"));
+        assert!(printed.contains("proof-object-success-tstp"));
+        assert!(printed.contains("cnf(c_0_2, axiom, ($false), c_0_1, ['proof']).\n"));
         assert!(printed.contains("% SZS output end CNFRefutation\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -20895,9 +21021,12 @@ mod tests {
         assert!(printed.contains("\n% Proof found!\n% SZS status Unsatisfiable\ndigraph proof{\n"));
         assert!(printed.contains("  rankdir=TB\n"));
         assert!(printed.contains(
-            "  1 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c1\"]\n"
+            "  1 [shape=box,color=green,fillcolor=forestgreen,style=filled,label=\"c1\"]\n"
         ));
-        assert!(!printed.contains(" -> "));
+        assert!(printed.contains(
+            "  2 [shape=box,color=blue,fillcolor=darkorchid1,style=filled,label=\"c2\"]\n"
+        ));
+        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
         assert!(!printed.contains("SZS output start CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -20922,9 +21051,12 @@ mod tests {
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
         assert!(printed.contains("label=\"cnf("));
-        assert!(printed.contains(",\\ninference(cn,[status(thm)],[])).\"]\n"));
+        assert!(printed.contains(",\\nfile('"));
+        assert!(printed.contains("proof-graph-detailed-dot"));
+        assert!(printed.contains("  2 [shape=box,color=blue,fillcolor=darkorchid1"));
+        assert!(printed.contains(",\\nc_0_"));
         assert!(!printed.contains("label=\"c2\""));
-        assert!(!printed.contains(" -> "));
+        assert!(printed.contains("    1 -> 2 [style=\"bold\",color=blue,fillcolor=darkorchid1]\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -21010,12 +21142,12 @@ mod tests {
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
-        assert!(printed.contains("% Proof object total steps             : 1\n"));
-        assert!(printed.contains("% Proof object clause steps            : 1\n"));
+        assert!(printed.contains("% Proof object total steps             : 2\n"));
+        assert!(printed.contains("% Proof object clause steps            : 2\n"));
         assert!(printed.contains("% Proof object formula steps           : 0\n"));
         assert!(printed.contains("% Proof object initial clauses used    : 1\n"));
         assert!(printed.contains("% Proof object generating inferences   : 0\n"));
-        assert!(printed.contains("% Proof object simplifying inferences  : 1\n"));
+        assert!(printed.contains("% Proof object simplifying inferences  : 0\n"));
         assert!(!printed.contains("SZS output start CNFRefutation"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
