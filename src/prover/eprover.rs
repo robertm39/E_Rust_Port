@@ -12364,6 +12364,7 @@ fn parse_simple_fof_tstp_application_formula(
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
     simple_fof_starts_tstp_logical_head_application(scanner)
         || simple_fof_starts_tstp_parenthesized_lambda_application(scanner)
+        || simple_fof_starts_tstp_parenthesized_application_head(scanner)
         || (scanner.test_tok(TokenType::NAME | TokenType::SEM_IDENT)
             && scanner_test_tok(scanner.look_token(1), TokenType::APPLICATION))
 }
@@ -12371,6 +12372,16 @@ fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
 fn simple_fof_starts_tstp_parenthesized_lambda_application(scanner: &Scanner) -> bool {
     scanner.test_tok(TokenType::OPEN_BRACKET)
         && scanner_test_tok(scanner.look_token(1), TokenType::LAMBDA_QUANTOR)
+}
+
+fn simple_fof_starts_tstp_parenthesized_application_head(scanner: &Scanner) -> bool {
+    scanner.test_tok(TokenType::OPEN_BRACKET)
+        && scanner_test_tok(
+            scanner.look_token(1),
+            TokenType::NAME | TokenType::SEM_IDENT,
+        )
+        && scanner_test_tok(scanner.look_token(2), TokenType::CLOSE_BRACKET)
+        && scanner_test_tok(scanner.look_token(3), TokenType::APPLICATION)
 }
 
 fn simple_fof_starts_tstp_logical_head_application(scanner: &Scanner) -> bool {
@@ -15110,7 +15121,9 @@ mod tests {
              tff(q_type, type, q: $i > $o).\n\
              fof(app, axiom, p @ a).\n\
              fof(neg_app, axiom, ~ p @ a).\n\
-             fof(and_app, axiom, p @ a & q @ a).\n",
+             fof(and_app, axiom, p @ a & q @ a).\n\
+             fof(paren_app, axiom, (p) @ a).\n\
+             fof(paren_neg_app, axiom, ~ (p) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -15131,6 +15144,8 @@ mod tests {
         assert!(printed.contains("tff(neg_app, axiom, ~(app_"));
         assert!(printed.contains("tff(and_app, axiom, (app_"));
         assert!(printed.contains("&app_"));
+        assert!(printed.contains("tff(paren_app, axiom, app_"));
+        assert!(printed.contains("tff(paren_neg_app, axiom, ~(app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -16351,7 +16366,9 @@ mod tests {
              fof(app, axiom, p @ a).\n\
              fof(neg_app, axiom, ~ p @ a).\n\
              fof(and_app, axiom, p @ a & q @ a).\n\
-             fof(ex_app, axiom, ?[X]:p @ X).\n",
+             fof(ex_app, axiom, ?[X]:p @ X).\n\
+             fof(paren_app, axiom, (p) @ a).\n\
+             fof(paren_ex_app, axiom, ?[X]:(p) @ X).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23729,7 +23746,10 @@ mod tests {
              fof(app, axiom, p @ a).\n\
              fof(neg_app, axiom, ~ p @ a).\n\
              fof(and_app, axiom, p @ a & q @ a).\n\
-             fof(ex_app, axiom, ?[X]:p @ X).\n",
+             fof(ex_app, axiom, ?[X]:p @ X).\n\
+             fof(paren_app, axiom, (p) @ a).\n\
+             fof(paren_neg_app, axiom, ~ (p) @ a).\n\
+             fof(paren_ex_app, axiom, ?[X]:(p) @ X).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23749,11 +23769,12 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("cnf(i_0_"))
             .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 5, "{printed}");
+        assert_eq!(cnf_lines.len(), 8, "{printed}");
         assert!(cnf_lines.iter().any(|line| line.contains("(p(a))")));
         assert!(cnf_lines.iter().any(|line| line.contains("(~p(a))")));
         assert!(cnf_lines.iter().any(|line| line.contains("(q(a))")));
         assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(esk2_0)")));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
