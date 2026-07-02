@@ -5778,6 +5778,20 @@ pub fn clause_recognize_choice(
     Ok(Some(candidate.choice_code))
 }
 
+/// Tests whether a clause is a represented C defined-choice axiom without
+/// recording the choice symbol or mutating the clause.
+///
+/// This mirrors `ClauseRecognizeChoice(NULL, cl)`: duplicate choice-symbol
+/// checks and normalized-literal replacement are skipped when no side map is
+/// supplied.
+///
+/// # Errors
+///
+/// Returns diagnostics from beta normalization.
+pub fn clause_recognizes_choice(bank: &mut TermBank, clause: &Clause) -> Result<bool, Diagnostic> {
+    clause_choice_candidate(bank, clause, &BTreeMap::new()).map(|candidate| candidate.is_some())
+}
+
 /// Recognizes all represented choice axioms in `set`.
 ///
 /// The C helper stores pointers to clauses that remain in the source set,
@@ -6040,10 +6054,10 @@ mod tests {
         clause_archive, clause_archive_copy, clause_boolean_simplification,
         clause_canon_compare_ref, clause_eliminate_naked_boolean_variables,
         clause_flip_literal_sign_index, clause_is_orphaned_with, clause_normalize_equations,
-        clause_prune_args, clause_recognize_injectivity, clause_remove_ac_resolved,
-        clause_remove_literal, clause_remove_literal_index, clause_remove_superfluous_literals,
-        clause_resolve_flex_clause, clause_set_archive_copy, clause_set_canonize,
-        clause_set_delete_orphans_with, clause_set_recognize_choice,
+        clause_prune_args, clause_recognize_injectivity, clause_recognizes_choice,
+        clause_remove_ac_resolved, clause_remove_literal, clause_remove_literal_index,
+        clause_remove_superfluous_literals, clause_resolve_flex_clause, clause_set_archive_copy,
+        clause_set_canonize, clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_format_string,
         pstack_clause_print_lop_string, tcf_tstp_parse, tformula_add_quantor,
@@ -9753,6 +9767,28 @@ mod tests {
         assert_eq!(stored.ident(), live.ident());
         assert!(live.literals().as_slice()[0].left().is_applied_free_var());
         assert!(live.literals().as_slice()[1].left().is_applied_free_var());
+    }
+
+    #[test]
+    fn recognizes_choice_without_map_does_not_mutate_or_reject_duplicates() {
+        let mut bank = test_bank();
+        let (first, choice_code) = choice_axiom(&mut bank, "choice_boolean", -71, -73);
+        let (second, _) = choice_axiom(&mut bank, "choice_boolean", -75, -77);
+        let first_left = first.literals().as_slice()[0].left().clone();
+        let mut set = ClauseSet::from_clauses([first.clone(), second]);
+        let mut choice_symbols = BTreeMap::new();
+
+        assert!(clause_recognizes_choice(&mut bank, &first).unwrap());
+        assert_eq!(first.literals().as_slice()[0].left(), &first_left);
+        assert_eq!(
+            clause_set_recognize_choice(&mut bank, &mut set, &mut choice_symbols).unwrap(),
+            1
+        );
+        let duplicate = set
+            .iter()
+            .find(|clause| clause.ident() != choice_symbols[&choice_code].ident())
+            .expect("duplicate choice clause remains in source set");
+        assert!(clause_recognizes_choice(&mut bank, duplicate).unwrap());
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
+use crate::clauses::clausefunc::clause_recognizes_choice;
 use crate::clauses::clausesets::{eq_axioms_print_string, ClauseSet};
 use crate::clauses::eqn::EqnPrintOptions;
 use crate::clauses::eqn_props::EP_IS_EQU_LITERAL;
@@ -1373,6 +1374,78 @@ pub fn clause_set_compute_ho_features_without_choice(
     clause_set_compute_ho_features(set, signature, |_| false)
 }
 
+/// Computes `ClauseSetComputeHOFeatures` with the C no-map
+/// `ClauseRecognizeChoice(NULL, clause)` behavior.
+///
+/// # Errors
+///
+/// Returns diagnostics from choice-axiom beta normalization.
+///
+/// # Panics
+///
+/// Panics under the same type/order invariants as
+/// [`clause_set_compute_ho_features`].
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "C computes this higher-order feature ratio as double"
+)]
+pub fn clause_set_compute_ho_features_with_choice_recognition(
+    set: &ClauseSet,
+    bank: &mut TermBank,
+) -> Result<ClauseSetHoFeatures, Diagnostic> {
+    let mut is_fo = true;
+    let mut quantifies_booleans = false;
+    let mut has_defined_choice = false;
+    let mut app_var_lit_count = 0;
+    let mut order = 0;
+
+    for symbol in (bank.signature().internal_symbols() + 1)..=bank.signature().f_count() {
+        let type_ = bank
+            .signature()
+            .get_type(symbol)
+            .unwrap_or_else(|| panic!("external signature symbol {symbol} must have a type"));
+        order = order.max(type_get_order(type_));
+    }
+
+    for clause in set.iter() {
+        let mut variables = BTreeMap::new();
+        clause.collect_variables(&mut variables);
+        for variable in variables.values() {
+            let type_ = variable
+                .type_()
+                .unwrap_or_else(|| panic!("collected variable must have a type"));
+            order = order.max(var_order(&type_));
+            quantifies_booleans = quantifies_booleans || type_has_bool(&type_);
+        }
+
+        let mut has_app_var = false;
+        for literal in clause.literals().as_slice() {
+            is_fo = is_fo
+                && term_is_first_order_for_ho_features(literal.left())
+                && term_is_first_order_for_ho_features(literal.right());
+            has_app_var = has_app_var
+                || literal.left().is_applied_free_var()
+                || literal.right().is_applied_free_var();
+        }
+
+        has_defined_choice = has_defined_choice || clause_recognizes_choice(bank, clause)?;
+        app_var_lit_count += i64::from(has_app_var);
+    }
+
+    Ok(ClauseSetHoFeatures {
+        has_ho_features: !is_fo,
+        order: i32::try_from(order)
+            .unwrap_or_else(|_| panic!("higher-order feature order must fit C int")),
+        quantifies_booleans,
+        has_defined_choice,
+        perc_app_var_lits: if set.members() == 0 {
+            0.0
+        } else {
+            app_var_lit_count as f64 / set.members() as f64
+        },
+    })
+}
+
 /// Computes the clause-set portion of C `SpecFeaturesCompute`.
 ///
 /// Formula-set order scanning and formula-definition statistics are not owned
@@ -1392,6 +1465,16 @@ pub fn spec_features_compute_clause_set<F>(
 ) where
     F: FnMut(&Clause) -> bool,
 {
+    let ho_features = clause_set_compute_ho_features(set, bank.signature(), recognize_choice);
+    spec_features_compute_clause_set_with_ho_features(features, set, bank, ho_features);
+}
+
+fn spec_features_compute_clause_set_with_ho_features(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    bank: &TermBank,
+    ho_features: ClauseSetHoFeatures,
+) {
     features.clauses = set.members();
     features.goals = clause_set_count_goals(set);
     features.axioms = features.clauses - features.goals;
@@ -1440,7 +1523,6 @@ pub fn spec_features_compute_clause_set<F>(
     spec_features_add_basic_eval(features);
 
     features.num_of_definitions = -1;
-    let ho_features = clause_set_compute_ho_features(set, bank.signature(), recognize_choice);
     features.has_ho_features = ho_features.has_ho_features;
     features.quantifies_booleans = ho_features.quantifies_booleans;
     features.has_defined_choice = ho_features.has_defined_choice;
@@ -1452,8 +1534,8 @@ pub fn spec_features_compute_clause_set<F>(
 /// Computes the clause-set portion of C `SpecFeaturesCompute` without the
 /// defined-choice recognizer.
 ///
-/// This preserves the non-choice behavior until lambda-normalized
-/// `ClauseRecognizeChoice` is ported at the clause layer.
+/// This is useful for callers that need side-effect-free feature extraction
+/// without running the choice-axiom beta-normalization check.
 ///
 /// # Panics
 ///
@@ -1465,6 +1547,27 @@ pub fn spec_features_compute_clause_set_without_choice(
     bank: &TermBank,
 ) {
     spec_features_compute_clause_set(features, set, bank, |_| false);
+}
+
+/// Computes the clause-set portion of C `SpecFeaturesCompute` with built-in
+/// no-map choice recognition.
+///
+/// # Errors
+///
+/// Returns diagnostics from choice-axiom beta normalization.
+///
+/// # Panics
+///
+/// Panics under the same conditions as
+/// [`spec_features_compute_clause_set`].
+pub fn spec_features_compute_clause_set_with_choice_recognition(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    let ho_features = clause_set_compute_ho_features_with_choice_recognition(set, bank)?;
+    spec_features_compute_clause_set_with_ho_features(features, set, bank, ho_features);
+    Ok(())
 }
 
 /// Computes C `SpecFeaturesCompute`, including optional active/archive formula
@@ -1508,6 +1611,30 @@ pub fn spec_features_compute_without_choice(
     bank: &TermBank,
 ) {
     spec_features_compute(features, set, fset, farch, bank, |_| false);
+}
+
+/// Computes C `SpecFeaturesCompute` with built-in no-map defined-choice
+/// recognition.
+///
+/// # Errors
+///
+/// Returns diagnostics from choice-axiom beta normalization.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`spec_features_compute`].
+pub fn spec_features_compute_with_choice_recognition(
+    features: &mut SpecFeatureCell,
+    set: &ClauseSet,
+    fset: Option<&FormulaSet>,
+    farch: Option<&FormulaSet>,
+    bank: &mut TermBank,
+) -> Result<(), Diagnostic> {
+    spec_features_compute_clause_set_with_choice_recognition(features, set, bank)?;
+    for formulas in [farch, fset].into_iter().flatten() {
+        spec_features_scan_formula_order(features, bank.signature(), formulas);
+    }
+    Ok(())
 }
 
 fn spec_features_scan_formula_order(
@@ -1850,6 +1977,7 @@ mod tests {
     use super::{
         clause_set_axioms_are_horn, clause_set_axioms_are_unit,
         clause_set_collect_arity_information, clause_set_compute_ho_features,
+        clause_set_compute_ho_features_with_choice_recognition,
         clause_set_compute_ho_features_without_choice, clause_set_count_axioms,
         clause_set_count_eqn_literals, clause_set_count_equational, clause_set_count_goals,
         clause_set_count_ground, clause_set_count_ground_goals,
@@ -1872,10 +2000,11 @@ mod tests {
         clause_set_print_pos_units_format_string, clause_set_print_pos_units_string,
         clause_set_term_cells, clause_set_tptp_depth_info_add, create_default_spec_limits,
         spec_features_add_basic_eval, spec_features_add_eval, spec_features_compute,
-        spec_features_compute_clause_set, spec_features_parse, spec_features_print_string,
-        spec_limits_print_string, spec_type_print_string, spec_type_string_for_problem,
-        ClauseSetHoFeatures, SpecFeatureCell, SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK,
-        DEFAULT_OUTPUT_DESCRIPTOR, SPEC_STRING_MEM,
+        spec_features_compute_clause_set, spec_features_compute_with_choice_recognition,
+        spec_features_parse, spec_features_print_string, spec_limits_print_string,
+        spec_type_print_string, spec_type_string_for_problem, ClauseSetHoFeatures, SpecFeatureCell,
+        SpecFeatureClass, SpecLimits, DEFAULT_CLASS_MASK, DEFAULT_OUTPUT_DESCRIPTOR,
+        SPEC_STRING_MEM,
     };
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::clause::Clause;
@@ -1891,6 +2020,7 @@ mod tests {
     };
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::terms::functypes::FunCode;
+    use crate::terms::lambda::apply_terms as lambda_apply_terms;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
@@ -1973,6 +2103,48 @@ mod tests {
 
     fn typed_var(bank: &TermBank, f_code: FunCode) -> Term {
         bank.vars().var_assert_alloc(f_code, &individual(bank))
+    }
+
+    fn predicate_var(bank: &mut TermBank, f_code: FunCode) -> Term {
+        let individual = individual(bank);
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![individual, bool_type]));
+        bank.vars().var_assert_alloc(f_code, &predicate_type)
+    }
+
+    fn apply_many(bank: &mut TermBank, head: &Term, args: &[Term]) -> Term {
+        lambda_apply_terms(bank, head, args).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn choice_const(bank: &mut TermBank, name: &str) -> Term {
+        let individual = individual(bank);
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![individual.clone(), bool_type]));
+        let choice_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![predicate_type, individual]));
+        typed_const_with_type(bank, name, &choice_type)
+    }
+
+    fn choice_axiom(bank: &mut TermBank, name: &str, p_code: FunCode, x_code: FunCode) -> Clause {
+        let predicate = predicate_var(bank, p_code);
+        let witness = typed_var(bank, x_code);
+        let choice = choice_const(bank, name);
+        let choice_applied = apply_many(bank, &choice, std::slice::from_ref(&predicate));
+        let negative_atom = apply_many(bank, &predicate, std::slice::from_ref(&witness));
+        let positive_atom = apply_many(bank, &predicate, std::slice::from_ref(&choice_applied));
+        let true_term = bank.true_term().clone();
+        clause_from(vec![
+            equation(bank, &negative_atom, &true_term, false),
+            equation(bank, &positive_atom, &true_term, true),
+        ])
     }
 
     fn equation(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -2560,6 +2732,38 @@ mod tests {
             !clause_set_compute_ho_features_without_choice(&set, bank.signature())
                 .has_defined_choice
         );
+    }
+
+    #[test]
+    fn ho_feature_extraction_can_use_c_null_map_choice_recognition() {
+        let mut bank = term_bank();
+        let choice_clause = choice_axiom(&mut bank, "feature_choice", -90, -92);
+        let set = ClauseSet::from_clauses([choice_clause.clone()]);
+        let original_left = choice_clause.literals().as_slice()[0].left().clone();
+
+        let features =
+            clause_set_compute_ho_features_with_choice_recognition(&set, &mut bank).unwrap();
+
+        assert!(features.has_defined_choice);
+        assert!(
+            !clause_set_compute_ho_features_without_choice(&set, bank.signature())
+                .has_defined_choice
+        );
+        assert_eq!(
+            set.iter().next().unwrap().literals().as_slice()[0].left(),
+            &original_left
+        );
+
+        let mut spec_features = SpecFeatureCell::default();
+        spec_features_compute_with_choice_recognition(
+            &mut spec_features,
+            &set,
+            None,
+            None,
+            &mut bank,
+        )
+        .unwrap();
+        assert!(spec_features.has_defined_choice);
     }
 
     #[test]

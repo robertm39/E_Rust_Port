@@ -75,7 +75,7 @@ use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_de
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
-    spec_features_compute_without_choice, spec_type_string, SpecFeatureCell, SpecLimits,
+    spec_features_compute_with_choice_recognition, spec_type_string, SpecFeatureCell, SpecLimits,
 };
 use crate::heuristics::hcb::{self, heuristic_parms_parse_into, HeuristicParmsCell};
 use crate::heuristics::litselection::NO_GENERATION;
@@ -5751,7 +5751,7 @@ fn run_proof_search<W: Write + ?Sized>(
     apply_auto_mode_search_selection(
         output,
         config,
-        &state,
+        &mut state,
         auto_context.as_ref(),
         &mut heuristic_params,
     )?;
@@ -6002,7 +6002,7 @@ fn apply_auto_mode_preprocessing_selection<W: Write + ?Sized>(
 fn apply_auto_mode_search_selection<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
-    state: &crate::clauses::proofstate::ProofState,
+    state: &mut crate::clauses::proofstate::ProofState,
     auto_context: Option<&AutoModeContext>,
     params: &mut HeuristicParmsCell,
 ) -> Result<(), EProverError> {
@@ -6015,13 +6015,14 @@ fn apply_auto_mode_search_selection<W: Write + ?Sized>(
 
     let choice_max_depth = params.inst_choice_max_depth;
     let mut features = SpecFeatureCell::default();
-    spec_features_compute_without_choice(
+    let (terms, axioms, f_axioms, f_ax_archive) = state.terms_axioms_formula_sets_mut();
+    spec_features_compute_with_choice_recognition(
         &mut features,
-        state.axioms(),
-        Some(state.f_axioms()),
-        Some(state.f_ax_archive()),
-        state.terms(),
-    );
+        axioms,
+        Some(f_axioms),
+        Some(f_ax_archive),
+        terms,
+    )?;
     features.order = auto_context.raw_features.order;
     features.goal_order = auto_context.raw_features.conj_order;
     features.num_of_definitions = auto_context.raw_features.num_of_definitions;
