@@ -92,7 +92,7 @@ Source files reviewed: `PROVER/epcllemma.c`.
 
 ### Rust Port Notes
 
-- `src/prover/epcllemma.rs` and `src/bin/epcllemma.rs` port the standalone `epcllemma` executable over the existing Rust PCL2 lemma-selection core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file`, `-s`/`--silent`, `-l`/`--output-level`, PCL/TPTP/TSTP/LOP output selection, iterative/recursive/flat lemma algorithms, absolute and relative lemma count/quality thresholds, lemma-quality weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing, strict end-of-input checks, stdout status lines, and output-level-controlled lemma/full-protocol printing.
+- `src/prover/epcllemma.rs` and `src/bin/epcllemma.rs` port the standalone `epcllemma` executable over the existing Rust PCL2 lemma-selection core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file`, `-s`/`--silent`, `-l`/`--output-level`, PCL/TPTP/TSTP/LOP output selection, iterative/recursive/flat lemma algorithms, absolute and relative lemma count/quality thresholds, lemma-quality weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing, strict end-of-input checks, stdout status lines, output-level-controlled lemma/full-protocol printing including empty, formula-valued, and shell-step protocols, two-line `SysError`-style file-open diagnostics, and C `OutClose` wording on final flush failure.
 
 ### Change Later
 
@@ -100,6 +100,7 @@ Source files reviewed: `PROVER/epcllemma.c`.
 - C prints the `% Selecting at most ...` and `% Minimum lemma quality ...` status lines with `printf`, so they always go to stdout even when `-o` redirects lemma output. Rust preserves this visible split; a cleaner UI could route all non-diagnostic output through one selected stream after compatibility baselines exist.
 - `OPT_LOP_PRINT` lacks a `break` and falls through into `OPT_ITERATIVE_LEMMAS`, so `--lop-out` also resets the algorithm to iterative unless a later option changes it again. Rust preserves that order-sensitive behavior.
 - `--no-reference-weights` is documented as clearing all reference weights, but C assigns `pas_simpl_w` twice and leaves `act_simpl_w` unchanged. Rust preserves the effective assignments; revisit only with lemma-selection trace comparisons.
+- The default relative lemma limit uses `PCLProtStepNo(prot) * max_lemmas_rel + 0.99` and then stores the result in `long`; this can still truncate to zero for very small protocols. Rust preserves the numeric behavior; a clearer UI could expose explicit rounding only outside compatibility mode.
 - `print_help(FILE* out)` prints the option table to `stdout` instead of `out`, and the footer uses the old 2003-2005 support-tool copyright block. Rust keeps the visible executable text but not the internal helper-output bug.
 
 ### Porting Focus

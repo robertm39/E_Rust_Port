@@ -17,7 +17,7 @@ use crate::pcl2::protocol::PclProtocol;
 use crate::pcl2::steps::{PclStepParseOptions, PCL_IS_LEMMA};
 use crate::prover::version::{E_URL, STS_MAIL, VERSION};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "epcllemma";
@@ -782,7 +782,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         Scanner::from_file_content("-", data, true)?
     } else {
-        Scanner::from_file(Path::new(name), true)?
+        Scanner::from_file(Path::new(name), true).map_err(epcllemma_scanner_open_diagnostic)?
     };
     scanner.set_format(IoFormat::Tptp);
     Ok(scanner)
@@ -884,7 +884,12 @@ impl LemmaOutput {
         }
         File::create(path)
             .map(|file| Self { file: Some(file) })
-            .map_err(|error| io_diagnostic(format!("Cannot open file {}: {error}", path.display())))
+            .map_err(|error| {
+                epcllemma_sys_error_diagnostic(
+                    format!("Cannot open file {}", path.display()),
+                    &error,
+                )
+            })
     }
 
     fn write_all(&mut self, stdout: &mut impl Write, bytes: &[u8]) -> Result<(), Diagnostic> {
@@ -918,19 +923,51 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn epcllemma_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
+fn epcllemma_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+        return error;
+    }
+    let Some((prefix, source_error)) = error.message().split_once(": ") else {
+        return error;
+    };
+    Diagnostic::new(
+        error.code(),
+        format!("{prefix}\n{PROGRAM_NAME}: {source_error}"),
+    )
+}
+
 fn i64_to_i32_saturating(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{print_help, run, PROGRAM_NAME};
+    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::prover::version::VERSION;
     use crate::test_support::global_state_lock;
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        }
+    }
 
     const SAMPLE_PROTOCOL: &str = "\
 1 : : [++p(a)] : initial
@@ -1054,6 +1091,87 @@ mod tests {
     }
 
     #[test]
+    fn input_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let missing_path = temp_path("missing-input");
+        remove_if_present(&missing_path);
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME, missing_path.to_str().expect("path is utf8")],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("missing input file is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("output-dir");
+        remove_if_present(&output_path);
+        _ = std::fs::remove_dir(&output_path);
+        std::fs::create_dir(&output_path).expect("output fixture directory is created");
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("directory output path is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        std::fs::remove_dir(&output_path).expect("output fixture directory is removed");
+    }
+
+    #[test]
+    fn output_close_failure_uses_c_outclose_diagnostic() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(SAMPLE_PROTOCOL.as_bytes().to_vec());
+        let mut stdout = FlushFailWriter;
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [PROGRAM_NAME, "--max-lemmas=0", "--min-lemma-quality=0"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("flush failure is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn silent_output_level_keeps_status_lines_only() {
         let _guard = global_state_lock();
         let (status, output, stderr) = run_with_stdin(
@@ -1091,6 +1209,35 @@ mod tests {
         assert!(stderr.is_empty());
         assert!(output.contains("      1 : lemma : [++p(a)] : initial : 'lemma'\n"));
         assert!(output.contains("      5 :  : [++t(a)] : er(4)\n"));
+    }
+
+    #[test]
+    fn empty_input_preserves_status_lines_without_lemmas() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME], "");
+
+        assert_eq!(status, 0);
+        assert_eq!(
+            output,
+            "% Selecting at most 0 lemmas\n% Minimum lemma quality: 100.000000\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn high_output_level_prints_formula_and_shell_steps() {
+        let _guard = global_state_lock();
+        let input = "\
+1 : : p(a) : initial
+2 : : : 1 : final
+";
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME, "--output-level=3"], input);
+
+        assert_eq!(status, 0);
+        assert!(output.contains("% Selecting at most 0 lemmas\n"));
+        assert!(output.contains("      1 :  : p(a) : initial\n"));
+        assert!(output.contains("      2 :  :  : 1 : final\n"));
+        assert!(stderr.is_empty());
     }
 
     #[test]

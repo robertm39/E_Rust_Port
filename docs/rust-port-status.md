@@ -668,11 +668,11 @@ C source references:
 
 Implemented:
 
-- Standalone `epcllemma` binary integration over the ported PCL2 full-protocol and lemma-selection modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, PCL/TPTP/TSTP/LOP output-format options, iterative/recursive/flat algorithms, absolute and relative lemma-count and lemma-quality thresholds, lemma-quality reference/size/Horn weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, stdout status-line routing, selected-lemma versus full-protocol printing by output level, legacy support-tool footer text, and unit coverage for stdin, file output, silent mode, full-protocol output, relative quality thresholds, TSTP/LOP output, option compatibility, verbosity side effect, weight-option parsing, and trailing-token diagnostics.
+- Standalone `epcllemma` binary integration over the ported PCL2 full-protocol and lemma-selection modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, PCL/TPTP/TSTP/LOP output-format options, iterative/recursive/flat algorithms, absolute and relative lemma-count and lemma-quality thresholds, lemma-quality reference/size/Horn weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, stdout status-line routing, selected-lemma versus full-protocol printing by output level, legacy support-tool footer text, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, file output, silent mode, full-protocol output, relative quality thresholds, TSTP/LOP output, empty protocols, formula-valued and shell UPCL2 full-protocol output, option compatibility, verbosity side effect, weight-option parsing, and trailing-token diagnostics.
 
 Pending:
 
-- Byte-for-byte comparison against a built C `epcllemma` executable remains pending for large proof protocols, formula-valued and shell UPCL2 steps across every output format, exact floating-point spelling under unusual values, empty protocols, `STACK_SIZE` build behavior, exact file/open close diagnostics, and platform-specific broken-pipe behavior.
+- Byte-for-byte comparison against a built C `epcllemma` executable remains pending for large proof protocols, formula-valued and shell UPCL2 steps across lemma-only and non-PCL output formats, exact floating-point spelling under unusual values, `STACK_SIZE` build behavior, platform-specific system-error suffixes, and platform-specific broken-pipe behavior.
 
 Change-later notes:
 
@@ -680,6 +680,7 @@ Change-later notes:
 - C prints lemma-selection status lines directly to stdout even when `-o` redirects the selected lemma/protocol output. Rust preserves that split.
 - C `--lop-out` falls through into `--iterative-lemmas`, resetting any earlier algorithm selection. Rust mirrors the order-sensitive behavior.
 - C `--no-reference-weights` leaves `act_simpl_w` unchanged because it assigns `pas_simpl_w` twice. Rust preserves the effective assignments until lemma-selection trace tests prove a cleanup is acceptable.
+- C computes the default relative lemma limit as `PCLProtStepNo(prot) * max_lemmas_rel + 0.99` and truncates to `long`, so tiny protocols can still select zero lemmas. Rust preserves this rounding/truncation behavior.
 - The C help footer is an old support-tool block with the 2003-2005 copyright range; Rust keeps the visible text for compatibility, but a future documentation pass may want a shared helper for legacy support-tool footers.
 
 ## classify_problem Executable
