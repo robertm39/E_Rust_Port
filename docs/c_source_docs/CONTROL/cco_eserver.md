@@ -96,6 +96,12 @@ Source files reviewed: `CONTROL/cco_eserver.h`, `CONTROL/cco_eserver.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/control/eserver.rs` ports the initial server owner surface with a safe `TcpListener`/`TcpStream` backend, the C not-listening allocation shape, listener descriptor capture, accepted-session queueing through `ESession`, listener/readiness descriptor registration, and maximum-descriptor calculation across listener and queued sessions.
+- Rust keeps `reset` as a no-op compatibility surface matching the current C body, while ordinary owned Rust values release listener/session resources through normal ownership when dropped.
+- Tests cover newly allocated server state, pre-listen readiness, ephemeral-port listening, accepting a client connection, accepted-session queueing, listener read-interest registration, and max-descriptor calculation.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

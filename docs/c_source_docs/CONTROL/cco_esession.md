@@ -95,6 +95,12 @@ Source files reviewed: `CONTROL/cco_esession.h`, `CONTROL/cco_esession.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Status Notes
+
+- `src/control/esession.rs` ports the `ESessionState` discriminants, session allocation around the ported `TcpChannel`, descriptor-interest collection corresponding to C `fd_set` registration, no-state/stale readiness filtering, write readiness when outbound messages are queued, optional subprocess descriptor delegation through a trait, and stale transition with channel close on read/write error or closed input.
+- The Rust I/O path preserves the C session skeleton: complete inbound messages enqueue a literal `"wait"` reply, queued outbound messages are written when the descriptor is write-ready, and `ESessionProcessCmds`-style command draining renders `Received: ...` through an explicit writer for testability.
+- Tests cover enum values, new-session readiness, active-session read/write interest registration, read-side command capture plus `"wait"` reply writing, and stale marking on closed input.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
