@@ -93,7 +93,7 @@ Source files reviewed: `PROVER/tsm_classify.c`.
 ### Rust Port Notes
 
 - `src/prover/tsm_classify.rs` and `src/bin/tsm_classify.rs` port the standalone executable over the existing Rust learning modules for annotations, flat annotated terms, pattern substitutions, TSM construction, and classification.
-- The Rust wrapper preserves the C command-line surface, including long-only `--version`, optional `--verbose`, `--index-type` printing `% Index type: ...` to stdout during option parsing, and the typo-preserving `--tsm-type` error text.
+- The Rust wrapper preserves the C command-line surface, including long-only `--version`, optional `--verbose`, `-o` summary redirection including `-o -`, C-shaped input/output file-open and output-close diagnostics, `--index-type` printing `% Index type: ...` to stdout during option parsing, and the typo-preserving `--tsm-type` error text.
 - Input files are concatenated before scanning, then parsed as `Training: <annotated terms>. Test: <annotated terms>.`; the parser flattens all annotations and translates them with C's fixed weight vector where only weight slot `0` is set.
 - `TSMClassifySet` writes per-term `Evaluation: ... OKOK/FAIL ...` progress to plain `stdout`; only the final `<n> terms, <n> successes, ...` summary is written through `GlobalOut`/`-o`. The Rust executable mirrors that split.
 
@@ -101,6 +101,7 @@ Source files reviewed: `PROVER/tsm_classify.c`.
 
 - Replace the temporary-file concatenation model with streaming or a scanner chain only after compatibility tests cover diagnostics, lack of inserted separators, and stdin/file ordering.
 - Move the `--index-type` parse echo and classification progress behind explicit output controls in a modernized mode. In C these writes go to stdout even on usage errors or when `-o` redirects the summary, which is awkward for machine consumers.
+- `main()` opens `GlobalOut` before defaulting to stdin and before `ConcatFiles()` reads the inputs, so an output file can be created or truncated even when input opening or parsing later fails. Rust preserves that ordering through its explicit summary writer; a cleaned CLI should make output transactional if compatibility mode is not required.
 - Make the fixed `(Sources, Class)` annotation interpretation explicit in a typed configuration instead of allocating a generic dynamic double array and setting only `weights[0]`.
 - Define empty-test-set behavior deliberately. The C summary divides by `nodes` without a zero guard, so an empty test block can print NaN/Inf depending on the platform C library.
 - Clean up user-visible typos only outside compatibility mode: help says `Reccurent`, and the invalid TSM-type diagnostic contains `asTSM` without a space.
