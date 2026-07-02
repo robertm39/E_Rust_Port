@@ -93,7 +93,7 @@ Source files reviewed: `ORDERINGS/cto_kbo.h`, `ORDERINGS/cto_kbo.c`.
 - Term/type sharing affects equality and performance; do not replace pointer identity with structural equality without auditing callers.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - `KBOVarGreater`'s source comment describes a multiset-subset test in the wrong direction; the implementation actually accepts the `Var(s)-Var(t) >= 0` condition required for `s > t`.
-- `KBOCompare` asserts the global problem type is not higher-order; higher-order and LFHO behavior belongs to the separate linear `cto_kbolin`/`KBO6` implementation.
+- `KBOCompare` asserts the global problem type is not higher-order, even though release builds can still reach the ordinary first-order comparison mechanics if all dereferenced terms are first-order-shaped. Rust keeps classic KBO as a first-order algorithm but permits that first-order-shaped higher-order-problem subset behind an explicit DB/lambda/phony-surface guard; full LFHO behavior still belongs to `cto_kbolin`/`KBO6`.
 - `kbogtrnew` and `KBOCompare` both defer the whole-term variable-condition check until a weight, precedence, or lexicographic path has already found a possible strict result. Preserve that mutation-free but repeated var-hash behavior before attempting linearization.
 - Term weights are accumulated in signed `long` without overflow handling. Treat this as a portability hazard to revisit after compatibility and resource-limit policy are established.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.

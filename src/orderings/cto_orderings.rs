@@ -250,13 +250,29 @@ mod tests {
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
-    use crate::terms::signature::Signature;
+    use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
+    }
 
     fn signature() -> Signature {
         let mut signature = Signature::new(TypeBank::new());
@@ -439,6 +455,83 @@ mod tests {
             DerefType::Never,
             DerefType::Never
         ));
+    }
+
+    #[test]
+    fn to_compare_legacy_orderings_accept_first_order_surface_in_higher_order_problem() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut signature = signature();
+        let f = signature.insert_id("ho_fo_dispatch_f", 1, false);
+        let x = Term::const_cell_alloc(-2);
+        let f_x = app(f, std::slice::from_ref(&x));
+
+        for ordering in [
+            TermOrdering::Kbo,
+            TermOrdering::Lpo,
+            TermOrdering::LpoCopy,
+            TermOrdering::Lpo4,
+            TermOrdering::Lpo4Copy,
+        ] {
+            let mut ocb =
+                OrderControlBlock::alloc(ordering, true, &signature, HoOrderKind::LfhoOrder);
+            assert_eq!(
+                to_compare(
+                    &mut ocb,
+                    &signature,
+                    &f_x,
+                    &x,
+                    DerefType::Never,
+                    DerefType::Never
+                ),
+                CompareResult::Greater,
+                "higher-order first-order-surface dispatch failed for {ordering:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "requires first-order-shaped terms")]
+    fn to_compare_legacy_ordering_rejects_higher_order_surface() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let signature = signature();
+        let head = Term::const_cell_alloc(-2);
+        let arg = Term::const_cell_alloc(signature.find_f_code("a"));
+        let applied = app(SIG_PHONY_APP_CODE, &[head, arg.clone()]);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo, true, &signature, HoOrderKind::LfhoOrder);
+
+        let _ = to_compare(
+            &mut ocb,
+            &signature,
+            &applied,
+            &arg,
+            DerefType::Never,
+            DerefType::Never,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "requires first-order-shaped terms")]
+    fn to_compare_lpo4_rejects_equal_higher_order_surface_before_structural_equality() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let signature = signature();
+        let head = Term::const_cell_alloc(-2);
+        let arg = Term::const_cell_alloc(signature.find_f_code("a"));
+        let applied = app(SIG_PHONY_APP_CODE, &[head, arg]);
+        let mut ocb =
+            OrderControlBlock::alloc(TermOrdering::Lpo4, true, &signature, HoOrderKind::LfhoOrder);
+
+        let _ = to_compare(
+            &mut ocb,
+            &signature,
+            &applied,
+            &applied,
+            DerefType::Never,
+            DerefType::Never,
+        );
     }
 
     #[test]

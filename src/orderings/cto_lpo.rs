@@ -61,8 +61,9 @@ pub fn lpo_greater(
 ///
 /// # Panics
 ///
-/// Panics if the global problem type is higher-order, if term argument slots
-/// are uninitialized, or if the OCB lacks precedence storage.
+/// Panics if a higher-order problem reaches this path with higher-order
+/// ordering syntax, if term argument slots are uninitialized, or if the OCB
+/// lacks precedence storage.
 #[must_use]
 pub fn lpo_greater_with_limit(
     ocb: &OrderControlBlock,
@@ -73,7 +74,6 @@ pub fn lpo_greater_with_limit(
     deref_t: DerefType,
     limit: i64,
 ) -> bool {
-    assert_first_order_lpo();
     LpoContext::new(ocb, signature, limit).greater_inner(s, t, deref_s, deref_t, 0)
         == CompareResult::Greater
 }
@@ -85,8 +85,9 @@ pub fn lpo_greater_with_limit(
 ///
 /// # Panics
 ///
-/// Panics if the global problem type is higher-order, if term argument slots
-/// are uninitialized, or if the OCB lacks precedence storage.
+/// Panics if a higher-order problem reaches this path with higher-order
+/// ordering syntax, if term argument slots are uninitialized, or if the OCB
+/// lacks precedence storage.
 #[must_use]
 pub fn lpo_compare(
     ocb: &OrderControlBlock,
@@ -122,7 +123,6 @@ pub fn lpo_compare_with_limit(
     deref_t: DerefType,
     limit: i64,
 ) -> CompareResult {
-    assert_first_order_lpo();
     let context = LpoContext::new(ocb, signature, limit);
     let result = context.greater_inner(s, t, deref_s, deref_t, 0);
     match result {
@@ -160,9 +160,9 @@ pub fn lpo_greater_copy(
     deref_s: DerefType,
     deref_t: DerefType,
 ) -> bool {
-    assert_first_order_lpo();
     let s_copy = copy_term_for_lpo_copy(s, deref_s);
     let t_copy = copy_term_for_lpo_copy(t, deref_t);
+    assert_legacy_lpo_inputs_ready(&s_copy, &t_copy);
     let result = lpo_greater(
         ocb,
         signature,
@@ -191,9 +191,9 @@ pub fn lpo_compare_copy(
     deref_s: DerefType,
     deref_t: DerefType,
 ) -> CompareResult {
-    assert_first_order_lpo();
     let s_copy = copy_term_for_lpo_copy(s, deref_s);
     let t_copy = copy_term_for_lpo_copy(t, deref_t);
+    assert_legacy_lpo_inputs_ready(&s_copy, &t_copy);
     let result = lpo_compare(
         ocb,
         signature,
@@ -250,7 +250,6 @@ pub fn lpo4_greater_with_limit(
     deref_t: DerefType,
     limit: i64,
 ) -> bool {
-    assert_first_order_lpo();
     Lpo4Context::new(ocb, signature, limit).greater_inner(s, t, deref_s, deref_t, 0)
 }
 
@@ -294,7 +293,7 @@ pub fn lpo4_compare_with_limit(
     deref_t: DerefType,
     limit: i64,
 ) -> CompareResult {
-    assert_first_order_lpo();
+    assert_legacy_lpo_deref_inputs_ready(s, t, deref_s, deref_t);
     if term_struct_equal_deref(s, t, deref_s, deref_t) {
         return CompareResult::Equal;
     }
@@ -326,9 +325,9 @@ pub fn lpo4_greater_copy(
     deref_s: DerefType,
     deref_t: DerefType,
 ) -> bool {
-    assert_first_order_lpo();
     let s_copy = copy_term_for_lpo_copy(s, deref_s);
     let t_copy = copy_term_for_lpo_copy(t, deref_t);
+    assert_legacy_lpo_inputs_ready(&s_copy, &t_copy);
     let result = Lpo4CopyContext::new(ocb, signature).greater_inner(&s_copy, &t_copy);
     debug_assert_eq!(result, lpo_greater(ocb, signature, s, t, deref_s, deref_t));
     result
@@ -348,9 +347,9 @@ pub fn lpo4_compare_copy(
     deref_s: DerefType,
     deref_t: DerefType,
 ) -> CompareResult {
-    assert_first_order_lpo();
     let s_copy = copy_term_for_lpo_copy(s, deref_s);
     let t_copy = copy_term_for_lpo_copy(t, deref_t);
+    assert_legacy_lpo_inputs_ready(&s_copy, &t_copy);
     let context = Lpo4CopyContext::new(ocb, signature);
     let result = if term_struct_equal_no_deref(&s_copy, &t_copy) {
         CompareResult::Equal
@@ -371,14 +370,6 @@ fn copy_term_for_lpo_copy(term: &Term, deref: DerefType) -> Term {
     } else {
         term_copy_keep_vars(term, deref)
     }
-}
-
-fn assert_first_order_lpo() {
-    assert_ne!(
-        problem_type(),
-        ProblemType::HigherOrder,
-        "this LPO path is not used for higher-order problems"
-    );
 }
 
 struct LpoContext<'a> {
@@ -468,6 +459,7 @@ impl<'a> LpoContext<'a> {
     ) -> CompareResult {
         let s = term_deref(s, &mut deref_s);
         let t = term_deref(t, &mut deref_t);
+        assert_legacy_lpo_inputs_ready(&s, &t);
         if depth > self.limit {
             return CompareResult::Uncomparable;
         }
@@ -640,6 +632,7 @@ impl<'a> Lpo4Context<'a> {
         }
         let s = term_deref(s, &mut deref_s);
         let t = term_deref(t, &mut deref_t);
+        assert_legacy_lpo_inputs_ready(&s, &t);
         let child_depth = depth + 1;
 
         if s.is_top_level_free_var() {
@@ -727,6 +720,29 @@ fn assert_lpo4_deref_once_ready(term: &Term, deref: DerefType) {
     assert!(
         deref != DerefType::Once || !term.has_app_var(),
         "LPO4 DEREF_ONCE over applied variables needs higher-order instantiation support"
+    );
+}
+
+fn assert_legacy_lpo_inputs_ready(s: &Term, t: &Term) {
+    assert_legacy_lpo_term_ready(s);
+    assert_legacy_lpo_term_ready(t);
+}
+
+fn assert_legacy_lpo_deref_inputs_ready(
+    s: &Term,
+    t: &Term,
+    mut deref_s: DerefType,
+    mut deref_t: DerefType,
+) {
+    let s = term_deref(s, &mut deref_s);
+    let t = term_deref(t, &mut deref_t);
+    assert_legacy_lpo_inputs_ready(&s, &t);
+}
+
+fn assert_legacy_lpo_term_ready(term: &Term) {
+    assert!(
+        problem_type() != ProblemType::HigherOrder || !term.has_higher_order_ordering_surface(),
+        "legacy LPO higher-order problem path requires first-order-shaped terms"
     );
 }
 
