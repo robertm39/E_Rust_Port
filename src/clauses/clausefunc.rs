@@ -2573,6 +2573,17 @@ pub fn tformula_var_is_free(bank: &TermBank, form: &Term, var: &Term) -> bool {
     }
 }
 
+/// Compatibility facade for C `TFormulaVarIsFreeCached`.
+///
+/// The checked C source declares this function in the header, but its only
+/// implementation body is commented out and asserts the same result as
+/// `TFormulaVarIsFree`. Rust therefore exposes the public surface as an alias
+/// to the direct query rather than inventing a cache owned by the term bank.
+#[must_use]
+pub fn tformula_var_is_free_cached(bank: &TermBank, form: &Term, var: &Term) -> bool {
+    tformula_var_is_free(bank, form, var)
+}
+
 /// Wraps a formula in one universal or existential quantifier.
 ///
 /// This matches C `TFormulaAddQuantor`: `universal` selects `!`, otherwise
@@ -6078,8 +6089,8 @@ mod tests {
         tformula_shift_quantors, tformula_shift_quantors2, tformula_simplify,
         tformula_simplify_decoded, tformula_skolemize_outermost, tformula_stack_to_form,
         tformula_to_cnf, tformula_tptp_parse, tformula_tptp_string, tformula_tstp_parse,
-        tformula_unroll_fool, tformula_var_is_free, tformula_var_rename, TFormulaDefinitions,
-        TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_unroll_fool, tformula_var_is_free, tformula_var_is_free_cached,
+        tformula_var_rename, TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::ProblemType;
@@ -8652,6 +8663,10 @@ mod tests {
         assert!(!tformula_var_is_free(&bank, &quantified, &x));
         assert!(tformula_var_is_free(&bank, &quantified, &y));
         assert!(!tformula_var_is_free(&bank, &left_atom, &a));
+        assert_eq!(
+            tformula_var_is_free_cached(&bank, &quantified, &y),
+            tformula_var_is_free(&bank, &quantified, &y)
+        );
     }
 
     #[test]
@@ -8665,6 +8680,7 @@ mod tests {
         let lambda = tformula_quantor_alloc(&mut bank, SIG_NAMED_LAMBDA_CODE, &x, &body).unwrap();
 
         assert!(tformula_var_is_free(&bank, &lambda, &x));
+        assert!(tformula_var_is_free_cached(&bank, &lambda, &x));
         assert!(tformula_collect_free_vars(&bank, &lambda).is_empty());
     }
 
