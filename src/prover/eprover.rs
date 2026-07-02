@@ -4627,9 +4627,9 @@ fn run_syntax_only(
     let mut watchlist = ClauseSet::new();
 
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
+    let mut input_owner_seen = false;
     let files = config.files.clone();
     for file in &files {
-        let before = clauses.len();
         let parsed_file = parse_clause_file(
             file,
             config.parse_format,
@@ -4642,7 +4642,8 @@ fn run_syntax_only(
             config.flags.set(EProverFlag::FormulaConjectureSeen);
         }
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
-        if config.flags.contains(EProverFlag::RequireNonempty) && clauses.len() == before {
+        input_owner_seen |= parsed_file.input_owner_seen;
+        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
             return Err(Diagnostic::new(
                 ErrorCode::INPUT_SEMANTIC_ERROR,
                 format!("Input file {file} did not contain any clauses"),
@@ -4651,7 +4652,7 @@ fn run_syntax_only(
         }
     }
 
-    if config.flags.contains(EProverFlag::RequireNonempty) && clauses.is_empty() {
+    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
         return Err(Diagnostic::new(
             ErrorCode::INPUT_SEMANTIC_ERROR,
             "Input did not contain any clauses",
@@ -6450,6 +6451,7 @@ fn parse_input_files_into_axioms(
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
     let mut parsed_total = 0_i64;
+    let mut input_owner_seen = false;
     config.flags.clear(EProverFlag::FormulaConjectureSeen);
     let files = config.files.clone();
     for file in &files {
@@ -6468,6 +6470,7 @@ fn parse_input_files_into_axioms(
             config.flags.set(EProverFlag::FormulaConjectureSeen);
         }
         apply_auto_parse_output_side_effects(config, parsed_file.detected_format);
+        input_owner_seen |= parsed_file.input_owner_seen;
         let parsed_count = parsed.len();
         parsed_total = parsed_total.saturating_add(i64::try_from(parsed_count).unwrap_or(i64::MAX));
         state.add_raw_formula_features(parsed_file.raw_formula_features);
@@ -6481,7 +6484,7 @@ fn parse_input_files_into_axioms(
             })?;
             watchlist.insert_set(&mut parsed_watchlist);
         }
-        if config.flags.contains(EProverFlag::RequireNonempty) && parsed_count == 0 {
+        if config.flags.contains(EProverFlag::RequireNonempty) && !parsed_file.input_owner_seen {
             return Err(Diagnostic::new(
                 ErrorCode::INPUT_SEMANTIC_ERROR,
                 format!("Input file {file} did not contain any clauses"),
@@ -6491,7 +6494,7 @@ fn parse_input_files_into_axioms(
         debug_assert_eq!(state.axioms().len(), before + parsed_count);
     }
 
-    if config.flags.contains(EProverFlag::RequireNonempty) && state.axioms().is_empty() {
+    if config.flags.contains(EProverFlag::RequireNonempty) && !input_owner_seen {
         return Err(Diagnostic::new(
             ErrorCode::INPUT_SEMANTIC_ERROR,
             "Input did not contain any clauses",
@@ -8476,8 +8479,10 @@ fn parse_clause_file(
     };
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
+    let start_clause_count = clauses.len();
     let mut formula_conjecture_seen = false;
     let mut raw_formula_features = RawFormulaFeatures::default();
+    let input_owner_seen;
     match detected_format {
         IoFormat::Tstp => {
             let parsed = parse_tstp_entry_list(
@@ -8490,6 +8495,7 @@ fn parse_clause_file(
             )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
+            input_owner_seen = parsed.input_owner_seen;
         }
         IoFormat::Tptp => {
             let parsed = parse_tptp_entry_list(
@@ -8502,9 +8508,11 @@ fn parse_clause_file(
             )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
+            input_owner_seen = parsed.input_owner_seen;
         }
         _ => {
             clauses.parse_list(&mut scanner, bank, ProblemType::FirstOrder)?;
+            input_owner_seen = clauses.len() != start_clause_count;
         }
     }
     if !scanner.test_tok(TokenType::NO_TOKEN) {
@@ -8519,6 +8527,7 @@ fn parse_clause_file(
     }
     Ok(ParsedClauseFile {
         detected_format,
+        input_owner_seen,
         formula_conjecture_seen,
         raw_formula_features,
     })
@@ -8579,18 +8588,21 @@ fn parse_app_encode_file(
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ParsedClauseFile {
     detected_format: IoFormat,
+    input_owner_seen: bool,
     formula_conjecture_seen: bool,
     raw_formula_features: RawFormulaFeatures,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ParsedEntryList {
+    input_owner_seen: bool,
     formula_conjecture_seen: bool,
     raw_formula_features: RawFormulaFeatures,
 }
 
 impl ParsedEntryList {
     fn add(&mut self, other: Self) {
+        self.input_owner_seen |= other.input_owner_seen;
         self.formula_conjecture_seen |= other.formula_conjecture_seen;
         self.raw_formula_features.add(other.raw_formula_features);
     }
@@ -8741,16 +8753,19 @@ fn parse_tptp_entry_list(
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
             if tstp_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
+                result.input_owner_seen |= is_input_owner;
                 insert_input_or_watchlist_clause(clauses, watchlist, clause);
             }
         } else if scanner.test_id("input_formula") {
             let parsed = parse_simple_tptp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
+                    result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
                     result.raw_formula_features.add(parsed.raw_formula_features);
                 }
@@ -8802,16 +8817,19 @@ fn parse_tstp_entry_list(
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
             let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
             if tstp_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
                 selectors.as_deref_mut(),
             ) {
+                result.input_owner_seen |= is_input_owner;
                 insert_input_or_watchlist_clause(clauses, watchlist, clause);
             }
         } else if scanner.test_id("fof|tff|tcf|thf") {
             let parsed = parse_simple_tstp_formula_clause(scanner, bank, formula_preprocessing)?;
             if tstp_entry_selected(Some(parsed.name.as_str()), selectors.as_deref_mut()) {
                 if parsed.raw_formula_type != CP_TYPE_WATCH_CLAUSE {
+                    result.input_owner_seen = true;
                     result.formula_conjecture_seen |= parsed.formula_conjecture_seen;
                     result.raw_formula_features.add(parsed.raw_formula_features);
                 }
@@ -9012,7 +9030,11 @@ fn parse_simple_tstp_app_encode_formula(
         parse_simple_tstp_optional_source(scanner)?;
         scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
         scanner.accept_tok(TokenType::FULLSTOP)?;
-        return Ok(None);
+        return Ok(Some(SimpleAppEncodedFormula {
+            name,
+            type_: CP_TYPE_AXIOM | CP_INPUT_FORMULA,
+            formulas: simple_fof_truth_formula(true),
+        }));
     }
 
     let roles = if formula_kind == "tcf" {
@@ -14764,6 +14786,43 @@ mod tests {
         assert!(printed.contains("tff(symboltypedecl"));
         assert!(printed.contains("app_"));
         assert!(printed.contains("tff(ax, axiom, "));
+        assert!(!printed.contains("SZS status"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_prints_type_declarations_without_formula_entries() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-type-decls-only");
+        std::fs::write(
+            &path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--error-on-empty",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("%-- person."));
+        assert!(printed.contains("tff(typedecl"));
+        assert!(printed.contains("tff(symboltypedecl"));
         assert!(!printed.contains("SZS status"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -25447,5 +25506,47 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_error_on_empty_accepts_formula_owners_without_clauses() {
+        let _guard = global_state_lock();
+        let type_path = temp_path("syntax-type-owner-without-clauses");
+        let true_path = temp_path("syntax-true-owner-without-clauses");
+        std::fs::write(
+            &type_path,
+            "tff(person_type, type, person: $tType).\n\
+             tff(a_type, type, a: person).\n",
+        )
+        .unwrap();
+        std::fs::write(&true_path, "fof(true_formula, axiom, $true).\n").unwrap();
+
+        for path in [&type_path, &true_path] {
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let status = run(
+                [
+                    "eprover",
+                    "--syntax-only",
+                    "--error-on-empty",
+                    path_arg.as_str(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+
+            assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                "\n% Parsing successful!\n% SZS status Unknown\n"
+            );
+            assert!(stderr.is_empty());
+        }
+
+        std::fs::remove_file(&type_path).unwrap();
+        std::fs::remove_file(&true_path).unwrap();
     }
 }
