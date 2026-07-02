@@ -95,6 +95,7 @@ Source files reviewed: `PROVER/eground.c`.
 
 - `--miniscope-limit` is parsed into `miniscope_limit`, and the help advertises a default of 1000, but `main()` passes the hard-coded value `1048576` to `FormulaSetCNF2`. Keep this as a compatibility quirk until exact formula-set clausification is ported, then decide whether the option should actually control the call.
 - `--local-constraints` sets `constraints`, `local_constraints`, `ClausesHaveDisjointVariables`, and `ClausesHaveLocalVariables`, but `local_constraints` is not read later in this file. Revisit whether the global clause-variable flags are still needed once the parser and grounding state have explicit Rust ownership.
+- `OpenGlobalOut(outname)` runs before the default `-` input is inserted and before any scanner is created, so output paths can be created or truncated even if later input opening or parsing fails. Rust preserves this order; a cleanup mode could stage output before replacing the destination.
 - `app_encode` is initialized but unused. Remove it only after the executable option surface and any historical scripts depending on it are audited.
 - DIMACS output goes through `GroundSetPrintDimacs`, which delegates non-empty non-unit clause literal printing to `ClausePrintDimacs`; that helper writes literal integers to `stdout` while writing only terminators to the passed `FILE* out`. This is surprising for `--output-file` and should be cleaned only outside drop-in compatibility mode.
 - Equational clauses are recoded into predicate literals after a warning, shifting equality semantics onto explicit equality axioms supplied by the user. Keep the warning/output order for compatibility, but consider a clearer user-facing mode after parity.
@@ -105,4 +106,9 @@ Source files reviewed: `PROVER/eground.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Notes
+
+- `src/prover/eground.rs` and `src/bin/eground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
+- The wrapper preserves default stdin through `-`, `OutOpen`-style `-o -` stdout routing, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, and the C DIMACS split between the configured output stream and raw stdout.
 <!-- END MANUAL REVIEW: c_source_docs -->
