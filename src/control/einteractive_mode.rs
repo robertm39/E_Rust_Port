@@ -132,6 +132,12 @@ pub struct InteractiveCommandOutput {
     pub status: &'static str,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveDispatchResult {
+    pub output: String,
+    pub done: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InteractiveSpec {
     axiom_sets: Vec<AxiomSet>,
@@ -434,6 +440,115 @@ impl InteractiveSpec {
             ERR_UNKNOWN_AXIOM_SET_MESSAGE
         }
     }
+
+    /// C `quit_command`: unstage every currently staged axiom set before the
+    /// connection closes.
+    pub fn quit_command(&mut self, ctrl: &mut StructFofSpec, signature: &Signature) {
+        let staged_names: Vec<_> = self
+            .axiom_sets
+            .iter()
+            .filter(|handle| handle.is_staged())
+            .map(|handle| handle.name().to_owned())
+            .collect();
+
+        for name in staged_names.into_iter().rev() {
+            let _ = self.unstage_command(ctrl, signature, &name);
+        }
+    }
+
+    /// C `StartDeductionServer` single-message command dispatch, with the
+    /// transport-specific block reader and `RUN` implementation supplied by
+    /// the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns scanner diagnostics, parser diagnostics from `ADD`/`LOAD`, or
+    /// caller-supplied diagnostics from block reading and `RUN`.
+    pub fn dispatch_command_with<B, R>(
+        &mut self,
+        command_input: &str,
+        spec: &BatchSpec,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        mut read_block: B,
+        mut run_command: R,
+    ) -> Result<InteractiveDispatchResult, Diagnostic>
+    where
+        B: FnMut(&str) -> Result<String, Diagnostic>,
+        R: FnMut(&str, &str) -> Result<InteractiveCommandOutput, Diagnostic>,
+    {
+        let mut scanner = Scanner::from_user_string(command_input, true)?;
+        scanner.set_format(IoFormat::Tstp);
+
+        if scanner.test_id(STAGE_COMMAND) {
+            scanner.accept_id(STAGE_COMMAND)?;
+            let axiom_set = accept_command_axiom_set_name(&mut scanner)?;
+            Ok(dispatch_status(
+                self.stage_command(ctrl, bank.signature(), &axiom_set),
+                false,
+            ))
+        } else if scanner.test_id(UNSTAGE_COMMAND) {
+            scanner.accept_id(UNSTAGE_COMMAND)?;
+            let axiom_set = accept_command_axiom_set_name(&mut scanner)?;
+            Ok(dispatch_status(
+                self.unstage_command(ctrl, bank.signature(), &axiom_set),
+                false,
+            ))
+        } else if scanner.test_id(REMOVE_COMMAND) {
+            scanner.accept_id(REMOVE_COMMAND)?;
+            let axiom_set = accept_command_axiom_set_name(&mut scanner)?;
+            Ok(dispatch_status(self.remove_command(&axiom_set), false))
+        } else if scanner.test_id(DOWNLOAD_COMMAND) {
+            scanner.accept_id(DOWNLOAD_COMMAND)?;
+            let axiom_set = accept_command_axiom_set_name(&mut scanner)?;
+            Ok(dispatch_command_output(
+                self.download_command(&axiom_set),
+                false,
+            ))
+        } else if scanner.test_id(LOAD_COMMAND) {
+            scanner.accept_id(LOAD_COMMAND)?;
+            let axiom_set = accept_command_axiom_set_name(&mut scanner)?;
+            Ok(dispatch_status(
+                self.load_command(&axiom_set, spec, bank, &*ctrl)?,
+                false,
+            ))
+        } else if scanner.test_id(ADD_COMMAND) {
+            scanner.accept_id(ADD_COMMAND)?;
+            let axiom_set = accept_command_axiom_set_name(&mut scanner)?;
+            let input_axioms = read_block(END_OF_BLOCK_TOKEN)?;
+            Ok(dispatch_status(
+                self.add_command(&axiom_set, &input_axioms, spec, bank, &*ctrl)?,
+                false,
+            ))
+        } else if scanner.test_id(RUN_COMMAND) {
+            scanner.accept_id(RUN_COMMAND)?;
+            let job_name = scanner.current_token().literal();
+            scanner.accept_tok(TokenType::IDENTIFIER)?;
+            let input_axioms = read_block(END_OF_BLOCK_TOKEN)?;
+            Ok(dispatch_command_output(
+                run_command(&job_name, &input_axioms)?,
+                false,
+            ))
+        } else if scanner.test_id(LIST_COMMAND) {
+            scanner.accept_id(LIST_COMMAND)?;
+            Ok(dispatch_command_output(self.list_command(), false))
+        } else if scanner.test_id(HELP_COMMAND) {
+            scanner.accept_id(HELP_COMMAND)?;
+            Ok(InteractiveDispatchResult {
+                output: format!("{HELP_MESSAGE}{OK_SUCCESS_MESSAGE}"),
+                done: false,
+            })
+        } else if scanner.test_id(QUIT_COMMAND) {
+            scanner.accept_id(QUIT_COMMAND)?;
+            self.quit_command(ctrl, bank.signature());
+            Ok(InteractiveDispatchResult {
+                output: String::new(),
+                done: true,
+            })
+        } else {
+            Ok(dispatch_status(ERR_UNKNOWN_COMMAND_MESSAGE, false))
+        }
+    }
 }
 
 /// C `AXIOM_SET_NAME_TOKENS`.
@@ -463,6 +578,28 @@ pub fn accept_axiom_set_name(scanner: &mut Scanner, dest: &mut String) -> Result
         scanner.next_token()?;
     }
     Ok(())
+}
+
+fn accept_command_axiom_set_name(scanner: &mut Scanner) -> Result<String, Diagnostic> {
+    let mut axiom_set = String::new();
+    accept_axiom_set_name(scanner, &mut axiom_set)?;
+    Ok(axiom_set)
+}
+
+fn dispatch_status(status: &'static str, done: bool) -> InteractiveDispatchResult {
+    InteractiveDispatchResult {
+        output: status.to_owned(),
+        done,
+    }
+}
+
+fn dispatch_command_output(
+    result: InteractiveCommandOutput,
+    done: bool,
+) -> InteractiveDispatchResult {
+    let mut output = result.output;
+    output.push_str(result.status);
+    InteractiveDispatchResult { output, done }
 }
 
 /// C `get_directory_listings`: return a stack-shaped list of regular file
@@ -514,13 +651,15 @@ fn parse_interactive_axioms(
 mod tests {
     use super::{
         accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, AxiomSet,
-        InteractiveSpec, ADD_COMMAND, END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
+        InteractiveCommandOutput, InteractiveSpec, ADD_COMMAND, DOWNLOAD_COMMAND,
+        END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
         ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
         ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE,
         ERR_NO_AXIOM_LIBRARY_ON_SERVER_MESSAGE, ERR_UNKNOWN_AXIOM_SET_MESSAGE,
-        ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_ADDED_MESSAGE, OK_DOWNLOADED_MESSAGE,
-        OK_LOADED_MESSAGE, OK_REMOVED_MESSAGE, OK_STAGED_MESSAGE, OK_SUCCESS_MESSAGE,
-        OK_UNSTAGED_MESSAGE, STAGE_COMMAND,
+        ERR_UNKNOWN_COMMAND_MESSAGE, HELP_COMMAND, HELP_MESSAGE, LIST_COMMAND, LOAD_COMMAND,
+        OK_ADDED_MESSAGE, OK_DOWNLOADED_MESSAGE, OK_LOADED_MESSAGE, OK_REMOVED_MESSAGE,
+        OK_STAGED_MESSAGE, OK_SUCCESS_MESSAGE, OK_UNSTAGED_MESSAGE, QUIT_COMMAND, REMOVE_COMMAND,
+        RUN_COMMAND, STAGE_COMMAND, UNSTAGE_COMMAND,
     };
     use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
@@ -572,6 +711,14 @@ mod tests {
         TermBank::new(signature).unwrap()
     }
 
+    fn unused_block_reader(_: &str) -> Result<String, Diagnostic> {
+        panic!("block reader should not run")
+    }
+
+    fn unused_run_command(_: &str, _: &str) -> Result<InteractiveCommandOutput, Diagnostic> {
+        panic!("run command should not run")
+    }
+
     struct ScratchDir {
         path: PathBuf,
     }
@@ -601,7 +748,15 @@ mod tests {
     #[test]
     fn command_and_response_strings_match_c_surface() {
         assert_eq!(STAGE_COMMAND, "STAGE");
+        assert_eq!(UNSTAGE_COMMAND, "UNSTAGE");
+        assert_eq!(REMOVE_COMMAND, "REMOVE");
+        assert_eq!(DOWNLOAD_COMMAND, "DOWNLOAD");
         assert_eq!(ADD_COMMAND, "ADD");
+        assert_eq!(LOAD_COMMAND, "LOAD");
+        assert_eq!(RUN_COMMAND, "RUN");
+        assert_eq!(LIST_COMMAND, "LIST");
+        assert_eq!(HELP_COMMAND, "HELP");
+        assert_eq!(QUIT_COMMAND, "QUIT");
         assert_eq!(END_OF_BLOCK_TOKEN, "GO\n");
         assert_eq!(OK_SUCCESS_MESSAGE, "200 ok : success\n");
         assert_eq!(ERR_UNKNOWN_COMMAND_MESSAGE, "407 Err : unknown command\n");
@@ -1046,6 +1201,282 @@ mod tests {
         assert!(!interactive.axiom_set_mut("orphan").unwrap().is_staged());
         assert_eq!(ctrl.clause_set_count(), 0);
         assert_eq!(ctrl.shared_ax_sp(), 0);
+    }
+
+    #[test]
+    fn dispatch_command_routes_immediate_state_commands() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("set.one", "raw", false)),
+            OK_ADDED_MESSAGE
+        );
+
+        let stage = interactive
+            .dispatch_command_with(
+                "STAGE set . one",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(stage.output, OK_STAGED_MESSAGE);
+        assert!(!stage.done);
+        assert!(interactive.axiom_set_mut("set.one").unwrap().is_staged());
+        assert_eq!(ctrl.clause_set_count(), 1);
+
+        let unstage = interactive
+            .dispatch_command_with(
+                "UNSTAGE set.one",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(unstage.output, OK_UNSTAGED_MESSAGE);
+        assert!(!unstage.done);
+        assert!(!interactive.axiom_set_mut("set.one").unwrap().is_staged());
+        assert_eq!(ctrl.clause_set_count(), 0);
+
+        let remove = interactive
+            .dispatch_command_with(
+                "REMOVE set.one",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(remove.output, OK_REMOVED_MESSAGE);
+        assert!(!remove.done);
+        assert_eq!(interactive.axiom_set_count(), 0);
+    }
+
+    #[test]
+    fn dispatch_add_command_reads_block_then_uses_batch_parser() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        let mut terminators = Vec::new();
+
+        let result = interactive
+            .dispatch_command_with(
+                "ADD uploaded",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                |terminator| {
+                    terminators.push(terminator.to_owned());
+                    Ok(String::from("fof(dispatch_formula, axiom, p(a)).\n"))
+                },
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(terminators, vec![String::from(END_OF_BLOCK_TOKEN)]);
+        assert_eq!(result.output, OK_ADDED_MESSAGE);
+        assert!(!result.done);
+        let axiom_set = interactive.axiom_sets().next().unwrap();
+        assert_eq!(axiom_set.name(), "uploaded");
+        assert_eq!(axiom_set.formula_set().cardinality(), 1);
+    }
+
+    #[test]
+    fn dispatch_load_command_uses_server_library_parser() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("dispatch.ax"), b"fof(a, axiom, p).\n").unwrap();
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+
+        let result = interactive
+            .dispatch_command_with(
+                "LOAD dispatch.ax",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(result.output, OK_LOADED_MESSAGE);
+        assert!(!result.done);
+        assert_eq!(interactive.axiom_set_count(), 1);
+        assert_eq!(
+            interactive.download_command("dispatch.ax").output,
+            "fof(a, axiom, p).\n"
+        );
+    }
+
+    #[test]
+    fn dispatch_run_command_uses_only_one_identifier_token_for_name() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        let mut terminators = Vec::new();
+        let mut seen_run = None;
+
+        let result = interactive
+            .dispatch_command_with(
+                "RUN job-1",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                |terminator| {
+                    terminators.push(terminator.to_owned());
+                    Ok(String::from("fof(run_formula, axiom, q(a)).\n"))
+                },
+                |job_name, input_axioms| {
+                    seen_run = Some((job_name.to_owned(), input_axioms.to_owned()));
+                    Ok(InteractiveCommandOutput {
+                        output: String::from("run output\n"),
+                        status: OK_SUCCESS_MESSAGE,
+                    })
+                },
+            )
+            .unwrap();
+
+        assert_eq!(terminators, vec![String::from(END_OF_BLOCK_TOKEN)]);
+        assert_eq!(
+            seen_run,
+            Some((
+                String::from("job"),
+                String::from("fof(run_formula, axiom, q(a)).\n")
+            ))
+        );
+        assert_eq!(result.output, format!("run output\n{OK_SUCCESS_MESSAGE}"));
+        assert!(!result.done);
+    }
+
+    #[test]
+    fn dispatch_printing_commands_append_statuses() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("download_me", "raw axioms\n", false)),
+            OK_ADDED_MESSAGE
+        );
+
+        let download = interactive
+            .dispatch_command_with(
+                "DOWNLOAD download_me",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(
+            download.output,
+            format!("raw axioms\n{OK_DOWNLOADED_MESSAGE}")
+        );
+        assert!(!download.done);
+
+        let list = interactive
+            .dispatch_command_with(
+                "LIST",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert!(list.output.contains("Unstaged :\n  download_me\n"));
+        assert!(list.output.ends_with(OK_SUCCESS_MESSAGE));
+        assert!(!list.done);
+
+        let help = interactive
+            .dispatch_command_with(
+                "HELP",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(help.output, format!("{HELP_MESSAGE}{OK_SUCCESS_MESSAGE}"));
+        assert!(!help.done);
+    }
+
+    #[test]
+    fn dispatch_quit_unstages_all_sets_and_marks_done() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        for name in ["first", "second"] {
+            assert_eq!(
+                interactive.add_axiom_set(axiom_set(name, name, false)),
+                OK_ADDED_MESSAGE
+            );
+            assert_eq!(
+                interactive.stage_command(&mut ctrl, bank.signature(), name),
+                OK_STAGED_MESSAGE
+            );
+        }
+
+        let result = interactive
+            .dispatch_command_with(
+                "QUIT",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(result.output, "");
+        assert!(result.done);
+        assert!(!interactive.axiom_set_mut("first").unwrap().is_staged());
+        assert!(!interactive.axiom_set_mut("second").unwrap().is_staged());
+        assert_eq!(ctrl.clause_set_count(), 0);
+        assert_eq!(ctrl.formula_set_count(), 0);
+        assert_eq!(ctrl.shared_ax_sp(), 0);
+    }
+
+    #[test]
+    fn dispatch_unknown_command_reports_protocol_error() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+
+        let result = interactive
+            .dispatch_command_with(
+                "BOGUS",
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_block_reader,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(result.output, ERR_UNKNOWN_COMMAND_MESSAGE);
+        assert!(!result.done);
     }
 
     #[test]
