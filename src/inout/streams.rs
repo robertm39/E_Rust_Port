@@ -97,6 +97,14 @@ impl InputStream {
         Ok(Self::from_file_content(&path.to_string_lossy(), data))
     }
 
+    pub fn from_file_optional(path: &Path, fail: bool) -> Result<Option<Self>, Diagnostic> {
+        match Self::from_file(path) {
+            Ok(stream) => Ok(Some(stream)),
+            Err(error) if fail => Err(error),
+            Err(_) => Ok(None),
+        }
+    }
+
     #[must_use]
     pub fn source_bytes(&self) -> &[u8] {
         &self.source
@@ -281,6 +289,25 @@ mod tests {
         stream.next_char();
         assert_eq!((stream.line(), stream.column()), (2, 1));
         assert_eq!(stream.current_char(), Some(b'c'));
+
+        remove_if_present(&path);
+    }
+
+    #[test]
+    fn optional_file_stream_preserves_create_stream_fail_false_shape() {
+        let path = temp_path("missing");
+        remove_if_present(&path);
+
+        assert!(InputStream::from_file_optional(&path, false)
+            .unwrap()
+            .is_none());
+        assert!(InputStream::from_file_optional(&path, true).is_err());
+
+        std::fs::write(&path, b"ok").unwrap();
+        let stream = InputStream::from_file_optional(&path, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stream.current_char(), Some(b'o'));
 
         remove_if_present(&path);
     }
