@@ -813,6 +813,10 @@ impl BatchSpec {
         S: FnMut(BatchRunnerRequest) -> Result<BatchSpawnedRunner, Diagnostic>,
         P: FnMut(&mut Vec<BatchSpawnedRunner>) -> Result<Option<BatchCompletedRunner>, Diagnostic>,
     {
+        outputs
+            .global_output
+            .flush()
+            .map_err(|error| batch_process_output_error(&error))?;
         let problem = load_problem(BatchProblemLoadRequest {
             source: config.source,
             default_dir: config.default_dir,
@@ -926,15 +930,15 @@ impl BatchSpec {
         C: FnMut() -> i64,
         B: BatchRunnerBackend,
     {
-        let problem = self.load_problem_from_file(
-            bank,
-            ctrl,
-            BatchProblemLoadRequest {
-                source: config.source,
-                default_dir: config.default_dir,
-                format: IoFormat::Tstp,
-            },
-        )?;
+        let mut scanner = open_batch_problem_scanner(BatchProblemLoadRequest {
+            source: config.source,
+            default_dir: config.default_dir,
+            format: IoFormat::Tstp,
+        })?;
+        global_output
+            .flush()
+            .map_err(|error| batch_process_output_error(&error))?;
+        let problem = self.load_problem_from_scanner(bank, ctrl, &mut scanner)?;
         let mut dest = open_batch_dest_file(config.dest)?;
         let problem = self.process_problem_with_runner_backend(
             bank,
@@ -2149,12 +2153,14 @@ mod tests {
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::typebanks::TypeBank;
+    use std::cell::Cell;
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::fs;
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::path::PathBuf;
     use std::process::Command;
+    use std::rc::Rc;
 
     #[test]
     fn batch_spec_defaults_match_c_allocation_shape() {
@@ -2921,6 +2927,59 @@ mod tests {
     }
 
     #[test]
+    fn process_file_flushes_global_output_before_injected_load() {
+        let signature = test_signature();
+        let mut ctrl = shared_spec(&signature);
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let flushes = Rc::new(Cell::new(0));
+        let mut global = FlushCountingWriter::new(Rc::clone(&flushes));
+        let mut dest = Vec::new();
+        let report = {
+            let mut outputs = BatchProcessFileOutputs {
+                global_output: &mut global,
+                dest_output: &mut dest,
+            };
+            spec.process_file_with(
+                &signature,
+                &mut ctrl,
+                BatchProcessFileConfig {
+                    wct_limit: 12,
+                    default_dir: None,
+                    source: "flush-before-load.p",
+                    dest: "flush-before-load.out",
+                },
+                &mut outputs,
+                |_| {
+                    assert_eq!(flushes.get(), 1);
+                    Ok(one_empty_clause_problem())
+                },
+                || 200,
+                |request| {
+                    Ok(BatchSpawnedRunner {
+                        name: request.name,
+                        start_time: 200,
+                        prob_time: request.cpu_time,
+                    })
+                },
+                |active| {
+                    Ok(Some(BatchCompletedRunner {
+                        runner: active[0].clone(),
+                        result: ProverResult::Theorem,
+                        output: "% flushed proof\n".to_owned(),
+                    }))
+                },
+            )
+            .unwrap()
+        };
+
+        assert!(report.solved);
+        assert_eq!(flushes.get(), 1);
+        assert!(String::from_utf8(global.writes)
+            .unwrap()
+            .contains("% SZS status Theorem for flush-before-load.p\n"));
+    }
+
+    #[test]
     fn process_file_propagates_load_error_without_mutating_shared_spec() {
         let signature = test_signature();
         let mut ctrl = shared_spec(&signature);
@@ -3145,7 +3204,8 @@ mod tests {
         let mut bank = test_bank();
         let mut ctrl = shared_spec(bank.signature());
         let spec = BatchSpec::new("eprover", IoFormat::Tstp);
-        let mut global = Vec::new();
+        let flushes = Rc::new(Cell::new(0));
+        let mut global = FlushCountingWriter::new(Rc::clone(&flushes));
         let mut backend = FakeRunnerBackend::new(None);
         let source_name = source.to_string_lossy().into_owned();
         let dest_name = dest.to_string_lossy().into_owned();
@@ -3170,7 +3230,8 @@ mod tests {
         assert!(!dest.exists());
         assert_eq!(backend.requests.len(), 0);
         assert_eq!(ctrl.clause_set_count(), 1);
-        assert!(global.is_empty());
+        assert_eq!(flushes.get(), 1);
+        assert!(global.writes.is_empty());
     }
 
     #[test]
@@ -3647,6 +3708,32 @@ mod tests {
 
     fn test_bank() -> TermBank {
         TermBank::new(test_signature()).unwrap()
+    }
+
+    struct FlushCountingWriter {
+        writes: Vec<u8>,
+        flushes: Rc<Cell<usize>>,
+    }
+
+    impl FlushCountingWriter {
+        fn new(flushes: Rc<Cell<usize>>) -> Self {
+            Self {
+                writes: Vec::new(),
+                flushes,
+            }
+        }
+    }
+
+    impl Write for FlushCountingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes.set(self.flushes.get() + 1);
+            Ok(())
+        }
     }
 
     struct FakeRunnerBackend {
