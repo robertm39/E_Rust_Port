@@ -475,6 +475,28 @@ mod tests {
     }
 
     #[test]
+    fn output_dash_routes_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"f(a)\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [PROGRAM_NAME, "-o", "-"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("dash output run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        assert!(output.contains("f(a)  : 2 : 2 : n : n\n"));
+        assert!(output.contains("% Terms: 1  ASize: 2.000000 MSize: 2"));
+    }
+
+    #[test]
     fn verbose_option_sets_global_verbose_level() {
         let _guard = global_state_lock();
         let mut stdin = Cursor::new(b"a\n".to_vec());

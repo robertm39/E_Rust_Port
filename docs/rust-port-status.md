@@ -562,7 +562,7 @@ C source references:
 
 Implemented:
 
-- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 
@@ -570,6 +570,7 @@ Pending:
 
 Change-later notes:
 
+- C calls `OpenGlobalOut(outname)` after defaulting missing input to `-` but before scanner creation, so `-o` can create or truncate an output file before later input failures while `-o -` stays on stdout. Rust preserves this ordering; transactional output should be a separate cleaned mode.
 - The C `com` probe reads a second argument from a child whose arity was just checked to be one. Rust does not reproduce that undefined memory access; decide later whether to remove the flag, preserve the safe false result, or implement the likely intended first-child comparison behind compatibility tests.
 
 ## epclextract Executable
@@ -586,7 +587,7 @@ C source references:
 
 Implemented:
 
-- Standalone `epclextract` binary integration over the ported PCL2 protocol owners, including C-shaped help/version/verbosity/output options, full and fast extraction modes, comment forwarding, competition SZS framing, no-extract syntax-check/printing mode, `--tstp-out`/`--tptp3-out`, default stdin input through `-`, explicit output-file routing, TPTP-format PCL parsing, end-of-input checks, recursive full-protocol proof-step marking, mini-protocol contiguous-suffix fast proof marking, PCL/TSTP selected-step printing, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, file output, comments including multi-file forwarding order, TSTP aliasing, framing, fast extraction, shell/formula-valued no-extract output, and trailing-token diagnostics.
+- Standalone `epclextract` binary integration over the ported PCL2 protocol owners, including C-shaped help/version/verbosity/output options, full and fast extraction modes, comment forwarding, competition SZS framing, no-extract syntax-check/printing mode, `--tstp-out`/`--tptp3-out`, default stdin input through `-`, explicit output-file routing including `-o -`, TPTP-format PCL parsing, end-of-input checks, recursive full-protocol proof-step marking, mini-protocol contiguous-suffix fast proof marking, PCL/TSTP selected-step printing, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, dash/file output, comments including multi-file forwarding order, TSTP aliasing, framing, fast extraction, shell/formula-valued no-extract output, and trailing-token diagnostics.
 
 Pending:
 
@@ -596,6 +597,7 @@ Change-later notes:
 
 - C's optional `FAST_EXIT` build path exits immediately after printing and skips ordinary cleanup and output close. Rust always flushes and drops owned protocol state; only add an early-exit compatibility mode if a C reference build demonstrates observable performance or diagnostics differences.
 - `--silent` mutates C's global `OutputLevel`, but the extraction output in this executable is not level-gated. Rust accepts it as a no-op for command-line compatibility; revisit only if shared PCL warning/output plumbing gains observable level handling.
+- C calls `OpenGlobalOut(outname)` before defaulting missing input to `-`, allocating the protocol owner, or scanning files, so `-o` can create or truncate an output file before later input failures while `-o -` stays on stdout. Rust preserves this ordering; transactional extraction output belongs outside drop-in mode.
 - The fast mini-protocol path intentionally trusts C's contiguous proof/final/extract suffix assumption instead of scanning every step. Preserve this until reference traces prove users expect the more complete slow extraction semantics under `--fast-extract`.
 - With `--forward-comments`, C writes comments to `GlobalOut` while parsing, before proof extraction and selected-step printing. Rust preserves that visible ordering, including across multiple input files; a later streaming API should make this partial-output-before-success behavior explicit.
 
@@ -613,7 +615,7 @@ C source references:
 
 Implemented:
 
-- Standalone `epclanalyse` binary integration over the ported PCL2 full-protocol and property-analysis modules, including C-shaped help, long-only `--version`, verbosity, output-file, and silent options, default stdin input through `-`, TPTP-format PCL parsing, strict end-of-input checks, protocol property aggregation, representative-step rendering, legacy support-tool help footer text, explicit stdout/file routing, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, output files, option compatibility, verbosity side effect, trailing-token diagnostics, empty-protocol zero-denominator output, and formula-only representative output.
+- Standalone `epclanalyse` binary integration over the ported PCL2 full-protocol and property-analysis modules, including C-shaped help, long-only `--version`, verbosity, output-file including `-o -`, and silent options, default stdin input through `-`, TPTP-format PCL parsing, strict end-of-input checks, protocol property aggregation, representative-step rendering, legacy support-tool help footer text, explicit stdout/file routing, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, dash/file output, option compatibility, verbosity side effect, trailing-token diagnostics, empty-protocol zero-denominator output, and formula-only representative output.
 
 Pending:
 
@@ -623,6 +625,7 @@ Change-later notes:
 
 - C exposes `--version` but no `-V` shorthand for this executable. Rust preserves that table even though nearby tools differ; consider normalizing only outside drop-in compatibility mode.
 - `--silent` mutates C's global `OutputLevel`, but the summary printed by `PCLProtPropDataPrint` is unconditional. Rust accepts it as a no-op; revisit if future shared output plumbing exposes this side effect.
+- C calls `OpenGlobalOut(outname)` before defaulting missing input to `-` and before scanning files, so `-o` can create or truncate an output file before later input failures while `-o -` stays on stdout. Rust preserves this ordering; transactional output belongs outside drop-in mode.
 - The C help footer is an old support-tool block with the 2002-2009 copyright range and obsolete URL. Rust keeps the visible text for compatibility, but a future documentation pass may want a shared helper for legacy support-tool footers.
 - Via `PCLProtPropDataPrint`, C prints zero-denominator averages and then unconditionally prints representative steps and clause metrics. Empty or formula-only protocols can therefore reach assertion/null/invalid-union behavior; Rust keeps the arithmetic output shape but makes representative printing total.
 
@@ -673,7 +676,7 @@ C source references:
 
 Implemented:
 
-- Standalone `epcllemma` binary integration over the ported PCL2 full-protocol and lemma-selection modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, PCL/TPTP/TSTP/LOP output-format options, iterative/recursive/flat algorithms, absolute and relative lemma-count and lemma-quality thresholds, lemma-quality reference/size/Horn weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, stdout status-line routing, selected-lemma versus full-protocol printing by output level, legacy support-tool footer text, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, file output, silent mode, full-protocol output, relative quality thresholds, TSTP/LOP output, empty protocols, formula-valued and shell UPCL2 full-protocol output, option compatibility, verbosity side effect, weight-option parsing, and trailing-token diagnostics.
+- Standalone `epcllemma` binary integration over the ported PCL2 full-protocol and lemma-selection modules, including C-shaped help, long-only `--version`, verbosity, output-file including `-o -`, silent/output-level, PCL/TPTP/TSTP/LOP output-format options, iterative/recursive/flat algorithms, absolute and relative lemma-count and lemma-quality thresholds, lemma-quality reference/size/Horn weights, proof-tree inference weights, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, stdout status-line routing, selected-lemma versus full-protocol printing by output level, legacy support-tool footer text, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, dash/file output, silent mode, full-protocol output, relative quality thresholds, TSTP/LOP output, empty protocols, formula-valued and shell UPCL2 full-protocol output, option compatibility, verbosity side effect, weight-option parsing, and trailing-token diagnostics.
 
 Pending:
 
@@ -683,6 +686,7 @@ Change-later notes:
 
 - C exposes `--version` but no `-V` shorthand for this executable. Rust preserves that table even though nearby tools differ; consider normalizing only outside drop-in compatibility mode.
 - C prints lemma-selection status lines directly to stdout even when `-o` redirects the selected lemma/protocol output. Rust preserves that split.
+- C calls `OpenGlobalOut(outname)` before defaulting missing input to `-` and before parsing, so `-o` can create or truncate the lemma-output file before later input failures while `-o -` keeps lemma output with the stdout status lines. Rust preserves this ordering; transactional output belongs outside drop-in mode.
 - C `--lop-out` falls through into `--iterative-lemmas`, resetting any earlier algorithm selection. Rust mirrors the order-sensitive behavior.
 - C `--no-reference-weights` leaves `act_simpl_w` unchanged because it assigns `pas_simpl_w` twice. Rust preserves the effective assignments until lemma-selection trace tests prove a cleanup is acceptable.
 - C computes the default relative lemma limit as `PCLProtStepNo(prot) * max_lemmas_rel + 0.99` and truncates to `long`, so tiny protocols can still select zero lemmas. Rust preserves this rounding/truncation behavior.

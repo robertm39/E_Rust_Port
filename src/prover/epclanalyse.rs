@@ -522,6 +522,28 @@ mod tests {
     }
 
     #[test]
+    fn output_dash_routes_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(SAMPLE_PROTOCOL.as_bytes().to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [PROGRAM_NAME, "-o", "-"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("dash output run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).expect("stdout is utf8");
+        assert!(output.contains("% Protocol properties\n"));
+        assert!(output.contains("% Number of clauses                  :      2\n"));
+    }
+
+    #[test]
     fn input_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
         let missing_path = temp_path("missing-input");
