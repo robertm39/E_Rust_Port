@@ -535,7 +535,7 @@ C source references:
 
 Implemented:
 
-- The `e_stratpar` binary wrapper and library run path now parse C-shaped `-h`/`--help`, `-V`/`--version`, and optional-argument `--cpu-limit[=300]`, default the hard time limit to 3600 seconds, require one or two positional arguments, launch eight `eprover` children with `AutoSched0` through `AutoSched7` `-x`/`-t` strategy options plus `--sine`, pass half the hard time limit to each child, stream C-shaped no-proof child messages through the process-control writer, print the first proof-producing child output, emit `% SZS status GaveUp` if no child proves the problem, and clean up remaining child processes through `EPCtrlSet`.
+- The `e_stratpar` binary wrapper and library run path now parse C-shaped `-h`/`--help`, `-V`/`--version`, and optional-argument `--cpu-limit[=300]`, default the hard time limit to 3600 seconds, require one or two positional arguments, launch eight `eprover` children with `AutoSched0` through `AutoSched7` `-x`/`-t` strategy options plus `--sine`, pass half the hard time limit to each child, stream C-shaped no-proof child messages through the process-control writer, print the first proof-producing child output, emit `% SZS status GaveUp` if no child proves the problem, clean up remaining child processes through `EPCtrlSet`, and cover both proof-producing and all-no-proof subprocess outcomes with unit tests.
 
 Pending:
 

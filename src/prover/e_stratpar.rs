@@ -340,6 +340,33 @@ mod tests {
     }
 
     #[test]
+    fn execute_with_no_proof_children_prints_child_failures_and_gaveup() {
+        let _guard = global_state_lock();
+        let config = StratparConfig {
+            cpu_limit: 10,
+            problem_file: "problem.p".to_owned(),
+        };
+        let mut stdout = Vec::new();
+
+        let status = execute_with_spawner(&config, &mut stdout, |strategy| {
+            EPCtrl::spawn_command(
+                pid_status_command("% SZS status GaveUp"),
+                strategy.name.clone(),
+                None,
+                strategy.cpu_limit,
+            )
+        })
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        let no_proof_messages = printed.matches("% No proof found by AutoSched").count();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!((1..=8).contains(&no_proof_messages));
+        assert!(!printed.contains("% SZS status Theorem"));
+        assert!(printed.ends_with("% SZS status GaveUp\n"));
+    }
+
+    #[test]
     fn help_text_contains_current_version_and_footer() {
         let help = print_help();
 

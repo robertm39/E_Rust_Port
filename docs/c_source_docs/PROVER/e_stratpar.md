@@ -91,6 +91,10 @@ Source files reviewed: `PROVER/e_stratpar.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
+### Rust Port Notes
+
+- `src/prover/e_stratpar.rs` and `src/bin/e_stratpar.rs` port the standalone wrapper over the Rust process-control owner, including C's eight hard-coded `AutoSched` children, ignored optional prover argument, first proof-output replay, no-proof child messages, and final `% SZS status GaveUp` when every child exits without a recognized proof status.
+
 ### Change Later
 
 - The optional `<path-to-eprover>` positional argument is advertised and accepted, but the C implementation leaves `prover` fixed to `"eprover"` and never reads the second positional argument. Preserve this until drop-in tests are stable, then either honor the argument or remove it from the cleaned interface.
