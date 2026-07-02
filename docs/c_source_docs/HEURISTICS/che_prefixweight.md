@@ -100,6 +100,7 @@ Source files reviewed: `HEURISTICS/che_prefixweight.h`, `HEURISTICS/che_prefixwe
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - `ConjectureTermPrefixWeightCompute` lazily initializes prefix terms, calls `ClauseCondMarkMaximalTerms(local->ocb, clause)`, then scores through `ClauseTermExtWeight`; the Rust port preserves that ordering with an explicit OCB-backed helper until WFCB/proof-state ownership can pass mutable clauses directly.
+- The Rust lazy prefix-term store now uses the shared `src/clauses/pdtrees.rs` trie subset for `PDTreeInsertTerm`/`PDTreeMatchPrefix`-style traversal, so scoring follows the C single-path match/remains counts without keeping the earlier heuristic-local vector scan as the primary data structure.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
 ### Porting Focus

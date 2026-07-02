@@ -33,6 +33,7 @@ pub mod inferencedoc;
 pub mod neweval;
 pub mod overlap_index;
 pub mod paramodulation;
+pub mod pdtrees;
 pub mod pred_elim;
 pub mod proofstate;
 pub mod propclauses;

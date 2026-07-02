@@ -99,6 +99,7 @@ Source files reviewed: `HEURISTICS/che_tfidfweight.h`, `HEURISTICS/che_tfidfweig
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
 - `ConjectureTermTfIdfWeightCompute` lazily initializes TF-IDF data, calls `ClauseCondMarkMaximalTerms(local->ocb, clause)`, scores through `ClauseTermExtWeight`, and only then appends generated-clause document terms when `update_docs` is set; the Rust port preserves that ordering with an explicit OCB-backed helper until WFCB/proof-state ownership can pass mutable clauses directly.
+- The Rust document-code path now shares the `src/clauses/pdtrees.rs` `TermLRTraverseNext` key extraction with prefix weights. Document-frequency storage remains vector-backed until the full `PDTree` leaf/ref-count owner is wired for TF-IDF.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 
 ### Porting Focus

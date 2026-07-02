@@ -1,6 +1,10 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::clauses::clausesets::ClauseSet;
+pub use crate::clauses::pdtrees::{
+    prefix_code_match_counts, prefix_code_ref_count, prefix_compute_term_code, prefix_match_counts,
+    PdTree, PrefixToken,
+};
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::termweights::{
     collect_related_conjecture_terms, parse_related_term_set, parse_term_weight_extension_style,
@@ -10,20 +14,12 @@ use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
-use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::VarNormStyle;
-use crate::terms::termtypes::{term_identity_id, Term};
+use crate::terms::termtypes::Term;
 use crate::terms::termvars::VarBank;
 use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrefixToken {
-    Fun(FunCode),
-    FreeVar(usize),
-    DbLike(usize),
-}
 
 #[derive(Clone, Debug)]
 pub struct PrefixWeightParam {
@@ -37,7 +33,7 @@ pub struct PrefixWeightParam {
     max_literal_multiplier: f64,
     pos_multiplier: f64,
     vars: Option<VarBank>,
-    terms: Option<Vec<Term>>,
+    terms: Option<PdTree>,
     codes: Option<Vec<Vec<PrefixToken>>>,
 }
 
@@ -111,18 +107,24 @@ impl PrefixWeightParam {
             .iter()
             .map(prefix_compute_term_code)
             .collect::<Vec<_>>();
+        let mut tree = PdTree::new();
+        for term in &terms {
+            tree.insert_term(term);
+        }
 
         self.vars = Some(vars);
-        self.terms = Some(terms);
+        self.terms = Some(tree);
         self.codes = Some(codes);
     }
 
     fn term_weight(&self, term: &Term) -> f64 {
-        let codes = self
-            .codes
-            .as_deref()
+        let terms = self
+            .terms
+            .as_ref()
             .unwrap_or_else(|| panic!("ConjectureTermPrefixWeight terms must be initialized"));
-        prefix_term_weight(term, codes, self.match_weight, self.miss_weight)
+        let prefix_match = terms.match_prefix(term);
+        (usize_to_f64(prefix_match.matched) * self.match_weight)
+            + (usize_to_f64(prefix_match.remains) * self.miss_weight)
     }
 }
 
@@ -275,63 +277,6 @@ pub fn conjecture_term_prefix_weight_compute_with_ocb(
     clause.term_ext_weight(&extension)
 }
 
-/// Extracts the C `TermLRTraverseNext` prefix-index keys used by
-/// `PDTreeInsertTerm` and `PDTreeMatchPrefix`.
-///
-/// # Panics
-///
-/// Panics if a traversed non-leaf term has an uninitialized argument, matching
-/// the C traversal precondition that all argument slots contain valid terms.
-#[must_use]
-pub fn prefix_compute_term_code(term: &Term) -> Vec<PrefixToken> {
-    let mut code = Vec::new();
-    let mut stack = vec![term.clone()];
-
-    while let Some(current) = stack.pop() {
-        code.push(prefix_token(&current));
-        if current.is_top_level_free_var() {
-            continue;
-        }
-
-        let start = usize::from(current.is_lambda() || current.is_applied_db_var());
-        for index in (start..current.arity()).rev() {
-            let arg = current
-                .argument(index)
-                .unwrap_or_else(|| panic!("term argument {index} is uninitialized"));
-            stack.push(arg);
-        }
-    }
-
-    code
-}
-
-#[must_use]
-pub fn prefix_match_counts(term: &Term, prefixes: &[Vec<PrefixToken>]) -> (usize, usize) {
-    let term_code = prefix_compute_term_code(term);
-    prefix_code_match_counts(&term_code, prefixes)
-}
-
-#[must_use]
-pub fn prefix_code_match_counts(
-    term_code: &[PrefixToken],
-    prefixes: &[Vec<PrefixToken>],
-) -> (usize, usize) {
-    let matched = prefixes
-        .iter()
-        .map(|prefix| common_prefix_len(term_code, prefix))
-        .max()
-        .unwrap_or(0);
-    (matched, term_code.len() - matched)
-}
-
-#[must_use]
-pub fn prefix_code_ref_count(term_code: &[PrefixToken], prefixes: &[Vec<PrefixToken>]) -> usize {
-    prefixes
-        .iter()
-        .filter(|prefix| prefix.starts_with(term_code))
-        .count()
-}
-
 #[must_use]
 pub fn prefix_term_weight(
     term: &Term,
@@ -363,29 +308,6 @@ fn prefix_weight_extension(term: &Term, data: &&PrefixWeightParam) -> f64 {
 }
 
 fn prefix_weight_exit(_data: PrefixWeightParam) {}
-
-fn prefix_token(term: &Term) -> PrefixToken {
-    if term.is_top_level_free_var() {
-        PrefixToken::FreeVar(term_identity_id(term))
-    } else if term.is_db_var() || term.is_applied_db_var() || term.is_lambda() {
-        let key = if term.is_db_var() {
-            term.clone()
-        } else {
-            term.argument(0)
-                .unwrap_or_else(|| panic!("DB/lambda term has no head argument"))
-        };
-        PrefixToken::DbLike(term_identity_id(&key))
-    } else {
-        PrefixToken::Fun(term.f_code())
-    }
-}
-
-fn common_prefix_len(left: &[PrefixToken], right: &[PrefixToken]) -> usize {
-    left.iter()
-        .zip(right)
-        .take_while(|(left, right)| left == right)
-        .count()
-}
 
 #[allow(clippy::cast_precision_loss)]
 fn usize_to_f64(value: usize) -> f64 {

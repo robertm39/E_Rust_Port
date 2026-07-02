@@ -173,6 +173,8 @@ Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- Initial Rust status: `src/clauses/pdtrees.rs` ports the `TermLRTraverseNext` key sequence plus an owned trie for `PDTreeInsertTerm`-style insertion and `PDTreeMatchPrefix` match/remains counting. `che_prefixweight` now stores its lazy conjecture-prefix terms in that trie, and `che_tfidfweight` reuses the shared traversal-code helpers.
+- Change-later candidate: C `PDTreeInsertTerm` eta-expands non-FO patterns or eta-reduces other terms before indexing, and full search mutates tree-local traversal state while relying on `ClausePos` leaves, substitution backtracking, age/size constraints, and a process-global traversal order switch. Keep those compatibility surfaces visible before replacing the remaining plain scans or vector-backed document-frequency helpers with full PDTree ownership.
 
 ### Porting Focus
 
