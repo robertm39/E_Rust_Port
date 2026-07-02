@@ -608,17 +608,18 @@ C source references:
 
 Implemented:
 
-- Standalone `epclanalyse` binary integration over the ported PCL2 full-protocol and property-analysis modules, including C-shaped help, long-only `--version`, verbosity, output-file, and silent options, default stdin input through `-`, TPTP-format PCL parsing, strict end-of-input checks, protocol property aggregation, representative-step rendering, legacy support-tool help footer text, explicit stdout/file routing, and unit coverage for stdin, output files, option compatibility, verbosity side effect, and trailing-token diagnostics.
+- Standalone `epclanalyse` binary integration over the ported PCL2 full-protocol and property-analysis modules, including C-shaped help, long-only `--version`, verbosity, output-file, and silent options, default stdin input through `-`, TPTP-format PCL parsing, strict end-of-input checks, protocol property aggregation, representative-step rendering, legacy support-tool help footer text, explicit stdout/file routing, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, output files, option compatibility, verbosity side effect, trailing-token diagnostics, empty-protocol zero-denominator output, and formula-only representative output.
 
 Pending:
 
-- Byte-for-byte comparison against a built C `epclanalyse` executable remains pending for empty protocols and zero-denominator average spelling, formula-valued PCL representative steps, exact file/open close diagnostics, and platform-specific broken-pipe behavior.
+- Byte-for-byte comparison against a built C `epclanalyse` executable remains pending for platform-specific system-error suffixes, target C-runtime zero-denominator NaN spelling, empty/formula-only protocols where C may assert or dereference invalid representative clause pointers, and platform-specific broken-pipe behavior.
 
 Change-later notes:
 
 - C exposes `--version` but no `-V` shorthand for this executable. Rust preserves that table even though nearby tools differ; consider normalizing only outside drop-in compatibility mode.
 - `--silent` mutates C's global `OutputLevel`, but the summary printed by `PCLProtPropDataPrint` is unconditional. Rust accepts it as a no-op; revisit if future shared output plumbing exposes this side effect.
 - The C help footer is an old support-tool block with the 2002-2009 copyright range and obsolete URL. Rust keeps the visible text for compatibility, but a future documentation pass may want a shared helper for legacy support-tool footers.
+- Via `PCLProtPropDataPrint`, C prints zero-denominator averages and then unconditionally prints representative steps and clause metrics. Empty or formula-only protocols can therefore reach assertion/null/invalid-union behavior; Rust keeps the arithmetic output shape but makes representative printing total.
 
 ## checkproof Executable
 
