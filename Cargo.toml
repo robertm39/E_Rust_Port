@@ -33,4 +33,8 @@ path = "src/bin/epclextract.rs"
 name = "epclanalyse"
 path = "src/bin/epclanalyse.rs"
 
+[[bin]]
+name = "checkproof"
+path = "src/bin/checkproof.rs"
+
 [dependencies]

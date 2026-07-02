@@ -86,6 +86,18 @@ Source files reviewed: `PROVER/checkproof.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/checkproof.rs` and `src/bin/checkproof.rs` port the standalone `checkproof` executable over the existing Rust PCL2 proof-checking core. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file`, `-s`/`--silent`, `-l`/`--output-level`, `-p`/`--prover-type`, `-x`/`--executable`, `-t`/`--prover-cpu-limit`, default stdin input through `-`, TPTP-format UPCL2 parsing, strict end-of-input checks, external-prover verification dispatch, warning output, and the C-shaped final verification summary.
+
+### Change Later
+
+- C exposes `--version` without a `-V` shorthand here, unlike some newer E tools. Rust preserves that table; add a short alias only as an explicit non-compatibility-mode cleanup.
+- `print_help(FILE* out)` prints its option table to `stdout` instead of the `out` parameter. The executable only calls it with `stdout`, so Rust keeps the user-visible behavior without preserving the misdirected helper API.
+- The C executable mutates global `OutputFormat`, `EqnUseInfix`, and `ClausesHaveLocalVariables` while selecting Otter/SPASS checking. Rust keeps those effects localized in explicit proof-check rendering/parsing paths; audit again if shared global output-format state becomes part of the public Rust API.
+- `scheme-setheo` is accepted by C but verification is not implemented in `pcl_proofcheck`. Rust preserves it as an unchecked prover type; remove or rename only after compatibility mode can report deprecated options.
+- C installs SIGTERM/SIGINT handlers mainly to clean temporary prover problem files. Rust uses owned temporary-file registration/removal around each prover run and still sets the equivalent handlers for executable compatibility; a later process-management layer could make cleanup ownership explicit and avoid global signal setup in library-facing paths.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
