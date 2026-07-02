@@ -2,11 +2,13 @@
 
 use std::{ffi::OsStr, fmt::Write as _, fs, path::Path};
 
-use crate::basics::error::Diagnostic;
+use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
+use crate::control::batch_spec::{BatchProblemData, BatchSpec};
 use crate::control::sine::StructFofSpec;
-use crate::inout::scanner::{Scanner, TokenType};
+use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 
 pub const STAGE_COMMAND: &str = "STAGE";
 pub const UNSTAGE_COMMAND: &str = "UNSTAGE";
@@ -116,6 +118,14 @@ impl AxiomSet {
     }
 }
 
+impl From<(String, String, BatchProblemData)> for AxiomSet {
+    fn from((name, raw_data, mut problem): (String, String, BatchProblemData)) -> Self {
+        problem.clauses.set_identifier(name.clone());
+        problem.formulas.set_identifier(name);
+        Self::new(problem.clauses, problem.formulas, raw_data, false)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveCommandOutput {
     pub output: String,
@@ -172,6 +182,102 @@ impl InteractiveSpec {
         } else {
             self.axiom_sets.push(axiom_set);
             OK_ADDED_MESSAGE
+        }
+    }
+
+    /// C `add_command` after the input block has already been parsed.
+    pub fn add_parsed_axiom_set(
+        &mut self,
+        axioms_name: impl Into<String>,
+        raw_data: impl Into<String>,
+        problem: BatchProblemData,
+    ) -> &'static str {
+        self.add_axiom_set(AxiomSet::from((
+            axioms_name.into(),
+            raw_data.into(),
+            problem,
+        )))
+    }
+
+    /// C `add_command`.
+    ///
+    /// # Errors
+    ///
+    /// Returns parser diagnostics from constructing the clause/formula sets.
+    pub fn add_command(
+        &mut self,
+        axioms_name: &str,
+        input_axioms: &str,
+        spec: &BatchSpec,
+        bank: &mut TermBank,
+        ctrl: &StructFofSpec,
+    ) -> Result<&'static str, Diagnostic> {
+        let problem = parse_interactive_axioms(axioms_name, input_axioms, spec, bank, ctrl)?;
+        Ok(self.add_parsed_axiom_set(axioms_name, input_axioms, problem))
+    }
+
+    /// C `load_command`.
+    ///
+    /// # Errors
+    ///
+    /// Returns file-read diagnostics or parser diagnostics for the selected
+    /// server-library file.
+    pub fn load_command(
+        &mut self,
+        filename: &str,
+        spec: &BatchSpec,
+        bank: &mut TermBank,
+        ctrl: &StructFofSpec,
+    ) -> Result<&'static str, Diagnostic> {
+        self.load_command_with(filename, |path, raw_data| {
+            let source_name = path.to_string_lossy();
+            parse_interactive_axioms(&source_name, raw_data, spec, bank, ctrl)
+        })
+    }
+
+    /// C `load_command`, with parsing supplied by the caller.
+    ///
+    /// The parser boundary corresponds to C's `FileLoad` plus `add_command`
+    /// parse step. This keeps the directory/file status behavior local while
+    /// allowing the batch parser owner to provide the actual clause/formula
+    /// construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns file-read diagnostics or parser diagnostics for the selected
+    /// server-library file.
+    pub fn load_command_with<F>(
+        &mut self,
+        filename: &str,
+        parse_axioms: F,
+    ) -> Result<&'static str, Diagnostic>
+    where
+        F: FnOnce(&Path, &str) -> Result<BatchProblemData, Diagnostic>,
+    {
+        if self.server_lib.is_empty() {
+            return Ok(ERR_NO_AXIOM_LIBRARY_ON_SERVER_MESSAGE);
+        }
+
+        let Some(files) = get_directory_listings(&self.server_lib) else {
+            return Ok(ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE);
+        };
+        if !files.iter().rev().any(|handle| handle == filename) {
+            return Ok(ERR_UNKNOWN_AXIOM_SET_MESSAGE);
+        }
+
+        let path = Path::new(&self.server_lib).join(filename);
+        let raw_data = fs::read_to_string(&path).map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::FILE_ERROR,
+                format!("Cannot read file {}: {error}", path.display()),
+            )
+        })?;
+        let problem = parse_axioms(&path, &raw_data)?;
+        let status = self.add_parsed_axiom_set(filename, raw_data, problem);
+        if status == OK_ADDED_MESSAGE {
+            Ok(OK_LOADED_MESSAGE)
+        } else {
+            Ok(status)
         }
     }
 
@@ -391,23 +497,40 @@ pub fn get_directory_listings(dirname: impl AsRef<Path>) -> Option<Vec<String>> 
     Some(files)
 }
 
+fn parse_interactive_axioms(
+    source_name: &str,
+    input_axioms: &str,
+    spec: &BatchSpec,
+    bank: &mut TermBank,
+    ctrl: &StructFofSpec,
+) -> Result<BatchProblemData, Diagnostic> {
+    let mut scanner =
+        Scanner::from_file_content(source_name, input_axioms.as_bytes().to_vec(), true)?;
+    scanner.set_format(IoFormat::Tstp);
+    spec.load_problem_from_scanner(bank, ctrl, &mut scanner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, AxiomSet,
         InteractiveSpec, ADD_COMMAND, END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
         ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
-        ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_UNKNOWN_AXIOM_SET_MESSAGE,
+        ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE,
+        ERR_NO_AXIOM_LIBRARY_ON_SERVER_MESSAGE, ERR_UNKNOWN_AXIOM_SET_MESSAGE,
         ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_ADDED_MESSAGE, OK_DOWNLOADED_MESSAGE,
-        OK_REMOVED_MESSAGE, OK_STAGED_MESSAGE, OK_SUCCESS_MESSAGE, OK_UNSTAGED_MESSAGE,
-        STAGE_COMMAND,
+        OK_LOADED_MESSAGE, OK_REMOVED_MESSAGE, OK_STAGED_MESSAGE, OK_SUCCESS_MESSAGE,
+        OK_UNSTAGED_MESSAGE, STAGE_COMMAND,
     };
+    use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
+    use crate::control::batch_spec::{BatchProblemData, BatchSpec};
     use crate::control::sine::StructFofSpec;
-    use crate::inout::scanner::{Scanner, TokenType};
-    use crate::terms::{signature::Signature, typebanks::TypeBank};
+    use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+    use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
     use std::{
         collections::BTreeSet,
+        ffi::OsStr,
         fs,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
@@ -425,6 +548,13 @@ mod tests {
         AxiomSet::new(clauses, formulas, raw_data, staged_arg)
     }
 
+    fn empty_problem() -> BatchProblemData {
+        BatchProblemData {
+            clauses: ClauseSet::new(),
+            formulas: FormulaSet::new(),
+        }
+    }
+
     fn axiom_names(interactive: &InteractiveSpec) -> Vec<String> {
         interactive
             .axiom_sets()
@@ -434,6 +564,12 @@ mod tests {
 
     fn test_signature() -> Signature {
         Signature::new(TypeBank::new())
+    }
+
+    fn parser_bank() -> TermBank {
+        let mut signature = Signature::new(TypeBank::new());
+        signature.insert_internal_codes().unwrap();
+        TermBank::new(signature).unwrap()
     }
 
     struct ScratchDir {
@@ -586,6 +722,207 @@ mod tests {
 
         assert_eq!(interactive.axiom_set_count(), 1);
         assert_eq!(interactive.download_command("dup").output, "first");
+    }
+
+    #[test]
+    fn add_parsed_axiom_set_sets_identifiers_and_keeps_raw_data() {
+        let mut interactive = InteractiveSpec::new("");
+
+        assert_eq!(
+            interactive.add_parsed_axiom_set("parsed", "fof(a,axiom,p).\n", empty_problem()),
+            OK_ADDED_MESSAGE
+        );
+
+        let axiom_set = interactive.axiom_sets().next().unwrap();
+        assert_eq!(axiom_set.name(), "parsed");
+        assert_eq!(axiom_set.formula_set().identifier(), "parsed");
+        assert_eq!(axiom_set.raw_data(), "fof(a,axiom,p).\n");
+    }
+
+    #[test]
+    fn add_parsed_axiom_set_rejects_duplicate_after_problem_is_built() {
+        let mut interactive = InteractiveSpec::new("");
+
+        assert_eq!(
+            interactive.add_parsed_axiom_set("dup", "first", empty_problem()),
+            OK_ADDED_MESSAGE
+        );
+        assert_eq!(
+            interactive.add_parsed_axiom_set("dup", "second", empty_problem()),
+            ERR_AXIOM_SET_NAME_TAKEN_MESSAGE
+        );
+
+        assert_eq!(interactive.axiom_set_count(), 1);
+        assert_eq!(interactive.download_command("dup").output, "first");
+    }
+
+    #[test]
+    fn add_command_parses_uploaded_axioms_through_batch_parser() {
+        let mut bank = parser_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+
+        let status = interactive
+            .add_command(
+                "uploaded",
+                "fof(uploaded_formula, axiom, p(a)).\n",
+                &spec,
+                &mut bank,
+                &ctrl,
+            )
+            .unwrap();
+
+        assert_eq!(status, OK_ADDED_MESSAGE);
+        let axiom_set = interactive.axiom_sets().next().unwrap();
+        assert_eq!(axiom_set.name(), "uploaded");
+        assert_eq!(axiom_set.formula_set().cardinality(), 1);
+        assert_eq!(
+            axiom_set.raw_data(),
+            "fof(uploaded_formula, axiom, p(a)).\n"
+        );
+    }
+
+    #[test]
+    fn add_command_propagates_parser_error_without_inserting() {
+        let mut bank = parser_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+
+        let error = interactive
+            .add_command("bad", "not a problem", &spec, &mut bank, &ctrl)
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(interactive.axiom_set_count(), 0);
+    }
+
+    #[test]
+    fn load_command_reports_missing_server_library_configuration() {
+        let mut interactive = InteractiveSpec::new("");
+
+        let status = interactive
+            .load_command_with("anything.ax", |_, _| Ok(empty_problem()))
+            .unwrap();
+
+        assert_eq!(status, ERR_NO_AXIOM_LIBRARY_ON_SERVER_MESSAGE);
+    }
+
+    #[test]
+    fn load_command_reports_unreadable_server_library() {
+        let mut missing = std::env::temp_dir();
+        missing.push(format!(
+            "e_rust_port_einteractive_missing_load_dir_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut interactive = InteractiveSpec::new(missing.to_string_lossy());
+
+        let status = interactive
+            .load_command_with("anything.ax", |_, _| Ok(empty_problem()))
+            .unwrap();
+
+        assert_eq!(status, ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE);
+    }
+
+    #[test]
+    fn load_command_reports_unknown_file_without_parsing() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("present.ax"), b"fof(a, axiom, p).").unwrap();
+        let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+
+        let status = interactive
+            .load_command_with("missing.ax", |_, _| panic!("parser should not run"))
+            .unwrap();
+
+        assert_eq!(status, ERR_UNKNOWN_AXIOM_SET_MESSAGE);
+    }
+
+    #[test]
+    fn load_command_reads_file_parses_and_rewrites_added_to_loaded() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("lib.ax"), b"fof(a, axiom, p).\n").unwrap();
+        let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+
+        let status = interactive
+            .load_command_with("lib.ax", |path, raw_data| {
+                assert_eq!(path.file_name().unwrap(), OsStr::new("lib.ax"));
+                assert_eq!(raw_data, "fof(a, axiom, p).\n");
+                Ok(empty_problem())
+            })
+            .unwrap();
+
+        assert_eq!(status, OK_LOADED_MESSAGE);
+        assert_eq!(interactive.axiom_set_count(), 1);
+        assert_eq!(
+            interactive.download_command("lib.ax").output,
+            "fof(a, axiom, p).\n"
+        );
+    }
+
+    #[test]
+    fn load_command_returns_duplicate_name_status_from_add_command() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("dup.ax"), b"fof(a, axiom, p).\n").unwrap();
+        let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+        assert_eq!(
+            interactive.add_parsed_axiom_set("dup.ax", "existing", empty_problem()),
+            OK_ADDED_MESSAGE
+        );
+
+        let status = interactive
+            .load_command_with("dup.ax", |_, _| Ok(empty_problem()))
+            .unwrap();
+
+        assert_eq!(status, ERR_AXIOM_SET_NAME_TAKEN_MESSAGE);
+        assert_eq!(interactive.download_command("dup.ax").output, "existing");
+    }
+
+    #[test]
+    fn load_command_uses_concrete_batch_parser_for_server_file() {
+        let scratch = ScratchDir::new();
+        fs::write(
+            scratch.path.join("real.ax"),
+            b"cnf(watch_clause, watchlist, q(a)).\nfof(ax_formula, axiom, p(a)).\n",
+        )
+        .unwrap();
+        let mut bank = parser_bank();
+        let ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+
+        let status = interactive
+            .load_command("real.ax", &spec, &mut bank, &ctrl)
+            .unwrap();
+
+        assert_eq!(status, OK_LOADED_MESSAGE);
+        let axiom_set = interactive.axiom_sets().next().unwrap();
+        assert_eq!(axiom_set.name(), "real.ax");
+        assert_eq!(axiom_set.clause_set().len(), 1);
+        assert_eq!(axiom_set.formula_set().cardinality(), 1);
+    }
+
+    #[test]
+    fn load_command_propagates_parser_diagnostics_without_inserting() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("bad.ax"), b"not a problem").unwrap();
+        let mut interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+
+        let error = interactive
+            .load_command_with("bad.ax", |_, _| {
+                Err(Diagnostic::new(
+                    ErrorCode::SYNTAX_ERROR,
+                    "synthetic parser failure",
+                ))
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert_eq!(interactive.axiom_set_count(), 0);
     }
 
     #[test]
