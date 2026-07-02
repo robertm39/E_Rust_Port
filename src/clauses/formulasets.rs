@@ -2333,9 +2333,10 @@ impl FormulaSet {
     /// Applies C `TFormulaSetLiftLets` in insertion order.
     ///
     /// Generated definition wrappers are appended after the traversal in the
-    /// same stack-pop order C uses. Formula-level derivation storage and proof
-    /// output are deferred, so this returns the `DCIntroDef` and `DCApplyDef`
-    /// opcodes that should be attached by a future owner.
+    /// same stack-pop order C uses. Generated definitions receive
+    /// `DCIntroDef`, and each rewritten source formula receives `DCApplyDef`
+    /// parented by the generated definition. This also returns those opcodes as
+    /// result metadata; proof output remains deferred.
     ///
     /// # Errors
     ///
@@ -2363,7 +2364,14 @@ impl FormulaSet {
             if !definitions.is_empty() {
                 result.formulas_lets_lifted += 1;
                 for definition in definitions {
-                    lifted_definitions.push(WrappedFormula::wt_formula_alloc(definition));
+                    let mut definition_wrapper = WrappedFormula::wt_formula_alloc(definition);
+                    definition_wrapper.push_formula_derivation(DC_INTRO_DEF, None, None);
+                    formula.push_formula_derivation(
+                        DC_APPLY_DEF,
+                        Some(FormulaDerivationRef::new(definition_wrapper.ident())),
+                        None,
+                    );
+                    lifted_definitions.push(definition_wrapper);
                     result.formula_derivation_ops.push(DC_INTRO_DEF);
                     result.formula_derivation_ops.push(DC_APPLY_DEF);
                 }
@@ -4682,6 +4690,17 @@ mod tests {
         assert_eq!(rewritten.f_code(), eqn_code);
         assert_ne!(rewritten.argument(0).unwrap().f_code(), SIG_LET_CODE);
         let generated_definition = formulas[1].formula();
+        assert_eq!(
+            formulas[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(FormulaDerivationRef::new(formulas[1].ident()))
+            ]
+        );
+        assert_eq!(
+            formulas[1].derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
         assert_eq!(generated_definition.f_code(), eqn_code);
         assert_eq!(
             generated_definition.argument(1).as_ref(),
