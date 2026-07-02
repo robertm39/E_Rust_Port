@@ -12040,8 +12040,8 @@ fn parse_simple_fof_primary_formula(
     let formulas = match (|| {
         if scanner.test_tok(TokenType::EXIST_QUANTOR) {
             parse_simple_fof_existential_formula(scanner, bank, problem_type)
-        } else if simple_fof_starts_tstp_logical_head_application(scanner) {
-            parse_simple_fof_tstp_logical_head_application(scanner, bank)
+        } else if simple_fof_starts_tstp_application_formula(scanner) {
+            parse_simple_fof_tstp_application_formula(scanner, bank)
         } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
             let formulas = parse_simple_fof_connective_formulas(scanner, bank, problem_type)?;
@@ -12202,8 +12202,8 @@ fn parse_simple_fof_existential_formula(
         scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
         scanner.accept_tok(TokenType::COLON)?;
 
-        let formulas = if simple_fof_starts_tstp_logical_head_application(scanner) {
-            parse_simple_fof_tstp_logical_head_application(scanner, bank)?
+        let formulas = if simple_fof_starts_tstp_application_formula(scanner) {
+            parse_simple_fof_tstp_application_formula(scanner, bank)?
         } else if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
             let formulas = parse_simple_fof_connective_formulas(scanner, bank, problem_type)?;
@@ -12338,7 +12338,7 @@ fn parse_simple_fof_non_boolean_fool_literal(
     Ok(simple_fof_literal_formulas(vec![literal]))
 }
 
-fn parse_simple_fof_tstp_logical_head_application(
+fn parse_simple_fof_tstp_application_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
@@ -12348,6 +12348,12 @@ fn parse_simple_fof_tstp_logical_head_application(
         SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
         bank,
     )
+}
+
+fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
+    simple_fof_starts_tstp_logical_head_application(scanner)
+        || (scanner.test_tok(TokenType::NAME | TokenType::SEM_IDENT)
+            && scanner_test_tok(scanner.look_token(1), TokenType::APPLICATION))
 }
 
 fn simple_fof_starts_tstp_logical_head_application(scanner: &Scanner) -> bool {
@@ -15077,6 +15083,42 @@ mod tests {
     }
 
     #[test]
+    fn run_app_encode_accepts_tstp_predicate_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tstp-predicate-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(app, axiom, p @ a).\n\
+             fof(neg_app, axiom, ~ p @ a).\n\
+             fof(and_app, axiom, p @ a & q @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("tff(app, axiom, app_"));
+        assert!(printed.contains("tff(neg_app, axiom, ~(app_"));
+        assert!(printed.contains("tff(and_app, axiom, (app_"));
+        assert!(printed.contains("&app_"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_app_encode_treats_typed_atomic_left_fool_rhs_as_formula_equality() {
         let _guard = global_state_lock();
         let path = temp_path("app-encode-atomic-left-fool-rhs-equality");
@@ -16228,6 +16270,41 @@ mod tests {
              fof(and_app, axiom, (&) @ p(a) @ q(a)).\n\
              fof(not_app, axiom, (~) @ p(a)).\n\
              fof(ex_app, axiom, ?[X]:(&) @ p(X) @ q(X)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_tstp_predicate_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-only-tstp-predicate-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(app, axiom, p @ a).\n\
+             fof(neg_app, axiom, ~ p @ a).\n\
+             fof(and_app, axiom, p @ a & q @ a).\n\
+             fof(ex_app, axiom, ?[X]:p @ X).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23558,6 +23635,47 @@ mod tests {
         assert!(cnf_lines.iter().any(|line| line.contains("(~p(a))")));
         assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")));
         assert!(cnf_lines.iter().any(|line| line.contains("q(esk1_0)")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_tstp_predicate_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tstp-predicate-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(app, axiom, p @ a).\n\
+             fof(neg_app, axiom, ~ p @ a).\n\
+             fof(and_app, axiom, p @ a & q @ a).\n\
+             fof(ex_app, axiom, ?[X]:p @ X).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 5, "{printed}");
+        assert!(cnf_lines.iter().any(|line| line.contains("(p(a))")));
+        assert!(cnf_lines.iter().any(|line| line.contains("(~p(a))")));
+        assert!(cnf_lines.iter().any(|line| line.contains("(q(a))")));
+        assert!(cnf_lines.iter().any(|line| line.contains("p(esk1_0)")));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
