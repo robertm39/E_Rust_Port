@@ -582,17 +582,18 @@ C source references:
 
 Implemented:
 
-- Standalone `epclextract` binary integration over the ported PCL2 protocol owners, including C-shaped help/version/verbosity/output options, full and fast extraction modes, comment forwarding, competition SZS framing, no-extract syntax-check/printing mode, `--tstp-out`/`--tptp3-out`, default stdin input through `-`, explicit output-file routing, TPTP-format PCL parsing, end-of-input checks, recursive full-protocol proof-step marking, mini-protocol contiguous-suffix fast proof marking, PCL/TSTP selected-step printing, and unit coverage for stdin, file output, comments, TSTP aliasing, framing, fast extraction, and trailing-token diagnostics.
+- Standalone `epclextract` binary integration over the ported PCL2 protocol owners, including C-shaped help/version/verbosity/output options, full and fast extraction modes, comment forwarding, competition SZS framing, no-extract syntax-check/printing mode, `--tstp-out`/`--tptp3-out`, default stdin input through `-`, explicit output-file routing, TPTP-format PCL parsing, end-of-input checks, recursive full-protocol proof-step marking, mini-protocol contiguous-suffix fast proof marking, PCL/TSTP selected-step printing, C-shaped two-line file-open diagnostics, C `OutClose` wording on final flush failure, and unit coverage for stdin, file output, comments including multi-file forwarding order, TSTP aliasing, framing, fast extraction, shell/formula-valued no-extract output, and trailing-token diagnostics.
 
 Pending:
 
-- Byte-for-byte comparison against a built C `epclextract` executable remains pending for shell PCL, formula-valued PCL steps, multi-file comment interleaving, exact file/open close diagnostics, and platform-specific broken-pipe behavior.
+- Byte-for-byte comparison against a built C `epclextract` executable remains pending for larger shell/formula-valued extraction traces beyond no-extract rendering, direct multi-file comment interleaving against C output, platform-specific system-error suffixes, and platform-specific broken-pipe behavior.
 
 Change-later notes:
 
 - C's optional `FAST_EXIT` build path exits immediately after printing and skips ordinary cleanup and output close. Rust always flushes and drops owned protocol state; only add an early-exit compatibility mode if a C reference build demonstrates observable performance or diagnostics differences.
 - `--silent` mutates C's global `OutputLevel`, but the extraction output in this executable is not level-gated. Rust accepts it as a no-op for command-line compatibility; revisit only if shared PCL warning/output plumbing gains observable level handling.
 - The fast mini-protocol path intentionally trusts C's contiguous proof/final/extract suffix assumption instead of scanning every step. Preserve this until reference traces prove users expect the more complete slow extraction semantics under `--fast-extract`.
+- With `--forward-comments`, C writes comments to `GlobalOut` while parsing, before proof extraction and selected-step printing. Rust preserves that visible ordering, including across multiple input files; a later streaming API should make this partial-output-before-success behavior explicit.
 
 ## epclanalyse Executable
 
