@@ -25129,6 +25129,40 @@ mod tests {
     }
 
     #[test]
+    fn run_proves_thf_composition_without_fresh_variable_type_collision() {
+        let _guard = global_state_lock();
+        let path = temp_path("thf-composition-fresh-variable-types");
+        std::fs::write(
+            &path,
+            "thf(g_type,type,g:$tType).\n\
+             thf(b_type,type,b:$tType).\n\
+             thf(a_type,type,a:$tType).\n\
+             thf(cTHM133_pme,conjecture,\n\
+               ![Xh1:g>b,Xh2:b>a,Xf1:g>g>g,Xf2:b>b>b,Xf3:a>a>a]:\n\
+                 (((![Xx:g,Xy:g]:((Xh1 @ (Xf1 @ Xx @ Xy)) = (Xf2 @ (Xh1 @ Xx) @ (Xh1 @ Xy))))\n\
+                   & (![Xx:b,Xy:b]:((Xh2 @ (Xf2 @ Xx @ Xy)) = (Xf3 @ (Xh2 @ Xx) @ (Xh2 @ Xy)))))\n\
+                  => (![Xx:g,Xy:g]:((Xh2 @ (Xh1 @ (Xf1 @ Xx @ Xy))) = (Xf3 @ (Xh2 @ (Xh1 @ Xx)) @ (Xh2 @ (Xh1 @ Xy))))))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_syntax_only_parses_thf_type_declarations() {
         let _guard = global_state_lock();
         let path = temp_path("syntax-thf-type-declarations");

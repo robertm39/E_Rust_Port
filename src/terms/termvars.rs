@@ -146,6 +146,26 @@ impl VarBank {
         self.sync_shadow_fresh_count();
     }
 
+    /// Copies normal variable f-codes and types from `source` into this bank.
+    ///
+    /// This mirrors the variable-code half of C `VarBankPairShadow` for
+    /// temporary fresh-variable banks that cannot share ownership with the live
+    /// term bank.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `source` contains an untyped variable or if this bank already
+    /// contains the same f-code with a different type.
+    pub fn copy_variable_codes_from(&self, source: &Self) {
+        for vars in source.normal_variables_by_sort().values() {
+            for var in vars {
+                let type_ = var.type_().expect("varbank variables have types");
+                let _ = self.var_assert_alloc(var.f_code(), &type_);
+            }
+        }
+        self.set_fresh_count_to_used();
+    }
+
     pub fn clear_ext_names(&self) {
         self.clear_ext_names_no_reset();
         self.reset_v_counts();
@@ -674,6 +694,32 @@ mod tests {
         let next = bank.get_fresh_var(&i_type);
 
         assert_eq!(next.f_code(), -10);
+    }
+
+    #[test]
+    fn copied_variable_codes_preserve_types_and_advance_fresh_count() {
+        let mut types = TypeBank::new();
+        let person_code = types.define_simple_sort("person").unwrap();
+        let person =
+            types.insert_type_shared(crate::terms::simpletypes::alloc_simple_sort(person_code));
+        let source = VarBank::new(&types);
+        let target = VarBank::new(&types);
+        let _ = source.var_assert_alloc(-2, &types.i_type());
+        let _ = source.var_assert_alloc(-4, &person);
+
+        target.copy_variable_codes_from(&source);
+        target.set_v_counts_to_used();
+
+        assert_eq!(
+            target.var_assert_alloc(-2, &types.i_type()).type_(),
+            Some(types.i_type())
+        );
+        assert_eq!(
+            target.var_assert_alloc(-4, &person).type_(),
+            Some(person.clone())
+        );
+        assert_eq!(target.fresh_count(), 4);
+        assert_eq!(target.get_fresh_var(&types.i_type()).f_code(), -6);
     }
 
     #[test]

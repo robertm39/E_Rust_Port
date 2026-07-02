@@ -326,10 +326,6 @@ fn term_top_unfold_def_fo(
 
     let mut subst = Substitution::new();
     let matched = subst_match_complete(lside, term, &mut subst);
-    debug_assert!(
-        matched,
-        "same-headed definition term must match target term"
-    );
     if !matched {
         return Ok(term.clone());
     }
@@ -617,6 +613,30 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(demodulator_id, 0)),
             ]
         );
+    }
+
+    #[test]
+    fn clause_unfold_eq_def_skips_same_head_nonmatching_occurrence() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut terms = test_bank();
+        let a = object_const(&mut terms, "unfold_nomatch_a");
+        let b = object_const(&mut terms, "unfold_nomatch_b");
+        let c = object_const(&mut terms, "unfold_nomatch_c");
+        let f_code = object_unary_code(&mut terms, "unfold_nomatch_f");
+        let g_code = object_unary_code(&mut terms, "unfold_nomatch_g");
+        let f_a = unary_with_code(&mut terms, f_code, &a);
+        let g_a = unary_with_code(&mut terms, g_code, &a);
+        let f_b = unary_with_code(&mut terms, f_code, &b);
+        let mut demodulator = clause(vec![literal(&mut terms, &f_a, &g_a, true)]);
+        demodulator.set_tptp_type(CP_TYPE_AXIOM);
+        let mut target = clause(vec![literal(&mut terms, &f_b, &c, true)]);
+
+        assert!(!clause_unfold_eq_def(&mut target, &demodulator, &f_a, &g_a, &mut terms).unwrap());
+
+        let literal = &target.literals().as_slice()[0];
+        assert_eq!(literal.left(), &f_b);
+        assert_eq!(literal.right(), &c);
+        assert!(target.derivation().is_none());
     }
 
     #[test]

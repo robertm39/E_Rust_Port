@@ -5362,15 +5362,12 @@ fn fresh_var_bank_for_arg_cong_clause(bank: &TermBank, clause: &Clause) -> VarBa
     let freshvars = VarBank::new(bank.signature().type_bank());
     let mut variables: BTreeMap<usize, _> = BTreeMap::new();
     let _ = clause.collect_variables(&mut variables);
-    let max_var = variables
-        .values()
-        .map(|variable| -variable.f_code())
-        .max()
-        .unwrap_or(0);
-    let default_type = bank.signature().type_bank().default_type();
-    while freshvars.fresh_count() < max_var {
-        let _ = freshvars.get_fresh_var(&default_type);
+    freshvars.copy_variable_codes_from(bank.vars());
+    for variable in variables.values() {
+        let type_ = variable.type_().expect("clause variables have types");
+        let _ = freshvars.var_assert_alloc(variable.f_code(), &type_);
     }
+    freshvars.set_fresh_count_to_used();
     freshvars.set_v_counts_to_used();
     freshvars
 }
@@ -5380,15 +5377,12 @@ fn fresh_var_bank_for_ext_sup_clauses(bank: &TermBank, first: &Clause, second: &
     let mut variables: BTreeMap<usize, _> = BTreeMap::new();
     let _ = first.collect_variables(&mut variables);
     let _ = second.collect_variables(&mut variables);
-    let max_var = variables
-        .values()
-        .map(|variable| -variable.f_code())
-        .max()
-        .unwrap_or(0);
-    let default_type = bank.signature().type_bank().default_type();
-    while freshvars.fresh_count() < max_var {
-        let _ = freshvars.get_fresh_var(&default_type);
+    freshvars.copy_variable_codes_from(bank.vars());
+    for variable in variables.values() {
+        let type_ = variable.type_().expect("clause variables have types");
+        let _ = freshvars.var_assert_alloc(variable.f_code(), &type_);
     }
+    freshvars.set_fresh_count_to_used();
     freshvars.set_v_counts_to_used();
     freshvars
 }
