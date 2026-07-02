@@ -17,6 +17,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "termprops";
+const OUTPUT_CLOSE_ERROR: &str =
+    "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
@@ -200,7 +202,7 @@ fn execute_termprops(
     writeln_diag(&mut output, &termprops_summary(stats))?;
     output
         .flush()
-        .map_err(|error| io_diagnostic(error.to_string()))?;
+        .map_err(|_error| io_diagnostic(OUTPUT_CLOSE_ERROR))?;
     Ok(0)
 }
 
@@ -251,7 +253,7 @@ fn scanner_for_input(name: &str, stdin: &mut impl Read) -> Result<Scanner, Diagn
             .map_err(|error| io_diagnostic(format!("Cannot read stdin: {error}")))?;
         return Scanner::from_file_content("-", data, true);
     }
-    Scanner::from_file(Path::new(name), true)
+    Scanner::from_file(Path::new(name), true).map_err(termprops_scanner_open_diagnostic)
 }
 
 #[must_use]
@@ -282,9 +284,9 @@ impl<'a, W: Write> TermpropsOutput<'a, W> {
         if path == Path::new("-") {
             return Ok(Self::Stdout(stdout));
         }
-        File::create(path)
-            .map(Self::File)
-            .map_err(|error| io_diagnostic(format!("Cannot open file {}: {error}", path.display())))
+        File::create(path).map(Self::File).map_err(|error| {
+            termprops_sys_error_diagnostic(format!("Cannot open file {}", path.display()), &error)
+        })
     }
 }
 
@@ -319,18 +321,50 @@ fn io_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(ErrorCode::FILE_ERROR, message)
 }
 
+fn termprops_sys_error_diagnostic(prefix: impl Into<String>, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("{}\n{PROGRAM_NAME}: {error}", prefix.into()),
+    )
+}
+
+fn termprops_scanner_open_diagnostic(error: Diagnostic) -> Diagnostic {
+    if error.code() != ErrorCode::FILE_ERROR || !error.message().starts_with("Cannot open file ") {
+        return error;
+    }
+    let Some((prefix, source_error)) = error.message().split_once(": ") else {
+        return error;
+    };
+    Diagnostic::new(
+        error.code(),
+        format!("{prefix}\n{PROGRAM_NAME}: {source_error}"),
+    )
+}
+
 fn i64_to_i32_saturating(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{print_help, run, PROGRAM_NAME};
+    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
     use crate::test_support::global_state_lock;
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Write};
     use std::path::{Path, PathBuf};
+
+    struct FlushFailWriter;
+
+    impl Write for FlushFailWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+        }
+    }
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::current_dir()
@@ -384,6 +418,24 @@ mod tests {
         assert!(output.contains("g(f(a),a)  : 4 : 3 : n : n\n"));
         assert!(
             output.contains("% Terms: 3  ASize: 2.666667 MSize: 4, ADepth: 2.000000 MDepth: 3\n")
+        );
+    }
+
+    #[test]
+    fn empty_input_preserves_c_nan_summary_shape() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status =
+            run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr).expect("empty run succeeds");
+
+        assert_eq!(status, 0);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("output is utf8"),
+            "% Terms: 0  ASize: nan MSize: 0, ADepth: nan MDepth: 0\n"
         );
     }
 
@@ -459,8 +511,61 @@ mod tests {
         .expect_err("missing input file is reported");
 
         assert_eq!(error.code(), ErrorCode::FILE_ERROR);
-        assert!(error.message().contains("Cannot open file"));
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
         assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn output_file_open_failure_uses_c_syserror_shape() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("output-dir");
+        remove_if_present(&output_path);
+        _ = std::fs::remove_dir(&output_path);
+        std::fs::create_dir(&output_path).expect("output fixture directory is created");
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("directory output path is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error
+            .message()
+            .starts_with(&format!("Cannot open file {}", output_path.display())));
+        assert!(error.message().contains(&format!("\n{PROGRAM_NAME}: ")));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        std::fs::remove_dir(&output_path).expect("output fixture directory is removed");
+    }
+
+    #[test]
+    fn output_close_failure_uses_c_outclose_diagnostic() {
+        let _guard = global_state_lock();
+        let mut stdin = Cursor::new(b"a\n".to_vec());
+        let mut stdout = FlushFailWriter;
+        let mut stderr = Vec::new();
+
+        let error = run([PROGRAM_NAME], &mut stdin, &mut stdout, &mut stderr)
+            .expect_err("flush failure is reported");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert_eq!(error.message(), OUTPUT_CLOSE_ERROR);
         assert!(stderr.is_empty());
     }
 

@@ -85,12 +85,12 @@ Source files reviewed: `PROVER/termprops.c`.
 
 ### Rust Port Notes
 
-- `src/prover/termprops.rs` and `src/bin/termprops.rs` port the standalone `termprops` executable over the existing Rust term bank, including `-h`/`--help`, `-v`/`--verbose`, `-o`/`--output-file`, default stdin input through `-`, sequential file processing through one shared term bank, per-term simple printing, C `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity symmetry detection for binary terms, and the final count/average/max summary line.
+- `src/prover/termprops.rs` and `src/bin/termprops.rs` port the standalone `termprops` executable over the existing Rust term bank, including `-h`/`--help`, `-v`/`--verbose`, `-o`/`--output-file`, default stdin input through `-`, sequential file processing through one shared term bank, per-term simple printing, C `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity symmetry detection for binary terms, C-shaped file-open/final-flush diagnostics, and the final count/average/max summary line including the zero-count `nan` path.
 
 ### Change Later
 
 - The C `com` flag checks `term->args[0]->arity == 1` and then reads `term->args[0]->args[1]`, which is past the unary child argument list. Rust treats that missing second nested argument as `false` instead of reproducing undefined memory access; if reference traces ever show the flag is consumed by users, decide whether the intended test was `args[0]` or an old internal term-layout artifact.
-- `termprops` divides by the term count when printing averages, so an empty input can print a platform-shaped NaN. Rust emits `nan` for the zero-count case; byte-compatible empty-input output should be rechecked against a built C executable before treating the spelling as final.
+- `termprops` divides by the term count when printing averages, so an empty input can print a platform-shaped NaN. Rust emits and tests `nan` for the zero-count case; byte-compatible empty-input output should still be rechecked against each target C library before treating the spelling as final.
 
 ### Porting Focus
 

@@ -558,11 +558,11 @@ C source references:
 
 Implemented:
 
-- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output, and explicit stdout/file routing with unit coverage.
+- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 
-- Byte-for-byte comparison against a built C `termprops` executable remains pending for file-open diagnostics, output-close diagnostics, and empty-input NaN spelling.
+- Direct byte-for-byte comparison against a built C `termprops` executable remains pending for platform-specific system-error suffixes and empty-input NaN spelling on the target C library.
 
 Change-later notes:
 
