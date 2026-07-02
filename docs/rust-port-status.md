@@ -335,11 +335,14 @@ Rust files:
 - `src/control/eserver.rs`
 - `src/control/esession.rs`
 - `src/prover/e_client.rs`
+- `src/prover/e_deduction_server.rs`
 - `src/bin/e_client.rs`
+- `src/bin/e_deduction_server.rs`
 
 C source references:
 
 - `eprover/PROVER/e_client.c`
+- `eprover/PROVER/e_deduction_server.c`
 - `eprover/CONTROL/cco_einteractive_mode.c`
 - `eprover/CONTROL/cco_einteractive_mode.h`
 - `eprover/CONTROL/cco_eserver.c`
@@ -353,13 +356,14 @@ Implemented:
 - Initial `EServer` allocation/listen/accept/readiness support over the safe `TcpListener`/`TcpStream` wrappers, including the C not-listening default, listener descriptor registration, accepted-session queuing, and maximum-descriptor calculation over listener and sessions.
 - Initial deduction-server interactive-mode surface from `cco_einteractive_mode`, including command names, block terminator, success/error response strings, help text, the whitespace-tolerant `AcceptAxiomSetName` token loop, `AxiomSet`/`InteractiveSpec` state over parsed clause/formula sets, `ADD`/`LOAD` through the currently ported batch-parser subset with C-shaped duplicate handling and `OK_ADDED` to `OK_LOADED` status rewriting, C-shaped `STAGE`, `UNSTAGE`, `LIST`, `DOWNLOAD`, `REMOVE`, `QUIT`, single-message `StartDeductionServer` command dispatch over injected block readers and `RUN` handlers, `ReadTextBlock`/`TCPReadTextBlock`-style adapters for `ADD`/`RUN` payloads, a TCP-string receive/send loop adapter for socket-mode command sessions, staged `RUN` job parsing plus `BatchProcessProblem` execution over injected runner hooks with C-shaped 30-second fallback limits and start/finish output, and the unsorted regular-file-only `get_directory_listings` helper used by server-library `LIST`/`LOAD`.
 - Standalone `e_client` executable wrapper for the legacy `e_server` handshake, including C-shaped help/version text, verbosity, output-file redirection, server/port option aliases, low-reserved-port warning, default stdin input through `-`, multi-file problem concatenation, `CreateClientSock`-style connection through the ported TCP-string transport, the `hello`/`add`/problem/`prove` send sequence, `% Server: ...` echoing while waiting for `ready` and `result`, and unit coverage over the injectable stream protocol.
+- Standalone `e_deduction_server` executable wrapper for the interactive deduction-server command protocol, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, `--wtc-limit`, `--lib`, optional `--port`, first-positional prover selection with extra positional arguments ignored, default `eprover` prover, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, stdin/stdout command-loop mode when no port is supplied, TCP-string command-loop mode when a port is supplied, fresh term/control state per accepted TCP client to approximate C fork isolation, and concrete temp-file-backed `RUN` execution through `BatchProcCtrlRunnerSet`.
 
 Pending:
 
-- Full `FormulaAndClauseSetParse` coverage for every input form accepted by the C server, executable server wiring around the represented socket-mode command loop, the intentionally-unimplemented stdout command path, and the final concrete fork/process backend for `RUN` job execution.
+- Full `FormulaAndClauseSetParse` coverage for every input form accepted by the C server, exact byte-level `RUN` output ordering against a live C reference server, and final TCP fork/concurrency semantics for serving multiple clients simultaneously.
 - Exact event-loop integration for `select`/`fd_set` or a compatible platform abstraction.
 - Full subprocess I/O in session processing; `cco_proc_ctrl` descriptor registration is represented, but the C session code leaves actual subprocess I/O as a TODO.
-- Server executable/control wiring, legacy `e_server` protocol compatibility, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
+- Legacy `e_server` executable protocol compatibility, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
 
 Change-later notes:
 
@@ -383,6 +387,11 @@ Change-later notes:
 - `e_client.c` speaks the older `e_server` protocol (`hello`, wait for `ready`, `add`, problem text, `prove`, wait for `result`) rather than the newer interactive deduction-server command set. Rust preserves that client handshake; unifying the client with `StartDeductionServer` should wait until both server executables have protocol compatibility tests.
 - `e_client.c` echoes every received server message through `GlobalOut`, including the terminal `ready` and `result` messages, and opens `GlobalOut` before loading files or connecting. Rust keeps the echo and early output-file creation side effect, while routing through explicit writers.
 - `e_client.c` accepts privileged/reserved ports after printing a warning. Rust preserves acceptance and warning routing; a cleaned CLI should make this a structured warning after compatibility checks.
+- `e_deduction_server.c` advertises `-p <port>` in usage even though omitting `-p` intentionally starts a stdin/stdout command loop. Rust preserves the no-port mode; a cleaned CLI should make transport choice explicit after compatibility tests cover both paths.
+- `e_deduction_server.c` seeds `total_wtc_limit` with 30 before option parsing, so `-w 0` later disables the fallback rather than re-triggering it. Rust keeps that ordering; a cleaned configuration API should distinguish “unset” from an explicit zero limit.
+- `e_deduction_server.c` has dead or misleading configuration surface: `outname` is opened but no option sets it, `app_encode` is unused in the file, and the enum still contains `OPT_PRINT_STATISTICS` without an option-table entry. Rust omits those dead surfaces for now; revisit only if reference executables expose them through linked code or generated help.
+- `e_deduction_server.c` treats the first positional argument as the prover executable and ignores any later positional arguments even though usage says `[files]`. Rust preserves first-argument selection and ignores extras; a cleaned CLI should reject or repurpose extras once drop-in behavior is covered.
+- `e_deduction_server.c` forks for every accepted TCP client and lets the child inherit a snapshot of the initialized batch/control state. Rust currently creates fresh term/control state for each accepted client but serves clients sequentially in one process; concurrent client handling should be added after subprocess cleanup, output ordering, and shared global-state boundaries are reference-tested.
 
 ## E Process Control
 

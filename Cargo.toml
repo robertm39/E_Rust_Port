@@ -62,6 +62,10 @@ name = "e_client"
 path = "src/bin/e_client.rs"
 
 [[bin]]
+name = "e_deduction_server"
+path = "src/bin/e_deduction_server.rs"
+
+[[bin]]
 name = "ekb_create"
 path = "src/bin/ekb_create.rs"
 

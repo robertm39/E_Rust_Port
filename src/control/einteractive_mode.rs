@@ -13,7 +13,8 @@ use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
 use crate::control::batch_spec::{
     BatchCompletedRunner, BatchProblemData, BatchProcessProblemConfig, BatchProcessProblemOutputs,
-    BatchProcessProblemReport, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
+    BatchProcessProblemReport, BatchRunnerBackend, BatchRunnerProblemConfig, BatchRunnerRequest,
+    BatchSpawnedRunner, BatchSpec,
 };
 use crate::control::sine::StructFofSpec;
 use crate::inout::network::{tcp_string_recv_from_or_error, tcp_string_send_to_or_error};
@@ -805,6 +806,65 @@ where
         clock_seconds,
         spawn_runner,
         poll_runners,
+    )?;
+    outstream_output
+        .extend_from_slice(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
+
+    Ok(InteractiveRunReport {
+        command: InteractiveCommandOutput {
+            output: bytes_to_string(outstream_output)?,
+            status: OK_SUCCESS_MESSAGE,
+        },
+        process,
+        global_output: bytes_to_string(global_output)?,
+    })
+}
+
+/// C `run_command` over the concrete temp-file runner backend.
+///
+/// This keeps executable integrations on the same parsed-command path as the
+/// injectable `run_command_with` helper while still rendering the selected
+/// problem to the temporary file expected by `EPCtrlCreateGeneric`.
+///
+/// # Errors
+///
+/// Returns parser diagnostics or batch runner diagnostics.
+pub fn run_command_with_runner_backend<C, B>(
+    job_name: &str,
+    input_axioms: &str,
+    spec: &BatchSpec,
+    bank: &mut TermBank,
+    ctrl: &mut StructFofSpec,
+    clock_seconds: C,
+    backend: &mut B,
+) -> Result<InteractiveRunReport, Diagnostic>
+where
+    C: FnMut() -> i64,
+    B: BatchRunnerBackend,
+{
+    let mut global_output = Vec::new();
+    global_output.extend_from_slice(job_name.as_bytes());
+    let mut outstream_output = format!("\n% Processing started for {job_name}\n").into_bytes();
+
+    let problem = parse_interactive_axioms(job_name, input_axioms, spec, bank, ctrl)?;
+    let mut ignored_external_output = Vec::new();
+    let process = spec.process_problem_with_runner_backend(
+        bank,
+        ctrl,
+        problem,
+        BatchProcessProblemConfig {
+            wct_limit: run_command_wct_limit(spec),
+            jobname: job_name,
+            interactive: true,
+        },
+        BatchRunnerProblemConfig::default(),
+        BatchProcessProblemOutputs {
+            global_output: &mut global_output,
+            external_output: Some(&mut ignored_external_output),
+            socket_output: Some(&mut outstream_output),
+        },
+        clock_seconds,
+        backend,
     )?;
     outstream_output
         .extend_from_slice(format!("\n% Processing finished for {job_name}\n\n").as_bytes());
