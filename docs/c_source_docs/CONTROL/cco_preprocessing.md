@@ -85,4 +85,13 @@ Source files reviewed: `CONTROL/cco_preprocessing.h`, `CONTROL/cco_preprocessing
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Rust Port Status
+
+- The Rust executable mirrors the represented `ProofStateClausalPreproc` ordering for clausal preprocessing and equality-definition unfolding, followed by higher-order defined-choice axiom recognition when `problemType == PROBLEM_HO` and `inst_choice_max_depth >= 0`, before first-order BCE, first-order predicate elimination, and goal-definition transformation. `PreinstantiateInduction` remains pending until formula-archive ownership and abstraction-trigger instantiation are integrated.
+
+### Change-Later Observations
+
+- `ProofStateClausalPreproc` records `preproc_removed` only from `ClauseSetPreprocess` plus equality-definition unfolding; BCE, predicate elimination, and goal-definition transformation can remove or add clauses without contributing to that returned count. Rust preserves the currently visible statistics split, but a future reporting API should distinguish "clausal preprocess removed" from later transformation counts explicitly.
+- The higher-order choice-recognition call passes `proofstate->archive` through to `ClauseSetRecognizeChoice`, but the checked implementation only records existing axiom pointers in `choice_opcodes` and does not archive or move the recognized clauses. Rust keeps the call ordering while storing owned clause copies; stable clause handles would make that aliasing contract clearer later.
 <!-- END MANUAL REVIEW: c_source_docs -->

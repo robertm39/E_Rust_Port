@@ -37,7 +37,8 @@ use crate::clauses::clause_props::{
     CP_TYPE_LEMMA, CP_TYPE_NEG_CONJECTURE, CP_TYPE_QUESTION, CP_TYPE_WATCH_CLAUSE,
 };
 use crate::clauses::clausefunc::{
-    tformula_fcode_alloc, tformula_lit_alloc, tformula_prop_constant_alloc,
+    clause_set_recognize_choice, tformula_fcode_alloc, tformula_lit_alloc,
+    tformula_prop_constant_alloc,
 };
 use crate::clauses::clauseinfo::{source_info_pcl_string, source_info_tstp_string, ClauseInfo};
 use crate::clauses::clausesets::ClauseSet;
@@ -5637,6 +5638,15 @@ fn run_prune_only<W: Write + ?Sized>(
         config.preprocessing.eqdef_incrlimit,
         config.preprocessing.eqdef_maxclauses,
     )?;
+    let choice_max_depth = i32_from_i64_config(
+        "inst_choice_max_depth",
+        config
+            .search
+            .inference
+            .higher_order_preprocessing
+            .inst_choice_max_depth,
+    )?;
+    let _choice_axioms = apply_choice_axiom_recognition(&mut state, choice_max_depth)?;
     let bce_max_occs = i32_from_i64_config("bce_max_occs", config.preprocessing.bce.max_occs)?;
     apply_blocked_clause_elimination(
         output,
@@ -5703,6 +5713,8 @@ fn run_proof_search<W: Write + ?Sized>(
         heuristic_params.eqdef_incrlimit,
         heuristic_params.eqdef_maxclauses,
     )?;
+    let _choice_axioms =
+        apply_choice_axiom_recognition(&mut state, heuristic_params.inst_choice_max_depth)?;
     apply_blocked_clause_elimination(
         output,
         heuristic_params.bce,
@@ -6745,6 +6757,18 @@ fn apply_clause_set_preprocessing(
         eqdef_maxclauses,
     )?;
     Ok(removed)
+}
+
+fn apply_choice_axiom_recognition(
+    state: &mut crate::clauses::proofstate::ProofState,
+    inst_choice_max_depth: i32,
+) -> Result<i64, EProverError> {
+    if problem_type() != ProblemType::HigherOrder || inst_choice_max_depth < 0 {
+        return Ok(0);
+    }
+
+    let (bank, axioms, choice_opcodes) = state.terms_axioms_choice_opcodes_mut();
+    Ok(clause_set_recognize_choice(bank, axioms, choice_opcodes)?)
 }
 
 fn apply_blocked_clause_elimination<W: Write + ?Sized>(
@@ -12296,26 +12320,26 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
-        fv_index_params_from_config, heuristic_parms_from_config, order_parms_from_config,
-        parse_app_encode_file, preprocessing_config_debug_line, process_options,
-        proof_control_from_config, proof_object_list_display_clauses,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
-        simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
-        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, SimpleFofBoolEqnReplacement,
-        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
-        LPO_RECURSION_LIMIT_WARNING, MEGA, THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE,
-        TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
+        apply_choice_axiom_recognition, auto_memory_limit_from_system_mb,
+        core_limit_failure_messages, cpu_rlimit_to_apply, fv_index_params_from_config,
+        heuristic_parms_from_config, order_parms_from_config, parse_app_encode_file,
+        preprocessing_config_debug_line, process_options, proof_control_from_config,
+        proof_object_list_display_clauses, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        schedule_heuristic_selection, simple_app_encoded_formula_set,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FvIndexFeatureType,
+        GroundingStrategy, LiteralComparison, ParamodulationType, PredicateEliminationFlag,
+        PrimEnumMode, ProblemTypeRunGuard, SimpleFofBoolEqnReplacement, SimpleFofFormula,
+        TermOrdering, UnificationMode, WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
+        THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::os_wrapper::{resource_limit_error_message, RLimResult, RLimitOutcome};
     use crate::basics::partial_orderings::HoOrderKind;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::clauses::clause::{clause_parse, Clause};
     use crate::clauses::clause_props::CP_TYPE_AXIOM;
@@ -12323,6 +12347,8 @@ mod tests {
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_EQ_RES,
     };
+    use crate::clauses::eqn::Eqn;
+    use crate::clauses::eqnlist::EqnList;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge};
     use crate::heuristics::new_autoschedule::ScheduleCell;
@@ -12342,6 +12368,7 @@ mod tests {
     use crate::terms::signature::{
         FP_IGNORE_PROPS, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL,
     };
+    use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{RewriteLevel, Term};
     use crate::test_support::global_state_lock;
@@ -12375,6 +12402,62 @@ mod tests {
         term.set_argument(0, left.clone());
         term.set_argument(1, right.clone());
         bank.term_top_insert(term).unwrap()
+    }
+
+    fn typed_var(bank: &TermBank, f_code: i64) -> Term {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn unary_predicate_var(bank: &mut TermBank, f_code: i64) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let type_ = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type, bool_type]));
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn apply_unary(bank: &mut TermBank, head: &Term, arg: &Term) -> Term {
+        let applied = bank.term_apply_arg(head, arg);
+        bank.term_top_insert(applied).unwrap()
+    }
+
+    fn choice_const(bank: &mut TermBank, name: &str) -> Term {
+        let arg_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![arg_type.clone(), bool_type]));
+        let choice_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![predicate_type, arg_type]));
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, choice_type)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn choice_axiom(bank: &mut TermBank, name: &str, p_code: i64, x_code: i64) -> (Clause, i64) {
+        let predicate = unary_predicate_var(bank, p_code);
+        let witness = typed_var(bank, x_code);
+        let choice = choice_const(bank, name);
+        let choice_applied = apply_unary(bank, &choice, &predicate);
+        let negative_atom = apply_unary(bank, &predicate, &witness);
+        let positive_atom = apply_unary(bank, &predicate, &choice_applied);
+        let true_term = bank.true_term().clone();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![
+            Eqn::alloc(negative_atom, true_term.clone(), bank, false).unwrap(),
+            Eqn::alloc(positive_atom, true_term, bank, true).unwrap(),
+        ]));
+        clause.set_weight(clause.standard_weight());
+        (clause, choice.f_code())
     }
 
     fn set_env_var(name: &'static str, value: &str) -> EnvGuard {
@@ -15893,6 +15976,33 @@ mod tests {
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn apply_choice_axiom_recognition_uses_c_preprocessing_gates() {
+        let _guard = global_state_lock();
+        let _problem_type = ProblemTypeRunGuard::new();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let choice_code = {
+            let terms = state.terms_mut();
+            let (choice_clause, choice_code) =
+                choice_axiom(terms, "run_preproc_choice_axiom", -100, -102);
+            state.axioms_mut().insert(choice_clause);
+            choice_code
+        };
+
+        set_problem_type(ProblemType::FirstOrder).unwrap();
+        assert_eq!(apply_choice_axiom_recognition(&mut state, 0).unwrap(), 0);
+        assert!(state.choice_opcodes().is_empty());
+
+        reset_problem_type();
+        set_problem_type(ProblemType::HigherOrder).unwrap();
+        assert_eq!(apply_choice_axiom_recognition(&mut state, -1).unwrap(), 0);
+        assert!(state.choice_opcodes().is_empty());
+
+        assert_eq!(apply_choice_axiom_recognition(&mut state, 0).unwrap(), 1);
+        assert!(state.choice_opcodes().contains_key(&choice_code));
+        assert_eq!(apply_choice_axiom_recognition(&mut state, 0).unwrap(), 0);
     }
 
     #[test]
