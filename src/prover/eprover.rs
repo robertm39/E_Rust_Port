@@ -8673,8 +8673,8 @@ fn parse_tptp_app_encode_entry_list(
     let mut saw_formula_owner = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
-            saw_input_owner = true;
-            let _clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("input_formula") {
             saw_input_owner = true;
             saw_formula_owner = true;
@@ -8704,13 +8704,15 @@ fn parse_tstp_app_encode_entry_list(
     let mut saw_formula_owner = false;
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
-            saw_input_owner = true;
-            let _clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            saw_input_owner |= clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
         } else if scanner.test_id("fof|tff|tcf|thf") {
             if let Some(formula) = parse_simple_tstp_app_encode_formula(scanner, bank)? {
-                saw_input_owner = true;
-                saw_formula_owner = true;
-                formulas.push(formula);
+                if formula.type_.query_tptp_type() != CP_TYPE_WATCH_CLAUSE {
+                    saw_input_owner = true;
+                    saw_formula_owner = true;
+                    formulas.push(formula);
+                }
             }
         } else if scanner.test_id("include") {
             parse_app_encode_ignored_include(scanner)?;
@@ -14946,6 +14948,76 @@ mod tests {
             String::from_utf8(stdout).unwrap(),
             default_preprocessing_debug_line()
         );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_error_on_empty_ignores_watchlist_clause_entries() {
+        let _guard = global_state_lock();
+        for (name, input, format_flag) in [
+            (
+                "app-encode-tstp-cnf-watchlist-empty",
+                "cnf(watch, watchlist, (p(a))).\n",
+                "--tstp-in",
+            ),
+            (
+                "app-encode-old-tptp-watchlist-empty",
+                "input_clause(watch, watchlist, [++p(a)]).\n",
+                "--tptp-in",
+            ),
+        ] {
+            let path = temp_path(name);
+            std::fs::write(&path, input).unwrap();
+            let path_arg = path.to_string_lossy().into_owned();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            let error = run(
+                [
+                    "eprover",
+                    "--app-encode",
+                    "--error-on-empty",
+                    format_flag,
+                    path_arg.as_str(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+            assert!(error.message().contains("did not contain any clauses"));
+            assert!(stdout.is_empty());
+            assert!(stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn run_app_encode_error_on_empty_ignores_tcf_watchlist_formula_role() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-tcf-watchlist-empty");
+        std::fs::write(&path, "tcf(watch, watchlist, p(a)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--app-encode",
+                "--error-on-empty",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::INPUT_SEMANTIC_ERROR);
+        assert!(error.message().contains("did not contain any clauses"));
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
