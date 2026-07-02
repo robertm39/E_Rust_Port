@@ -25,9 +25,10 @@ use crate::clauses::clausefunc::{
 use crate::clauses::clauseinfo::ClauseInfo;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF,
-    DC_EQ_TO_EQ, DC_FOF_QUOTE, DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE,
-    DC_LIFT_LAMBDAS, DC_NEGATE_CONJECTURE, DC_SPLIT_EQUIV,
+    clause_push_formula_derivation, push_formula_derivation_stack, DerivationEntry,
+    FormulaDerivationRef, DC_ANNO_QUESTION, DC_APPLY_DEF, DC_EQ_TO_EQ, DC_FOF_QUOTE,
+    DC_FOF_SIMPLIFY, DC_FOOL_UNROLL, DC_INTRO_DEF, DC_LIFT_ITE, DC_LIFT_LAMBDAS,
+    DC_NEGATE_CONJECTURE, DC_SPLIT_EQUIV,
 };
 use crate::clauses::eqn_props::{EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
 use crate::clauses::garbage_coll::tb_gc_collect;
@@ -895,6 +896,7 @@ pub struct WrappedFormula {
     is_clause: bool,
     ident: i64,
     info: Option<ClauseInfo>,
+    derivation: Option<PStack<DerivationEntry>>,
     formula: Option<Term>,
 }
 
@@ -907,6 +909,7 @@ impl WrappedFormula {
             is_clause: false,
             ident: 0,
             info: None,
+            derivation: None,
             formula: None,
         }
     }
@@ -928,6 +931,7 @@ impl WrappedFormula {
             is_clause: self.is_clause,
             ident: self.ident,
             info: None,
+            derivation: None,
             formula: self.formula.clone(),
         }
     }
@@ -996,6 +1000,38 @@ impl WrappedFormula {
         self.info = info;
     }
 
+    #[must_use]
+    pub const fn derivation(&self) -> Option<&PStack<DerivationEntry>> {
+        self.derivation.as_ref()
+    }
+
+    pub fn ensure_derivation(&mut self) -> &mut PStack<DerivationEntry> {
+        self.derivation.get_or_insert_with(PStack::new)
+    }
+
+    pub fn set_derivation(&mut self, derivation: Option<PStack<DerivationEntry>>) {
+        self.derivation = derivation;
+    }
+
+    pub fn take_derivation(&mut self) -> Option<PStack<DerivationEntry>> {
+        self.derivation.take()
+    }
+
+    #[must_use]
+    pub fn derivation_entries(&self) -> &[DerivationEntry] {
+        self.derivation.as_ref().map_or(&[], PStack::as_slice)
+    }
+
+    pub fn push_formula_derivation(
+        &mut self,
+        op: i64,
+        arg1: Option<FormulaDerivationRef>,
+        arg2: Option<FormulaDerivationRef>,
+    ) {
+        let stack = self.ensure_derivation();
+        push_formula_derivation_stack(stack, op, arg1, arg2);
+    }
+
     /// Returns the wrapped formula term.
     ///
     /// # Panics
@@ -1028,7 +1064,7 @@ impl WrappedFormula {
     ///
     /// C calls `TFormulaSimplify` with a quantifier-optimization limit of zero.
     /// The staged Rust wrapper updates the formula term and reports whether it
-    /// changed; formula-level derivation storage remains deferred.
+    /// changed; the `DCFofSimplify` stack push remains staged result metadata.
     ///
     /// # Errors
     ///
@@ -1924,8 +1960,8 @@ impl FormulaSet {
     ///
     /// Each formula is extracted in insertion order, the original wrapper is
     /// moved to `archive`, and a flat copy is inserted back into this set. The
-    /// formula-level `DCFofQuote` derivation stack is deferred, so this returns
-    /// the quote sources and opcodes that should be attached by a future owner.
+    /// replacement copy receives the formula-level `DCFofQuote` derivation that
+    /// quotes the archived original.
     #[must_use]
     pub fn archive_into(&mut self, archive: &mut Self) -> FormulaSetArchiveResult {
         let mut result = FormulaSetArchiveResult::default();
@@ -1933,7 +1969,8 @@ impl FormulaSet {
 
         while let Some(handle) = self.extract_first() {
             let source = FormulaDerivationRef::new(handle.ident());
-            let newform = handle.flat_copy();
+            let mut newform = handle.flat_copy();
+            newform.push_formula_derivation(DC_FOF_QUOTE, Some(source), None);
             tmpset.insert(newform);
             archive.insert(handle);
             result.formulas_archived += 1;
@@ -3424,6 +3461,7 @@ mod tests {
         let mut first = WrappedFormula::wt_formula_alloc(first_term.clone());
         first.set_tptp_type(CP_TYPE_AXIOM);
         first.set_info(Some(ClauseInfo::new(Some("archive_name"), None, 1, 1)));
+        first.push_formula_derivation(DC_FOF_SIMPLIFY, None, None);
         let first_entry = first.entry_id();
         let first_source = FormulaDerivationRef::new(first.ident());
         let mut second = WrappedFormula::wt_formula_alloc(second_term.clone());
@@ -3453,6 +3491,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![first_entry, second_entry]
         );
+        let archived = archive.iter().collect::<Vec<_>>();
+        assert_eq!(
+            archived[0].derivation_entries(),
+            &[DerivationEntry::Operation(DC_FOF_SIMPLIFY)]
+        );
+        assert_eq!(archived[1].derivation_entries(), &[]);
         let copied = set.iter().collect::<Vec<_>>();
         assert_eq!(copied.len(), 2);
         assert_ne!(copied[0].entry_id(), first_entry);
@@ -3464,6 +3508,20 @@ mod tests {
         assert_eq!(copied[0].info(), None);
         assert_eq!(copied[0].formula(), &first_term);
         assert_eq!(copied[1].formula(), &second_term);
+        assert_eq!(
+            copied[0].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(first_source)
+            ]
+        );
+        assert_eq!(
+            copied[1].derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(second_source)
+            ]
+        );
     }
 
     #[test]

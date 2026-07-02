@@ -7,7 +7,8 @@ use crate::clauses::clausefunc::{
 };
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{
-    clause_push_formula_derivation, FormulaDerivationRef, DC_APPLY_DEF, DC_SPLIT_EQUIV,
+    clause_push_formula_derivation, FormulaDerivationRef, DC_APPLY_DEF, DC_INTRO_DEF,
+    DC_SPLIT_EQUIV,
 };
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EP_IS_POSITIVE, EP_IS_SPLIT_LIT};
@@ -244,7 +245,9 @@ pub fn get_split_formula_definition(
     let right = tformula_clause_closed_encode(bank, &def_clause, ProblemType::FirstOrder)?;
     let equiv_code = bank.signature().equiv_code();
     let formula = tformula_fcode_alloc(bank, equiv_code, left, Some(right))?;
-    Ok(WrappedFormula::wt_formula_alloc(formula))
+    let mut wrapped = WrappedFormula::wt_formula_alloc(formula);
+    wrapped.push_formula_derivation(DC_INTRO_DEF, None, None);
+    Ok(wrapped)
 }
 
 /// Performs the fresh-definition C `ClauseSplit` path.
@@ -841,7 +844,8 @@ mod tests {
     use crate::clauses::clause_props::{CP_IS_SOS, CP_TYPE_AXIOM};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        derivation_entries, DerivationEntry, FormulaDerivationRef, DC_APPLY_DEF, DC_SPLIT_EQUIV,
+        derivation_entries, DerivationEntry, FormulaDerivationRef, DC_APPLY_DEF, DC_INTRO_DEF,
+        DC_SPLIT_EQUIV,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_SPLIT_LIT;
@@ -1050,6 +1054,10 @@ mod tests {
         assert_eq!(encoded_def.argument(1).unwrap(), bank.true_term().clone());
         let encoded_body = formula.argument(1).unwrap();
         assert_eq!(encoded_body.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            wrapped.derivation_entries(),
+            &[DerivationEntry::Operation(DC_INTRO_DEF)]
+        );
     }
 
     #[test]

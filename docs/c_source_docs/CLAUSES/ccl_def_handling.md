@@ -102,7 +102,7 @@ Source files reviewed: `CLAUSES/ccl_def_handling.h`, `CLAUSES/ccl_def_handling.c
 - Rust now ports the generated split-literal subset of `GenDefLit`, including arity-zero and split-variable-parameterized predicates, generated predicate typing, `FPClSplitDef`, `EPIsSplitLit`, and term-bank sharing.
 - The arity-zero `GetDefinitions(fresh=false)` path is ported for controlled splitting: Rust canonicalizes the definition body, searches the proof-state definition store for variants, reuses the associated split predicate and formula parent when found, and inserts a canonical reusable definition body plus predicate/formula associations when none exists.
 - Rust now builds and archives the reusable non-fresh `GetFormulaDefinition` shape (`~def <=> closed(body)`) and records represented clause derivations: new definition clauses get `DCSplitEquiv` formula parents, and residual split clauses get `DCApplyDef` formula parents.
-- Fresh and reusable non-fresh arity-zero split definitions now archive represented formula parents for proof-state controlled splitting. Formula-owned `DCIntroDef` derivations and proof-document output side effects remain pending.
+- Fresh and reusable non-fresh arity-zero split definitions now archive represented formula parents for proof-state controlled splitting, and the archived `GetFormulaDefinition` wrappers carry formula-owned `DCIntroDef` derivations. Proof-document output side effects remain pending.
 
 ### Change-Later Observations
 

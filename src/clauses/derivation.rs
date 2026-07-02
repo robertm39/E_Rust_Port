@@ -354,8 +354,39 @@ pub fn clause_push_formula_derivation(
     );
 }
 
+/// Pushes a formula-owned derivation operation with optional formula parents.
+///
+/// # Panics
+///
+/// Panics if `op` is `DCNop`, if a provided formula parent is not permitted by
+/// the opcode argument bits, or if a second CNF parent is requested without a
+/// first CNF parent.
+pub(crate) fn push_formula_derivation_stack(
+    stack: &mut PStack<DerivationEntry>,
+    op: i64,
+    arg1: Option<FormulaDerivationRef>,
+    arg2: Option<FormulaDerivationRef>,
+) {
+    push_derivation_entries(
+        stack,
+        op,
+        arg1.map(DerivationArg::Formula),
+        arg2.map(DerivationArg::Formula),
+    );
+}
+
 fn push_derivation_args(
     clause: &mut Clause,
+    op: i64,
+    arg1: Option<DerivationArg>,
+    arg2: Option<DerivationArg>,
+) {
+    let stack = clause.ensure_derivation();
+    push_derivation_entries(stack, op, arg1, arg2);
+}
+
+fn push_derivation_entries(
+    stack: &mut PStack<DerivationEntry>,
     op: i64,
     arg1: Option<DerivationArg>,
     arg2: Option<DerivationArg>,
@@ -374,7 +405,6 @@ fn push_derivation_args(
         "derivation arg2 is not permitted by opcode"
     );
 
-    let stack = clause.ensure_derivation();
     stack.push(DerivationEntry::Operation(op));
     if let Some(parent) = arg1 {
         stack.push(derivation_arg_entry(parent));
