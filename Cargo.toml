@@ -21,4 +21,8 @@ path = "src/bin/e_stratpar.rs"
 name = "e_ltb_runner"
 path = "src/bin/e_ltb_runner.rs"
 
+[[bin]]
+name = "termprops"
+path = "src/bin/termprops.rs"
+
 [dependencies]

@@ -424,6 +424,30 @@ Change-later notes:
 - The C usage error says `e_ltb_runner` even though the executable is `e_stratpar`. Rust preserves that message in diagnostics for now; revise only after compatibility tests say user-facing typo compatibility is unnecessary.
 - The eight strategies and `HardTimeLimit/2` child limit are hard-coded for the CASC-2017 SLB hack. Keep this as a compatibility executable, but a future scheduler-facing interface should share configurable process orchestration with the main auto-schedule machinery.
 
+## termprops Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/termprops.rs`
+- `src/bin/termprops.rs`
+
+C source references:
+
+- `eprover/PROVER/termprops.c`
+
+Implemented:
+
+- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output, and explicit stdout/file routing with unit coverage.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `termprops` executable remains pending for file-open diagnostics, output-close diagnostics, and empty-input NaN spelling.
+
+Change-later notes:
+
+- The C `com` probe reads a second argument from a child whose arity was just checked to be one. Rust does not reproduce that undefined memory access; decide later whether to remove the flag, preserve the safe false result, or implement the likely intended first-child comparison behind compatibility tests.
+
 ## LTB Batch Specification Surface
 
 Rust files:
