@@ -660,6 +660,56 @@ mod tests {
     }
 
     #[test]
+    fn output_dash_routes_trace_to_stdout_like_c() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(&[PROGRAM_NAME, "-o", "-"], "p.");
+
+        assert_eq!(status, 0);
+        assert_eq!(output, "New clause: p<-....accepted\n");
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn output_file_is_created_before_later_input_open_failure() {
+        let _guard = global_state_lock();
+        let output_path = temp_path("early-output");
+        let missing_path = temp_path("missing-after-output");
+        remove_if_present(&output_path);
+        remove_if_present(&missing_path);
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                PROGRAM_NAME,
+                "-o",
+                output_path.to_str().expect("path is utf8"),
+                missing_path.to_str().expect("path is utf8"),
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("missing input file is reported after output creation");
+
+        assert_eq!(error.code(), ErrorCode::FILE_ERROR);
+        assert!(error.message().starts_with(&format!(
+            "Cannot open file {} for reading",
+            missing_path.display()
+        )));
+        assert!(output_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&output_path).expect("output file is readable"),
+            ""
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        remove_if_present(&output_path);
+    }
+
+    #[test]
     fn input_file_open_failure_uses_c_syserror_shape() {
         let _guard = global_state_lock();
         let missing_path = temp_path("missing-input");
