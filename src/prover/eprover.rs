@@ -17058,6 +17058,80 @@ mod tests {
     }
 
     #[test]
+    fn run_proof_search_closes_supported_old_tptp_xor() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-xor");
+        std::fs::write(
+            &path,
+            "input_formula(rule, axiom, (p(a)<~>q(a))).\n\
+             input_formula(fact, axiom, p(a)).\n\
+             input_formula(goal, conjecture, ~q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_old_tptp_nand() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-nand");
+        std::fs::write(
+            &path,
+            "input_formula(rule, axiom, (p(a)~&q(a))).\n\
+             input_formula(fact, axiom, p(a)).\n\
+             input_formula(goal, conjecture, ~q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proof_search_closes_supported_old_tptp_nor() {
+        let _guard = global_state_lock();
+        let path = temp_path("proof-tptp-input-formula-nor");
+        std::fs::write(
+            &path,
+            "input_formula(rule, axiom, (p(a)~|q(a))).\n\
+             input_formula(goal, conjecture, ~p(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(["eprover", path_arg.as_str()], &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn run_proof_search_preserves_old_tptp_quantifier_element_scope() {
         let _guard = global_state_lock();
         let path = temp_path("proof-tptp-input-formula-quantifier-element-scope");
