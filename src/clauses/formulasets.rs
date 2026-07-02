@@ -1615,7 +1615,11 @@ impl WrappedFormula {
 
         let cnf_result =
             tformula_conjunctive_nf3(bank, self.formula(), miniscope_limit, fool_unroll)?;
+        let formula_derivation_ops = cnf_result.derivation_ops().to_vec();
         self.set_formula(cnf_result.formula().clone());
+        for op in &formula_derivation_ops {
+            self.push_formula_derivation(*op, None, None);
+        }
         let clauses_generated = tformula_to_cnf(
             bank,
             self.formula(),
@@ -1627,7 +1631,7 @@ impl WrappedFormula {
         )?;
         Ok(WrappedFormulaCnfResult {
             clauses_generated,
-            formula_derivation_ops: cnf_result.derivation_ops().to_vec(),
+            formula_derivation_ops,
         })
     }
 
@@ -4818,6 +4822,7 @@ mod tests {
 
         assert_eq!(result.clauses_generated, 1);
         assert_eq!(result.formula_derivation_ops, Vec::<i64>::new());
+        assert_eq!(wrapped.derivation_entries(), &[]);
         let generated = set.iter().next().unwrap();
         assert_eq!(generated.query_tptp_type(), CP_TYPE_AXIOM);
         assert!(generated.query_prop(CP_INPUT_FORMULA));
@@ -4867,6 +4872,16 @@ mod tests {
         assert!(result
             .formula_derivation_ops
             .contains(&DC_DIST_DISJUNCTIONS));
+        assert_eq!(
+            wrapped.derivation_entries(),
+            result
+                .formula_derivation_ops
+                .iter()
+                .copied()
+                .map(DerivationEntry::Operation)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
         assert_eq!(set.members(), 2);
         for clause in set.iter() {
             assert_eq!(clause.query_tptp_type(), CP_TYPE_NEG_CONJECTURE);
