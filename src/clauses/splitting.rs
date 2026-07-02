@@ -1,10 +1,18 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_TYPE_MASK};
+use crate::clauses::clausefunc::{
+    tformula_clause_closed_encode, tformula_fcode_alloc, tformula_lit_alloc,
+};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::derivation::{
+    clause_push_formula_derivation, FormulaDerivationRef, DC_APPLY_DEF, DC_SPLIT_EQUIV,
+};
 use crate::clauses::eqn::Eqn;
-use crate::clauses::eqn_props::EP_IS_SPLIT_LIT;
+use crate::clauses::eqn_props::{EP_IS_POSITIVE, EP_IS_SPLIT_LIT};
 use crate::clauses::eqnlist::EqnList;
+use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
 use crate::clauses::subsumption::{
     clause_set_find_variant_clause_indexed, clause_subsume_order_sort_lits, clause_subsumes_clause,
 };
@@ -49,13 +57,33 @@ impl ClauseSplitOutcome {
 pub struct SplitDefinitionStore<'a> {
     clauses: &'a mut ClauseSet,
     predicates: &'a mut BTreeMap<i64, i64>,
+    formula_parents: Option<&'a mut BTreeMap<i64, FormulaDerivationRef>>,
+    formula_archive: Option<&'a mut FormulaSet>,
 }
 
 impl<'a> SplitDefinitionStore<'a> {
+    #[must_use]
     pub fn new(clauses: &'a mut ClauseSet, predicates: &'a mut BTreeMap<i64, i64>) -> Self {
         Self {
             clauses,
             predicates,
+            formula_parents: None,
+            formula_archive: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_formula_archive(
+        clauses: &'a mut ClauseSet,
+        predicates: &'a mut BTreeMap<i64, i64>,
+        formula_parents: &'a mut BTreeMap<i64, FormulaDerivationRef>,
+        formula_archive: &'a mut FormulaSet,
+    ) -> Self {
+        Self {
+            clauses,
+            predicates,
+            formula_parents: Some(formula_parents),
+            formula_archive: Some(formula_archive),
         }
     }
 
@@ -67,6 +95,16 @@ impl<'a> SplitDefinitionStore<'a> {
     #[must_use]
     pub fn predicates(&self) -> &BTreeMap<i64, i64> {
         self.predicates
+    }
+
+    #[must_use]
+    pub fn formula_parents(&self) -> Option<&BTreeMap<i64, FormulaDerivationRef>> {
+        self.formula_parents.as_deref()
+    }
+
+    #[must_use]
+    pub fn formula_archive(&self) -> Option<&FormulaSet> {
+        self.formula_archive.as_deref()
     }
 }
 
@@ -184,6 +222,31 @@ pub fn gen_def_lit(
     Ok(literal)
 }
 
+/// Builds the formula-side split definition used by C `GetFormulaDefinition`.
+///
+/// The represented formula is `~def <=> closed(split_literals)`: C first
+/// allocates a positive split definition literal, flips its positivity for the
+/// formula side, and then wraps the split body as a closed clause formula.
+///
+/// # Errors
+///
+/// Returns diagnostics from split-literal allocation, literal/formula encoding,
+/// or term-bank insertion.
+pub fn get_split_formula_definition(
+    bank: &mut TermBank,
+    literals: &[Eqn],
+    def_pred: i64,
+) -> Result<WrappedFormula, Diagnostic> {
+    let mut def_lit = gen_ground_def_lit(bank, def_pred, true)?;
+    def_lit.flip_prop(EP_IS_POSITIVE);
+    let left = tformula_lit_alloc(bank, &def_lit, ProblemType::FirstOrder)?;
+    let def_clause = Clause::alloc(EqnList::from_vec(literals.to_vec()));
+    let right = tformula_clause_closed_encode(bank, &def_clause, ProblemType::FirstOrder)?;
+    let equiv_code = bank.signature().equiv_code();
+    let formula = tformula_fcode_alloc(bank, equiv_code, left, Some(right))?;
+    Ok(WrappedFormula::wt_formula_alloc(formula))
+}
+
 /// Performs the fresh-definition C `ClauseSplit` path.
 ///
 /// The returned `Split` vector contains the definition clauses followed by the
@@ -286,6 +349,7 @@ pub fn clause_split_general(
 
     let mut split_clauses = Vec::with_capacity(part + 1);
     let mut residual_literals = Vec::with_capacity(part);
+    let mut applied_definition_parents = Vec::new();
     let arity = i32::try_from(split_vars.len()).map_err(|_| {
         Diagnostic::new(
             ErrorCode::OTHER_ERROR,
@@ -316,6 +380,9 @@ pub fn clause_split_general(
                 new_clause.set_properties(props);
                 split_clauses.push(new_clause);
             }
+            if let Some(parent) = definition.formula_parent {
+                applied_definition_parents.push(parent);
+            }
             definition.pred
         };
 
@@ -324,6 +391,9 @@ pub fn clause_split_general(
 
     residual_literals.reverse();
     clause.replace_literals(EqnList::from_vec(residual_literals));
+    for parent in applied_definition_parents {
+        clause_push_formula_derivation(&mut clause, DC_APPLY_DEF, Some(parent), None);
+    }
     split_clauses.push(clause);
     Ok(ClauseSplitOutcome::Split(split_clauses, part + 1))
 }
@@ -611,6 +681,7 @@ fn assemble_part_literals(lit_table: &[LitSplitDesc], part: usize) -> Vec<Eqn> {
 struct DefinitionLookup {
     pred: i64,
     new_clause: Option<Clause>,
+    formula_parent: Option<FormulaDerivationRef>,
 }
 
 fn get_or_create_definition(
@@ -629,26 +700,68 @@ fn get_or_create_definition(
                 "split definition variant has no predicate association",
             )
         })?;
+        let formula_parent = match store.formula_parents.as_deref() {
+            Some(parents) => Some(parents.get(&variant_id).copied().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::OTHER_ERROR,
+                    "split definition variant has no formula association",
+                )
+            })?),
+            None => None,
+        };
         return Ok(DefinitionLookup {
             pred,
             new_clause: None,
+            formula_parent,
         });
     }
 
     let pred = bank.signature_mut().get_new_predicate_code(0);
+    let def_ident = def_clause.ident();
+    let formula_parent =
+        archive_split_formula_definition(bank, store, split_literals.as_slice(), pred, def_ident)?;
     let mut clause_literals = Vec::with_capacity(split_literals.len() + 1);
     clause_literals.push(gen_ground_def_lit(bank, pred, true)?);
     clause_literals.extend(split_literals);
-    let new_clause = Clause::alloc(EqnList::from_vec(clause_literals));
+    let mut new_clause = Clause::alloc(EqnList::from_vec(clause_literals));
+    if let Some(parent) = formula_parent {
+        clause_push_formula_derivation(&mut new_clause, DC_SPLIT_EQUIV, Some(parent), None);
+    }
 
-    let def_ident = def_clause.ident();
     let _ = store.predicates.insert(def_ident, pred);
     store.clauses.indexed_insert_clause_owned(def_clause, bank);
 
     Ok(DefinitionLookup {
         pred,
         new_clause: Some(new_clause),
+        formula_parent,
     })
+}
+
+fn archive_split_formula_definition(
+    bank: &mut TermBank,
+    store: &mut SplitDefinitionStore<'_>,
+    split_literals: &[Eqn],
+    pred: i64,
+    def_ident: i64,
+) -> Result<Option<FormulaDerivationRef>, Diagnostic> {
+    match (
+        store.formula_archive.as_deref_mut(),
+        store.formula_parents.as_deref_mut(),
+    ) {
+        (None, None) => Ok(None),
+        (Some(archive), Some(parents)) => {
+            let formula = get_split_formula_definition(bank, split_literals, pred)?;
+            let parent = FormulaDerivationRef::new(formula.ident());
+            archive.insert(formula);
+            let _ = parents.insert(def_ident, parent);
+            Ok(Some(parent))
+        }
+        _ => Err(Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "split definition formula archive requires both an archive and association map",
+        )),
+    }
 }
 
 fn find_definition_variant(store: &ClauseSet, query: &Clause, bank: &TermBank) -> Option<i64> {
@@ -698,9 +811,13 @@ mod tests {
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_TYPE_AXIOM};
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::derivation::{
+        derivation_entries, DerivationEntry, FormulaDerivationRef, DC_APPLY_DEF, DC_SPLIT_EQUIV,
+    };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_SPLIT_LIT;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::FormulaSet;
     use crate::terms::signature::{Signature, FP_CL_SPLIT_DEF};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
@@ -740,6 +857,20 @@ mod tests {
             .iter()
             .filter(|literal| literal.query_prop(EP_IS_SPLIT_LIT) && literal.is_split_lit(bank))
             .count()
+    }
+
+    fn formula_parents_for_operation(clause: &Clause, op: i64) -> Vec<FormulaDerivationRef> {
+        derivation_entries(clause)
+            .windows(2)
+            .filter_map(|entry| match entry {
+                [DerivationEntry::Operation(found), DerivationEntry::FormulaParent(parent)]
+                    if *found == op =>
+                {
+                    Some(*parent)
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -868,6 +999,28 @@ mod tests {
         assert_eq!(literal.left().arity(), 1);
         assert_eq!(literal.left().argument(0).as_ref(), Some(&variable));
         assert_eq!(literal.right(), bank.true_term());
+    }
+
+    #[test]
+    fn get_split_formula_definition_builds_negative_split_equivalence() {
+        let mut bank = test_bank();
+        let first_const = typed_const(&mut bank, "split_formula_first");
+        let second_const = typed_const(&mut bank, "split_formula_second");
+        let pred = bank.signature_mut().get_new_predicate_code(0);
+        let literal = lit(&mut bank, &first_const, &second_const, true);
+
+        let wrapped =
+            super::get_split_formula_definition(&mut bank, std::slice::from_ref(&literal), pred)
+                .unwrap();
+
+        let formula = wrapped.formula();
+        assert_eq!(formula.f_code(), bank.signature().equiv_code());
+        let encoded_def = formula.argument(0).unwrap();
+        assert_eq!(encoded_def.f_code(), bank.signature().neqn_code());
+        assert_eq!(encoded_def.argument(0).unwrap().f_code(), pred);
+        assert_eq!(encoded_def.argument(1).unwrap(), bank.true_term().clone());
+        let encoded_body = formula.argument(1).unwrap();
+        assert_eq!(encoded_body.f_code(), bank.signature().eqn_code());
     }
 
     #[test]
@@ -1012,6 +1165,91 @@ mod tests {
             .map(|literal| literal.pred_code_fo(&bank))
             .collect::<Vec<_>>();
         assert_eq!(second_residual_preds, first_residual_preds);
+    }
+
+    #[test]
+    fn clause_split_archives_nonfresh_formula_definitions_and_reuses_parents() {
+        let mut bank = test_bank();
+        let first_const = typed_const(&mut bank, "split_archive_first");
+        let second_const = typed_const(&mut bank, "split_archive_second");
+        let first_var = typed_var(&bank, -2);
+        let second_var = typed_var(&bank, -4);
+        let third_var = typed_var(&bank, -6);
+        let fourth_var = typed_var(&bank, -8);
+        let first_clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &first_var, &first_const, true),
+            lit(&mut bank, &second_var, &second_const, true),
+        ]));
+        let second_clause = Clause::alloc(EqnList::from_vec(vec![
+            lit(&mut bank, &third_var, &first_const, true),
+            lit(&mut bank, &fourth_var, &second_const, true),
+        ]));
+        let mut definitions = ClauseSet::new();
+        let mut predicates = BTreeMap::new();
+        let mut formula_parents = BTreeMap::new();
+        let mut archive = FormulaSet::new();
+
+        let (first_residual_parents, second_residual_parents) = {
+            let mut store = SplitDefinitionStore::with_formula_archive(
+                &mut definitions,
+                &mut predicates,
+                &mut formula_parents,
+                &mut archive,
+            );
+
+            let first = clause_split(
+                &mut bank,
+                Some(&mut store),
+                first_clause,
+                ClauseSplitType::GroundFull,
+                false,
+            )
+            .unwrap();
+            let ClauseSplitOutcome::Split(first_clauses, first_count) = first else {
+                panic!("first clause should split");
+            };
+            assert_eq!(first_count, 3);
+            assert_eq!(first_clauses.len(), 3);
+            assert_eq!(store.clauses().members(), 2);
+            assert_eq!(store.predicates().len(), 2);
+            assert_eq!(store.formula_archive().unwrap().cardinality(), 2);
+            assert_eq!(store.formula_parents().unwrap().len(), 2);
+
+            let first_definition_parents = first_clauses[..2]
+                .iter()
+                .flat_map(|clause| formula_parents_for_operation(clause, DC_SPLIT_EQUIV))
+                .collect::<Vec<_>>();
+            assert_eq!(first_definition_parents.len(), 2);
+            let first_residual_parents =
+                formula_parents_for_operation(&first_clauses[2], DC_APPLY_DEF);
+            assert_eq!(first_residual_parents, first_definition_parents);
+
+            let second = clause_split(
+                &mut bank,
+                Some(&mut store),
+                second_clause,
+                ClauseSplitType::GroundFull,
+                false,
+            )
+            .unwrap();
+            let ClauseSplitOutcome::Split(second_clauses, second_count) = second else {
+                panic!("second clause should split");
+            };
+            assert_eq!(second_count, 3);
+            assert_eq!(second_clauses.len(), 1);
+            assert_eq!(store.clauses().members(), 2);
+            assert_eq!(store.predicates().len(), 2);
+            assert_eq!(store.formula_archive().unwrap().cardinality(), 2);
+            assert_eq!(store.formula_parents().unwrap().len(), 2);
+
+            let second_residual_parents =
+                formula_parents_for_operation(&second_clauses[0], DC_APPLY_DEF);
+            (first_residual_parents, second_residual_parents)
+        };
+
+        assert_eq!(archive.cardinality(), 2);
+        assert_eq!(formula_parents.len(), 2);
+        assert_eq!(second_residual_parents, first_residual_parents);
     }
 
     #[test]

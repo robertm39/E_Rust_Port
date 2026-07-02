@@ -7358,8 +7358,14 @@ fn proof_state_split_clause(
         return clause_split_fresh(state.terms_mut(), clause, method);
     }
 
-    let (terms, definitions, predicates) = state.terms_and_definition_store_mut();
-    let mut store = SplitDefinitionStore::new(definitions, predicates);
+    let (terms, definitions, predicates, formula_parents, archive) =
+        state.terms_and_definition_store_mut();
+    let mut store = SplitDefinitionStore::with_formula_archive(
+        definitions,
+        predicates,
+        formula_parents,
+        archive,
+    );
     clause_split(terms, Some(&mut store), clause, method, false)
 }
 
@@ -11023,6 +11029,8 @@ mod tests {
         assert!(state.eval_store().is_empty());
         assert_eq!(state.definition_store().members(), 2);
         assert_eq!(state.definition_assocs().len(), 2);
+        assert_eq!(state.definition_formula_assocs().len(), 2);
+        assert_eq!(state.f_archive().cardinality(), 2);
         assert_eq!(state.unprocessed().members(), 4);
         assert_eq!(state.statistics().generated_count, 8);
         assert_eq!(state.statistics().generated_lit_count, 4);
@@ -11289,6 +11297,8 @@ mod tests {
         assert!(state.eval_store().is_empty());
         assert_eq!(state.definition_store().members(), 2);
         assert_eq!(state.definition_assocs().len(), 2);
+        assert_eq!(state.definition_formula_assocs().len(), 2);
+        assert_eq!(state.f_archive().cardinality(), 2);
         assert_eq!(state.unprocessed().members(), 4);
         assert_eq!(state.statistics().generated_count, 4);
         assert_eq!(state.statistics().generated_lit_count, 8);

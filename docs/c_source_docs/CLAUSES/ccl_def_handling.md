@@ -100,12 +100,13 @@ Source files reviewed: `CLAUSES/ccl_def_handling.h`, `CLAUSES/ccl_def_handling.c
 ### Rust Port Status Notes
 
 - Rust now ports the generated split-literal subset of `GenDefLit`, including arity-zero and split-variable-parameterized predicates, generated predicate typing, `FPClSplitDef`, `EPIsSplitLit`, and term-bank sharing.
-- The clause-level arity-zero part of `GetDefinitions(fresh=false)` is ported for controlled splitting: Rust canonicalizes the definition body, searches the proof-state definition store for variants, reuses the associated split predicate when found, and inserts a canonical reusable definition body plus predicate association when none exists.
-- `GetFormulaDefinition`, the `def_archive` formula owner, and the formula/derivation output side effects remain pending.
+- The arity-zero `GetDefinitions(fresh=false)` path is ported for controlled splitting: Rust canonicalizes the definition body, searches the proof-state definition store for variants, reuses the associated split predicate and formula parent when found, and inserts a canonical reusable definition body plus predicate/formula associations when none exists.
+- Rust now builds and archives the reusable non-fresh `GetFormulaDefinition` shape (`~def <=> closed(body)`) and records represented clause derivations: new definition clauses get `DCSplitEquiv` formula parents, and residual split clauses get `DCApplyDef` formula parents.
+- Fresh-definition formula archiving, formula-owned `DCIntroDef` derivations, and proof-document output side effects remain pending.
 
 ### Change-Later Observations
 
-- The current Rust proof state represents the reusable clause side of `DefStoreCell` as a `ClauseSet` plus a predicate-association map, not a single owner that also contains the term-bank pointer and formula archive. Consolidate this into a fuller `DefStore`-shaped owner once formula sets are represented.
+- The current Rust proof state represents `DefStoreCell` as a `ClauseSet`, predicate/formula association maps, and the proof state's formula archive rather than as a single owner that also contains the term-bank pointer. Consolidate this into a fuller `DefStore`-shaped owner once all splitting paths and split-definition proof output are represented.
 - C `GetDefinitions(fresh=true)` deliberately does not insert reusable variant associations, but it still archives the introduced formula definition. Rust fresh splitting skips the formula archive for now; add it when formula sets and split-definition proof output are ported.
 - C expects `def_clauses` to be FV-indexed before reuse lookup. Rust falls back to a linear variant scan when the standalone helper is used before proof-state FV initialization; tighten this only if all real callers can guarantee the C initialization order.
 

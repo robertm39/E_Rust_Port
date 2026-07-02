@@ -229,6 +229,7 @@ pub struct ProofState {
     watchlist_activation: WatchlistActivation,
     definition_store: ClauseSet,
     definition_assocs: BTreeMap<i64, FunCode>,
+    definition_formula_assocs: BTreeMap<i64, FormulaDerivationRef>,
     fvi_initialized: bool,
     fvi_cspec: Option<FvCollect>,
     def_store_cspec: Option<FvCollect>,
@@ -238,6 +239,14 @@ pub struct ProofState {
     statistics: ProofStateStatistics,
     answer_outputs: Vec<String>,
 }
+
+pub type ProofStateDefinitionStoreMut<'a> = (
+    &'a mut TermBank,
+    &'a mut ClauseSet,
+    &'a mut BTreeMap<i64, FunCode>,
+    &'a mut BTreeMap<i64, FormulaDerivationRef>,
+    &'a mut FormulaSet,
+);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum WatchlistActivation {
@@ -288,6 +297,7 @@ impl ProofState {
             watchlist_activation: WatchlistActivation::Inactive,
             definition_store: ClauseSet::new(),
             definition_assocs: BTreeMap::new(),
+            definition_formula_assocs: BTreeMap::new(),
             fvi_initialized: false,
             fvi_cspec: None,
             def_store_cspec: None,
@@ -687,16 +697,31 @@ impl ProofState {
         &mut self.definition_assocs
     }
 
-    pub fn terms_and_definition_store_mut(
-        &mut self,
-    ) -> (&mut TermBank, &mut ClauseSet, &mut BTreeMap<i64, FunCode>) {
+    #[must_use]
+    pub const fn definition_formula_assocs(&self) -> &BTreeMap<i64, FormulaDerivationRef> {
+        &self.definition_formula_assocs
+    }
+
+    pub fn definition_formula_assocs_mut(&mut self) -> &mut BTreeMap<i64, FormulaDerivationRef> {
+        &mut self.definition_formula_assocs
+    }
+
+    pub fn terms_and_definition_store_mut(&mut self) -> ProofStateDefinitionStoreMut<'_> {
         let Self {
+            terms,
+            f_archive,
+            definition_store,
+            definition_assocs,
+            definition_formula_assocs,
+            ..
+        } = self;
+        (
             terms,
             definition_store,
             definition_assocs,
-            ..
-        } = self;
-        (terms, definition_store, definition_assocs)
+            definition_formula_assocs,
+            f_archive,
+        )
     }
 
     #[must_use]
@@ -2038,6 +2063,8 @@ mod tests {
         assert_eq!(state.archive().members(), 0);
         assert_eq!(state.f_archive().cardinality(), 0);
         assert_eq!(state.definition_store().members(), 0);
+        assert_eq!(state.definition_assocs().len(), 0);
+        assert_eq!(state.definition_formula_assocs().len(), 0);
         assert!(state.state_is_complete());
         assert!(!state.has_interpreted_symbols());
         assert!(!state.fvi_initialized());
@@ -2604,6 +2631,7 @@ mod tests {
         let formula_axiom = wrapped_formula(&mut state, "reset_formula_axiom");
         let formula_ax_archive = wrapped_formula(&mut state, "reset_formula_ax_archive");
         let formula_archive = wrapped_formula(&mut state, "reset_formula_archive");
+        let formula_archive_ident = formula_archive.ident();
         let params = FvIndexParams::new(FvIndexType::AcFold, false, true, 9, 1);
 
         state.axioms_mut().insert(axiom);
@@ -2614,6 +2642,9 @@ mod tests {
         state.unprocessed_mut().insert(unprocessed);
         state.watchlist_mut().unwrap().insert(watch);
         state.definition_store_mut().insert(def);
+        state
+            .definition_formula_assocs_mut()
+            .insert(34, FormulaDerivationRef::new(formula_archive_ident));
         state.init_fvi_anchors(&params).unwrap();
 
         state.reset_clause_sets();
@@ -2627,6 +2658,7 @@ mod tests {
         assert_eq!(state.unprocessed().members(), 0);
         assert_eq!(state.watchlist().unwrap().members(), 0);
         assert_eq!(state.definition_store().members(), 1);
+        assert_eq!(state.definition_formula_assocs().len(), 1);
         assert_eq!(
             state
                 .processed_non_units()
