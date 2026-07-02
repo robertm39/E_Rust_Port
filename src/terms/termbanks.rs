@@ -2399,6 +2399,13 @@ impl TermBank {
                 .sig
                 .type_bank_mut()
                 .insert_type_shared(type_drop_first_arg(&head_type)))
+        } else if term.arity() != 0 {
+            term.type_().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "formula application head has no inferred type",
+                )
+            })
         } else {
             self.sig.get_type(term.f_code()).cloned().ok_or_else(|| {
                 Diagnostic::new(
@@ -4903,6 +4910,60 @@ mod tests {
             .unwrap();
         declarations.accept_tok(TokenType::FULLSTOP).unwrap();
         let mut scanner = Scanner::from_user_string("appfun @ f @ a = b", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        let left = formula.argument(0).unwrap();
+        assert_eq!(bank.signature().find_name(left.f_code()), Some("appfun"));
+        assert_eq!(left.arity(), 2);
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(0).unwrap().f_code()),
+            Some("f")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(left.argument(1).unwrap().f_code()),
+            Some("a")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(1).unwrap().f_code()),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn tstp_formula_application_accepts_parenthesized_applied_head() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string(
+            "person: $tType. a: person. b: person. f: person > person. appfun: (person > person) > person > person.",
+            false,
+        )
+        .unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        bank.signature_mut()
+            .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+            .unwrap();
+        declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        let mut scanner = Scanner::from_user_string("(appfun @ f) @ a = b", false).unwrap();
 
         let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
 
