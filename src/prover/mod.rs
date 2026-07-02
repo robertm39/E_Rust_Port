@@ -8,4 +8,5 @@ pub mod epcllemma;
 pub mod eprover;
 pub mod options;
 pub mod termprops;
+pub mod tsm_classify;
 pub mod version;

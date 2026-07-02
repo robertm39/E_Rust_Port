@@ -45,4 +45,8 @@ path = "src/bin/epcllemma.rs"
 name = "edpll"
 path = "src/bin/edpll.rs"
 
+[[bin]]
+name = "tsm_classify"
+path = "src/bin/tsm_classify.rs"
+
 [dependencies]

@@ -112,6 +112,16 @@ Source files reviewed: `LEARN/cle_flatannoterms.h`, `LEARN/cle_flatannoterms.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Compatibility Notes
+
+- `FlatAnnoSetTranslate` assumes each annotated term has been flattened to exactly one annotation, uses `AnnotationEval(weights)` as the stored evaluation, keeps annotation slot `0` as `eval_weight`, and casts that same count to `long` for `sources`.
+- `FlatAnnoSetSize` returns the sum of `sources`, not the number of unique flat term nodes. Classification success counts use the same source-weighted convention.
+
+### Change Later
+
+- Audit whether source counts should remain a double-to-long cast after compatibility is secured. Fractional counts, negative counts, and values outside `long` range are all implementation-defined or surprising in C-shaped behavior.
+- Split the overloaded flat annotation fields into named concepts (`class_eval`, `eval_weight`, source count) once learned-data compatibility tests make it safe to move away from the compact C struct shape.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

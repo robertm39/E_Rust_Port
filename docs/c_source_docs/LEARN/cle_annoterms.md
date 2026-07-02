@@ -137,6 +137,11 @@ Source files reviewed: `LEARN/cle_annoterms.h`, `LEARN/cle_annoterms.c`.
 - `AnnoSetRemoveExceptIdentList` checks `PStackGetSP(stack)` where `stack` is the NumTree traversal stack, not the caller's `set_idents` stack. Rust exposes the useful id-retention helper with an explicit id-list bound because the current sorted-map owner has no equivalent raw traversal stack; revisit only if learned-data reference tests expose dependence on the C accident.
 - `AnnoSetRecToFlatEnc` mutates each stored annotated term in place and returns the number of terms visited.
 
+### Change Later
+
+- Fix or retire return values whose C implementation does not match the comments. In particular, `AnnoSetFlatten` documents a remaining-term count but always returns zero, so callers should not be encouraged to use it as a meaningful status.
+- Make annotation-list separators explicit in any modernized printer. The C printer concatenates multiple annotations without a delimiter, which is compact but hard for humans to scan.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

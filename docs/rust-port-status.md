@@ -2,6 +2,37 @@
 
 This document tracks Rust implementation slices and the original C source units they are intended to mirror.
 
+## Learning Executables
+
+Rust files:
+
+- `src/prover/tsm_classify.rs`
+- `src/bin/tsm_classify.rs`
+
+C source references:
+
+- `eprover/PROVER/tsm_classify.c`
+- `eprover/LEARN/cle_annotations.c`
+- `eprover/LEARN/cle_annoterms.c`
+- `eprover/LEARN/cle_flatannoterms.c`
+- `eprover/LEARN/cle_patterns.c`
+- `eprover/LEARN/cle_indexfunctions.c`
+- `eprover/LEARN/cle_tsm.c`
+- `eprover/LEARN/cle_classification.c`
+
+Implemented:
+
+- Standalone `tsm_classify` executable wrapper, including C-compatible help/version text, index/TSM option parsing, output-file handling, concatenated input scanning, `Training:`/`Test:` annotated-term parsing, annotation flattening, fixed class-weight translation, TSM build/evaluation setup, per-term classification progress, and final source-weighted success summary.
+
+Pending:
+
+- Reference executable comparison on a larger learned-data corpus and performance coverage for the TSM build/classification path.
+
+Change-later notes:
+
+- C `TSMClassifySet` owns progress printing to stdout while `tsm_classify.c` writes only the final summary through `GlobalOut`; Rust preserves that split for compatibility, but a modernized API should separate classifier results from presentation.
+- The executable hardcodes the `(Sources, Class)` annotation shape through a generic weight vector with only slot `0` set. A cleaned interface should use typed field names once learned-data compatibility is established.
+
 ## Factoring
 
 Rust files:
