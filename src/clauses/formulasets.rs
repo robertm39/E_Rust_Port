@@ -335,6 +335,8 @@ fn create_definition_symbol_map(
         let definition = tformula_fcode_alloc(bank, eqn_code, lhs_symbol, Some(rhs))?;
         let mut definition_wrapper = formula.flat_copy();
         definition_wrapper.set_formula(definition);
+        let source = FormulaDerivationRef::new(formula.ident());
+        definition_wrapper.push_formula_derivation(DC_FOF_QUOTE, Some(source), None);
         definitions.insert(lhs_body.f_code(), definition_wrapper);
         recognized_entry_ids.push(formula.entry_id());
     }
@@ -452,6 +454,21 @@ fn do_rewrite_with_def_symbols(
     rewritten = do_rewrite_with_def_symbols(bank, &rewritten, def_map, used_defs, steps)?;
     *steps -= 1;
     Ok(rewritten)
+}
+
+fn definition_parent_refs(
+    definitions: &BTreeMap<FunCode, WrappedFormula>,
+    used_defs: &BTreeSet<FunCode>,
+) -> Vec<FormulaDerivationRef> {
+    used_defs
+        .iter()
+        .map(|code| {
+            let definition = definitions
+                .get(code)
+                .unwrap_or_else(|| panic!("definition symbol {code} disappeared"));
+            FormulaDerivationRef::new(definition.ident())
+        })
+        .collect()
 }
 
 fn unencode_eqns(bank: &mut TermBank, term: &Term) -> Result<Term, Diagnostic> {
@@ -2447,9 +2464,10 @@ impl FormulaSet {
     /// The pass recognizes `CP_IS_LAMBDA_DEF` wrappers in C's definition
     /// shapes, archives simplified `symbol = lambda` definitions, rewrites the
     /// remaining formulas with those definitions, and moves recognized
-    /// original definition wrappers to the archive. Formula-level derivation
-    /// storage and proof output are deferred, so this returns the `DCFofQuote`
-    /// and `DCApplyDef` opcodes that should be attached by a future owner.
+    /// original definition wrappers to the archive. Proof-document output is
+    /// deferred. Generated definitions quote the original definitions, and
+    /// rewritten generated definitions and source formulas store `DCApplyDef`
+    /// parent entries while this still returns the opcodes as staged metadata.
     ///
     /// # Errors
     ///
@@ -2512,10 +2530,14 @@ impl FormulaSet {
             if new_rhs != rhs {
                 let eqn_code = bank.signature().eqn_code();
                 let new_definition = tformula_fcode_alloc(bank, eqn_code, lhs, Some(new_rhs))?;
-                definitions
+                let parents = definition_parent_refs(&definitions, &used_defs);
+                let definition = definitions
                     .get_mut(&definition_code)
-                    .expect("definition code disappeared")
-                    .set_formula(new_definition);
+                    .expect("definition code disappeared");
+                definition.set_formula(new_definition);
+                for parent in parents {
+                    definition.push_formula_derivation(DC_APPLY_DEF, Some(parent), None);
+                }
                 result.unfolded_definition_rhs_rewritten += 1;
                 result.definition_symbol_applications += usize_to_i64(used_defs.len());
                 result
@@ -2544,6 +2566,9 @@ impl FormulaSet {
             if rewritten != *formula.formula() {
                 let rewritten = unencode_eqns(bank, &rewritten)?;
                 formula.set_formula(rewritten);
+                for parent in definition_parent_refs(&definitions, &used_defs) {
+                    formula.push_formula_derivation(DC_APPLY_DEF, Some(parent), None);
+                }
                 result.formulas_def_symbols_unfolded += 1;
                 result.definition_symbol_applications += usize_to_i64(used_defs.len());
                 result
@@ -5152,14 +5177,33 @@ mod tests {
         assert!(result.formula_derivation_ops.contains(&DC_FOF_QUOTE));
         assert!(result.formula_derivation_ops.contains(&DC_APPLY_DEF));
         assert_eq!(set.cardinality(), 1);
-        assert_eq!(set.iter().next().unwrap().formula(), &q_a);
+        let rewritten = set.iter().next().unwrap();
+        assert_eq!(rewritten.formula(), &q_a);
         assert_eq!(archive.cardinality(), 2);
-        assert!(archive.get(definition_entry).is_some());
-        assert_eq!(archive.iter().next().unwrap().formula().f_code(), eqn_code);
+        let generated_definition = archive.iter().next().unwrap();
+        let original_definition = archive.get(definition_entry).unwrap();
+        let generated_ref = FormulaDerivationRef::new(generated_definition.ident());
+        let original_ref = FormulaDerivationRef::new(original_definition.ident());
+        assert_eq!(
+            rewritten.derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_APPLY_DEF),
+                DerivationEntry::FormulaParent(generated_ref)
+            ]
+        );
+        assert_eq!(generated_definition.formula().f_code(), eqn_code);
+        assert_eq!(
+            generated_definition.derivation_entries(),
+            &[
+                DerivationEntry::Operation(DC_FOF_QUOTE),
+                DerivationEntry::FormulaParent(original_ref)
+            ]
+        );
         assert_eq!(
             archive.iter().nth(1).unwrap().formula(),
             &definition_formula
         );
+        assert_eq!(original_definition.derivation_entries(), &[]);
     }
 
     #[test]
