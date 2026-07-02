@@ -1,7 +1,14 @@
 //! Deduction-server interactive command surface from `cco_einteractive_mode`.
 
-use std::{ffi::OsStr, fmt::Write as _, fs, path::Path};
+use std::{
+    ffi::OsStr,
+    fmt::Write as _,
+    fs,
+    io::{self, BufRead, Read},
+    path::Path,
+};
 
+use crate::basics::dstrings::DynamicString;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
 use crate::control::batch_spec::{
@@ -10,6 +17,7 @@ use crate::control::batch_spec::{
 };
 use crate::control::sine::StructFofSpec;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
+use crate::inout::simplestuff::{read_text_block, tcp_read_text_block_from};
 use crate::terms::signature::Signature;
 use crate::terms::termbanks::TermBank;
 
@@ -146,6 +154,12 @@ pub struct InteractiveRunReport {
     pub command: InteractiveCommandOutput,
     pub process: BatchProcessProblemReport,
     pub global_output: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveBlockRead {
+    pub input: String,
+    pub complete: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -565,6 +579,115 @@ impl InteractiveSpec {
             Ok(dispatch_status(ERR_UNKNOWN_COMMAND_MESSAGE, false))
         }
     }
+
+    /// Single-message dispatch using C `ReadTextBlock`-style line input for
+    /// block commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns scanner, parser, text-block I/O, or caller-supplied `RUN`
+    /// diagnostics.
+    pub fn dispatch_text_command_with<B, R>(
+        &mut self,
+        command_input: &str,
+        block_reader: &mut B,
+        spec: &BatchSpec,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        run_command: R,
+    ) -> Result<InteractiveDispatchResult, Diagnostic>
+    where
+        B: BufRead,
+        R: FnMut(
+            &BatchSpec,
+            &mut TermBank,
+            &mut StructFofSpec,
+            &str,
+            &str,
+        ) -> Result<InteractiveCommandOutput, Diagnostic>,
+    {
+        self.dispatch_command_with(
+            command_input,
+            spec,
+            bank,
+            ctrl,
+            |terminator| Ok(read_interactive_text_block(block_reader, terminator)?.input),
+            run_command,
+        )
+    }
+
+    /// Single-message dispatch using C `TCPReadTextBlock`-style TCP message
+    /// input for block commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns scanner, parser, TCP block-read, or caller-supplied `RUN`
+    /// diagnostics.
+    pub fn dispatch_tcp_command_with<B, R>(
+        &mut self,
+        command_input: &str,
+        block_reader: &mut B,
+        spec: &BatchSpec,
+        bank: &mut TermBank,
+        ctrl: &mut StructFofSpec,
+        run_command: R,
+    ) -> Result<InteractiveDispatchResult, Diagnostic>
+    where
+        B: Read,
+        R: FnMut(
+            &BatchSpec,
+            &mut TermBank,
+            &mut StructFofSpec,
+            &str,
+            &str,
+        ) -> Result<InteractiveCommandOutput, Diagnostic>,
+    {
+        self.dispatch_command_with(
+            command_input,
+            spec,
+            bank,
+            ctrl,
+            |terminator| Ok(read_interactive_tcp_block(block_reader, terminator)?.input),
+            run_command,
+        )
+    }
+}
+
+/// C `ReadTextBlock` adapter for interactive `ADD`/`RUN` payloads.
+///
+/// # Errors
+///
+/// Returns an I/O diagnostic when reading fails or an output conversion
+/// diagnostic if the captured text is not UTF-8.
+pub fn read_interactive_text_block(
+    reader: &mut impl BufRead,
+    terminator: &str,
+) -> Result<InteractiveBlockRead, Diagnostic> {
+    let mut result = DynamicString::new();
+    let complete = read_text_block(&mut result, reader, terminator.as_bytes())
+        .map_err(|error| interactive_block_io_error(&error))?;
+    Ok(InteractiveBlockRead {
+        input: dynamic_string_to_string(&result)?,
+        complete,
+    })
+}
+
+/// C `TCPReadTextBlock` adapter for interactive `ADD`/`RUN` payloads.
+///
+/// # Errors
+///
+/// Returns TCP receive diagnostics or an output conversion diagnostic if the
+/// captured text is not UTF-8.
+pub fn read_interactive_tcp_block(
+    reader: &mut impl Read,
+    terminator: &str,
+) -> Result<InteractiveBlockRead, Diagnostic> {
+    let mut result = DynamicString::new();
+    let complete = tcp_read_text_block_from(&mut result, reader, terminator.as_bytes())?;
+    Ok(InteractiveBlockRead {
+        input: dynamic_string_to_string(&result)?,
+        complete,
+    })
 }
 
 /// C `run_command`, staged over injectable runner spawning and polling.
@@ -702,6 +825,17 @@ fn bytes_to_string(bytes: Vec<u8>) -> Result<String, Diagnostic> {
     })
 }
 
+fn dynamic_string_to_string(value: &DynamicString) -> Result<String, Diagnostic> {
+    bytes_to_string(value.copy())
+}
+
+fn interactive_block_io_error(error: &io::Error) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::FILE_ERROR,
+        format!("Could not read interactive text block: {error}"),
+    )
+}
+
 /// C `get_directory_listings`: return a stack-shaped list of regular file
 /// names in the directory.
 ///
@@ -750,8 +884,9 @@ fn parse_interactive_axioms(
 #[cfg(test)]
 mod tests {
     use super::{
-        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, run_command_with,
-        AxiomSet, InteractiveCommandOutput, InteractiveSpec, ADD_COMMAND, DOWNLOAD_COMMAND,
+        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings,
+        read_interactive_tcp_block, read_interactive_text_block, run_command_with, AxiomSet,
+        InteractiveCommandOutput, InteractiveSpec, ADD_COMMAND, DOWNLOAD_COMMAND,
         END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_ALREADY_STAGED_MESSAGE,
         ERR_AXIOM_SET_IS_ALREADY_UNSTAGED_MESSAGE, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
         ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_CANNOT_READ_SERVER_LIBRARY_MESSAGE,
@@ -768,12 +903,14 @@ mod tests {
         BatchCompletedRunner, BatchProblemData, BatchRunnerRequest, BatchSpawnedRunner, BatchSpec,
     };
     use crate::control::sine::StructFofSpec;
+    use crate::inout::network::TcpMessage;
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::terms::{signature::Signature, termbanks::TermBank, typebanks::TypeBank};
     use std::{
         collections::BTreeSet,
         ffi::OsStr,
         fs,
+        io::Cursor,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -826,6 +963,14 @@ mod tests {
         _: &str,
     ) -> Result<InteractiveCommandOutput, Diagnostic> {
         panic!("run command should not run")
+    }
+
+    fn packed_tcp_messages(messages: &[&str]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for message in messages {
+            bytes.extend_from_slice(TcpMessage::pack(message).unwrap().content_bytes());
+        }
+        bytes
     }
 
     struct ScratchDir {
@@ -1190,6 +1335,38 @@ mod tests {
     }
 
     #[test]
+    fn read_interactive_text_block_reports_completion_and_partial_eof() {
+        let mut complete_reader = Cursor::new(b"one\ntwo\nGO\nignored\n".to_vec());
+
+        let complete =
+            read_interactive_text_block(&mut complete_reader, END_OF_BLOCK_TOKEN).unwrap();
+
+        assert!(complete.complete);
+        assert_eq!(complete.input, "one\ntwo\n");
+
+        let mut eof_reader = Cursor::new(b"partial".to_vec());
+
+        let partial = read_interactive_text_block(&mut eof_reader, END_OF_BLOCK_TOKEN).unwrap();
+
+        assert!(!partial.complete);
+        assert_eq!(partial.input, "partial");
+    }
+
+    #[test]
+    fn read_interactive_tcp_block_reads_messages_until_exact_terminator() {
+        let mut reader = Cursor::new(packed_tcp_messages(&[
+            "fof(a, axiom, p).\n",
+            END_OF_BLOCK_TOKEN,
+            "ignored\n",
+        ]));
+
+        let block = read_interactive_tcp_block(&mut reader, END_OF_BLOCK_TOKEN).unwrap();
+
+        assert!(block.complete);
+        assert_eq!(block.input, "fof(a, axiom, p).\n");
+    }
+
+    #[test]
     fn stage_command_adds_problem_to_control_and_marks_shared_boundary() {
         let signature = test_signature();
         let mut ctrl = StructFofSpec::new(&signature);
@@ -1398,6 +1575,63 @@ mod tests {
         assert!(!result.done);
         let axiom_set = interactive.axiom_sets().next().unwrap();
         assert_eq!(axiom_set.name(), "uploaded");
+        assert_eq!(axiom_set.formula_set().cardinality(), 1);
+    }
+
+    #[test]
+    fn dispatch_text_command_reads_add_block_from_line_transport() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        let mut block_reader =
+            Cursor::new(b"fof(text_formula, axiom, p(a)).\nGO\nignored\n".to_vec());
+
+        let result = interactive
+            .dispatch_text_command_with(
+                "ADD text_upload",
+                &mut block_reader,
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(result.output, OK_ADDED_MESSAGE);
+        assert_eq!(interactive.axiom_set_count(), 1);
+        let axiom_set = interactive.axiom_sets().next().unwrap();
+        assert_eq!(axiom_set.name(), "text_upload");
+        assert_eq!(axiom_set.formula_set().cardinality(), 1);
+    }
+
+    #[test]
+    fn dispatch_tcp_command_reads_add_block_from_message_transport() {
+        let mut bank = parser_bank();
+        let mut ctrl = StructFofSpec::new(bank.signature());
+        let spec = BatchSpec::new("eprover", IoFormat::Tstp);
+        let mut interactive = InteractiveSpec::new("");
+        let mut block_reader = Cursor::new(packed_tcp_messages(&[
+            "fof(tcp_formula, axiom, p(a)).\n",
+            END_OF_BLOCK_TOKEN,
+            "ignored\n",
+        ]));
+
+        let result = interactive
+            .dispatch_tcp_command_with(
+                "ADD tcp_upload",
+                &mut block_reader,
+                &spec,
+                &mut bank,
+                &mut ctrl,
+                unused_run_command,
+            )
+            .unwrap();
+
+        assert_eq!(result.output, OK_ADDED_MESSAGE);
+        assert_eq!(interactive.axiom_set_count(), 1);
+        let axiom_set = interactive.axiom_sets().next().unwrap();
+        assert_eq!(axiom_set.name(), "tcp_upload");
         assert_eq!(axiom_set.formula_set().cardinality(), 1);
     }
 
