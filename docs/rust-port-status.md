@@ -560,6 +560,36 @@ Change-later notes:
 - C `--no-reference-weights` leaves `act_simpl_w` unchanged because it assigns `pas_simpl_w` twice. Rust preserves the effective assignments until lemma-selection trace tests prove a cleanup is acceptable.
 - The C help footer is an old support-tool block with the 2003-2005 copyright range; Rust keeps the visible text for compatibility, but a future documentation pass may want a shared helper for legacy support-tool footers.
 
+## edpll Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/edpll.rs`
+- `src/bin/edpll.rs`
+
+C source references:
+
+- `eprover/PROVER/edpll.c`
+- `eprover/PROPOSITIONAL/cpr_dpllformula.c`
+- `eprover/PROPOSITIONAL/cpr_dpll.c`
+
+Implemented:
+
+- Standalone `edpll` binary integration over the ported DPLL formula/state shell, including C-shaped help, long-only `--version` with the historical `classify_problem` label typo, verbosity, output-file, silent/output-level, old-TPTP input mode, DIMACS flag parsing, memory/CPU option parsing, default stdin input through `-`, LOP/TPTP scanner format selection, clause parsing into a single accumulated DPLL formula, C progress trace output for accepted and tautological clauses, DPLL state allocation, and unit coverage for stdin, file output, option compatibility, TPTP input clauses, output-level side effects, resource option validation, and the intentionally unused DIMACS flag.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `edpll` executable remains pending for exact resource-limit warnings/failures, file/open close diagnostics, platform-specific broken-pipe behavior, and malformed/trailing input cases.
+- A real standalone DPLL solving mode remains unimplemented because the referenced C executable and low-level `cpr_dpll` body are incomplete.
+
+Change-later notes:
+
+- C `edpll` advertises refutation/satisfaction but prints "Not completed yet!" in help and exits after allocating `DPLLState`; Rust preserves that incomplete behavior rather than inventing solver output.
+- C accepts `--dimacs` but never reads `dimacs_format` after option parsing. Rust accepts the flag as a no-op until a deliberate completed-driver design decides what DIMACS output should mean.
+- C's `--version` reports `classify_problem VERSION`, not `edpll VERSION`. Rust keeps the typo for drop-in compatibility; modernized support tools should share a consistent version helper only outside compatibility mode.
+- The executable duplicates resource-limit options from larger prover tools despite doing no search. A cleaned implementation should share `eprover`'s resource-limit/warning pipeline or drop those options after compatibility requirements are clear.
+
 ## LTB Batch Specification Surface
 
 Rust files:

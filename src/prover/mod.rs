@@ -1,6 +1,7 @@
 pub mod checkproof;
 pub mod e_ltb_runner;
 pub mod e_stratpar;
+pub mod edpll;
 pub mod epclanalyse;
 pub mod epclextract;
 pub mod epcllemma;
