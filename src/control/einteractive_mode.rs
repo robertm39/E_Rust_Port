@@ -1,8 +1,9 @@
 //! Deduction-server interactive command surface from `cco_einteractive_mode`.
 
-use std::{ffi::OsStr, fs, path::Path};
+use std::{ffi::OsStr, fmt::Write as _, fs, path::Path};
 
 use crate::basics::error::Diagnostic;
+use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
 use crate::inout::scanner::{Scanner, TokenType};
 
 pub const STAGE_COMMAND: &str = "STAGE";
@@ -53,6 +54,222 @@ pub const HELP_MESSAGE: &str = "\
 %- LIST              : Prints the status of the axiom sets.\n\
 %- HELP              : Prints the help message.\n\
 %- QUIT              : Closes the connection with the server.\n";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxiomSet {
+    cset: ClauseSet,
+    fset: FormulaSet,
+    staged: bool,
+    raw_data: String,
+}
+
+impl AxiomSet {
+    /// C `AxiomSetAlloc`.
+    ///
+    /// The `staged` parameter is intentionally ignored because the C allocator
+    /// always initializes `handle->staged = 0`.
+    #[must_use]
+    pub fn new(
+        cset: ClauseSet,
+        fset: FormulaSet,
+        raw_data: impl Into<String>,
+        staged: bool,
+    ) -> Self {
+        let _ = staged;
+        Self {
+            cset,
+            fset,
+            staged: false,
+            raw_data: raw_data.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.cset.identifier()
+    }
+
+    #[must_use]
+    pub fn clause_set(&self) -> &ClauseSet {
+        &self.cset
+    }
+
+    #[must_use]
+    pub fn formula_set(&self) -> &FormulaSet {
+        &self.fset
+    }
+
+    #[must_use]
+    pub const fn is_staged(&self) -> bool {
+        self.staged
+    }
+
+    pub const fn set_staged(&mut self, staged: bool) {
+        self.staged = staged;
+    }
+
+    #[must_use]
+    pub fn raw_data(&self) -> &str {
+        &self.raw_data
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveCommandOutput {
+    pub output: String,
+    pub status: &'static str,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InteractiveSpec {
+    axiom_sets: Vec<AxiomSet>,
+    server_lib: String,
+}
+
+impl InteractiveSpec {
+    /// C `InteractiveSpecAlloc` surface for the state currently represented in
+    /// Rust. Batch/control pointers and the output transport are wired by later
+    /// command-dispatch slices.
+    #[must_use]
+    pub fn new(server_lib: impl Into<String>) -> Self {
+        Self {
+            axiom_sets: Vec::new(),
+            server_lib: server_lib.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn server_lib(&self) -> &str {
+        &self.server_lib
+    }
+
+    #[must_use]
+    pub fn axiom_set_count(&self) -> usize {
+        self.axiom_sets.len()
+    }
+
+    pub fn axiom_sets(&self) -> impl Iterator<Item = &AxiomSet> {
+        self.axiom_sets.iter()
+    }
+
+    pub fn axiom_set_mut(&mut self, name: &str) -> Option<&mut AxiomSet> {
+        self.axiom_sets
+            .iter_mut()
+            .find(|axiom_set| axiom_set.name() == name)
+    }
+
+    /// C `add_command` duplicate-name tail, after parsing has produced clause
+    /// and formula sets.
+    pub fn add_axiom_set(&mut self, axiom_set: AxiomSet) -> &'static str {
+        if self
+            .axiom_sets
+            .iter()
+            .any(|handle| handle.name() == axiom_set.name())
+        {
+            ERR_AXIOM_SET_NAME_TAKEN_MESSAGE
+        } else {
+            self.axiom_sets.push(axiom_set);
+            OK_ADDED_MESSAGE
+        }
+    }
+
+    /// C `list_command`.
+    #[must_use]
+    pub fn list_command(&self) -> InteractiveCommandOutput {
+        let mut output = String::new();
+
+        let staged: Vec<_> = self
+            .axiom_sets
+            .iter()
+            .filter(|handle| handle.is_staged())
+            .collect();
+        let unstaged: Vec<_> = self
+            .axiom_sets
+            .iter()
+            .filter(|handle| !handle.is_staged())
+            .collect();
+
+        if !staged.is_empty() {
+            output.push_str("Staged :\n");
+            for handle in staged {
+                let _ = writeln!(output, "  {}", handle.name());
+            }
+        }
+
+        if !unstaged.is_empty() {
+            output.push_str("Unstaged :\n");
+            for handle in unstaged {
+                let _ = writeln!(output, "  {}", handle.name());
+            }
+        }
+
+        if self.axiom_sets.is_empty() {
+            output.push_str("No Axiom Sets currently in memory.\n");
+        }
+
+        output.push_str("On Disk :\n");
+        if self.server_lib.is_empty() {
+            output.push_str("\tNo axioms directory was specified on server startup.\n");
+        } else if let Some(files) = get_directory_listings(&self.server_lib) {
+            for file in files.iter().rev() {
+                let _ = writeln!(output, "\t{file}");
+            }
+        } else {
+            output.push_str("\tCould not open current directory.\n");
+        }
+
+        InteractiveCommandOutput {
+            output,
+            status: OK_SUCCESS_MESSAGE,
+        }
+    }
+
+    /// C `download_command`.
+    #[must_use]
+    pub fn download_command(&self, axiom_set: &str) -> InteractiveCommandOutput {
+        self.axiom_sets
+            .iter()
+            .find(|handle| handle.name() == axiom_set)
+            .map_or(
+                InteractiveCommandOutput {
+                    output: String::new(),
+                    status: ERR_UNKNOWN_AXIOM_SET_MESSAGE,
+                },
+                |handle| InteractiveCommandOutput {
+                    output: handle.raw_data().to_owned(),
+                    status: OK_DOWNLOADED_MESSAGE,
+                },
+            )
+    }
+
+    /// C `remove_command`, including its stack-pop side effects on staged-set
+    /// errors.
+    pub fn remove_command(&mut self, axiom_set: &str) -> &'static str {
+        let mut spare_stack = Vec::new();
+        let mut found = false;
+
+        while let Some(handle) = self.axiom_sets.pop() {
+            if handle.name() == axiom_set {
+                if handle.is_staged() {
+                    return ERR_AXIOM_SET_IS_STAGED_MESSAGE;
+                }
+                found = true;
+                break;
+            }
+            spare_stack.push(handle);
+        }
+
+        while let Some(handle) = spare_stack.pop() {
+            self.axiom_sets.push(handle);
+        }
+
+        if found {
+            OK_REMOVED_MESSAGE
+        } else {
+            ERR_UNKNOWN_AXIOM_SET_MESSAGE
+        }
+    }
+}
 
 /// C `AXIOM_SET_NAME_TOKENS`.
 #[must_use]
@@ -118,10 +335,13 @@ pub fn get_directory_listings(dirname: impl AsRef<Path>) -> Option<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::{
-        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, ADD_COMMAND,
-        END_OF_BLOCK_TOKEN, ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_SUCCESS_MESSAGE,
-        STAGE_COMMAND,
+        accept_axiom_set_name, axiom_set_name_tokens, get_directory_listings, AxiomSet,
+        InteractiveSpec, ADD_COMMAND, END_OF_BLOCK_TOKEN, ERR_AXIOM_SET_IS_STAGED_MESSAGE,
+        ERR_AXIOM_SET_NAME_TAKEN_MESSAGE, ERR_UNKNOWN_AXIOM_SET_MESSAGE,
+        ERR_UNKNOWN_COMMAND_MESSAGE, HELP_MESSAGE, OK_ADDED_MESSAGE, OK_DOWNLOADED_MESSAGE,
+        OK_REMOVED_MESSAGE, OK_SUCCESS_MESSAGE, STAGE_COMMAND,
     };
+    use crate::clauses::{clausesets::ClauseSet, formulasets::FormulaSet};
     use crate::inout::scanner::{Scanner, TokenType};
     use std::{
         collections::BTreeSet,
@@ -132,6 +352,21 @@ mod tests {
 
     fn scanner(source: &str) -> Scanner {
         Scanner::from_user_string(source, true).unwrap()
+    }
+
+    fn axiom_set(name: &str, raw_data: &str, staged_arg: bool) -> AxiomSet {
+        let mut clauses = ClauseSet::new();
+        clauses.set_identifier(name);
+        let mut formulas = FormulaSet::new();
+        formulas.set_identifier(name);
+        AxiomSet::new(clauses, formulas, raw_data, staged_arg)
+    }
+
+    fn axiom_names(interactive: &InteractiveSpec) -> Vec<String> {
+        interactive
+            .axiom_sets()
+            .map(|axiom_set| axiom_set.name().to_owned())
+            .collect()
     }
 
     struct ScratchDir {
@@ -256,5 +491,181 @@ mod tests {
         ));
 
         assert!(get_directory_listings(missing).is_none());
+    }
+
+    #[test]
+    fn axiom_set_alloc_ignores_staged_argument_and_copies_raw_data() {
+        let axiom_set = axiom_set("library", "fof(a,axiom,p).\n", true);
+
+        assert_eq!(axiom_set.name(), "library");
+        assert_eq!(axiom_set.clause_set().identifier(), "library");
+        assert_eq!(axiom_set.formula_set().identifier(), "library");
+        assert!(!axiom_set.is_staged());
+        assert_eq!(axiom_set.raw_data(), "fof(a,axiom,p).\n");
+    }
+
+    #[test]
+    fn add_axiom_set_rejects_duplicate_clause_set_identifier() {
+        let mut interactive = InteractiveSpec::new("");
+
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("dup", "first", false)),
+            OK_ADDED_MESSAGE
+        );
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("dup", "second", false)),
+            ERR_AXIOM_SET_NAME_TAKEN_MESSAGE
+        );
+
+        assert_eq!(interactive.axiom_set_count(), 1);
+        assert_eq!(interactive.download_command("dup").output, "first");
+    }
+
+    #[test]
+    fn list_command_groups_staged_unstaged_and_missing_server_library() {
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("loaded", "loaded raw", false)),
+            OK_ADDED_MESSAGE
+        );
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("queued", "queued raw", false)),
+            OK_ADDED_MESSAGE
+        );
+        interactive
+            .axiom_set_mut("queued")
+            .unwrap()
+            .set_staged(true);
+
+        let result = interactive.list_command();
+
+        assert_eq!(result.status, OK_SUCCESS_MESSAGE);
+        assert_eq!(
+            result.output,
+            "Staged :\n  queued\nUnstaged :\n  loaded\nOn Disk :\n\tNo axioms directory was specified on server startup.\n"
+        );
+    }
+
+    #[test]
+    fn list_command_reports_empty_memory_and_directory_open_failure() {
+        let mut missing = std::env::temp_dir();
+        missing.push(format!(
+            "e_rust_port_einteractive_missing_list_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let interactive = InteractiveSpec::new(missing.to_string_lossy());
+
+        let result = interactive.list_command();
+
+        assert_eq!(result.status, OK_SUCCESS_MESSAGE);
+        assert_eq!(
+            result.output,
+            "No Axiom Sets currently in memory.\nOn Disk :\n\tCould not open current directory.\n"
+        );
+    }
+
+    #[test]
+    fn list_command_prints_disk_files_in_stack_pop_order() {
+        let scratch = ScratchDir::new();
+        fs::write(scratch.path.join("only.ax"), b"fof(a, axiom, p).").unwrap();
+        fs::create_dir(scratch.path.join("nested")).unwrap();
+        let interactive = InteractiveSpec::new(scratch.path.to_string_lossy());
+
+        let result = interactive.list_command();
+
+        assert_eq!(result.status, OK_SUCCESS_MESSAGE);
+        assert_eq!(
+            result.output,
+            "No Axiom Sets currently in memory.\nOn Disk :\n\tonly.ax\n"
+        );
+    }
+
+    #[test]
+    fn download_command_prints_raw_data_then_ok_status() {
+        let mut interactive = InteractiveSpec::new("");
+        assert_eq!(
+            interactive.add_axiom_set(axiom_set("download_me", "raw axioms\n", false)),
+            OK_ADDED_MESSAGE
+        );
+
+        let result = interactive.download_command("download_me");
+
+        assert_eq!(result.output, "raw axioms\n");
+        assert_eq!(result.status, OK_DOWNLOADED_MESSAGE);
+    }
+
+    #[test]
+    fn download_command_reports_unknown_axiom_set_without_output() {
+        let interactive = InteractiveSpec::new("");
+
+        let result = interactive.download_command("missing");
+
+        assert_eq!(result.output, "");
+        assert_eq!(result.status, ERR_UNKNOWN_AXIOM_SET_MESSAGE);
+    }
+
+    #[test]
+    fn remove_command_removes_unstaged_set_and_restores_stack_order() {
+        let mut interactive = InteractiveSpec::new("");
+        for name in ["first", "remove_me", "last"] {
+            assert_eq!(
+                interactive.add_axiom_set(axiom_set(name, name, false)),
+                OK_ADDED_MESSAGE
+            );
+        }
+
+        assert_eq!(interactive.remove_command("remove_me"), OK_REMOVED_MESSAGE);
+
+        assert_eq!(
+            axiom_names(&interactive),
+            vec![String::from("first"), String::from("last")]
+        );
+    }
+
+    #[test]
+    fn remove_command_preserves_c_staged_error_stack_side_effect() {
+        let mut interactive = InteractiveSpec::new("");
+        for name in ["first", "staged", "last"] {
+            assert_eq!(
+                interactive.add_axiom_set(axiom_set(name, name, false)),
+                OK_ADDED_MESSAGE
+            );
+        }
+        interactive
+            .axiom_set_mut("staged")
+            .unwrap()
+            .set_staged(true);
+
+        assert_eq!(
+            interactive.remove_command("staged"),
+            ERR_AXIOM_SET_IS_STAGED_MESSAGE
+        );
+
+        assert_eq!(axiom_names(&interactive), vec![String::from("first")]);
+    }
+
+    #[test]
+    fn remove_command_reports_unknown_and_restores_all_sets() {
+        let mut interactive = InteractiveSpec::new("");
+        for name in ["first", "second"] {
+            assert_eq!(
+                interactive.add_axiom_set(axiom_set(name, name, false)),
+                OK_ADDED_MESSAGE
+            );
+        }
+
+        assert_eq!(
+            interactive.remove_command("missing"),
+            ERR_UNKNOWN_AXIOM_SET_MESSAGE
+        );
+
+        assert_eq!(
+            axiom_names(&interactive),
+            vec![String::from("first"), String::from("second")]
+        );
     }
 }
