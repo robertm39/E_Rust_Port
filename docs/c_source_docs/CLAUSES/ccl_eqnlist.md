@@ -229,6 +229,16 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 - `EqnListTSTPPrint` reuses the same first-literal/no-leading-separator loop but always delegates to `EqnTSTPPrint` without a negation argument. Rust keeps the separator behavior and forwards explicit `fullterms` and oriented-output choices to the bank-explicit TSTP literal writer.
 - `EqnListParse` first checks for a format-specific literal start and returns an empty list without consuming input if none is present; otherwise it parses the first literal and then consumes the caller-supplied separator before each following literal. Rust preserves that control flow over the currently ported equation/simple-term parser.
 - `EqnListMaximalLiterals` temporarily extracts and relinks literals while using a stack archive to restore the original list order. Rust preserves the maximal and strictly-maximal flag results through an index-based active-candidate list; later stable literal-handle ownership should keep this temporary relinking unobservable.
+- `EqnListMapTerms` delegates every literal to `EqnMap`, so mapped `$false` sides become `$true` with a polarity flip, `$true` is swapped away from the left side, and the equational-literal property is recomputed. Rust preserves this in `Eqn::map_terms`, and `EqnListLambdaNormalize` is now represented by `EqnList::lambda_normalize` over `LambdaNormalizeDB`.
+
+### Rust Port Status Notes
+
+- `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, stack-shaped conversion, property mutation/querying, term-existence checks, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering over the currently ported term/equation parser surface.
+
+### Change-Later Observations
+
+- `EqnMap` clears `EPMaxIsUpToDate` and `EPIsOriented` only when the final left side differs from the old left side, even if the right side changed. Rust preserves that invalidation rule through both generic term mapping and lambda normalization; a cleaned literal-mutation API should decide whether right-side-only rewrites should also invalidate ordering metadata after compatibility tests cover the affected callers.
+- `EqnListLambdaNormalize` obtains the term bank from the first linked literal and is a no-op for `NULL`, which hides the bank ownership boundary inside list nodes. Rust takes the active `TermBank` explicitly; future call-site integration should keep that owner explicit rather than recreating C's implicit list-head bank lookup.
 
 ### Porting Focus
 

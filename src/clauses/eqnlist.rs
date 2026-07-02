@@ -12,6 +12,7 @@ use crate::inout::scanner::{IoFormat, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::functypes::func_symb_start_token;
 use crate::terms::functypes::FunCode;
+use crate::terms::lambda::lambda_normalize_db;
 use crate::terms::signature::Signature;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
@@ -167,6 +168,44 @@ impl EqnList {
         for literal in &mut self.literals {
             literal.map_terms(bank, &mut mapper);
         }
+    }
+
+    /// Applies C `EqnListLambdaNormalize` to every literal side.
+    ///
+    /// The underlying literal mapper preserves C `EqnMap` side effects:
+    /// normalized `$false` sides are rewritten through `$true` with polarity
+    /// flips, `$true` is swapped away from the left side, and the equational
+    /// literal flag is refreshed.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics from DB-lambda beta/eta normalization.
+    pub fn lambda_normalize(&mut self, bank: &mut TermBank) -> Result<usize, Diagnostic> {
+        let mut changed_sides = 0;
+        for literal in &mut self.literals {
+            let old_left = literal.left().clone();
+            let old_right = literal.right().clone();
+            let normalized_left = lambda_normalize_db(bank, &old_left)?;
+            let normalized_right = lambda_normalize_db(bank, &old_right)?;
+
+            let mut mapped_left = false;
+            let mut mapped_right = false;
+            literal.map_terms(bank, |term| {
+                if !mapped_left && term == &old_left {
+                    mapped_left = true;
+                    normalized_left.clone()
+                } else if !mapped_right && term == &old_right {
+                    mapped_right = true;
+                    normalized_right.clone()
+                } else {
+                    term.clone()
+                }
+            });
+
+            changed_sides += usize::from(literal.left() != &old_left);
+            changed_sides += usize::from(literal.right() != &old_right);
+        }
+        Ok(changed_sides)
     }
 
     /// Orient every literal in the list and return the number of swaps.
@@ -837,14 +876,15 @@ mod tests {
     use crate::basics::simple_stuff::ProblemType;
     use crate::clauses::eqn::{Eqn, EqnPrintOptions};
     use crate::clauses::eqn_props::{
-        EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_IS_SELECTED, EP_IS_STRICTLY_MAXIMAL,
-        EP_MAX_IS_UP_TO_DATE,
+        EP_IS_EQU_LITERAL, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_IS_POSITIVE, EP_IS_SELECTED,
+        EP_IS_STRICTLY_MAXIMAL, EP_MAX_IS_UP_TO_DATE,
     };
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE};
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_OP_FLAG, TP_SPECIAL_FLAG};
@@ -859,6 +899,16 @@ mod tests {
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, type_.clone())
+            .unwrap();
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: Type) -> Term {
         let f_code = bank.signature_mut().insert_id(name, 0, false);
         bank.signature_mut()
             .declare_final_type(f_code, type_.clone())
@@ -1346,6 +1396,51 @@ mod tests {
 
         assert!(list.as_slice()[0].is_negative());
         assert_eq!(list.as_slice()[0].right(), bank.true_term());
+    }
+
+    #[test]
+    fn lambda_normalize_maps_literal_sides_through_beta_eta_normalization() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "eqnlist_lambda_f", unary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let a = typed_const(&mut bank, "eqnlist_lambda_a");
+        let b = typed_const(&mut bank, "eqnlist_lambda_b");
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&a)).unwrap();
+        let expected = apply_terms(&mut bank, &f, std::slice::from_ref(&a)).unwrap();
+        let mut list = EqnList::from_vec(vec![eqn(&mut bank, &applied, &b, true)]);
+
+        let changed = list.lambda_normalize(&mut bank).unwrap();
+
+        assert_eq!(changed, 1);
+        assert_eq!(list.as_slice()[0].left(), &expected);
+        assert_eq!(list.as_slice()[0].right(), &b);
+        assert!(list.as_slice()[0].is_positive());
+    }
+
+    #[test]
+    fn lambda_normalize_preserves_eqn_map_false_and_polarity_normalization() {
+        let mut bank = test_bank();
+        let a = typed_const(&mut bank, "eqnlist_map_false_a");
+        let b = typed_const(&mut bank, "eqnlist_map_false_b");
+        let mut literal = eqn(&mut bank, &a, &b, true);
+        literal.set_left_raw(bank.false_term().clone());
+        literal.set_right_raw(b.clone());
+        literal.set_prop(EP_IS_EQU_LITERAL);
+        let mut list = EqnList::from_vec(vec![literal]);
+
+        let changed = list.lambda_normalize(&mut bank).unwrap();
+
+        assert_eq!(changed, 2);
+        let literal = &list.as_slice()[0];
+        assert_eq!(literal.left(), &b);
+        assert_eq!(literal.right(), bank.true_term());
+        assert!(!literal.is_positive());
+        assert!(!literal.is_equ_lit(&bank));
     }
 
     #[test]
