@@ -11,6 +11,7 @@ use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termtypes::{term_identity_id, Term};
 use crate::terms::termvars::VarBank;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,6 +63,26 @@ struct PredicateEliminationTask {
     sq_vars: f64,
     size: i64,
     blocked: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PotentialGateSigns {
+    positive: bool,
+    negative: bool,
+}
+
+impl PotentialGateSigns {
+    const fn has_both(self) -> bool {
+        self.positive && self.negative
+    }
+
+    fn add(&mut self, positive: bool) {
+        if positive {
+            self.positive = true;
+        } else {
+            self.negative = true;
+        }
+    }
 }
 
 impl PredicateEliminationTask {
@@ -264,6 +285,123 @@ pub fn eliminate_predicates_singular_non_equational_with_output(
     eliminate_predicates_singular_with_output(
         passive, archive, bank, tmp_bank, fresh_vars, config, output,
     )
+}
+
+/// Reports whether C's gate-recognition branch would need SAT-backed gate
+/// validation rather than falling back to the ordinary singular task sets.
+#[must_use]
+pub fn predicate_elimination_needs_gate_validation(
+    passive: &ClauseSet,
+    bank: &TermBank,
+    config: PredicateEliminationConfig,
+) -> bool {
+    let mut blocked_symbols = BTreeSet::new();
+    let mut potential_gates = BTreeMap::new();
+    for clause in passive.iter() {
+        scan_clause_for_potential_gates(
+            clause,
+            bank,
+            &config,
+            &mut blocked_symbols,
+            &mut potential_gates,
+        );
+        if potential_gates
+            .values()
+            .any(|signs: &PotentialGateSigns| signs.has_both())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn scan_clause_for_potential_gates(
+    clause: &Clause,
+    bank: &TermBank,
+    config: &PredicateEliminationConfig,
+    blocked_symbols: &mut BTreeSet<FunCode>,
+    potential_gates: &mut BTreeMap<FunCode, PotentialGateSigns>,
+) {
+    let clause_is_conjecture = clause.query_tptp_type() == CP_TYPE_CONJECTURE || clause.is_goal();
+    for (literal_index, literal) in clause.literals().as_slice().iter().enumerate() {
+        if literal.is_equ_lit(bank) {
+            continue;
+        }
+
+        let sym = literal.left().f_code();
+        if blocked_symbols.contains(&sym) {
+            continue;
+        }
+
+        let occurrences = potential_gates.get(&sym).map_or(0, |signs| {
+            usize::from(signs.positive) + usize::from(signs.negative)
+        });
+        if (config.ignore_conj_syms && clause_is_conjecture)
+            || config.max_occs > 0 && occurrences >= usize_from_i64(config.max_occs)
+        {
+            blocked_symbols.insert(sym);
+            continue;
+        }
+
+        if is_potential_gate_clause(clause, bank, literal_index, literal) {
+            potential_gates
+                .entry(sym)
+                .or_default()
+                .add(literal.is_positive());
+        }
+    }
+}
+
+fn is_potential_gate_clause(
+    clause: &Clause,
+    bank: &TermBank,
+    literal_index: usize,
+    literal: &Eqn,
+) -> bool {
+    let sym = literal.left().f_code();
+    if clause_has_other_predicate_literal(clause, bank, literal_index, sym) {
+        return false;
+    }
+    let Some(vars) = unique_distinct_arg_vars(literal.left()) else {
+        return false;
+    };
+    clause
+        .literals()
+        .as_slice()
+        .iter()
+        .enumerate()
+        .all(|(index, other)| {
+            index == literal_index
+                || (term_vars_from_set(other.left(), &vars)
+                    && term_vars_from_set(other.right(), &vars))
+        })
+}
+
+fn unique_distinct_arg_vars(term: &Term) -> Option<BTreeSet<usize>> {
+    let mut variables = BTreeSet::new();
+    for index in 0..term.arity() {
+        let arg = term
+            .argument(index)
+            .unwrap_or_else(|| panic!("predicate argument {index} is initialized"));
+        if !arg.is_free_var() || !variables.insert(term_identity_id(&arg)) {
+            return None;
+        }
+    }
+    Some(variables)
+}
+
+fn term_vars_from_set(term: &Term, vars: &BTreeSet<usize>) -> bool {
+    let mut stack = vec![term.clone()];
+    while let Some(current) = stack.pop() {
+        if current.is_free_var() {
+            if !vars.contains(&term_identity_id(&current)) {
+                return false;
+            }
+        } else {
+            stack.extend(current.argument_clones().into_iter().flatten());
+        }
+    }
+    true
 }
 
 fn build_task_map(
@@ -655,7 +793,8 @@ fn i64_to_f64(value: i64) -> f64 {
 mod tests {
     use super::{
         eliminate_predicates_singular, eliminate_predicates_singular_with_output,
-        PredicateEliminationConfig, PredicateEliminationResult,
+        predicate_elimination_needs_gate_validation, PredicateEliminationConfig,
+        PredicateEliminationResult,
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::CP_TYPE_CONJECTURE;
@@ -976,6 +1115,52 @@ mod tests {
 
         assert_eq!(result.eliminated_count, 1);
         assert_eq!(output, "% PE start: 1\n% PE eliminated: 1\n");
+    }
+
+    #[test]
+    fn gate_recognition_without_bidirectional_potential_gate_needs_no_validation() {
+        let mut bank = test_bank();
+        let a = object_const(&mut bank, "pe_no_gate_a");
+        let x = object_var(&bank, -2);
+        let p_a = predicate_atom(&mut bank, "pe_no_gate_p", std::slice::from_ref(&a));
+        let p_x = predicate_atom(&mut bank, "pe_no_gate_p", std::slice::from_ref(&x));
+        let q_x = predicate_atom(&mut bank, "pe_no_gate_q", std::slice::from_ref(&x));
+        let positive_potential = clause(vec![
+            predicate_literal(&mut bank, &p_x, true),
+            predicate_literal(&mut bank, &q_x, true),
+        ]);
+        let negative_not_potential = clause(vec![predicate_literal(&mut bank, &p_a, false)]);
+        let passive = ClauseSet::from_clauses([positive_potential, negative_not_potential]);
+
+        assert!(!predicate_elimination_needs_gate_validation(
+            &passive,
+            &bank,
+            PredicateEliminationConfig::default()
+        ));
+    }
+
+    #[test]
+    fn gate_recognition_with_both_potential_signs_needs_validation() {
+        let mut bank = test_bank();
+        let x = object_var(&bank, -2);
+        let p_x = predicate_atom(&mut bank, "pe_gate_p", std::slice::from_ref(&x));
+        let q_x = predicate_atom(&mut bank, "pe_gate_q", std::slice::from_ref(&x));
+        let r_x = predicate_atom(&mut bank, "pe_gate_r", std::slice::from_ref(&x));
+        let positive_potential = clause(vec![
+            predicate_literal(&mut bank, &p_x, true),
+            predicate_literal(&mut bank, &q_x, true),
+        ]);
+        let negative_potential = clause(vec![
+            predicate_literal(&mut bank, &p_x, false),
+            predicate_literal(&mut bank, &r_x, true),
+        ]);
+        let passive = ClauseSet::from_clauses([positive_potential, negative_potential]);
+
+        assert!(predicate_elimination_needs_gate_validation(
+            &passive,
+            &bank,
+            PredicateEliminationConfig::default()
+        ));
     }
 
     #[test]

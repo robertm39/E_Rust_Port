@@ -60,7 +60,7 @@ use crate::clauses::inferencedoc::{
     PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
 };
 use crate::clauses::pred_elim::{
-    eliminate_predicates_singular_with_output,
+    eliminate_predicates_singular_with_output, predicate_elimination_needs_gate_validation,
     PredicateEliminationConfig as ClausePredicateEliminationConfig,
 };
 use crate::clauses::proofstate::{
@@ -6811,19 +6811,21 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     if !config.enabled || problem_type() != ProblemType::FirstOrder {
         return Ok(0);
     }
-    if config.recognize_gates {
-        return Err(Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "Predicate elimination gate recognition is not yet ported",
-        )
-        .into());
-    }
 
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
     let fresh_vars = state.fresh_vars().clone();
     let mut pred_elim_output = String::new();
     let result = {
         let (bank, axioms, archive) = state.terms_axioms_archive_mut();
+        if config.recognize_gates
+            && predicate_elimination_needs_gate_validation(axioms, bank, config.clause_config)
+        {
+            return Err(Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "Predicate elimination gate validation is not yet ported",
+            )
+            .into());
+        }
         eliminate_predicates_singular_with_output(
             axioms,
             archive,
@@ -16167,6 +16169,84 @@ mod tests {
         assert!(printed.contains(&format!("file('{path_arg}', s_offending)")));
         assert!(printed.contains(", plain, (s(a)), "));
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_allows_pred_elim_gate_recognition_without_gate_validation() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-pred-elim-gates-without-validation");
+        std::fs::write(
+            &path,
+            "cnf(pos, axiom, (p(a)|s(a))).\n\
+             cnf(neg, axiom, (~p(a))).\n\
+             cnf(s_offending, axiom, (s(b)|s(c))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--tstp-out",
+                "--output-level=2",
+                "--pred-elim=true",
+                "--pred-elim-recognize-gates=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.contains("% PE start: 3\n% PE eliminated: 1\n"));
+        assert!(printed.contains(", plain, (s(a)), "));
+        assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_prune_only_reports_pred_elim_gate_validation_requirement() {
+        let _guard = global_state_lock();
+        let path = temp_path("prune-pred-elim-gate-validation");
+        std::fs::write(
+            &path,
+            "cnf(pos_gate, axiom, (p(X)|q(X))).\n\
+             cnf(neg_gate, axiom, (~p(X)|r(X))).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run(
+            [
+                "eprover",
+                "--prune",
+                "--tstp-in",
+                "--pred-elim=true",
+                "--pred-elim-recognize-gates=true",
+                path_arg.as_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
+        assert!(error
+            .message()
+            .contains("Predicate elimination gate validation is not yet ported"));
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(!printed.contains("% PE start:"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
