@@ -12290,20 +12290,15 @@ fn parse_simple_fof_distinct_formula(
     scanner: &mut Scanner,
     bank: &mut TermBank,
 ) -> Result<Vec<SimpleFofFormula>, Diagnostic> {
-    scanner.accept_id("$distinct")?;
-    scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-    let mut args = Vec::new();
-    args.push(parse_simple_fof_distinct_constant(scanner, bank, None)?);
-    let expected_type = args[0].type_();
-    while scanner.test_tok(TokenType::COMMA) {
-        scanner.accept_tok(TokenType::COMMA)?;
-        args.push(parse_simple_fof_distinct_constant(
-            scanner,
-            bank,
-            expected_type.as_ref(),
+    let distinct = bank.parse_tstp_distinct(scanner)?;
+    let mut args = Vec::with_capacity(distinct.arity());
+    for index in 0..distinct.arity() {
+        args.push(simple_fof_formula_term_argument(
+            &distinct,
+            index,
+            "$distinct",
         )?);
     }
-    scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
 
     if args.len() < 2 {
         return Ok(simple_fof_truth_formula(true));
@@ -12321,32 +12316,6 @@ fn parse_simple_fof_distinct_formula(
         }
     }
     Ok(simple_fof_literal_formulas(disequalities))
-}
-
-fn parse_simple_fof_distinct_constant(
-    scanner: &mut Scanner,
-    bank: &mut TermBank,
-    expected_type: Option<&Type>,
-) -> Result<Term, Diagnostic> {
-    let source = String::from_utf8_lossy(scanner.current_token().source_bytes()).into_owned();
-    let line = scanner.current_token().line();
-    let column = scanner.current_token().column();
-    let term = bank.parse_term_with_distinct_checks(scanner)?;
-    if term.is_free_var() || term.arity() != 0 {
-        return Err(Diagnostic::new(
-            ErrorCode::SYNTAX_ERROR,
-            format!("{source}:{line}:{column}: constant expected in $distinct argument list"),
-        ));
-    }
-    if expected_type.is_some_and(|type_| term.type_().as_ref() != Some(type_)) {
-        return Err(Diagnostic::new(
-            ErrorCode::TYPE_ERROR,
-            format!(
-                "{source}:{line}:{column}: All $distinct arguments have to be constants of the same type"
-            ),
-        ));
-    }
-    Ok(term)
 }
 
 fn parse_simple_tstp_optional_source(scanner: &mut Scanner) -> Result<(), Diagnostic> {
@@ -24512,6 +24481,31 @@ mod tests {
         let _guard = global_state_lock();
         let path = temp_path("syntax-fof-distinct");
         std::fs::write(&path, "fof(test1, axiom, $distinct(a,b,c)).\n").unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--syntax-only", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "\n% Parsing successful!\n% SZS status Unknown\n"
+        );
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_syntax_only_parses_fof_distinct_variable_looking_constants() {
+        let _guard = global_state_lock();
+        let path = temp_path("syntax-fof-distinct-variable-looking-constants");
+        std::fs::write(&path, "fof(test1, axiom, $distinct(X,Y)).\n").unwrap();
         let path_arg = path.to_string_lossy().into_owned();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
