@@ -1374,6 +1374,7 @@ fn clause_ordered_paramod_with_subst(
     let mut new_literals = EqnList::new();
     new_literals.push(new_literal);
     new_literals.append(into_copy);
+    new_literals.lambda_normalize(bank)?;
     new_literals.remove_resolved(bank);
     new_literals.remove_duplicates(bank);
     Ok(Some(Clause::alloc(new_literals)))
@@ -1486,6 +1487,7 @@ fn clause_ordered_sim_paramod_with_subst(
     into_copy.del_prop(EP_FROM_CLAUSE_LIT);
     from_copy.set_prop(EP_FROM_CLAUSE_LIT);
     into_copy.append(from_copy);
+    into_copy.lambda_normalize(bank)?;
     into_copy.remove_resolved(bank);
     into_copy.remove_duplicates(bank);
     Ok(Some(Clause::alloc(into_copy)))
@@ -1868,10 +1870,11 @@ fn effective_paramodulation_type(
 #[cfg(test)]
 mod tests {
     use super::{
-        clause_ordered_paramod, clause_ordered_super_sim_paramod, compute_all_paramodulants,
-        compute_all_paramodulants_indexed, compute_all_paramodulants_with_docs,
-        compute_clause_clause_paramodulants, paramod_from_side_positions, paramod_into_positions,
-        paramodulation_pair_positions, ParamodulationType,
+        clause_ordered_paramod, clause_ordered_sim_paramod, clause_ordered_super_sim_paramod,
+        compute_all_paramodulants, compute_all_paramodulants_indexed,
+        compute_all_paramodulants_with_docs, compute_clause_clause_paramodulants,
+        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
+        ParamodulationType,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -1893,7 +1896,7 @@ mod tests {
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
-    use crate::terms::lambda::apply_terms;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -2413,6 +2416,43 @@ mod tests {
     }
 
     #[test]
+    fn clause_ordered_sim_paramod_lambda_normalizes_generated_literal_list() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_lambda_sim_a");
+        let source_right = typed_const(&mut bank, "pm_lambda_sim_b");
+        let target_rhs = typed_const(&mut bank, "pm_lambda_sim_c");
+        let i_type = bank.signature().type_bank().default_type();
+        let f_code = typed_unary_code(&mut bank, "pm_lambda_sim_f");
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = typed_unary(&mut bank, f_code, &db0);
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&source_left)).unwrap();
+        let expected = typed_unary(&mut bank, f_code, &source_right);
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &applied, &target_rhs, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let from_pos = top_left_position(&source);
+        let mut into_pos = top_left_position(&target);
+        into_pos.term_pos_mut().push_component(applied, 1);
+        source_left.set_prop(TP_POTENTIAL_PARAMOD);
+        let mut ocb = kbo_ocb(&bank);
+
+        let paramodulant = clause_ordered_sim_paramod(&mut bank, &mut ocb, &from_pos, &into_pos)
+            .unwrap()
+            .expect("simultaneous paramodulation should rewrite the lambda argument");
+
+        assert_eq!(paramodulant.literal_number(), 1);
+        let generated = &paramodulant.literals().as_slice()[0];
+        assert!(generated.is_positive());
+        assert_eq!(generated.left(), &expected);
+        assert_eq!(generated.right(), &target_rhs);
+    }
+
+    #[test]
     fn clause_ordered_super_sim_paramod_replaces_instantiated_target_occurrences() {
         let mut bank = test_bank();
         let source_arg = typed_const(&mut bank, "pm_super_source_arg");
@@ -2811,6 +2851,42 @@ mod tests {
         assert!(generated.query_prop(EP_FROM_CLAUSE_LIT));
         assert_eq!(generated.left(), &f_of_b);
         assert_eq!(generated.right(), &c);
+    }
+
+    #[test]
+    fn clause_ordered_paramod_lambda_normalizes_generated_literal_list() {
+        let mut bank = test_bank();
+        let source_left = typed_const(&mut bank, "pm_lambda_plain_a");
+        let source_right = typed_const(&mut bank, "pm_lambda_plain_b");
+        let target_rhs = typed_const(&mut bank, "pm_lambda_plain_c");
+        let i_type = bank.signature().type_bank().default_type();
+        let f_code = typed_unary_code(&mut bank, "pm_lambda_plain_f");
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = typed_unary(&mut bank, f_code, &db0);
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&source_left)).unwrap();
+        let expected = typed_unary(&mut bank, f_code, &source_right);
+        let mut from_lit = lit(&mut bank, &source_left, &source_right, true);
+        let mut into_lit = lit(&mut bank, &applied, &target_rhs, true);
+        maximal_oriented(&mut from_lit);
+        maximal_oriented(&mut into_lit);
+        let from_clause = Clause::alloc(EqnList::from_vec(vec![from_lit]));
+        let into_clause = Clause::alloc(EqnList::from_vec(vec![into_lit]));
+        let from_pos = top_left_position(&from_clause);
+        let mut into_pos = top_left_position(&into_clause);
+        into_pos.term_pos_mut().push_component(applied, 1);
+        let mut ocb = kbo_ocb(&bank);
+
+        let paramodulant = clause_ordered_paramod(&mut bank, &mut ocb, &from_pos, &into_pos)
+            .unwrap()
+            .expect("paramodulation into lambda application argument should generate a clause");
+
+        assert_eq!(paramodulant.literal_number(), 1);
+        let generated = &paramodulant.literals().as_slice()[0];
+        assert!(generated.is_positive());
+        assert_eq!(generated.left(), &expected);
+        assert_eq!(generated.right(), &target_rhs);
     }
 
     #[test]
