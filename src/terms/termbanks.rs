@@ -2001,6 +2001,23 @@ impl TermBank {
         Ok(term)
     }
 
+    fn parse_tformula_equality_right_term_arg(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        if scanner.test_tok(TokenType::OPEN_BRACKET) {
+            scanner.accept_tok(TokenType::OPEN_BRACKET)?;
+            let mut term = self.parse_tformula_tstp_subset(scanner)?;
+            scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
+            if scanner.test_tok(TokenType::APPLICATION) {
+                term = self.parse_applied_tformula_term_tstp_subset(scanner, &term)?;
+            }
+            Ok(term)
+        } else {
+            self.parse_tformula_application_term_arg(scanner, true)
+        }
+    }
+
     fn parse_applied_tformula_term_tstp_subset(
         &mut self,
         scanner: &mut Scanner,
@@ -2429,7 +2446,7 @@ impl TermBank {
                 left = self.encode_equality_term(left, self.true_term.clone(), true)?;
                 right
             } else {
-                self.parse_tformula_application_term_arg(scanner, true)?
+                self.parse_tformula_equality_right_term_arg(scanner)?
             };
             self.encode_equality_term(left, right, positive)
         } else {
@@ -4985,6 +5002,30 @@ mod tests {
             bank.signature()
                 .find_name(formula.argument(1).unwrap().f_code()),
             Some("b")
+        );
+
+        let mut scanner = Scanner::from_user_string("b = (appfun @ f) @ a", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        assert_eq!(
+            bank.signature()
+                .find_name(formula.argument(0).unwrap().f_code()),
+            Some("b")
+        );
+        let right = formula.argument(1).unwrap();
+        assert_eq!(bank.signature().find_name(right.f_code()), Some("appfun"));
+        assert_eq!(right.arity(), 2);
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(0).unwrap().f_code()),
+            Some("f")
+        );
+        assert_eq!(
+            bank.signature()
+                .find_name(right.argument(1).unwrap().f_code()),
+            Some("a")
         );
     }
 

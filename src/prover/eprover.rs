@@ -12333,7 +12333,7 @@ fn parse_simple_fof_non_boolean_fool_literal(
     }
     let positive = scanner.test_tok(TokenType::EQUAL_SIGN);
     scanner.accept_tok(TokenType::EQUAL_SIGN | TokenType::NEG_EQUAL_SIGN)?;
-    let right = bank.parse_term_with_distinct_checks(scanner)?;
+    let right = parse_simple_fof_tstp_equality_right_term(scanner, bank)?;
     let literal = Eqn::alloc(left, right, bank, positive)?;
     Ok(simple_fof_literal_formulas(vec![literal]))
 }
@@ -12359,6 +12359,26 @@ fn parse_simple_fof_tstp_application_formula(
         SimpleFofBoolEqnReplacement::PreserveEncodedEquality,
         bank,
     )
+}
+
+fn parse_simple_fof_tstp_equality_right_term(
+    scanner: &mut Scanner,
+    bank: &mut TermBank,
+) -> Result<Term, Diagnostic> {
+    if scanner.format() == IoFormat::Tstp && simple_fof_starts_tstp_application_formula(scanner) {
+        let term = bank.parse_tformula_tstp(scanner)?;
+        let term = if term.has_lambda_subterm() {
+            named_to_db(bank, &term)?
+        } else {
+            term
+        };
+        if term.has_lambda_subterm() || term.has_db_subterm() {
+            return Err(simple_fof_unsupported_error(scanner));
+        }
+        return Ok(term);
+    }
+
+    bank.parse_term_with_distinct_checks(scanner)
 }
 
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
@@ -12425,7 +12445,7 @@ fn parse_simple_fof_atomic_formula_or_literal(
             positive = false;
         }
         scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
-        bank.parse_term_with_distinct_checks(scanner)?
+        parse_simple_fof_tstp_equality_right_term(scanner, bank)?
     } else {
         prepare_predicate_literal(bank, &left)?;
         bank.true_term().clone()
@@ -12442,6 +12462,9 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left
     if left.type_().as_ref().is_some_and(Type::is_bool) {
         return true;
     }
+    if simple_fof_equality_right_starts_tstp_application_formula(scanner) {
+        return false;
+    }
 
     let right = scanner.look_token(1);
     scanner_test_tok(
@@ -12451,6 +12474,53 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left
             | TokenType::EXIST_QUANTOR
             | TokenType::TILDE_SIGN,
     ) || scanner_test_id(right, "$true|$false|$distinct")
+}
+
+fn simple_fof_equality_right_starts_tstp_application_formula(scanner: &Scanner) -> bool {
+    simple_fof_equality_right_starts_tstp_logical_head_application(scanner)
+        || simple_fof_equality_right_starts_tstp_parenthesized_lambda_application(scanner)
+        || simple_fof_equality_right_starts_tstp_parenthesized_application_formula(scanner)
+        || simple_fof_equality_right_starts_tstp_parenthesized_application_head(scanner)
+        || (scanner_test_tok(
+            scanner.look_token(1),
+            TokenType::NAME | TokenType::SEM_IDENT,
+        ) && scanner_test_tok(scanner.look_token(2), TokenType::APPLICATION))
+}
+
+fn simple_fof_equality_right_starts_tstp_parenthesized_lambda_application(
+    scanner: &Scanner,
+) -> bool {
+    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
+        && scanner_test_tok(scanner.look_token(2), TokenType::LAMBDA_QUANTOR)
+}
+
+fn simple_fof_equality_right_starts_tstp_parenthesized_application_formula(
+    scanner: &Scanner,
+) -> bool {
+    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
+        && scanner_test_tok(
+            scanner.look_token(2),
+            TokenType::NAME | TokenType::SEM_IDENT,
+        )
+        && scanner_test_tok(scanner.look_token(3), TokenType::APPLICATION)
+}
+
+fn simple_fof_equality_right_starts_tstp_parenthesized_application_head(scanner: &Scanner) -> bool {
+    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
+        && scanner_test_tok(
+            scanner.look_token(2),
+            TokenType::NAME | TokenType::SEM_IDENT,
+        )
+        && scanner_test_tok(scanner.look_token(3), TokenType::CLOSE_BRACKET)
+        && scanner_test_tok(scanner.look_token(4), TokenType::APPLICATION)
+}
+
+fn simple_fof_equality_right_starts_tstp_logical_head_application(scanner: &Scanner) -> bool {
+    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
+        && (scanner_test_tok(scanner.look_token(2), TokenType::FOF_BIN_OP)
+            || scanner_test_tok(scanner.look_token(2), TokenType::TILDE_SIGN))
+        && scanner_test_tok(scanner.look_token(3), TokenType::CLOSE_BRACKET)
+        && scanner_test_tok(scanner.look_token(4), TokenType::APPLICATION)
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -15170,7 +15240,9 @@ mod tests {
              tff(b_type, type, b: $i).\n\
              tff(c_type, type, c: $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
-             fof(curried_eq, axiom, (h @ a) @ b = c).\n",
+             fof(curried_eq, axiom, (h @ a) @ b = c).\n\
+             fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
+             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -15189,6 +15261,8 @@ mod tests {
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("tff(curried_eq, axiom, app_"));
         assert!(printed.contains("(h,a),b)=c)."));
+        assert!(printed.contains("tff(curried_eq_right, axiom, c=app_"));
+        assert!(printed.contains("tff(curried_eq_right_plain, axiom, c=app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -16444,7 +16518,9 @@ mod tests {
              tff(b_type, type, b: $i).\n\
              tff(c_type, type, c: $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
-             fof(curried_eq, axiom, (h @ a) @ b = c).\n",
+             fof(curried_eq, axiom, (h @ a) @ b = c).\n\
+             fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
+             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23865,7 +23941,9 @@ mod tests {
              tff(b_type, type, b: $i).\n\
              tff(c_type, type, c: $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
-             fof(curried_eq, axiom, (h @ a) @ b = c).\n",
+             fof(curried_eq, axiom, (h @ a) @ b = c).\n\
+             fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
+             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -23885,8 +23963,16 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("cnf(i_0_"))
             .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 1, "{printed}");
+        assert_eq!(cnf_lines.len(), 3, "{printed}");
         assert!(cnf_lines.iter().any(|line| line.contains("h(a,b)=c")));
+        assert_eq!(
+            cnf_lines
+                .iter()
+                .filter(|line| line.contains("c=h(a,b)"))
+                .count(),
+            2,
+            "{printed}"
+        );
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
