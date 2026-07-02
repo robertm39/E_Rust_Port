@@ -12371,6 +12371,9 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left
     if !scanner.test_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN) {
         return false;
     }
+    if left.type_().as_ref().is_some_and(Type::is_bool) {
+        return true;
+    }
 
     let right = scanner.look_token(1);
     scanner_test_tok(
@@ -12380,8 +12383,6 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left
             | TokenType::EXIST_QUANTOR
             | TokenType::TILDE_SIGN,
     ) || scanner_test_id(right, "$true|$false|$distinct")
-        || (left.type_().as_ref().is_some_and(Type::is_bool)
-            && scanner_test_tok(right, TokenType::ITE_TOKEN | TokenType::LET_TOKEN))
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -14970,6 +14971,49 @@ mod tests {
         assert!(printed.contains("<=>"));
         assert!(printed.contains("tff(ne_right, axiom, (app_"));
         assert!(printed.contains("<~>"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_app_encode_treats_typed_atomic_predicate_equality_as_formula_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("app-encode-typed-atomic-predicate-equality");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             tff(q_type, type, q: $i > $o).\n\
+             fof(eq_atom, axiom, p(a) = q(a)).\n\
+             fof(ne_atom, axiom, p(a) != q(a)).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--app-encode", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let printed = String::from_utf8(stdout).unwrap();
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        assert!(printed.starts_with(&default_preprocessing_debug_line()));
+        let eq_line = printed
+            .lines()
+            .find(|line| line.starts_with("tff(eq_atom, "))
+            .unwrap();
+        let ne_line = printed
+            .lines()
+            .find(|line| line.starts_with("tff(ne_atom, "))
+            .unwrap();
+        assert!(eq_line.contains("<=>"));
+        assert!(ne_line.contains("<~>"));
+        assert!(!eq_line.contains(")="));
+        assert!(!ne_line.contains(")!="));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
