@@ -336,13 +336,16 @@ Rust files:
 - `src/control/esession.rs`
 - `src/prover/e_client.rs`
 - `src/prover/e_deduction_server.rs`
+- `src/prover/e_server.rs`
 - `src/bin/e_client.rs`
 - `src/bin/e_deduction_server.rs`
+- `src/bin/e_server.rs`
 
 C source references:
 
 - `eprover/PROVER/e_client.c`
 - `eprover/PROVER/e_deduction_server.c`
+- `eprover/PROVER/e_server.c`
 - `eprover/CONTROL/cco_einteractive_mode.c`
 - `eprover/CONTROL/cco_einteractive_mode.h`
 - `eprover/CONTROL/cco_eserver.c`
@@ -357,13 +360,14 @@ Implemented:
 - Initial deduction-server interactive-mode surface from `cco_einteractive_mode`, including command names, block terminator, success/error response strings, help text, the whitespace-tolerant `AcceptAxiomSetName` token loop, `AxiomSet`/`InteractiveSpec` state over parsed clause/formula sets, `ADD`/`LOAD` through the currently ported batch-parser subset with C-shaped duplicate handling and `OK_ADDED` to `OK_LOADED` status rewriting, C-shaped `STAGE`, `UNSTAGE`, `LIST`, `DOWNLOAD`, `REMOVE`, `QUIT`, single-message `StartDeductionServer` command dispatch over injected block readers and `RUN` handlers, `ReadTextBlock`/`TCPReadTextBlock`-style adapters for `ADD`/`RUN` payloads, a TCP-string receive/send loop adapter for socket-mode command sessions, staged `RUN` job parsing plus `BatchProcessProblem` execution over injected runner hooks with C-shaped 30-second fallback limits and start/finish output, and the unsorted regular-file-only `get_directory_listings` helper used by server-library `LIST`/`LOAD`.
 - Standalone `e_client` executable wrapper for the legacy `e_server` handshake, including C-shaped help/version text, verbosity, output-file redirection, server/port option aliases, low-reserved-port warning, default stdin input through `-`, multi-file problem concatenation, `CreateClientSock`-style connection through the ported TCP-string transport, the `hello`/`add`/problem/`prove` send sequence, `% Server: ...` echoing while waiting for `ready` and `result`, and unit coverage over the injectable stream protocol.
 - Standalone `e_deduction_server` executable wrapper for the interactive deduction-server command protocol, including C-shaped help/version text, verbosity, `--silent`/`--output-level`, `--wtc-limit`, `--lib`, optional `--port`, first-positional prover selection with extra positional arguments ignored, default `eprover` prover, default 30-second total wall-clock limit, `dummy` batch category, desired proof output, stdin/stdout command-loop mode when no port is supplied, TCP-string command-loop mode when a port is supplied, fresh term/control state per accepted TCP client to approximate C fork isolation, and concrete temp-file-backed `RUN` execution through `BatchProcCtrlRunnerSet`.
+- Standalone `e_server` executable wrapper for the legacy placeholder TCP service, including C-shaped help/version text and legacy footer, verbosity, output-file, filter-file, prover, service-port, silent/output-level, LOP/TSTP input-format options, C-shaped no-op handling for the advertised TPTP/TPTP2 options, default prover `eprover`, default port `3666`, output-file creation before missing-domain usage errors, default/custom ax-filter parsing, domain-spec parsing through `StructFOFSpecParseAxioms`-equivalent shared-axiom initialization, C-shaped reset of the shared boundary to zero after distribution initialization, and the observed TCP-string loop that prints received messages and sends `wait` then `ready` for each complete client message.
 
 Pending:
 
 - Full `FormulaAndClauseSetParse` coverage for every input form accepted by the C server, exact byte-level `RUN` output ordering against a live C reference server, and final TCP fork/concurrency semantics for serving multiple clients simultaneously.
 - Exact event-loop integration for `select`/`fd_set` or a compatible platform abstraction.
 - Full subprocess I/O in session processing; `cco_proc_ctrl` descriptor registration is represented, but the C session code leaves actual subprocess I/O as a TODO.
-- Legacy `e_server` executable protocol compatibility, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
+- Byte-compatible `e_server` `select`/accept behavior for rejecting concurrent second clients while one connection is active, stale-session cleanup, and byte-compatible warning/diagnostic routing for failed accepts and socket-close paths.
 
 Change-later notes:
 
@@ -388,10 +392,14 @@ Change-later notes:
 - `e_client.c` echoes every received server message through `GlobalOut`, including the terminal `ready` and `result` messages, and opens `GlobalOut` before loading files or connecting. Rust keeps the echo and early output-file creation side effect, while routing through explicit writers.
 - `e_client.c` accepts privileged/reserved ports after printing a warning. Rust preserves acceptance and warning routing; a cleaned CLI should make this a structured warning after compatibility checks.
 - `e_deduction_server.c` advertises `-p <port>` in usage even though omitting `-p` intentionally starts a stdin/stdout command loop. Rust preserves the no-port mode; a cleaned CLI should make transport choice explicit after compatibility tests cover both paths.
-- `e_deduction_server.c` seeds `total_wtc_limit` with 30 before option parsing, so `-w 0` later disables the fallback rather than re-triggering it. Rust keeps that ordering; a cleaned configuration API should distinguish “unset” from an explicit zero limit.
+- `e_deduction_server.c` seeds `total_wtc_limit` with 30 before option parsing, so `-w 0` later disables the fallback rather than re-triggering it. Rust keeps that ordering; a cleaned configuration API should distinguish "unset" from an explicit zero limit.
 - `e_deduction_server.c` has dead or misleading configuration surface: `outname` is opened but no option sets it, `app_encode` is unused in the file, and the enum still contains `OPT_PRINT_STATISTICS` without an option-table entry. Rust omits those dead surfaces for now; revisit only if reference executables expose them through linked code or generated help.
 - `e_deduction_server.c` treats the first positional argument as the prover executable and ignores any later positional arguments even though usage says `[files]`. Rust preserves first-argument selection and ignores extras; a cleaned CLI should reject or repurpose extras once drop-in behavior is covered.
 - `e_deduction_server.c` forks for every accepted TCP client and lets the child inherit a snapshot of the initialized batch/control state. Rust currently creates fresh term/control state for each accepted client but serves clients sequentially in one process; concurrent client handling should be added after subprocess cleanup, output ordering, and shared global-state boundaries are reference-tested.
+- `e_server.c` parses a domain spec and filter set but the checked service loop does not run the prover or use the parsed filters. It prints `Received: ...` and sends `wait` followed by `ready` for every TCP string, so it does not satisfy the `e_client.c` expectation of a terminal `result`. Rust preserves that placeholder protocol; a future cleaned legacy server should either implement the intended `result` workflow or clearly retire this executable after compatibility audits.
+- `e_server.c` advertises `--tptp-in`, `--tptp-format`, `--tptp2-in`, and `--tptp2-format`, but `process_options` has no switch case for their option codes. In normal builds they leave the default TSTP parser unchanged; Rust preserves that no-op. A cleaned CLI should either implement real TPTP-2 parsing or remove the advertised aliases.
+- `e_server.c` sends diagnostic loop text with `printf` to process stdout, while `--output-file` only affects `GlobalOut` users such as domain parsing. Rust keeps parse output separate from loop output; a later API should make this split explicit rather than depending on mixed global/stdout channels.
+- `e_server.c` accepts only one active connection and closes additional accepted sockets while the first is active. Rust currently serves accepted clients sequentially, which preserves single-client processing but not the exact second-client rejection timing; revisit with event-loop tests if this legacy server remains user-facing.
 
 ## E Process Control
 

@@ -93,6 +93,20 @@ Source files reviewed: `PROVER/e_server.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/e_server.rs` and `src/bin/e_server.rs` port the standalone executable wrapper. The Rust wrapper preserves the C option surface, default prover `eprover`, default service port `3666`, legacy help/footer text, output-file creation before missing-domain usage errors, custom/default ax-filter parsing, domain-spec parsing through the ported structured-FOF include loader, C-shaped reset of the shared boundary after distribution initialization, and the observed TCP-string response loop that prints each message and replies `wait` then `ready`.
+- The Rust server loop serves accepted clients sequentially. That preserves the single-client placeholder protocol but does not yet match C's `select` loop behavior of closing a second accepted socket while the first connection remains active.
+- The corresponding cross-unit status and compatibility notes live in [`../../rust-port-status.md`](../../rust-port-status.md) under “E Server Sessions”.
+
+### Change Later
+
+- The service loop parses the domain spec and filter set but never uses them to run the prover. It only prints `Received: ...` and sends `wait` then `ready` for every TCP string; no `result` message is produced for the legacy `e_client` protocol. Keep this for drop-in compatibility, but decide later whether to implement the intended service or retire this placeholder.
+- `--tptp-in`, `--tptp-format`, `--tptp2-in`, and `--tptp2-format` are advertised in the option table, but `process_options` has no switch cases for their option codes. In normal C builds they leave the default TSTP parser unchanged. Rust preserves this no-op; a cleaned CLI should either implement the aliases or remove them.
+- `--output-file` affects `GlobalOut` output from startup parsing, while the main loop uses `printf` directly to stdout for `Main loop`, `Accepted`, `Received`, and connection diagnostics. Preserve the split for compatibility, but make output routing explicit in a cleaned server API.
+- C prints the raw accepted descriptor in `Accepted %d` and closes extra accepted sockets while one connection is active. Rust prints the accepted socket descriptor through the ported descriptor adapter and serves clients sequentially; second-client rejection timing should be reference-tested before treating this legacy server as fully byte-compatible.
+- `app_encode` and `OPT_PRINT_STATISTICS` are present but unused in this file. Do not reproduce them in cleaned Rust APIs unless another compatibility path exposes them.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
