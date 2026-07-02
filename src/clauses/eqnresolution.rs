@@ -90,6 +90,7 @@ fn build_resolvent(
         .literals()
         .copy_opt_except_index(Some(literal_index), bank)?;
     subst.backtrack_to_pos(backtrack);
+    new_literals.lambda_normalize(bank)?;
     new_literals.remove_resolved(bank);
     new_literals.remove_duplicates(bank);
     Ok(Clause::alloc(new_literals))
@@ -324,8 +325,9 @@ mod tests {
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
@@ -353,6 +355,18 @@ mod tests {
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn typed_const_with_type(bank: &mut TermBank, name: &str, type_: Type) -> Term {
         let f_code = bank.signature_mut().insert_id(name, 0, false);
         if bank.signature().get_type(f_code).is_none() {
             bank.signature_mut()
@@ -463,6 +477,36 @@ mod tests {
         let literal = &resolvent.literals().as_slice()[0];
         assert!(literal.is_positive());
         assert_eq!(literal.left(), &a);
+        assert_eq!(literal.right(), &b);
+    }
+
+    #[test]
+    fn compute_eq_res_lambda_normalizes_copied_resolvent_literals() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let unary_type = alloc_arrow_type(vec![i_type.clone(), i_type.clone()]);
+        let f = typed_const_with_type(&mut bank, "er_lambda_f", unary_type);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(&mut bank, &f, std::slice::from_ref(&db0)).unwrap();
+        let lambda =
+            close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &matrix).unwrap();
+        let x = typed_var(&bank, -2);
+        let a = typed_const(&mut bank, "er_lambda_a");
+        let b = typed_const(&mut bank, "er_lambda_b");
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&x)).unwrap();
+        let expected = apply_terms(&mut bank, &f, std::slice::from_ref(&a)).unwrap();
+        let rest = lit(&mut bank, &applied, &b, true);
+        let diseq = lit(&mut bank, &x, &a, false);
+        let clause = Clause::alloc(EqnList::from_vec(vec![rest, diseq]));
+
+        let resolvent = compute_eq_res(&mut bank, &clause, 1)
+            .unwrap()
+            .expect("variable disequality should resolve");
+
+        assert_eq!(resolvent.literal_number(), 1);
+        let literal = &resolvent.literals().as_slice()[0];
+        assert!(literal.is_positive());
+        assert_eq!(literal.left(), &expected);
         assert_eq!(literal.right(), &b);
     }
 
