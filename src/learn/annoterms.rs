@@ -266,7 +266,7 @@ pub fn anno_term_parse(
     bank: &mut TermBank,
     expected: i64,
 ) -> Result<AnnoTerm, Diagnostic> {
-    let term = bank.parse_term_simple(scanner)?;
+    let term = bank.parse_term_with_distinct_checks(scanner)?;
     scanner.accept_tok(TokenType::COLON)?;
     let mut annotations = AnnotationTree::new();
     annotation_list_parse(scanner, &mut annotations, expected)?;
@@ -296,7 +296,7 @@ pub fn anno_set_parse(
     expected: i64,
 ) -> Result<AnnoSet, Diagnostic> {
     let mut set = anno_set_alloc(bank);
-    while anno_term_starts(scanner) {
+    while anno_term_starts(scanner, bank) {
         let term = anno_term_parse(scanner, bank, expected)?;
         set.add_term(term);
     }
@@ -325,8 +325,9 @@ pub fn anno_set_compute_pattern_subst(subst: &mut PatternSubst, set: &AnnoSet) -
     set.compute_pattern_subst(subst)
 }
 
-fn anno_term_starts(scanner: &Scanner) -> bool {
+fn anno_term_starts(scanner: &Scanner, bank: &TermBank) -> bool {
     scanner.test_tok(func_symb_start_token() | TokenType::MULT)
+        || (bank.signature().supports_lists() && scanner.test_tok(TokenType::OPEN_SQUARE))
 }
 
 fn annotation_collect_max(max_values: &mut DDArray, annotation: &Annotation) {
@@ -374,6 +375,7 @@ mod tests {
         anno_set_remove_except_ident_list, anno_term_parse, anno_term_print_string,
         anno_term_rec_to_flat_enc, AnnoSet, AnnoTerm,
     };
+    use crate::basics::error::ErrorCode;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::PatEqnDirection;
     use crate::inout::scanner::{Scanner, TokenType};
@@ -665,6 +667,45 @@ mod tests {
             anno_term_print_string(&parsed, &bank, true),
             "f(a) : 1:(2.000000,4.000000)2:(1.000000,3.500000)."
         );
+    }
+
+    #[test]
+    fn anno_term_parse_uses_checked_tbtermparse_shape() {
+        let mut bank = test_bank();
+        let mut scanner = make_scanner("12(a) : 1:(1,2).");
+
+        let error = anno_term_parse(&mut scanner, &mut bank, 1).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+        assert!(error.message().contains("Number cannot have argument list"));
+    }
+
+    #[test]
+    fn anno_set_parse_accepts_list_literals_when_signature_supports_lists() {
+        let mut bank =
+            TermBank::new(Signature::new_with_list_support(TypeBank::new(), true)).unwrap();
+        let mut scanner = make_scanner("[a,b] : 1:(2,10). f(a) : 1:(1,5).");
+
+        let set = anno_set_parse(&mut scanner, &mut bank, 2).unwrap();
+
+        assert_eq!(set.nodes(), 2);
+        assert_eq!(scanner.current_token().kind(), TokenType::NO_TOKEN);
+        let rendered = set
+            .iter()
+            .map(|(_key, term)| bank.term_string(term.term(), true))
+            .collect::<Vec<_>>();
+        assert_eq!(rendered, vec!["[a,b]", "f(a)"]);
+    }
+
+    #[test]
+    fn anno_set_parse_stops_before_list_literal_without_list_support() {
+        let mut bank = test_bank();
+        let mut scanner = make_scanner("[a,b] : 1:(2,10).");
+
+        let set = anno_set_parse(&mut scanner, &mut bank, 1).unwrap();
+
+        assert!(set.is_empty());
+        assert_eq!(scanner.current_token().kind(), TokenType::OPEN_SQUARE);
     }
 
     #[test]
