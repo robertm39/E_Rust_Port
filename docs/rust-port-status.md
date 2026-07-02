@@ -562,7 +562,7 @@ C source references:
 
 Implemented:
 
-- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+- Standalone `termprops` binary integration, including C-shaped `-h`/`--help`, `-v`/`--verbose`, and `-o`/`--output-file` options including `-o -`, default stdin input through `-`, sequential input-file parsing through one shared term bank, simple term rendering, `TermWeight(term,1,1)`-style size, `TermDepth`-style depth, pointer-identity binary symmetry detection, safe false treatment for C's out-of-bounds unary-child `com` probe, final count/average/max summary output including the empty-input `nan` shape, explicit stdout/file routing, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
 
 Pending:
 
@@ -645,7 +645,7 @@ C source references:
 
 Implemented:
 
-- Standalone `checkproof` binary integration over the ported PCL2 full-protocol and proof-checking modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, prover-type, executable, and prover CPU-limit options, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, signal setup for temp-file cleanup compatibility, external prover dispatch through E/Otter/SPASS command shapes, `scheme-setheo` unchecked behavior, warning output, explicit stdout/file routing including `-o -`, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, final verification summary, and unit coverage for assumption-only verification, unchecked partial verification, silent mode, output files, option compatibility, verbosity side effect, invalid prover diagnostics, trailing-token diagnostics, and diagnostic edge cases.
+- Standalone `checkproof` binary integration over the ported PCL2 full-protocol and proof-checking modules, including C-shaped help, long-only `--version`, verbosity, output-file, silent/output-level, prover-type, executable, and prover CPU-limit options, default stdin input through `-`, TPTP-format UPCL2 parsing with shell-step support, strict end-of-input checks, signal setup for temp-file cleanup compatibility, external prover dispatch through E/Otter/SPASS command shapes, `scheme-setheo` unchecked behavior, warning output, explicit stdout/file routing including `-o -`, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, final verification summary, and unit coverage for assumption-only verification, unchecked partial verification, silent mode, output files, early output-file creation before later input-open failure, option compatibility, verbosity side effect, invalid prover diagnostics, trailing-token diagnostics, and diagnostic edge cases.
 
 Pending:
 
