@@ -87,6 +87,16 @@ Source files reviewed: `PROVER/epclanalyse.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Rust Port Notes
+
+- `src/prover/epclanalyse.rs` and `src/bin/epclanalyse.rs` port the standalone `epclanalyse` executable over the existing Rust PCL2 full-protocol owner and property-analysis functions. The port covers `-h`/`--help`, long-only `--version`, `-v`/`--verbose`, `-o`/`--output-file`, `-s`/`--silent`, default stdin input through `-`, TPTP-format PCL parsing, strict end-of-input checking, property-statistic aggregation through `PCLProtPropAnalyse`-style logic, and C-shaped summary/representative-step output.
+
+### Change Later
+
+- Unlike nearby tools such as `epclextract`, C `epclanalyse` defines `--version` without a `-V` shorthand. Rust preserves that option table; add `-V` only behind an explicit compatibility decision.
+- `--silent` sets C's global `OutputLevel` to `0`, but the property-summary output is not level-gated. Rust accepts it as a no-op for command-line compatibility; a later cleanup can remove or document it if no shared output layer consumes the side effect.
+- The C help text uses a legacy 2002-2009 support-tool footer and obsolete URL instead of the shared modern `E_FOOTER`. Rust preserves that visible text for this executable; consider moving old support-tool footers behind a shared compatibility helper later.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.

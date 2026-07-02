@@ -474,6 +474,32 @@ Change-later notes:
 - `--silent` mutates C's global `OutputLevel`, but the extraction output in this executable is not level-gated. Rust accepts it as a no-op for command-line compatibility; revisit only if shared PCL warning/output plumbing gains observable level handling.
 - The fast mini-protocol path intentionally trusts C's contiguous proof/final/extract suffix assumption instead of scanning every step. Preserve this until reference traces prove users expect the more complete slow extraction semantics under `--fast-extract`.
 
+## epclanalyse Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/prover/epclanalyse.rs`
+- `src/bin/epclanalyse.rs`
+
+C source references:
+
+- `eprover/PROVER/epclanalyse.c`
+
+Implemented:
+
+- Standalone `epclanalyse` binary integration over the ported PCL2 full-protocol and property-analysis modules, including C-shaped help, long-only `--version`, verbosity, output-file, and silent options, default stdin input through `-`, TPTP-format PCL parsing, strict end-of-input checks, protocol property aggregation, representative-step rendering, legacy support-tool help footer text, explicit stdout/file routing, and unit coverage for stdin, output files, option compatibility, verbosity side effect, and trailing-token diagnostics.
+
+Pending:
+
+- Byte-for-byte comparison against a built C `epclanalyse` executable remains pending for empty protocols and zero-denominator average spelling, formula-valued PCL representative steps, exact file/open close diagnostics, and platform-specific broken-pipe behavior.
+
+Change-later notes:
+
+- C exposes `--version` but no `-V` shorthand for this executable. Rust preserves that table even though nearby tools differ; consider normalizing only outside drop-in compatibility mode.
+- `--silent` mutates C's global `OutputLevel`, but the summary printed by `PCLProtPropDataPrint` is unconditional. Rust accepts it as a no-op; revisit if future shared output plumbing exposes this side effect.
+- The C help footer is an old support-tool block with the 2002-2009 copyright range and obsolete URL. Rust keeps the visible text for compatibility, but a future documentation pass may want a shared helper for legacy support-tool footers.
+
 ## LTB Batch Specification Surface
 
 Rust files:

@@ -29,4 +29,8 @@ path = "src/bin/termprops.rs"
 name = "epclextract"
 path = "src/bin/epclextract.rs"
 
+[[bin]]
+name = "epclanalyse"
+path = "src/bin/epclanalyse.rs"
+
 [dependencies]
