@@ -784,7 +784,7 @@ Implemented:
 
 - Standalone `eground` binary registration and wrapper over the ported parser bridge, clause-set cleanup, feature extraction, equality-literal recoding, optional splitting, finite-Herbrand-universe guard, ground-instance generation, constrained instance generation, add-one-instance retry, DIMACS/LOP/TPTP/TSTP rendering, output-file routing including `-o -`, resource options, and statistics/resource-report output.
 - C-shaped option surface for help/version, verbosity/output level, parse/print/format aliases, `--dimacs`, `--definitional-cnf`, `--miniscope-limit`, `--split-tries`, unit-subsumption/unit-resolution/tautology toggles, memory/CPU limits, `--add-one-instance`, `--give-up`, `--constraints`, `--local-constraints`, `--fix-minisat`, default stdin input through `-`, and output format auto-upgrade to TSTP for TSTP-detected auto input.
-- Unit coverage for help/version text, option defaults and aliases, negative split validation, stdin grounding, DIMACS header/result output, suppressed result with statistics, output-file routing, `-o -` stdout routing, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, and rejection of non-ground inputs with non-constant functions.
+- Unit coverage for help/version text, option defaults and aliases, negative split validation, stdin grounding, DIMACS header/result output, suppressed result with statistics, output-file routing, `-o -` stdout routing, early output-file creation before later input-open failure, C-shaped two-line input/output file-open diagnostics, C `OutClose` wording on final flush failure, and rejection of non-ground inputs with non-constant functions.
 
 Pending:
 

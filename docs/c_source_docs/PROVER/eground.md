@@ -110,5 +110,5 @@ Source files reviewed: `PROVER/eground.c`.
 ### Rust Port Notes
 
 - `src/prover/eground.rs` and `src/bin/eground.rs` port the standalone executable wrapper over the shared Rust clause/formula parser bridge and grounding helpers.
-- The wrapper preserves default stdin through `-`, `OutOpen`-style `-o -` stdout routing, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, and the C DIMACS split between the configured output stream and raw stdout.
+- The wrapper preserves default stdin through `-`, `OutOpen`-style `-o -` stdout routing, early output-file creation before later input-open failures, two-line `SysError`-style scanner/output open diagnostics, C `OutClose` wording on final flush failure, and the C DIMACS split between the configured output stream and raw stdout.
 <!-- END MANUAL REVIEW: c_source_docs -->
