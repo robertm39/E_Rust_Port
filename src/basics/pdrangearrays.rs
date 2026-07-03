@@ -73,11 +73,29 @@ impl<T: Clone> PDRangeArr<T> {
         if self.index_is_covered(idx) {
             return;
         }
+        self.enlarge_c_raw(idx);
+    }
+
+    /// Enlarge using the exported C `PDRangeArrEnlarge` branch choice.
+    ///
+    /// Unlike [`PDRangeArr::enlarge`], this does not return early for already
+    /// covered indices; it dispatches solely on `idx < offset`, matching the C
+    /// helper's assertion-sensitive public surface.
+    ///
+    /// # Panics
+    ///
+    /// Panics if computing the new logical range overflows `usize` or
+    /// `isize`, or if the C-shaped branch choice fails to cover `idx`.
+    pub fn enlarge_c_raw(&mut self, idx: PDRangeArrIndex) {
         if idx < self.offset {
             self.expand_down(idx);
         } else {
             self.expand_up(idx);
         }
+        assert!(
+            self.index_is_covered(idx),
+            "PDRangeArrEnlarge failed to cover index {idx}"
+        );
     }
 
     /// Return a mutable slot for `idx`, growing the covered range if needed.
@@ -344,6 +362,26 @@ mod tests {
         *array.element_ref(4) = Some(4);
         assert_eq!((array.low_key(), array.limit_key()), (-4, 6));
         assert_eq!(array.existing_element(4), Some(&Some(4)));
+    }
+
+    #[test]
+    fn raw_enlarge_uses_c_branch_choice_even_for_covered_indices() {
+        let mut array = PDPointerRangeArr::new_pointer(0, GROW_EXPONENTIAL);
+        array.assign(3, Some("high"));
+        array.assign(0, Some("low"));
+        let before = array.copy_array();
+
+        array.enlarge_c_raw(1);
+
+        assert_eq!(array.low_key(), before.low_key());
+        assert_eq!(array.limit_key(), before.limit_key());
+        assert_eq!(array.size(), before.size());
+        assert_eq!(array.as_slice(), before.as_slice());
+
+        array.enlarge_c_raw(-2);
+        assert_eq!((array.low_key(), array.limit_key()), (-8, 8));
+        assert_eq!(array.existing_element(0), Some(&Some("low")));
+        assert_eq!(array.existing_element(3), Some(&Some("high")));
     }
 
     #[test]

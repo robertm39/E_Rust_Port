@@ -118,6 +118,7 @@ Source files reviewed: `BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `PDRangeArrElementRef` grows the range when the index is outside the current `[low, limit)` window and then asserts that the resulting offset/size covers the requested index. The element, assignment, and integer-increment macros inherit that grow-then-return behavior and always expose a slot for representable indices.
 - `PDRangeArrElementDeleteP` and `PDRangeArrElementDeleteInt` first test coverage and do nothing outside the current range, so deletion is checked while normal element access is mutating.
+- Rust keeps ordinary access on the checked grow-if-uncovered path and also exposes an explicit raw `PDRangeArrEnlarge`-shaped helper whose branch choice follows `idx < offset`, including already-covered indices.
 
 ### Porting Focus
 
@@ -127,6 +128,6 @@ Source files reviewed: `BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c
 
 ### Change Later
 
-- `PDRangeArrEnlarge` is exported but assertion-sensitive: the normal inline accessor calls it only for uncovered indices, while a direct call on an already covered index can take the wrong expansion branch. Rust keeps ordinary access C-compatible and safe to call, but a cleaned API should make raw expansion preconditions explicit or hide the helper.
+- `PDRangeArrEnlarge` is exported but assertion-sensitive: the normal inline accessor calls it only for uncovered indices, while a direct call on an already covered index can take the wrong expansion branch. Rust now exposes that raw branch choice separately from ordinary access; a cleaned API should hide the helper or make its preconditions explicit outside compatibility code.
 - Reads through `PDRangeArrElement*` can allocate and shift the backing array even when the caller is only probing for a value. Preserve this for compatibility, especially for `IntMap`, but future Rust-only lookup APIs should use non-mutating checked accessors.
 <!-- END MANUAL REVIEW: c_source_docs -->
