@@ -2,6 +2,7 @@ use crate::basics::plist::{PListArena, PListHandle};
 use crate::clauses::clause::Clause;
 use crate::clauses::clausepos_tree::clause_key;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::WrappedFormula;
 use crate::terms::functypes::FunCode;
 use std::collections::{btree_map::Entry, BTreeMap};
 
@@ -9,6 +10,7 @@ use std::collections::{btree_map::Entry, BTreeMap};
 pub struct FIndex {
     index: BTreeMap<FunCode, BTreeMap<i64, Clause>>,
     plist_clause_index: BTreeMap<FunCode, BTreeMap<usize, PListHandle>>,
+    plist_formula_index: BTreeMap<FunCode, BTreeMap<usize, PListHandle>>,
 }
 
 impl FIndex {
@@ -17,6 +19,7 @@ impl FIndex {
         Self {
             index: BTreeMap::new(),
             plist_clause_index: BTreeMap::new(),
+            plist_formula_index: BTreeMap::new(),
         }
     }
 
@@ -24,6 +27,7 @@ impl FIndex {
     pub fn is_empty(&self) -> bool {
         self.index.values().all(BTreeMap::is_empty)
             && self.plist_clause_index.values().all(BTreeMap::is_empty)
+            && self.plist_formula_index.values().all(BTreeMap::is_empty)
     }
 
     #[must_use]
@@ -37,8 +41,18 @@ impl FIndex {
     }
 
     #[must_use]
+    pub fn plist_formula_bucket(&self, f_code: FunCode) -> Option<&BTreeMap<usize, PListHandle>> {
+        self.plist_formula_index.get(&f_code)
+    }
+
+    #[must_use]
     pub fn first_pl_clause(&self, f_code: FunCode) -> Option<PListHandle> {
         self.plist_clause_bucket(f_code)?.values().next().copied()
+    }
+
+    #[must_use]
+    pub fn first_pl_formula(&self, f_code: FunCode) -> Option<PListHandle> {
+        self.plist_formula_bucket(f_code)?.values().next().copied()
     }
 
     /// Adds `clause` under every function symbol returned by
@@ -138,6 +152,64 @@ impl FIndex {
             .sum()
     }
 
+    /// Adds a `PList` cell containing a wrapped formula under every function
+    /// symbol returned by `WFormulaReturnFCodes`.
+    ///
+    /// Returns the number of new function-code/list-cell associations.
+    #[must_use]
+    pub fn add_pl_formula(
+        &mut self,
+        formulas: &PListArena<WrappedFormula>,
+        lformula: PListHandle,
+    ) -> usize {
+        let Some(formula) = formulas.value(lformula) else {
+            return 0;
+        };
+        let mut f_codes = Vec::new();
+        formula.return_f_codes(&mut f_codes);
+        f_codes
+            .into_iter()
+            .filter(|&f_code| self.add_pl_formula_instance(f_code, lformula))
+            .count()
+    }
+
+    /// Removes a `PList` cell containing a wrapped formula from every function
+    /// symbol returned by `WFormulaReturnFCodes`.
+    ///
+    /// Returns the number of removed function-code/list-cell associations.
+    #[must_use]
+    pub fn remove_pl_formula(
+        &mut self,
+        formulas: &PListArena<WrappedFormula>,
+        lformula: PListHandle,
+    ) -> usize {
+        let Some(formula) = formulas.value(lformula) else {
+            return 0;
+        };
+        let mut f_codes = Vec::new();
+        formula.return_f_codes(&mut f_codes);
+        f_codes
+            .into_iter()
+            .filter(|&f_code| self.remove_pl_formula_instance(f_code, lformula))
+            .count()
+    }
+
+    /// Adds every wrapped formula cell from a `PList` formula set.
+    ///
+    /// Returns the number of new function-code/list-cell associations.
+    #[must_use]
+    pub fn add_pl_formula_set(
+        &mut self,
+        formulas: &PListArena<WrappedFormula>,
+        set: PListHandle,
+    ) -> usize {
+        formulas
+            .handles(set)
+            .into_iter()
+            .map(|lformula| self.add_pl_formula(formulas, lformula))
+            .sum()
+    }
+
     fn add_instance(&mut self, f_code: FunCode, clause: &Clause) -> bool {
         match self
             .index
@@ -189,6 +261,32 @@ impl FIndex {
         }
         removed
     }
+
+    fn add_pl_formula_instance(&mut self, f_code: FunCode, lformula: PListHandle) -> bool {
+        match self
+            .plist_formula_index
+            .entry(f_code)
+            .or_default()
+            .entry(lformula.index())
+        {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(entry) => {
+                entry.insert(lformula);
+                true
+            }
+        }
+    }
+
+    fn remove_pl_formula_instance(&mut self, f_code: FunCode, lformula: PListHandle) -> bool {
+        let Some(bucket) = self.plist_formula_index.get_mut(&f_code) else {
+            return false;
+        };
+        let removed = bucket.remove(&lformula.index()).is_some();
+        if bucket.is_empty() {
+            self.plist_formula_index.remove(&f_code);
+        }
+        removed
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +298,7 @@ mod tests {
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::WrappedFormula;
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -346,6 +445,55 @@ mod tests {
         assert_eq!(index.add_pl_clause_set(&clauses, anchor), 2);
 
         let bucket = index.plist_clause_bucket(shared.f_code()).unwrap();
+        assert_eq!(bucket.len(), 2);
+        assert!(bucket.contains_key(&first.index()));
+        assert!(bucket.contains_key(&second.index()));
+    }
+
+    #[test]
+    fn plist_formula_cells_are_indexed_by_cell_identity() {
+        let mut bank = test_bank();
+        let shared = typed_const(&mut bank, "a");
+        let first_formula = WrappedFormula::wt_formula_alloc(shared.clone());
+        let second_formula = WrappedFormula::wt_formula_alloc(shared.clone());
+        let mut formulas = PListArena::new();
+        let anchor = formulas.alloc_list();
+        let first = formulas.store_after(anchor, first_formula);
+        let second = formulas.store_after(first, second_formula);
+        let mut index = FIndex::new();
+
+        assert_eq!(index.add_pl_formula(&formulas, first), 1);
+        assert_eq!(index.add_pl_formula(&formulas, first), 0);
+        assert_eq!(index.add_pl_formula(&formulas, second), 1);
+
+        let bucket = index.plist_formula_bucket(shared.f_code()).unwrap();
+        assert_eq!(bucket.len(), 2);
+        assert_eq!(bucket.get(&first.index()), Some(&first));
+        assert_eq!(bucket.get(&second.index()), Some(&second));
+
+        assert_eq!(index.remove_pl_formula(&formulas, first), 1);
+        assert_eq!(index.remove_pl_formula(&formulas, first), 0);
+        assert_eq!(
+            index.plist_formula_bucket(shared.f_code()).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn plist_formula_set_addition_walks_list_cells() {
+        let mut bank = test_bank();
+        let shared = typed_const(&mut bank, "a");
+        let first_formula = WrappedFormula::wt_formula_alloc(shared.clone());
+        let second_formula = WrappedFormula::wt_formula_alloc(shared.clone());
+        let mut formulas = PListArena::new();
+        let anchor = formulas.alloc_list();
+        let first = formulas.store_after(anchor, first_formula);
+        let second = formulas.store_after(first, second_formula);
+        let mut index = FIndex::new();
+
+        assert_eq!(index.add_pl_formula_set(&formulas, anchor), 2);
+
+        let bucket = index.plist_formula_bucket(shared.f_code()).unwrap();
         assert_eq!(bucket.len(), 2);
         assert!(bucket.contains_key(&first.index()));
         assert!(bucket.contains_key(&second.index()));

@@ -104,12 +104,13 @@ Source files reviewed: `CLAUSES/ccl_relevance.h`, `CLAUSES/ccl_relevance.c`.
 - `RelevanceDataInit` splits conjecture and non-conjecture clauses/formulas into `PList` buckets with `PListStoreP(anchor, ...)`; because insertion is after the anchor, each bucket is reversed relative to source set traversal.
 - `RelevanceDataCompute` records clause and formula core lists before allocating fresh empty cores, then `extract_new_core` moves matching rest-list cells into the new cores through the function-symbol index.
 - `proofstate_rel_prune` treats level `0` outside the helper: `ProofStateRelevancyProcess` returns before pruning. For requested levels beyond computed relevance levels, it moves all remaining rest clauses/formulas into the new axiom sets.
+- Rust now shares the C-shaped relevance traversal over represented clause and formula axiom owners, including formula `PList` indexing and axiom-count pruning deltas. Parser-owned formula population and `che_funweights` formula-context scoring remain separate follow-up work.
 
 ### Change Later
 
 - The C relevance implementation exposes raw `PList` list order in pruning results. If reference tests show the order does not matter, later Rust code could prefer source-order stable vectors for readability, but the current port should preserve the C-shaped reversed buckets.
 - `extract_new_core` repeatedly consumes the root of a `PTree` bucket keyed by raw `PList` cell addresses. That root depends on allocation addresses and splay-tree history; replacing it with deterministic handle order is a good Rust cleanup candidate only if proof/pruning behavior tests allow it.
-- The clause and formula relevance paths are duplicated structurally in C. Once `WFormula`/`FormulaSet` are ported, Rust can share the traversal/indexing scaffolding while keeping compatibility-visible mutation order explicit.
+- The clause and formula relevance paths are duplicated structurally in C. Rust now shares the traversal/indexing scaffolding for represented owners while keeping compatibility-visible mutation order explicit; revisit the remaining duplication only after parser-owned formula handles and reference output tests are in place.
 
 ### Porting Focus
 

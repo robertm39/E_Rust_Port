@@ -106,11 +106,12 @@ Source files reviewed: `CLAUSES/ccl_findex.h`, `CLAUSES/ccl_findex.c`.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - The index maps each function code to a `PTree` of raw clause/formula pointers or raw `PList` cell pointers. Duplicate suppression is pointer-identity based rather than structural.
 - PList-backed add/remove helpers recompute all function codes from the current clause/formula payload when removing a cell, so callers must remove from the index before mutating the payload's symbols.
+- Rust now ports the PList-backed formula indexing path over represented `WrappedFormula` cells for `ccl_relevance` formula-owner pruning; plain clause indexing and PList clause indexing remain available for existing clause callers.
 
 ### Change Later
 
 - `extract_new_core` in `ccl_relevance` observes the `PTree` root for a function-code bucket. Because the bucket is keyed by raw addresses and the root is affected by splay operations, exact extraction order is allocator- and history-sensitive. Rust should keep a deterministic handle order unless reference compatibility requires modeling this incidental root choice.
-- Formula and clause index helpers are duplicated in C; a typed Rust abstraction can share the indexing logic once stable owners for both payload kinds exist.
+- Formula and clause index helpers are duplicated in C; Rust can further share the indexing logic once stable owners for both payload kinds replace the remaining temporary identifier bridges.
 
 ### Porting Focus
 

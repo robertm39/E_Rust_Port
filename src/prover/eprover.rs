@@ -70,7 +70,7 @@ use crate::clauses::proofstate::{
     proof_state_alloc, ProofObjectAnalysis, ProofObjectGraph, ProofState, RawFormulaFeatures,
     WatchlistSource as ProofStateWatchlistSource,
 };
-use crate::clauses::relevance::clause_set_relevance_prune;
+use crate::clauses::relevance::clause_formula_sets_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
 use crate::clauses::sine::{
     pstack_clauses_move, pstack_formulas_move, select_axioms_clause_formula_sets,
@@ -5613,7 +5613,7 @@ fn run_prune_only<W: Write + ?Sized>(
     write_preprocessing_config_debug_line(output, config)?;
     load_configured_watchlist_source(config, &mut state)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
-    let _relevancy_pruned = apply_clause_relevance_pruning(config, &mut state);
+    let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
     let _preproc_removed = apply_clause_set_preprocessing(
         &mut state,
         config.preprocessing.no_preprocessing,
@@ -5688,7 +5688,7 @@ fn run_proof_search<W: Write + ?Sized>(
     write_preprocessing_params_debug_line(output, &heuristic_params)?;
     load_configured_watchlist_source(config, &mut state)?;
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
-    let relevancy_pruned = sine_pruned + apply_clause_relevance_pruning(config, &mut state);
+    let relevancy_pruned = sine_pruned + apply_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
     let preproc_removed = apply_clause_set_preprocessing(
         &mut state,
@@ -6788,7 +6788,7 @@ fn auto_sine_filter_name(state: &crate::clauses::proofstate::ProofState) -> Opti
         .and_then(|(_, filter)| *filter)
 }
 
-fn apply_clause_relevance_pruning(
+fn apply_relevance_pruning(
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> i64 {
@@ -6797,9 +6797,14 @@ fn apply_clause_relevance_pruning(
         return 0;
     }
 
-    let (pruned, removed) =
-        clause_set_relevance_prune(state.terms().signature(), state.axioms(), level);
+    let (pruned, pruned_formulas, removed) = clause_formula_sets_relevance_prune(
+        state.terms().signature(),
+        state.axioms(),
+        state.f_axioms(),
+        level,
+    );
     *state.axioms_mut() = pruned;
+    *state.f_axioms_mut() = pruned_formulas;
     removed
 }
 
@@ -12707,7 +12712,7 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 mod tests {
     use super::{
         apply_choice_axiom_recognition, apply_clause_set_preprocessing,
-        apply_proof_state_sine_silent, auto_memory_limit_from_system_mb,
+        apply_proof_state_sine_silent, apply_relevance_pruning, auto_memory_limit_from_system_mb,
         core_limit_failure_messages, cpu_rlimit_to_apply, fv_index_params_from_config,
         heuristic_parms_from_config, open_configured_output, order_parms_from_config,
         parse_app_encode_file, preprocessing_config_debug_line, process_options,
@@ -17188,6 +17193,50 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(remaining_formula_ids.contains(&goal_formula_id));
         assert!(remaining_formula_ids.contains(&bridge_formula_id));
+        assert!(!remaining_formula_ids.contains(&unrelated_formula_id));
+    }
+
+    #[test]
+    fn proof_state_relevance_pruning_filters_represented_formula_axioms() {
+        let _guard = global_state_lock();
+        let mut config = EProverConfig::default();
+        config.preprocessing.relevance_prune_level = 3;
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let goal = bool_const(state.terms_mut(), "proof_state_rel_goal");
+        let bridge = bool_const(state.terms_mut(), "proof_state_rel_bridge");
+        let unrelated = bool_const(state.terms_mut(), "proof_state_rel_unrelated");
+        let bridge_clause = bool_equality_clause(state.terms_mut(), &goal, &bridge, 61);
+        let unrelated_clause = bool_equality_clause(state.terms_mut(), &unrelated, &unrelated, 63);
+        state.axioms_mut().insert(bridge_clause);
+        state.axioms_mut().insert(unrelated_clause);
+
+        let mut goal_formula = WrappedFormula::wt_formula_alloc(goal);
+        goal_formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let goal_formula_id = goal_formula.entry_id();
+        let mut bridge_formula = WrappedFormula::wt_formula_alloc(bridge);
+        bridge_formula.set_tptp_type(CP_TYPE_AXIOM);
+        let bridge_formula_id = bridge_formula.entry_id();
+        let mut unrelated_formula = WrappedFormula::wt_formula_alloc(unrelated);
+        unrelated_formula.set_tptp_type(CP_TYPE_AXIOM);
+        let unrelated_formula_id = unrelated_formula.entry_id();
+        state.f_axioms_mut().insert(goal_formula);
+        state.f_axioms_mut().insert(bridge_formula);
+        state.f_axioms_mut().insert(unrelated_formula);
+
+        let removed = apply_relevance_pruning(&config, &mut state);
+
+        assert_eq!(removed, 2);
+        assert!(state.axioms().find_by_id(61).is_some());
+        assert!(state.axioms().find_by_id(63).is_none());
+        let remaining_formula_ids = state
+            .f_axioms()
+            .iter()
+            .map(WrappedFormula::entry_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining_formula_ids,
+            vec![goal_formula_id, bridge_formula_id]
+        );
         assert!(!remaining_formula_ids.contains(&unrelated_formula_id));
     }
 
