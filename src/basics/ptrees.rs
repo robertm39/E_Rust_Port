@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::ops::Bound::{Excluded, Unbounded};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PTree<K> {
@@ -122,7 +123,7 @@ where
 
     #[must_use]
     pub fn to_stack(&self) -> Vec<K> {
-        self.keys.iter().cloned().collect()
+        self.c_stack_order().into_iter().cloned().collect()
     }
 
     #[must_use]
@@ -179,19 +180,41 @@ where
     }
 
     #[must_use]
+    pub fn debug_print_with_count(&self) -> (String, usize)
+    where
+        K: std::fmt::Display,
+    {
+        let ordered_keys = self.c_stack_order();
+        let mut result = String::new();
+        for (count, key) in ordered_keys.iter().enumerate() {
+            if count.is_multiple_of(10) {
+                result.push_str("\n%");
+            }
+            let write_result = write!(&mut result, " {:>7}", *key);
+            debug_assert!(write_result.is_ok());
+        }
+        result.push('\n');
+        (result, ordered_keys.len())
+    }
+
+    #[must_use]
     pub fn debug_print_string(&self) -> String
     where
         K: std::fmt::Display,
     {
-        let mut result = String::new();
-        for (count, key) in self.keys.iter().enumerate() {
-            if count.is_multiple_of(10) {
-                result.push_str("\n%");
-            }
-            let write_result = write!(&mut result, " {key:>7}");
-            debug_assert!(write_result.is_ok());
-        }
-        result.push('\n');
+        self.debug_print_with_count().0
+    }
+
+    fn c_stack_order(&self) -> Vec<&K> {
+        let mut result = Vec::with_capacity(self.keys.len());
+        let Some(root_key) = self.root_key.as_ref().and_then(|key| self.keys.get(key)) else {
+            result.extend(&self.keys);
+            return result;
+        };
+
+        result.push(root_key);
+        result.extend(self.keys.range((Excluded(root_key), Unbounded)));
+        result.extend(self.keys.range((Unbounded, Excluded(root_key))));
         result
     }
 }
@@ -235,7 +258,7 @@ mod tests {
         let (mut tree, inserted) = PTree::from_stack([3, 1, 3, 2]);
         assert_eq!(inserted, 3);
         assert_eq!(tree.insert_stack([2, 4, 4]), 1);
-        assert_eq!(tree.to_stack(), vec![1, 2, 3, 4]);
+        assert_eq!(tree.to_stack(), vec![4, 1, 2, 3]);
         assert_eq!(tree.extract_key(&4), Some(4));
         assert!(!tree.delete_entry(&9));
         assert!(tree.delete_entry(&1));
@@ -247,7 +270,7 @@ mod tests {
     fn merge_consumes_source_and_reports_new_elements() {
         let mut base = tree(&[1, 2]);
         assert!(base.merge(tree(&[2, 3, 4])));
-        assert_eq!(base.to_stack(), vec![1, 2, 3, 4]);
+        assert_eq!(base.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
         assert!(!base.merge(tree(&[1, 2])));
     }
 
@@ -256,11 +279,11 @@ mod tests {
         let mut base = tree(&[1, 4]);
         let add = tree(&[2, 4]);
         base.insert_tree(&add);
-        assert_eq!(base.to_stack(), vec![1, 2, 4]);
-        assert_eq!(add.to_stack(), vec![2, 4]);
+        assert_eq!(base.iter().copied().collect::<Vec<_>>(), vec![1, 2, 4]);
+        assert_eq!(add.iter().copied().collect::<Vec<_>>(), vec![2, 4]);
 
         let intersection = base.intersection(&tree(&[2, 3, 4]));
-        assert_eq!(intersection.to_stack(), vec![2, 4]);
+        assert_eq!(intersection.iter().copied().collect::<Vec<_>>(), vec![2, 4]);
         assert_eq!(intersection.root_key(), Some(&4));
         assert_eq!(base.shared_element(&tree(&[9, 4, 2])), Some(2));
     }
@@ -269,10 +292,10 @@ mod tests {
     fn copy_destructive_intersection_equivalence_and_subset_match_c_helpers() {
         let mut base = tree(&[1, 2, 3, 4]);
         let copied = base.copy_tree();
-        assert_eq!(copied.to_stack(), vec![1, 2, 3, 4]);
+        assert_eq!(copied.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
         let removed = base.destructive_intersection(&tree(&[2, 4, 6]));
         assert_eq!(removed, 2);
-        assert_eq!(base.to_stack(), vec![2, 4]);
+        assert_eq!(base.iter().copied().collect::<Vec<_>>(), vec![2, 4]);
         assert!(base.equivalent(&tree(&[4, 2])));
         assert!(base.is_subset_of(&tree(&[1, 2, 3, 4])));
         assert!(!tree(&[1, 9]).is_subset_of(&base));
@@ -284,6 +307,11 @@ mod tests {
         let mut visited = Vec::new();
         tree.visit_in_order(|key| visited.push(*key));
         assert_eq!(visited, vec![1, 2, 3]);
-        assert_eq!(tree.debug_print_string(), "\n%       1       2       3\n");
+        assert_eq!(tree.to_stack(), vec![2, 3, 1]);
+        assert_eq!(
+            tree.debug_print_with_count(),
+            ("\n%       2       3       1\n".to_owned(), 3)
+        );
+        assert_eq!(tree.debug_print_string(), "\n%       2       3       1\n");
     }
 }

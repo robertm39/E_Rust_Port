@@ -146,4 +146,9 @@ Source files reviewed: `BASICS/clb_ptrees.h`, `BASICS/clb_ptrees.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- `PTreeCell` stores `key` last to work around an old GCC/memory-manager interaction described in the header. Rust does not mirror that field-layout workaround; keep any future raw-pointer arena representation behind a documented compatibility boundary instead of carrying the historical layout into safe code.
+- `PTreeToPStack` and `PTreeDebugPrint` use root-first explicit-stack traversal even though the C comment calls the order arbitrary. Rust now exposes root-first compatibility order, while sorted traversal remains a separate iterator; keep those surfaces distinct if the container is later replaced with an actual splay tree.
 <!-- END MANUAL REVIEW: c_source_docs -->
