@@ -97,10 +97,16 @@ Source files reviewed: `BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `FixedDArrayAdd`, `FixedDArrayMulAdd`, `FixedDArrayMax`, and `FixedDArrayMin` assert that all source arrays and the destination are non-null and have equal sizes before component-wise operations. Rust compatibility helpers should keep size mismatches as invariant failures rather than recoverable `false` results.
+- Element reads and writes in C use direct `array[i]` payload access through callers rather than checked exported accessors, so Rust's compatibility-shaped indexed helpers should treat out-of-range indices as invariant violations.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- `FixedDArray` is used as an invariant-backed feature vector in C. Keep assertion-shaped size and index contracts for drop-in compatibility, but future Rust-only APIs fed by user-derived dimensions may want explicit checked constructors or `try_` component-wise operations.
 <!-- END MANUAL REVIEW: c_source_docs -->
