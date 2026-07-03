@@ -1,10 +1,10 @@
 use crate::basics::error::Diagnostic;
 use crate::terms::ho_csu::Limits;
 use crate::terms::lambda::{
-    close_with_db_var, close_with_type_prefix, fresh_var_with_args, whnf_step,
+    apply_terms, close_with_db_var, close_with_type_prefix, fresh_var_with_args, whnf_step,
 };
 use crate::terms::signature::SIG_PHONY_APP_CODE;
-use crate::terms::simpletypes::{get_ret_type, type_get_max_arity, Type};
+use crate::terms::simpletypes::{arrow_type_flattened, get_ret_type, type_get_max_arity, Type};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 
@@ -264,6 +264,82 @@ pub fn build_elim(bank: &mut TermBank, flex: &Term, idx: usize) -> Result<Term, 
     Ok(result)
 }
 
+/// Builds the C `build_ident` pair of bindings for two top-level free variables.
+///
+/// Returns `None` when `right` is not a top-level free variable, matching C's
+/// success flag. The caller must pass a top-level free variable as `left`.
+///
+/// # Errors
+///
+/// Returns diagnostics from fresh-variable application, term-bank insertion, or
+/// lambda construction.
+///
+/// # Panics
+///
+/// Panics if `left` is not a top-level free variable, if either variable head is
+/// untyped, or if the return types differ.
+pub fn build_ident(
+    bank: &mut TermBank,
+    left: &Term,
+    right: &Term,
+) -> Result<Option<IdentificationBinding>, Diagnostic> {
+    assert!(
+        left.is_top_level_free_var(),
+        "identification expects a left top-level free variable"
+    );
+    if !right.is_top_level_free_var() {
+        return Ok(None);
+    }
+
+    let left_type = top_level_free_head(left)
+        .type_()
+        .expect("left top-level free variable head has a type");
+    let right_type = top_level_free_head(right)
+        .type_()
+        .expect("right top-level free variable head has a type");
+    let return_type = get_ret_type(&left_type);
+    assert_eq!(
+        return_type,
+        get_ret_type(&right_type),
+        "identification requires matching return types"
+    );
+
+    let left_prefix = type_prefix(&left_type).to_vec();
+    let right_prefix = type_prefix(&right_type).to_vec();
+    let mut matrix_arg_types = Vec::with_capacity(left_prefix.len() + right_prefix.len());
+    matrix_arg_types.extend(left_prefix.iter().cloned());
+    matrix_arg_types.extend(right_prefix.iter().cloned());
+    let matrix_type = bank
+        .signature_mut()
+        .type_bank_mut()
+        .insert_type_shared(arrow_type_flattened(&matrix_arg_types, &return_type));
+    let matrix = bank.vars().get_fresh_var(&matrix_type);
+    let matrix = bank.insert(&matrix, DerefType::Never)?;
+
+    let left_db_vars = db_vars_for_prefix(bank, &left_prefix);
+    let right_db_vars = db_vars_for_prefix(bank, &right_prefix);
+
+    let mut to_apply_left = Vec::with_capacity(left_prefix.len() + right_prefix.len());
+    to_apply_left.extend(left_db_vars.iter().cloned());
+    for type_ in &right_prefix {
+        to_apply_left.push(fresh_var_with_args(bank, &left_db_vars, type_)?);
+    }
+
+    let mut to_apply_right = Vec::with_capacity(left_prefix.len() + right_prefix.len());
+    for type_ in &left_prefix {
+        to_apply_right.push(fresh_var_with_args(bank, &right_db_vars, type_)?);
+    }
+    to_apply_right.extend(right_db_vars.iter().cloned());
+
+    let left_matrix = apply_terms(bank, &matrix, &to_apply_left)?;
+    let right_matrix = apply_terms(bank, &matrix, &to_apply_right)?;
+
+    Ok(Some(IdentificationBinding {
+        left_target: close_with_type_prefix(bank, &left_prefix, &left_matrix)?,
+        right_target: close_with_type_prefix(bank, &right_prefix, &right_matrix)?,
+    }))
+}
+
 /// Builds the C `build_trivial_ident` fallback binding.
 ///
 /// Returns `None` when `right` is not a top-level free variable, matching C's
@@ -360,7 +436,10 @@ fn type_prefix(type_: &Type) -> &[Type] {
 }
 
 fn db_vars_for_type_prefix(bank: &mut TermBank, type_: &Type) -> Vec<Term> {
-    let prefix = type_prefix(type_);
+    db_vars_for_prefix(bank, type_prefix(type_))
+}
+
+fn db_vars_for_prefix(bank: &mut TermBank, prefix: &[Type]) -> Vec<Term> {
     prefix
         .iter()
         .enumerate()
@@ -376,9 +455,10 @@ fn db_vars_for_type_prefix(bank: &mut TermBank, type_: &Type) -> Vec<Term> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_elim, build_imitation, build_projection, build_trivial_ident, elimination_count,
-        identification_count, imitation_count, inc_elimination, inc_identification, inc_imitation,
-        inc_projection, projection_count, ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
+        build_elim, build_ident, build_imitation, build_projection, build_trivial_ident,
+        elimination_count, identification_count, imitation_count, inc_elimination,
+        inc_identification, inc_imitation, inc_projection, projection_count, ELIM_MASK, IDENT_MASK,
+        IMIT_MASK, PROJ_MASK,
     };
     use crate::terms::lambda::{apply_terms, beta_normalize_db};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
@@ -514,6 +594,86 @@ mod tests {
         assert_eq!(binding.right_target.type_(), Some(unary));
         assert_eq!(left.f_code(), SIG_PHONY_APP_CODE);
         assert_eq!(right.f_code(), SIG_PHONY_APP_CODE);
+    }
+
+    #[test]
+    fn ident_returns_none_when_right_side_is_not_top_level_free() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let left = bank.vars().var_assert_alloc(-100, &individual);
+        let constant = typed_const(&mut bank, "ident_const_rhs", &individual);
+
+        assert!(build_ident(&mut bank, &left, &constant).unwrap().is_none());
+    }
+
+    #[test]
+    fn ident_builds_asymmetric_matrix_applications_in_c_order() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let left_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let right_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let left_head = bank.vars().var_assert_alloc(-100, &left_type);
+        let right_head = bank.vars().var_assert_alloc(-102, &right_type);
+        let a = typed_const(&mut bank, "ident_a", &individual);
+        let b = typed_const(&mut bank, "ident_b", &individual);
+        let c = typed_const(&mut bank, "ident_c", &individual);
+        let left = apply_terms(&mut bank, &left_head, std::slice::from_ref(&a)).unwrap();
+        let right = apply_terms(&mut bank, &right_head, &[b.clone(), c.clone()]).unwrap();
+
+        let binding = build_ident(&mut bank, &left, &right)
+            .unwrap()
+            .expect("top-level free variables should identify");
+        let left_applied =
+            apply_terms(&mut bank, &binding.left_target, std::slice::from_ref(&a)).unwrap();
+        let right_applied =
+            apply_terms(&mut bank, &binding.right_target, &[b.clone(), c.clone()]).unwrap();
+        let left_normalized = beta_normalize_db(&mut bank, &left_applied).unwrap();
+        let right_normalized = beta_normalize_db(&mut bank, &right_applied).unwrap();
+
+        assert_eq!(binding.left_target.type_(), Some(left_type));
+        assert_eq!(binding.right_target.type_(), Some(right_type));
+        assert!(left_normalized.is_applied_free_var());
+        assert!(right_normalized.is_applied_free_var());
+        assert_eq!(left_normalized.argument(0), right_normalized.argument(0));
+        assert_eq!(left_normalized.type_(), Some(bool_type.clone()));
+        assert_eq!(right_normalized.type_(), Some(bool_type));
+        assert_eq!(left_normalized.arity(), 4);
+        assert_eq!(right_normalized.arity(), 4);
+        assert_eq!(left_normalized.argument(1), Some(a.clone()));
+
+        let left_synth_1 = left_normalized
+            .argument(2)
+            .expect("left matrix has first synthesized right argument");
+        let left_synth_2 = left_normalized
+            .argument(3)
+            .expect("left matrix has second synthesized right argument");
+        assert!(left_synth_1.is_applied_free_var());
+        assert!(left_synth_2.is_applied_free_var());
+        assert_eq!(left_synth_1.argument(1), Some(a.clone()));
+        assert_eq!(left_synth_2.argument(1), Some(a));
+
+        let right_synth = right_normalized
+            .argument(1)
+            .expect("right matrix has synthesized left argument");
+        assert!(right_synth.is_applied_free_var());
+        assert_eq!(right_synth.argument(1), Some(b.clone()));
+        assert_eq!(right_synth.argument(2), Some(c.clone()));
+        assert_eq!(right_normalized.argument(2), Some(b));
+        assert_eq!(right_normalized.argument(3), Some(c));
     }
 
     #[test]
