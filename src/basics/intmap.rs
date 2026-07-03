@@ -95,7 +95,7 @@ impl<V: Clone> IntMap<V> {
             }
             IntMapRepr::Array(array) => {
                 if key <= self.max_key {
-                    array.element(key).and_then(Option::as_ref)
+                    array.element(key).as_ref()
                 } else {
                     None
                 }
@@ -126,10 +126,7 @@ impl<V: Clone> IntMap<V> {
                 debug_assert_eq!(*single_key, key);
                 value
             }
-            IntMapRepr::Array(array) => match array.element_ref(key) {
-                Some(value) => value,
-                None => panic!("IntMap array slot missing after ensure_ref_slot"),
-            },
+            IntMapRepr::Array(array) => array.element_ref(key),
             IntMapRepr::Tree(tree) => match tree.get_mut(&key) {
                 Some(value) => value,
                 None => panic!("IntMap tree slot missing after ensure_ref_slot"),
@@ -162,10 +159,9 @@ impl<V: Clone> IntMap<V> {
                 if key > self.max_key {
                     return None;
                 }
-                let result = array.element(key).and_then(Clone::clone);
+                let result = array.element(key).clone();
                 if result.is_some() {
-                    let deleted = array.assign(key, None);
-                    debug_assert!(deleted);
+                    array.assign(key, None);
                     self.entry_no = self.entry_no.saturating_sub(1);
                     if switch_to_tree(self.min_key, self.max_key, self.max_key, self.entry_no) {
                         self.array_to_tree();
@@ -306,10 +302,7 @@ impl<V: Clone> IntMap<V> {
                 }
 
                 let was_none = match &mut self.repr {
-                    IntMapRepr::Array(array) => match array.element_ref(key) {
-                        Some(value) => value.is_none(),
-                        None => panic!("IntMap array slot missing while inserting"),
-                    },
+                    IntMapRepr::Array(array) => array.element_ref(key).is_none(),
                     _ => unreachable!("IntMap representation changed unexpectedly"),
                 };
                 if was_none {

@@ -80,16 +80,32 @@ impl<T: Clone> PDRangeArr<T> {
         }
     }
 
-    pub fn element_ref(&mut self, idx: PDRangeArrIndex) -> Option<&mut T> {
+    /// Return a mutable slot for `idx`, growing the covered range if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if range growth overflows the represented index or capacity
+    /// space, or if the post-growth coverage invariant is broken.
+    pub fn element_ref(&mut self, idx: PDRangeArrIndex) -> &mut T {
         self.enlarge(idx);
-        let index = self.storage_index(idx)?;
-        self.array.get_mut(index)
+        let index = self.storage_index_or_panic(idx, "PDRangeArrElementRef");
+        self.array
+            .get_mut(index)
+            .unwrap_or_else(|| panic!("PDRangeArrElementRef lost covered slot"))
     }
 
-    pub fn element(&mut self, idx: PDRangeArrIndex) -> Option<&T> {
+    /// Return the slot for `idx`, growing the covered range if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if range growth overflows the represented index or capacity
+    /// space, or if the post-growth coverage invariant is broken.
+    pub fn element(&mut self, idx: PDRangeArrIndex) -> &T {
         self.enlarge(idx);
-        let index = self.storage_index(idx)?;
-        self.array.get(index)
+        let index = self.storage_index_or_panic(idx, "PDRangeArrElement");
+        self.array
+            .get(index)
+            .unwrap_or_else(|| panic!("PDRangeArrElement lost covered slot"))
     }
 
     #[must_use]
@@ -98,12 +114,15 @@ impl<T: Clone> PDRangeArr<T> {
         self.array.get(index)
     }
 
-    pub fn assign(&mut self, idx: PDRangeArrIndex, value: T) -> bool {
-        let Some(element) = self.element_ref(idx) else {
-            return false;
-        };
+    /// Assign `value` to `idx`, growing the covered range if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if range growth overflows the represented index or capacity
+    /// space, or if the post-growth coverage invariant is broken.
+    pub fn assign(&mut self, idx: PDRangeArrIndex, value: T) {
+        let element = self.element_ref(idx);
         *element = value;
-        true
     }
 
     pub fn delete(&mut self, idx: PDRangeArrIndex) -> bool {
@@ -158,6 +177,11 @@ impl<T: Clone> PDRangeArr<T> {
         }
         usize::try_from(idx.checked_sub(self.offset)?).ok()
     }
+
+    fn storage_index_or_panic(&self, idx: PDRangeArrIndex, caller: &str) -> usize {
+        self.storage_index(idx)
+            .unwrap_or_else(|| panic!("{caller} failed to cover index {idx}"))
+    }
 }
 
 impl<T: Clone> PDPointerRangeArr<T> {
@@ -186,14 +210,26 @@ impl PDIntRangeArr {
         self.delete(idx)
     }
 
-    pub fn inc_int(&mut self, idx: PDRangeArrIndex, value: PDRangeArrInt) -> Option<PDRangeArrInt> {
-        let element = self.element_ref(idx)?;
+    /// Increment `idx` by `value`, growing the covered range if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if range growth overflows the represented index or capacity
+    /// space, or if the post-growth coverage invariant is broken.
+    pub fn inc_int(&mut self, idx: PDRangeArrIndex, value: PDRangeArrInt) -> PDRangeArrInt {
+        let element = self.element_ref(idx);
         *element += value;
-        Some(*element)
+        *element
     }
 
+    /// Return the integer slot for `idx`, growing the covered range if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if range growth overflows the represented index or capacity
+    /// space, or if the post-growth coverage invariant is broken.
     pub fn element_int(&mut self, idx: PDRangeArrIndex) -> PDRangeArrInt {
-        self.element(idx).copied().unwrap_or(0)
+        *self.element(idx)
     }
 }
 
@@ -257,14 +293,14 @@ mod tests {
             (10, 11, 1)
         );
 
-        assert!(array.assign(12, Some("up")));
+        array.assign(12, Some("up"));
         assert_eq!(
             (array.low_key(), array.limit_key(), array.size()),
             (10, 14, 4)
         );
         assert_eq!(array.existing_element(12), Some(&Some("up")));
 
-        assert!(array.assign(7, Some("down")));
+        array.assign(7, Some("down"));
         assert_eq!(
             (array.low_key(), array.limit_key(), array.size()),
             (6, 14, 8)
@@ -299,6 +335,18 @@ mod tests {
     }
 
     #[test]
+    fn element_access_expands_and_returns_slots_like_c_macros() {
+        let mut array = PDPointerRangeArr::<usize>::new_pointer(0, 2);
+
+        assert_eq!(array.element(-3), &None);
+        assert_eq!((array.low_key(), array.limit_key()), (-4, 2));
+
+        *array.element_ref(4) = Some(4);
+        assert_eq!((array.low_key(), array.limit_key()), (-4, 6));
+        assert_eq!(array.existing_element(4), Some(&Some(4)));
+    }
+
+    #[test]
     fn delete_only_clears_covered_indices() {
         let mut array = PDPointerRangeArr::new_pointer(4, GROW_EXPONENTIAL);
         array.assign(4, Some("value"));
@@ -320,9 +368,9 @@ mod tests {
     #[test]
     fn integer_range_arrays_zero_fill_and_increment() {
         let mut array = PDIntRangeArr::new_int(0, GROW_EXPONENTIAL);
-        assert_eq!(array.inc_int(-2, 5), Some(5));
+        assert_eq!(array.inc_int(-2, 5), 5);
         assert_eq!((array.low_key(), array.limit_key()), (-3, 1));
-        assert_eq!(array.inc_int(3, 7), Some(7));
+        assert_eq!(array.inc_int(3, 7), 7);
         assert_eq!((array.low_key(), array.limit_key()), (-3, 5));
         assert_eq!(array.element_int(-2), 5);
         assert_eq!(array.element_int(3), 7);
