@@ -198,11 +198,21 @@ impl<T> PQueue<T> {
         }
     }
 
+    /// Return the backing slot at absolute `index`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `index` is negative, outside the allocated ring, or points
+    /// at a slot that has never been initialized by `store`/`bury`. The C
+    /// helper performs raw array access, so callers must supply a valid
+    /// absolute slot.
     #[must_use]
-    pub fn element(&self, index: PQueueIndex) -> Option<&T> {
-        checked_index(index, self.size)
-            .and_then(|index| self.queue.get(index))
-            .and_then(Option::as_ref)
+    pub fn element(&self, index: PQueueIndex) -> &T {
+        let index = checked_index(index, self.size)
+            .unwrap_or_else(|| panic!("PQueueElement called with invalid index {index}"));
+        self.queue[index]
+            .as_ref()
+            .unwrap_or_else(|| panic!("PQueueElement called on an uninitialized slot {index}"))
     }
 
     fn grow_after_full_wrap(&mut self) {
@@ -332,9 +342,9 @@ mod tests {
         assert_eq!(queue.look(), &10);
         assert_eq!(queue.look_last(), &20);
         assert_eq!(queue.get_next(), 10);
-        assert_eq!(queue.element(0), Some(&10));
+        assert_eq!(queue.element(0), &10);
         assert_eq!(queue.get_next(), 20);
-        assert_eq!(queue.element(1), Some(&20));
+        assert_eq!(queue.element(1), &20);
         assert!(queue.is_empty());
     }
 
@@ -346,12 +356,12 @@ mod tests {
         }
 
         assert_eq!(queue.get_last(), 3);
-        assert_eq!(queue.element(2), Some(&3));
+        assert_eq!(queue.element(2), &3);
         assert_eq!(queue.look_last(), &2);
         assert_eq!(queue.get_next(), 1);
-        assert_eq!(queue.element(0), Some(&1));
+        assert_eq!(queue.element(0), &1);
         assert_eq!(queue.get_last(), 2);
-        assert_eq!(queue.element(1), Some(&2));
+        assert_eq!(queue.element(1), &2);
         assert!(queue.is_empty());
     }
 
@@ -379,8 +389,8 @@ mod tests {
         assert_eq!(queue.head_index(), 0);
         assert_eq!(queue.tail_index(), 4);
         assert_eq!(queue.cardinality(), 4);
-        assert_eq!(queue.element(4), Some(&0));
-        assert_eq!(queue.element(7), Some(&3));
+        assert_eq!(queue.element(4), &0);
+        assert_eq!(queue.element(7), &3);
         assert_eq!(queue.get_next(), 0);
         assert_eq!(queue.get_next(), 1);
         assert_eq!(queue.get_next(), 2);
@@ -415,9 +425,7 @@ mod tests {
         let mut index = queue.tail_index();
         let mut values = Vec::new();
         while index != -1 {
-            if let Some(value) = queue.element(index) {
-                values.push(*value);
-            }
+            values.push(*queue.element(index));
             index = queue.inc_index(index);
         }
 
@@ -434,11 +442,11 @@ mod tests {
         queue.reset();
         assert!(queue.is_empty());
         assert_eq!(queue.allocated_size(), 4);
-        assert_eq!(queue.element(0), Some(&"a"));
-        assert_eq!(queue.element(1), Some(&"b"));
+        assert_eq!(queue.element(0), &"a");
+        assert_eq!(queue.element(1), &"b");
         queue.store("c");
-        assert_eq!(queue.element(0), Some(&"c"));
-        assert_eq!(queue.element(1), Some(&"b"));
+        assert_eq!(queue.element(0), &"c");
+        assert_eq!(queue.element(1), &"b");
         assert_eq!(queue.get_next(), "c");
     }
 
@@ -476,6 +484,27 @@ mod tests {
         queue.store_pointer("term");
         assert_eq!(queue.get_next_int(), None);
         assert!(queue.is_empty());
-        assert_eq!(queue.element(0).and_then(IntOrP::as_pointer), Some(&"term"));
+        assert_eq!(queue.element(0).as_pointer(), Some(&"term"));
+    }
+
+    #[test]
+    #[should_panic(expected = "PQueueElement called with invalid index -1")]
+    fn element_panics_on_negative_absolute_index() {
+        let queue = PQueue::<usize>::with_size(4);
+        let _value = queue.element(-1);
+    }
+
+    #[test]
+    #[should_panic(expected = "PQueueElement called with invalid index 4")]
+    fn element_panics_on_absolute_index_at_capacity() {
+        let queue = PQueue::<usize>::with_size(4);
+        let _value = queue.element(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "PQueueElement called on an uninitialized slot 0")]
+    fn element_panics_on_never_initialized_absolute_slot() {
+        let queue = PQueue::<usize>::with_size(4);
+        let _value = queue.element(0);
     }
 }
