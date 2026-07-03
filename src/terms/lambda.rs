@@ -99,6 +99,44 @@ pub fn apply_terms(bank: &mut TermBank, head: &Term, args: &[Term]) -> Result<Te
     bank.term_top_insert(applied)
 }
 
+/// Builds a fresh variable applied to `args`, matching C `FreshVarWArgs`.
+///
+/// The fresh head receives the flattened type `arg_1 -> ... -> arg_n -> ret`.
+///
+/// # Errors
+///
+/// Returns a diagnostic if term-bank insertion or application construction
+/// fails.
+///
+/// # Panics
+///
+/// Panics if any supplied argument is untyped.
+pub fn fresh_var_with_args(
+    bank: &mut TermBank,
+    args: &[Term],
+    ret_type: &Type,
+) -> Result<Term, Diagnostic> {
+    let arg_types = args
+        .iter()
+        .map(|arg| {
+            arg.type_()
+                .expect("FreshVarWArgs expects typed argument terms")
+        })
+        .collect::<Vec<_>>();
+    let var_type = bank
+        .signature_mut()
+        .type_bank_mut()
+        .insert_type_shared(arrow_type_flattened(&arg_types, ret_type));
+    let head = bank.vars().get_fresh_var(&var_type);
+    let head = bank.insert(&head, DerefType::Never)?;
+
+    if args.is_empty() {
+        bank.insert(&head, DerefType::Never)
+    } else {
+        apply_terms(bank, &head, args)
+    }
+}
+
 /// Flattens additional arguments onto an already-applied head, matching C `FlattenApps`.
 ///
 /// # Errors
@@ -1632,9 +1670,9 @@ fn do_beta_normalize_db(bank: &mut TermBank, term: &Term) -> Result<Term, Diagno
 mod tests {
     use super::{
         apply_terms, beta_normalize_db, close_with_type_prefix, decode_formulas_for_cnf,
-        flatten_apps, lambda_eta_expand_db, lambda_eta_expand_db_top_level, lambda_eta_reduce_db,
-        lambda_normalize_db, lambda_to_forall, named_to_db, post_cnf_encode_formulas, shift_db,
-        unfold_lambda, whnf_deref,
+        flatten_apps, fresh_var_with_args, lambda_eta_expand_db, lambda_eta_expand_db_top_level,
+        lambda_eta_reduce_db, lambda_normalize_db, lambda_to_forall, named_to_db,
+        post_cnf_encode_formulas, shift_db, unfold_lambda, whnf_deref,
     };
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::terms::functypes::FunCode;
@@ -1752,6 +1790,42 @@ mod tests {
         assert!(normalized.is_applied_free_var());
         assert_eq!(normalized.argument(0).as_ref(), Some(&g));
         assert_eq!(normalized.argument(1).as_ref(), Some(&b));
+    }
+
+    #[test]
+    fn fresh_var_with_args_builds_typed_fresh_application() {
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let unary_pred = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), bool_type.clone()]));
+        let db0 = bank.request_db_var(&i_type, 0);
+
+        let matrix =
+            fresh_var_with_args(&mut bank, std::slice::from_ref(&db0), &bool_type).unwrap();
+
+        assert!(matrix.is_applied_free_var());
+        assert_eq!(matrix.type_(), Some(bool_type));
+        assert_eq!(matrix.arity(), 2);
+        assert_eq!(matrix.argument(1), Some(db0));
+        let head = matrix
+            .argument(0)
+            .expect("fresh application has an initialized head");
+        assert!(head.is_free_var());
+        assert_eq!(head.type_(), Some(unary_pred));
+    }
+
+    #[test]
+    fn fresh_var_with_args_without_args_returns_fresh_return_var() {
+        let mut bank = test_bank();
+        let bool_type = bank.signature().type_bank().bool_type();
+
+        let matrix = fresh_var_with_args(&mut bank, &[], &bool_type).unwrap();
+
+        assert!(matrix.is_free_var());
+        assert_eq!(matrix.type_(), Some(bool_type));
     }
 
     #[test]

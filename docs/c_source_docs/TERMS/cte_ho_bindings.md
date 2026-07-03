@@ -109,9 +109,11 @@ Source files reviewed: `TERMS/cte_ho_bindings.h`, `TERMS/cte_ho_bindings.c`.
 ### Compatibility Notes
 
 - `cte_ho_bindings.c` stores four binding-generation counters in one `Limits_t` word: imitation in bits 0-5, projection in bits 6-11, identification in bits 12-17, and elimination in bits 18-23. Rust now ports the masks, field accessors, and C-shaped increment helpers in `src/terms/ho_bindings.rs`.
+- Rust also ports the `build_elim` binding constructor: for an applied free variable it builds a fresh matrix variable over all visible DB arguments except the eliminated zero-based index, then closes the result under the full original visible argument prefix. Tests apply and beta-normalize the resulting binding for both two-argument elimination indexes.
 - Rust also ports the `build_trivial_ident` fallback binding constructor: when both sides are top-level free variables, it inserts one fresh return-type matrix variable and closes it under each side's argument-type prefix with DB lambdas; when the right side is not a top-level free variable, it returns the C failure flag shape. Full nontrivial `build_ident` and `ComputeNextBinding` construction remain pending.
 
 ### Change-Later Observations
 
 - The `INC_IMIT`/`INC_PROJ`/`INC_IDENT`/`INC_ELIM` macros increment their selected six-bit field without masking the incremented result back down to six bits, so overflow can carry into the next field. Rust preserves that arithmetic in the helper layer; a cleaned CSU binding API should use typed counters and explicit limit checks once reference behavior is covered.
+- `build_elim` always abstracts the full original argument prefix even though the fresh matrix variable is applied only to the retained arguments. Preserve this for CSU search parity; after complete trace coverage, consider whether a clearer binding representation could encode the dropped argument without reconstructing a lambda slot that is intentionally unused.
 <!-- END MANUAL REVIEW: c_source_docs -->

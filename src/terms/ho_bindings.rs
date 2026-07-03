@@ -1,5 +1,6 @@
+use crate::basics::error::Diagnostic;
 use crate::terms::ho_csu::Limits;
-use crate::terms::lambda::close_with_type_prefix;
+use crate::terms::lambda::{close_with_db_var, close_with_type_prefix, fresh_var_with_args};
 use crate::terms::simpletypes::{get_ret_type, Type};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
@@ -64,6 +65,60 @@ pub struct IdentificationBinding {
     pub right_target: Term,
 }
 
+/// Builds the C `build_elim` binding that drops visible argument `idx`.
+///
+/// `idx` is zero-based over the applied free variable's visible arguments,
+/// excluding the head at argument slot 0.
+///
+/// # Errors
+///
+/// Returns diagnostics from fresh-variable application or lambda construction.
+///
+/// # Panics
+///
+/// Panics if `flex` is not an applied free variable, if `idx` is out of range,
+/// or if any visible argument or the applied term is untyped.
+pub fn build_elim(bank: &mut TermBank, flex: &Term, idx: usize) -> Result<Term, Diagnostic> {
+    assert!(
+        flex.is_applied_free_var(),
+        "elimination expects an applied free variable"
+    );
+    let visible_arity = flex.arity() - 1;
+    assert!(
+        idx < visible_arity,
+        "elimination argument index is out of range"
+    );
+
+    let mut db_vars = Vec::with_capacity(visible_arity.saturating_sub(1));
+    for index in 1..flex.arity() {
+        if index - 1 != idx {
+            let arg = flex
+                .argument(index)
+                .unwrap_or_else(|| panic!("flex argument {index} is uninitialized"));
+            let arg_type = arg
+                .type_()
+                .expect("elimination expects typed flex arguments");
+            let db_index = (flex.arity() - index - 1)
+                .try_into()
+                .expect("flex arity fits in a FunCode");
+            db_vars.push(bank.request_db_var(&arg_type, db_index));
+        }
+    }
+
+    let flex_type = flex.type_().expect("elimination expects a typed flex term");
+    let mut result = fresh_var_with_args(bank, &db_vars, &flex_type)?;
+    for index in (1..flex.arity()).rev() {
+        let arg = flex
+            .argument(index)
+            .unwrap_or_else(|| panic!("flex argument {index} is uninitialized"));
+        let arg_type = arg
+            .type_()
+            .expect("elimination expects typed flex arguments");
+        result = close_with_db_var(bank, &arg_type, &result)?;
+    }
+    Ok(result)
+}
+
 /// Builds the C `build_trivial_ident` fallback binding.
 ///
 /// Returns `None` when `right` is not a top-level free variable, matching C's
@@ -81,7 +136,7 @@ pub fn build_trivial_ident(
     bank: &mut TermBank,
     left: &Term,
     right: &Term,
-) -> Result<Option<IdentificationBinding>, crate::basics::error::Diagnostic> {
+) -> Result<Option<IdentificationBinding>, Diagnostic> {
     assert!(
         left.is_top_level_free_var(),
         "trivial identification expects a left top-level free variable"
@@ -135,16 +190,24 @@ fn type_prefix(type_: &Type) -> &[Type] {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trivial_ident, elimination_count, identification_count, imitation_count,
+        build_elim, build_trivial_ident, elimination_count, identification_count, imitation_count,
         inc_elimination, inc_identification, inc_imitation, inc_projection, projection_count,
         ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
     };
-    use crate::terms::lambda::apply_terms;
+    use crate::terms::lambda::{apply_terms, beta_normalize_db};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
-    use crate::terms::simpletypes::alloc_arrow_type;
+    use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
+
+    fn typed_const(bank: &mut TermBank, name: &str, type_: &Type) -> Term {
+        let code = bank.signature_mut().insert_id(name, 0, false);
+        bank.signature_mut()
+            .declare_final_type(code, type_.clone())
+            .unwrap();
+        bank.create_const_term(code).unwrap()
+    }
 
     #[test]
     fn limit_masks_match_c_layout() {
@@ -265,5 +328,63 @@ mod tests {
         assert_eq!(binding.right_target.type_(), Some(unary));
         assert_eq!(left.f_code(), SIG_PHONY_APP_CODE);
         assert_eq!(right.f_code(), SIG_PHONY_APP_CODE);
+    }
+
+    #[test]
+    fn elim_binding_drops_first_visible_argument() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let binary_pred =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                    bool_type.clone(),
+                ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &binary_pred);
+        let a = typed_const(&mut bank, "elim_a", &individual);
+        let b = typed_const(&mut bank, "elim_b", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, &[a.clone(), b.clone()]).unwrap();
+
+        let binding = build_elim(&mut bank, &flex, 0).unwrap();
+        let applied = apply_terms(&mut bank, &binding, &[a, b.clone()]).unwrap();
+        let normalized = beta_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(binding.type_(), Some(binary_pred));
+        assert!(normalized.is_applied_free_var());
+        assert_eq!(normalized.type_(), Some(bool_type));
+        assert_eq!(normalized.arity(), 2);
+        assert_eq!(normalized.argument(1), Some(b));
+    }
+
+    #[test]
+    fn elim_binding_drops_second_visible_argument() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let binary_pred =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                    bool_type.clone(),
+                ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &binary_pred);
+        let a = typed_const(&mut bank, "elim_left_a", &individual);
+        let b = typed_const(&mut bank, "elim_left_b", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, &[a.clone(), b.clone()]).unwrap();
+
+        let binding = build_elim(&mut bank, &flex, 1).unwrap();
+        let applied = apply_terms(&mut bank, &binding, &[a.clone(), b]).unwrap();
+        let normalized = beta_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(binding.type_(), Some(binary_pred));
+        assert!(normalized.is_applied_free_var());
+        assert_eq!(normalized.type_(), Some(bool_type));
+        assert_eq!(normalized.arity(), 2);
+        assert_eq!(normalized.argument(1), Some(a));
     }
 }
