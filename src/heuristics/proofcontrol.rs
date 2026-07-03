@@ -1829,10 +1829,10 @@ fn proof_state_forward_modify_clause_impl<W: fmt::Write>(
                 forward_modify_normalize_if_higher_order(higher_order, clause, terms);
             }
 
-            clause.orient_literals(ocb, terms);
+            clause.orient_literals_with_bank(ocb, terms)?;
 
             if forward_modify_condense(terms, clause, condense_clause, &mut doc_context)? {
-                clause.orient_literals(ocb, terms);
+                clause.orient_literals_with_bank(ocb, terms)?;
             }
 
             if clause.is_trivial(terms) {
@@ -2276,7 +2276,10 @@ fn proof_state_forward_contract_keep_impl<W: fmt::Write>(
             "forward_contract_keep requires initialized proof-control ordering",
         )
     })?;
-    clause.cond_mark_maximal_terms(ocb, state.terms());
+    {
+        let terms = state.terms_mut();
+        clause.cond_mark_maximal_terms_with_bank(ocb, terms)?;
+    }
 
     Ok(Some(fv_index_pack_clause(
         clause.clone(),

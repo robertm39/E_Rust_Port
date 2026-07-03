@@ -8,7 +8,7 @@ use crate::clauses::eqn_props::{
 };
 use crate::heuristics::to_params::LiteralCmp;
 use crate::inout::scanner::{IoFormat, Scanner, TokenType};
-use crate::orderings::cto_orderings::to_compare;
+use crate::orderings::cto_orderings::{to_compare, to_compare_with_bank};
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::acterms::term_ac_equal;
 use crate::terms::functypes::FunCode;
@@ -716,6 +716,61 @@ impl Eqn {
         swapped
     }
 
+    /// Orient this equation with a bank-backed ordering path when needed.
+    ///
+    /// Returns `true` if the sides were swapped, matching C `EqnOrient`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the selected ordering returns an internal cache-only relation
+    /// where C asserts in the default switch arm.
+    pub fn orient_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        if self.query_prop(EP_MAX_IS_UP_TO_DATE) {
+            return Ok(false);
+        }
+
+        let relation = if self.lterm == self.rterm {
+            CompareResult::Equal
+        } else if self.lterm == *bank.true_term() {
+            CompareResult::Lesser
+        } else if self.rterm == *bank.true_term() {
+            CompareResult::Greater
+        } else {
+            compare_terms_with_bank(ocb, bank, &self.lterm, &self.rterm)?
+        };
+
+        let swapped = match relation {
+            CompareResult::Uncomparable | CompareResult::Equal => {
+                self.del_prop(EP_IS_ORIENTED);
+                false
+            }
+            CompareResult::Greater => {
+                self.set_prop(EP_IS_ORIENTED);
+                false
+            }
+            CompareResult::Lesser => {
+                self.swap_sides();
+                self.set_prop(EP_IS_ORIENTED);
+                true
+            }
+            CompareResult::Unknown
+            | CompareResult::NotGreaterEqual
+            | CompareResult::NotLessEqual => {
+                panic!("unexpected equation orientation relation: {relation:?}")
+            }
+        };
+        self.set_prop(EP_MAX_IS_UP_TO_DATE);
+        Ok(swapped)
+    }
+
     /// Compare two equations as multisets of terms, matching C `EqnCompare`.
     ///
     /// # Panics
@@ -732,6 +787,26 @@ impl Eqn {
         compare_pos_eqns(ocb, bank, self, other)
     }
 
+    /// Compare two equations as multisets of terms with bank-backed ordering
+    /// preparation when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the equations do not have equivalent polarity, matching the C
+    /// assertion in the shared positive-equation comparison helper.
+    pub fn order_compare_with_bank(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        other: &Self,
+    ) -> Result<CompareResult, Diagnostic> {
+        compare_pos_eqns_with_bank(ocb, bank, self, other)
+    }
+
     /// Return whether this equation is greater than `other` under `ocb`.
     ///
     /// # Panics
@@ -745,6 +820,25 @@ impl Eqn {
         other: &Self,
     ) -> bool {
         self.order_compare(ocb, bank, other) == CompareResult::Greater
+    }
+
+    /// Return whether this equation is greater than `other` using bank-backed
+    /// ordering preparation when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Self::order_compare_with_bank`].
+    pub fn order_greater_with_bank(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        other: &Self,
+    ) -> Result<bool, Diagnostic> {
+        Ok(self.order_compare_with_bank(ocb, bank, other)? == CompareResult::Greater)
     }
 
     /// Compare two signed literals under the selected literal comparison mode.
@@ -799,6 +893,62 @@ impl Eqn {
         }
     }
 
+    /// Compare two signed literals with bank-backed ordering preparation when
+    /// needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the selected term ordering's internal invariants, or if a
+    /// literal/equational property bit is inconsistent with its `$true` shape.
+    pub fn literal_compare_with_bank(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        other: &Self,
+    ) -> Result<CompareResult, Diagnostic> {
+        let self_pseudo = self.query_prop(EP_PSEUDO_LIT);
+        let other_pseudo = other.query_prop(EP_PSEUDO_LIT);
+        if self_pseudo && !other_pseudo {
+            return Ok(CompareResult::Lesser);
+        }
+        if other_pseudo && !self_pseudo {
+            return Ok(CompareResult::Greater);
+        }
+
+        if !self.is_selected() {
+            if other.is_selected() {
+                return Ok(CompareResult::Lesser);
+            }
+        } else if !other.is_selected() {
+            return Ok(CompareResult::Greater);
+        } else if self.is_positive() != other.is_positive() {
+            return Ok(CompareResult::Uncomparable);
+        }
+
+        if ocb.lit_cmp == LiteralCmp::NoCmp {
+            return Ok(CompareResult::Uncomparable);
+        }
+
+        let tfo_result = tfo_literal_compare(ocb, bank, self, other);
+        if matches!(tfo_result, CompareResult::Greater | CompareResult::Lesser) {
+            return Ok(tfo_result);
+        }
+
+        if self.is_positive() == other.is_positive() {
+            compare_pos_eqns_with_bank(ocb, bank, self, other)
+        } else if self.is_positive() {
+            compare_poseqn_negeqn_with_bank(ocb, bank, self, other)
+        } else {
+            Ok(compare_poseqn_negeqn_with_bank(ocb, bank, other, self)?
+                .inverse()
+                .unwrap_or_else(|| panic!("literal comparison produced unknown inverse")))
+        }
+    }
+
     /// Return whether this signed literal is greater than `other` under `ocb`.
     ///
     /// # Panics
@@ -812,6 +962,25 @@ impl Eqn {
         other: &Self,
     ) -> bool {
         self.literal_compare(ocb, bank, other) == CompareResult::Greater
+    }
+
+    /// Return whether this signed literal is greater than `other` using
+    /// bank-backed ordering preparation when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invariants as [`Self::literal_compare_with_bank`].
+    pub fn literal_greater_with_bank(
+        &self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+        other: &Self,
+    ) -> Result<bool, Diagnostic> {
+        Ok(self.literal_compare_with_bank(ocb, bank, other)? == CompareResult::Greater)
     }
 
     pub fn copy_to_bank(&self, bank: &mut TermBank) -> Result<Self, Diagnostic> {
@@ -1905,6 +2074,15 @@ fn compare_terms(
     )
 }
 
+fn compare_terms_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    left: &Term,
+    right: &Term,
+) -> Result<CompareResult, Diagnostic> {
+    to_compare_with_bank(ocb, bank, left, right, DerefType::Always, DerefType::Always)
+}
+
 fn is_greater_or_equal(relation: CompareResult) -> bool {
     matches!(relation, CompareResult::Greater | CompareResult::Equal)
 }
@@ -1972,6 +2150,65 @@ fn compare_pos_eqns(
     CompareResult::Uncomparable
 }
 
+fn compare_pos_eqns_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    left: &Eqn,
+    right: &Eqn,
+) -> Result<CompareResult, Diagnostic> {
+    assert_eq!(
+        left.is_positive(),
+        right.is_positive(),
+        "EqnCompare requires equivalent literal polarity"
+    );
+
+    let left_left_relation = compare_terms_with_bank(ocb, bank, left.left(), right.left())?;
+    let right_right_relation = compare_terms_with_bank(ocb, bank, left.right(), right.right())?;
+
+    if left_left_relation == CompareResult::Equal && right_right_relation == CompareResult::Equal {
+        return Ok(CompareResult::Equal);
+    }
+    if is_greater_or_equal(left_left_relation) && is_greater_or_equal(right_right_relation) {
+        return Ok(CompareResult::Greater);
+    }
+    if is_lesser_or_equal(left_left_relation) && is_lesser_or_equal(right_right_relation) {
+        return Ok(CompareResult::Lesser);
+    }
+
+    let left_right_relation = compare_terms_with_bank(ocb, bank, left.left(), right.right())?;
+
+    if left_left_relation == CompareResult::Greater && left_right_relation == CompareResult::Greater
+    {
+        return Ok(CompareResult::Greater);
+    }
+    if left_right_relation == CompareResult::Lesser && right_right_relation == CompareResult::Lesser
+    {
+        return Ok(CompareResult::Lesser);
+    }
+
+    let right_left_relation = compare_terms_with_bank(ocb, bank, left.right(), right.left())?;
+
+    if left_right_relation == CompareResult::Equal && right_left_relation == CompareResult::Equal {
+        return Ok(CompareResult::Equal);
+    }
+    if is_greater_or_equal(right_left_relation) && is_greater_or_equal(left_right_relation) {
+        return Ok(CompareResult::Greater);
+    }
+    if right_left_relation == CompareResult::Greater
+        && right_right_relation == CompareResult::Greater
+    {
+        return Ok(CompareResult::Greater);
+    }
+    if left_left_relation == CompareResult::Lesser && right_left_relation == CompareResult::Lesser {
+        return Ok(CompareResult::Lesser);
+    }
+    if is_lesser_or_equal(right_left_relation) && is_lesser_or_equal(left_right_relation) {
+        return Ok(CompareResult::Lesser);
+    }
+
+    Ok(CompareResult::Uncomparable)
+}
+
 fn compare_poseqn_negeqn(
     ocb: &mut OrderControlBlock,
     bank: &TermBank,
@@ -2023,6 +2260,63 @@ fn compare_poseqn_negeqn(
     }
 
     CompareResult::Uncomparable
+}
+
+fn compare_poseqn_negeqn_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    positive: &Eqn,
+    negative: &Eqn,
+) -> Result<CompareResult, Diagnostic> {
+    assert!(positive.is_positive(), "left literal must be positive");
+    assert!(negative.is_negative(), "right literal must be negative");
+
+    let left_left_relation = compare_terms_with_bank(ocb, bank, positive.left(), negative.left())?;
+
+    if positive.is_oriented() {
+        if is_lesser_or_equal(left_left_relation) {
+            return Ok(CompareResult::Lesser);
+        }
+
+        let left_right_relation =
+            compare_terms_with_bank(ocb, bank, positive.left(), negative.right())?;
+
+        if is_lesser_or_equal(left_right_relation) {
+            return Ok(CompareResult::Lesser);
+        }
+        if left_left_relation == CompareResult::Greater
+            && left_right_relation == CompareResult::Greater
+        {
+            return Ok(CompareResult::Greater);
+        }
+    } else {
+        let left_right_relation =
+            compare_terms_with_bank(ocb, bank, positive.left(), negative.right())?;
+
+        if left_left_relation == CompareResult::Greater
+            && left_right_relation == CompareResult::Greater
+        {
+            return Ok(CompareResult::Greater);
+        }
+
+        let right_left_relation =
+            compare_terms_with_bank(ocb, bank, positive.right(), negative.left())?;
+        let right_right_relation =
+            compare_terms_with_bank(ocb, bank, positive.right(), negative.right())?;
+
+        if right_left_relation == CompareResult::Greater
+            && right_right_relation == CompareResult::Greater
+        {
+            return Ok(CompareResult::Greater);
+        }
+        if (is_lesser_or_equal(left_left_relation) || is_lesser_or_equal(left_right_relation))
+            && (is_lesser_or_equal(right_left_relation) || is_lesser_or_equal(right_right_relation))
+        {
+            return Ok(CompareResult::Lesser);
+        }
+    }
+
+    Ok(CompareResult::Uncomparable)
 }
 
 fn tfo_literal_compare(

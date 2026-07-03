@@ -70,7 +70,7 @@ pub fn clause_local_rw(
     bank: &mut TermBank,
     clause: &mut Clause,
 ) -> Result<bool, Diagnostic> {
-    clause.orient_literals(ocb, bank);
+    clause.orient_literals_with_bank(ocb, bank)?;
 
     let rw_sys = collect_local_rw_system(bank, clause);
     let source_literals: Vec<bool> = clause

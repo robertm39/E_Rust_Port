@@ -159,6 +159,23 @@ impl Clause {
         self.set_prop(CP_IS_ORIENTED);
     }
 
+    /// Orient literals and mark maximal literals using bank-backed ordering
+    /// preparation when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn mark_maximal_terms_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<(), Diagnostic> {
+        self.orient_literals_with_bank(ocb, bank)?;
+        self.mark_maximal_literals_with_bank(ocb, bank)?;
+        self.set_prop(CP_IS_ORIENTED);
+        Ok(())
+    }
+
     /// Conditionally mark maximal terms, matching C
     /// `ClauseCondMarkMaximalTerms`.
     ///
@@ -176,14 +193,62 @@ impl Clause {
         }
     }
 
+    /// Conditionally mark maximal terms using bank-backed ordering preparation
+    /// when needed.
+    ///
+    /// Returns whether marking was performed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn cond_mark_maximal_terms_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<bool, Diagnostic> {
+        if self.query_prop(CP_IS_ORIENTED) {
+            Ok(false)
+        } else {
+            self.mark_maximal_terms_with_bank(ocb, bank)?;
+            Ok(true)
+        }
+    }
+
     /// Orient all literals, matching C `ClauseOrientLiterals`.
     pub fn orient_literals(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> usize {
         self.literals.orient(ocb, bank)
     }
 
+    /// Orient all literals using bank-backed ordering preparation when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn orient_literals_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<usize, Diagnostic> {
+        self.literals.orient_with_bank(ocb, bank)
+    }
+
     /// Mark maximal literals, matching C `ClauseMarkMaximalLiterals`.
     pub fn mark_maximal_literals(&mut self, ocb: &mut OrderControlBlock, bank: &TermBank) -> usize {
         self.literals.mark_maximal_literals(ocb, bank)
+    }
+
+    /// Mark maximal literals using bank-backed ordering preparation when
+    /// needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn mark_maximal_literals_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<usize, Diagnostic> {
+        self.literals.mark_maximal_literals_with_bank(ocb, bank)
     }
 
     #[must_use]
@@ -2218,7 +2283,7 @@ mod tests {
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pdarrays::{PDIntArray, GROW_EXPONENTIAL};
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause_props::{
         CP_INITIAL, CP_INPUT_FORMULA, CP_IS_D_INDEXED, CP_IS_ORIENTED, CP_IS_SOS, CP_TYPE_AXIOM,
@@ -2236,6 +2301,7 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::{Signature, FP_ASSOCIATIVE, FP_COMMUTATIVE, FP_SKOLEM_SYMBOL};
     use crate::terms::simpletypes::{alloc_arrow_type, alloc_simple_sort, Type};
     use crate::terms::subst::Substitution;
@@ -2244,12 +2310,27 @@ mod tests {
     use crate::terms::termvars::VarBank;
     use crate::terms::termweightext::{TermWeightExtension, TermWeightExtensionStyle};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
@@ -2351,6 +2432,15 @@ mod tests {
         )
     }
 
+    fn kbo6_lambda_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LambdaOrder,
+        )
+    }
+
     #[test]
     fn allocation_sorts_positive_literals_before_negative_literals() {
         let mut bank = test_bank();
@@ -2390,6 +2480,32 @@ mod tests {
         assert_eq!(clause.literals().as_slice()[0].left(), &f_a);
         assert!(clause.literals().as_slice()[0].is_maximal());
         assert!(!clause.literals().as_slice()[1].is_maximal());
+    }
+
+    #[test]
+    fn mark_maximal_terms_with_bank_accepts_lambda_order_beta_surface() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let binder_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&binder_type, 0);
+        let lambda =
+            close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
+        let arg = typed_const(&mut bank, "clause_lambda_order_arg");
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&arg))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![eqn(
+            &mut bank, &applied, &arg, true,
+        )]));
+        let mut ocb = kbo6_lambda_ocb(&bank);
+
+        clause
+            .mark_maximal_terms_with_bank(&mut ocb, &mut bank)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(clause.query_prop(CP_IS_ORIENTED));
+        assert!(clause.literals().as_slice()[0].is_maximal());
+        assert!(!clause.literals().as_slice()[0].is_oriented());
     }
 
     #[test]

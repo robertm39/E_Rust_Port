@@ -219,6 +219,25 @@ impl EqnList {
         swaps
     }
 
+    /// Orient every literal using a bank-backed ordering path when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn orient_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<usize, Diagnostic> {
+        let mut swaps = 0;
+        for literal in &mut self.literals {
+            if literal.orient_with_bank(ocb, bank)? {
+                swaps += 1;
+            }
+        }
+        Ok(swaps)
+    }
+
     /// Mark maximal and strictly maximal literals under the selected ordering.
     ///
     /// This preserves C `EqnListMaximalLiterals` while keeping the Rust list
@@ -270,6 +289,69 @@ impl EqnList {
             self.literals[*index].set_prop(EP_IS_MAXIMAL);
         }
         maximal.len()
+    }
+
+    /// Mark maximal and strictly maximal literals using a bank-backed ordering
+    /// path when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn mark_maximal_literals_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<usize, Diagnostic> {
+        self.set_prop(EP_IS_STRICTLY_MAXIMAL);
+        self.del_prop(EP_IS_MAXIMAL);
+
+        let mut candidates: Vec<usize> = (0..self.len()).collect();
+        let mut maximal = Vec::new();
+
+        while !candidates.is_empty() {
+            let candidate = candidates.remove(0);
+            let mut candidate_survives = true;
+            let mut step = 0;
+
+            while step < candidates.len() {
+                let current = candidates[step];
+                match self.literals[candidate].literal_compare_with_bank(
+                    ocb,
+                    bank,
+                    &self.literals[current],
+                )? {
+                    CompareResult::Greater => {
+                        self.literals[current].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        candidates.remove(step);
+                    }
+                    CompareResult::Lesser => {
+                        self.literals[candidate].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        candidate_survives = false;
+                        break;
+                    }
+                    CompareResult::Equal => {
+                        self.literals[current].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        self.literals[candidate].del_prop(EP_IS_STRICTLY_MAXIMAL);
+                        step += 1;
+                    }
+                    CompareResult::Unknown
+                    | CompareResult::Uncomparable
+                    | CompareResult::NotGreaterEqual
+                    | CompareResult::NotLessEqual => {
+                        step += 1;
+                    }
+                }
+            }
+
+            if candidate_survives {
+                maximal.push(candidate);
+            }
+        }
+
+        for index in &maximal {
+            self.literals[*index].set_prop(EP_IS_MAXIMAL);
+        }
+        Ok(maximal.len())
     }
 
     #[must_use]

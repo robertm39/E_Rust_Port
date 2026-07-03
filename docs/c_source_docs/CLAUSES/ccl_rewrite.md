@@ -148,7 +148,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 
 ### Rust Port Notes
 
-- `ClauseLocalRW` is ported in `src/clauses/rewrite.rs` as a clause-local mutation helper. It preserves the C order: orient literals, collect local rules, skip rule-source literals while rewriting, then recompute literal counts, remove superfluous literals, clear the clause orientation cache, and record `DCLocalRewrite` on modification.
+- `ClauseLocalRW` is ported in `src/clauses/rewrite.rs` as a clause-local mutation helper. It preserves the C order: orient literals, collect local rules, skip rule-source literals while rewriting, then recompute literal counts, remove superfluous literals, clear the clause orientation cache, and record `DCLocalRewrite` on modification. Rust uses the bank-backed orientation wrapper here when the active ordering needs owner-bank preparation.
 - The temporary local rewrite system is keyed by shared-term identity, matching C's pointer-keyed `PObjMap`; duplicate rule keys overwrite earlier values like `PObjMapStore`.
 - C treats any negative oriented literal as a local rule source, not just equational literals. This means an oriented negative predicate literal can be skipped as a source instead of rewritten by a positive-atom rule. Rust preserves that classification.
 - `replace_term` recursively follows rule replacements and rebuilds changed top cells through the term bank. This matches `TermMap` restart behavior when the mapper returns a different shared term.
