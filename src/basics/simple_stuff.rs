@@ -415,6 +415,16 @@ mod tests {
     }
 
     #[test]
+    fn null_jkiss_seed_does_not_change_exported_random_sequence() {
+        let _guard = global_test_lock();
+        reset_jkiss_for_tests();
+
+        jkiss_seed(None, 10, 20, 30);
+
+        assert_eq!(jkiss_rand(None), 560_241_513);
+    }
+
+    #[test]
     fn indent_and_string_helpers_match_c_shapes() {
         assert_eq!(indent_str(-4), "");
         assert_eq!(indent_str(3), "   ");

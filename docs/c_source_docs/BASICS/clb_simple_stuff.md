@@ -127,4 +127,5 @@ Source files reviewed: `BASICS/clb_simple_stuff.h`, `BASICS/clb_simple_stuff.c`.
 ### Change Later Candidates
 
 - `problemType` is convenient C global state but awkward for repeated in-process Rust runs and future parallel solving. Rust resets it around executable `run()` calls for isolation; replace that shim with an explicit proof-session/parser context once the full first-order and higher-order parser owners are wired.
+- `JKISSSeed(NULL, ...)` seeds the file-static `rand_state` cell, but `JKISSRand(NULL)` and `JKISSRand(state)` advance separate file-static `xstate`/`ystate`/`zstate`/`cstate` words and ignore the selected `RandState_p`. Rust preserves this exported sequence quirk; a cleaned RNG API should either use caller-provided state consistently or expose an explicit global generator.
 <!-- END MANUAL REVIEW: c_source_docs -->
