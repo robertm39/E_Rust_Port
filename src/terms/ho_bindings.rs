@@ -683,6 +683,7 @@ mod tests {
         inc_elimination, inc_identification, inc_imitation, inc_projection, projection_count,
         ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
     };
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::heuristics::hcb::UnifMode;
     use crate::terms::ho_csu::{
         constraint_counter, constraint_state, HoCsuParams, Limits, DECOMPOSED_VAR, INIT_TAG,
@@ -720,6 +721,20 @@ mod tests {
             max_unifiers: 4,
             max_unif_steps: 256,
         }
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
     }
 
     #[test]
@@ -764,6 +779,7 @@ mod tests {
 
     #[test]
     fn compute_next_binding_imitation_binds_and_advances_counter() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -802,6 +818,7 @@ mod tests {
 
     #[test]
     fn compute_next_binding_projection_follows_imitation_slot() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let unary = bank
@@ -840,6 +857,7 @@ mod tests {
 
     #[test]
     fn compute_next_binding_elimination_follows_failed_projections() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -879,6 +897,7 @@ mod tests {
 
     #[test]
     fn compute_next_binding_identification_decomposes_variable_pair() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let bool_type = bank.signature().type_bank().bool_type();
         let left = bank.vars().var_assert_alloc(-100, &bool_type);
@@ -906,6 +925,7 @@ mod tests {
 
     #[test]
     fn trivial_ident_builds_shared_closed_targets_for_free_variables() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -940,6 +960,7 @@ mod tests {
 
     #[test]
     fn trivial_ident_returns_none_when_right_side_is_not_top_level_free() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let left = bank.vars().var_assert_alloc(-100, &individual);
@@ -954,6 +975,7 @@ mod tests {
 
     #[test]
     fn trivial_ident_accepts_applied_free_variable_heads() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let unary = bank
@@ -987,6 +1009,7 @@ mod tests {
 
     #[test]
     fn ident_returns_none_when_right_side_is_not_top_level_free() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let left = bank.vars().var_assert_alloc(-100, &individual);
@@ -997,6 +1020,7 @@ mod tests {
 
     #[test]
     fn ident_builds_asymmetric_matrix_applications_in_c_order() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -1067,6 +1091,7 @@ mod tests {
 
     #[test]
     fn imitation_binding_returns_none_for_variable_rhs() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let flex_type = bank
@@ -1086,6 +1111,7 @@ mod tests {
 
     #[test]
     fn imitation_binding_closes_constant_rhs_under_flex_prefix() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let flex_type = bank
@@ -1112,6 +1138,7 @@ mod tests {
 
     #[test]
     fn imitation_binding_synthesizes_args_for_rigid_function() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -1147,6 +1174,7 @@ mod tests {
 
     #[test]
     fn projection_binding_returns_selected_non_function_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let unary = bank
@@ -1172,6 +1200,7 @@ mod tests {
 
     #[test]
     fn projection_binding_rejects_mismatched_rigid_heads() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let unary = bank
@@ -1191,6 +1220,7 @@ mod tests {
 
     #[test]
     fn projection_binding_builds_fresh_args_for_function_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -1230,6 +1260,7 @@ mod tests {
 
     #[test]
     fn elim_binding_drops_first_visible_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();
@@ -1259,6 +1290,7 @@ mod tests {
 
     #[test]
     fn elim_binding_drops_second_visible_argument() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
         let individual = bank.signature().type_bank().i_type();
         let bool_type = bank.signature().type_bank().bool_type();

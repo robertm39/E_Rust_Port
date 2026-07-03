@@ -11,7 +11,7 @@ use crate::clauses::eqn_props::EqnSide;
 use crate::clauses::inferencedoc::{
     ClauseCreationInference, ClauseCreationParents, ProofDocSession,
 };
-use crate::orderings::cto_orderings::to_greater;
+use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
 use crate::terms::match_mgu::subst_mgu_complete;
@@ -262,7 +262,7 @@ pub fn compute_ordered_factor(
         return Ok(None);
     }
 
-    let result = if eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index) {
+    let result = if eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index)? {
         build_ordered_factor(bank, clause, position.second_literal_index, &mut subst)
     } else {
         Ok(None)
@@ -353,20 +353,23 @@ fn equality_factor_free_var_guard(input: &EqualityFactorInput) -> bool {
 }
 
 fn equality_factor_order_allows(
-    bank: &TermBank,
+    bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     clause: &Clause,
     position: EqualityFactorPosition,
     input: &EqualityFactorInput,
-) -> bool {
-    !to_greater(
+) -> Result<bool, Diagnostic> {
+    if to_greater_with_bank(
         ocb,
-        bank.signature(),
+        bank,
         &input.min_term,
         &input.max_term,
         DerefType::Always,
         DerefType::Always,
-    ) && eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index)
+    )? {
+        return Ok(false);
+    }
+    eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index)
 }
 
 fn compute_equality_factor_mgu(
@@ -386,7 +389,7 @@ fn compute_equality_factor_mgu(
     }
 
     let subst_is_ho = subst.has_ho_binding();
-    let result = if equality_factor_order_allows(bank, ocb, clause, position, &input) {
+    let result = if equality_factor_order_allows(bank, ocb, clause, position, &input)? {
         build_equality_factor(
             bank,
             clause,
@@ -430,7 +433,7 @@ fn compute_equality_factor_csu_factors(
             break;
         }
 
-        if equality_factor_order_allows(bank, ocb, clause, position, &input) {
+        if equality_factor_order_allows(bank, ocb, clause, position, &input)? {
             subst_is_ho = subst.has_ho_binding();
             let factor = match build_equality_factor(
                 bank,
@@ -638,19 +641,23 @@ fn literal_other_side(literal: &Eqn, side: EqnSide) -> &Term {
 
 fn eqn_is_maximal_under_subst(
     ocb: &mut OrderControlBlock,
-    bank: &TermBank,
+    bank: &mut TermBank,
     clause: &Clause,
     target_index: usize,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let literals = clause.literals().as_slice();
     let target = literals
         .get(target_index)
         .expect("maximality target index must be valid");
-    literals.iter().enumerate().all(|(index, candidate)| {
-        index == target_index
-            || !candidate.is_maximal()
-            || candidate.literal_compare(ocb, bank, target) != CompareResult::Greater
-    })
+    for (index, candidate) in literals.iter().enumerate() {
+        if index == target_index || !candidate.is_maximal() {
+            continue;
+        }
+        if candidate.literal_compare_with_bank(ocb, bank, target)? == CompareResult::Greater {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn build_ordered_factor(
@@ -794,6 +801,15 @@ mod tests {
         )
     }
 
+    fn kbo6_lambda_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LambdaOrder,
+        )
+    }
+
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         let f_code = bank.signature_mut().insert_id(name, 0, false);
@@ -854,6 +870,13 @@ mod tests {
         term.set_type(Some(type_));
         term.set_argument(0, arg.clone());
         bank.insert(&term, DerefType::Never).unwrap()
+    }
+
+    fn eta_expanded_arrow_const(bank: &mut TermBank, head: &Term) -> Term {
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(bank, head, std::slice::from_ref(&db0)).unwrap();
+        close_with_type_prefix(bank, std::slice::from_ref(&i_type), &matrix).unwrap()
     }
 
     fn lit(bank: &mut TermBank, left: &Term, right: &Term, positive: bool) -> Eqn {
@@ -1070,6 +1093,33 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    #[test]
+    fn compute_equality_factor_uses_banked_lambda_ordering_for_side_check() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
+        let mut bank = test_bank();
+        let f = typed_arrow_const(&mut bank, "ef_order_eta_f");
+        let eta_f = eta_expanded_arrow_const(&mut bank, &f);
+        let c = typed_arrow_const(&mut bank, "ef_order_eta_c");
+        let mut first = lit(&mut bank, &f, &eta_f, true);
+        let second = lit(&mut bank, &f, &c, true);
+        maximal(&mut first);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo6_lambda_ocb(&bank);
+
+        let factor = compute_equality_factor(
+            &mut bank,
+            &mut ocb,
+            &clause,
+            EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
+        )
+        .unwrap()
+        .expect("eta-equivalent side check should allow equality factoring");
+
+        assert_eq!(factor.literal_number(), 2);
     }
 
     #[test]

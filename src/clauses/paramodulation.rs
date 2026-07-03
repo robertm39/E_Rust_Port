@@ -19,7 +19,7 @@ use crate::clauses::overlap_index::{
 };
 use crate::clauses::subterm_tree::SubtermOcc;
 use crate::heuristics::to_params::TermOrdering;
-use crate::orderings::cto_orderings::to_greater;
+use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::ho_csu::CsuIterator;
 use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
@@ -840,11 +840,11 @@ fn compute_from_position_into_occurrence_csu(
             break;
         }
 
-        if !indexed_source_allows_under_subst(bank, ocb, from_pos) {
+        if !indexed_source_allows_under_subst(bank, ocb, from_pos)? {
             continue;
         }
         let subst_is_ho = subst.has_ho_binding();
-        let effective_pm_type = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, from_pos, pm_type)?;
 
         for into_clause_pos in occurrence.position_clauses().entries() {
             let generated = match compute_from_position_into_target_clause_entry_csu(
@@ -913,7 +913,7 @@ fn compute_from_position_into_target_clause_entry_csu(
                 break;
             }
         }
-        if !indexed_target_allows_under_subst(bank, ocb, &into_pos, target_entry.clause()) {
+        if !indexed_target_allows_under_subst(bank, ocb, &into_pos, target_entry.clause())? {
             continue;
         }
 
@@ -1026,7 +1026,7 @@ fn compute_indexed_sources_into_position_csu(
                 break;
             }
 
-            if !indexed_target_allows_under_subst(bank, ocb, into_pos, parent_alias) {
+            if !indexed_target_allows_under_subst(bank, ocb, into_pos, parent_alias)? {
                 continue;
             }
             let subst_is_ho = subst.has_ho_binding();
@@ -1083,11 +1083,11 @@ fn compute_indexed_sources_from_clause_entry_csu(
     for source_cpos in source_entry.positions() {
         let source_pos = unpack_clause_pos(*source_cpos, source_entry.clause().clone());
         ensure_indexed_paramodulation_ordering_supported(ocb, &source_pos, into_pos, pm_type)?;
-        if !indexed_source_allows_under_subst(bank, ocb, &source_pos) {
+        if !indexed_source_allows_under_subst(bank, ocb, &source_pos)? {
             continue;
         }
 
-        let effective_pm_type = effective_paramodulation_type(bank, ocb, &source_pos, pm_type);
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, &source_pos, pm_type)?;
         let marked_term = paramodulation_is_simultaneous(effective_pm_type).then(|| {
             let into_term = into_pos
                 .get_subterm()
@@ -1137,10 +1137,10 @@ fn compute_indexed_sources_from_clause_entry_csu(
 }
 
 fn indexed_source_allows_under_subst(
-    bank: &TermBank,
+    bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let from_clause = from_pos
         .clause()
         .expect("indexed source position must be backed by a clause");
@@ -1157,24 +1157,28 @@ fn indexed_source_allows_under_subst(
         .get_other_side()
         .expect("indexed source position must select an opposite side");
 
-    (from_literal.is_oriented()
-        || !to_greater(
+    if !from_literal.is_oriented()
+        && to_greater_with_bank(
             ocb,
-            bank.signature(),
+            bank,
             &from_other,
             &from_term,
             DerefType::Always,
             DerefType::Always,
-        ))
-        && eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index)
+        )?
+    {
+        return Ok(false);
+    }
+
+    eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index)
 }
 
 fn indexed_target_allows_under_subst(
-    bank: &TermBank,
+    bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     into_pos: &ClausePos,
     into_clause: &Clause,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let into_index = into_pos
         .literal_index()
         .expect("indexed target position must select a clause literal");
@@ -1188,19 +1192,26 @@ fn indexed_target_allows_under_subst(
         .get_other_side()
         .expect("indexed target position must select an opposite side");
 
-    (into_literal.is_oriented()
-        || !to_greater(
+    if !into_literal.is_oriented()
+        && to_greater_with_bank(
             ocb,
-            bank.signature(),
+            bank,
             &into_other,
             &into_side,
             DerefType::Always,
             DerefType::Always,
-        ))
-        && ((into_literal.is_positive()
-            && eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index))
-            || (into_literal.is_negative()
-                && eqn_is_maximal_under_subst(ocb, bank, into_clause, into_index)))
+        )?
+    {
+        return Ok(false);
+    }
+
+    if into_literal.is_positive() {
+        eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index)
+    } else if into_literal.is_negative() {
+        eqn_is_maximal_under_subst(ocb, bank, into_clause, into_index)
+    } else {
+        Ok(false)
+    }
 }
 
 fn ensure_indexed_paramodulation_ordering_supported(
@@ -1433,7 +1444,7 @@ fn indexed_sim_paramod_construct_with_subst(
 }
 
 fn indexed_effective_paramodulation_type(
-    bank: &TermBank,
+    bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
     overlap_term: &Term,
@@ -1456,19 +1467,19 @@ fn indexed_effective_paramodulation_type(
     let mut subst = Substitution::new();
     if !subst_mgu_complete(&from_term, overlap_term, &mut subst)
         || (!from_literal.is_oriented()
-            && to_greater(
+            && to_greater_with_bank(
                 ocb,
-                bank.signature(),
+                bank,
                 &from_other,
                 &from_term,
                 DerefType::Always,
                 DerefType::Always,
-            ))
+            )?)
     {
         subst.backtrack();
         return Ok(None);
     }
-    let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
+    let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type)?;
     subst.backtrack();
     Ok(Some(effective))
 }
@@ -1649,14 +1660,14 @@ pub fn compute_overlap(
         return Ok(None);
     }
     if !from_literal.is_oriented()
-        && to_greater(
+        && to_greater_with_bank(
             ocb,
-            bank.signature(),
+            bank,
             &rep_side,
             &max_side,
             DerefType::Always,
             DerefType::Always,
-        )
+        )?
     {
         subst.backtrack_to_pos(oldstate);
         return Ok(None);
@@ -1738,14 +1749,14 @@ pub fn eqn_ordered_paramod(
     };
 
     if !into_literal.is_oriented()
-        && to_greater(
+        && to_greater_with_bank(
             ocb,
-            bank.signature(),
+            bank,
             &rside,
             &lside,
             DerefType::Always,
             DerefType::Always,
-        )
+        )?
     {
         subst.backtrack_to_pos(oldstate);
         return Ok(None);
@@ -2011,9 +2022,10 @@ fn clause_ordered_paramod_with_subst(
     };
 
     let into_is_eligible = (into_literal.is_positive()
-        && eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index))
+        && eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index)?)
         || into_literal.is_negative();
-    if !into_is_eligible || !eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index)
+    if !into_is_eligible
+        || !eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index)?
     {
         return Ok(None);
     }
@@ -2121,41 +2133,41 @@ fn clause_ordered_sim_paramod_active_subst(
     replacement: SimParamodReplacement,
 ) -> Result<Option<Clause>, Diagnostic> {
     if !from_literal.is_oriented()
-        && to_greater(
+        && to_greater_with_bank(
             ocb,
-            bank.signature(),
+            bank,
             from_other,
             from_term,
             DerefType::Always,
             DerefType::Always,
-        )
+        )?
     {
         into_term.del_prop(TP_POTENTIAL_PARAMOD);
         return Ok(None);
     }
 
     if !into_literal.is_oriented()
-        && to_greater(
+        && to_greater_with_bank(
             ocb,
-            bank.signature(),
+            bank,
             into_other,
             into_side,
             DerefType::Always,
             DerefType::Always,
-        )
+        )?
     {
         return Ok(None);
     }
 
-    if !eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index) {
+    if !eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index)? {
         into_term.del_prop(TP_POTENTIAL_PARAMOD);
         return Ok(None);
     }
 
     let into_is_eligible = (into_literal.is_positive()
-        && eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index))
+        && eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index)?)
         || (into_literal.is_negative()
-            && eqn_is_maximal_under_subst(ocb, bank, into_clause, into_index));
+            && eqn_is_maximal_under_subst(ocb, bank, into_clause, into_index)?);
     if !into_is_eligible {
         return Ok(None);
     }
@@ -2209,39 +2221,47 @@ fn clause_ordered_sim_paramod_active_subst(
 
 fn eqn_is_strictly_maximal_under_subst(
     ocb: &mut OrderControlBlock,
-    bank: &TermBank,
+    bank: &mut TermBank,
     clause: &Clause,
     target_index: usize,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let literals = clause.literals().as_slice();
     let target = literals
         .get(target_index)
         .expect("maximality target index must be valid");
-    literals.iter().enumerate().all(|(index, candidate)| {
-        index == target_index
-            || !candidate.is_maximal()
-            || !matches!(
-                candidate.literal_compare(ocb, bank, target),
-                CompareResult::Greater | CompareResult::Equal
-            )
-    })
+    for (index, candidate) in literals.iter().enumerate() {
+        if index == target_index || !candidate.is_maximal() {
+            continue;
+        }
+        if matches!(
+            candidate.literal_compare_with_bank(ocb, bank, target)?,
+            CompareResult::Greater | CompareResult::Equal
+        ) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn eqn_is_maximal_under_subst(
     ocb: &mut OrderControlBlock,
-    bank: &TermBank,
+    bank: &mut TermBank,
     clause: &Clause,
     target_index: usize,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let literals = clause.literals().as_slice();
     let target = literals
         .get(target_index)
         .expect("maximality target index must be valid");
-    literals.iter().enumerate().all(|(index, candidate)| {
-        index == target_index
-            || !candidate.is_maximal()
-            || candidate.literal_compare(ocb, bank, target) != CompareResult::Greater
-    })
+    for (index, candidate) in literals.iter().enumerate() {
+        if index == target_index || !candidate.is_maximal() {
+            continue;
+        }
+        if candidate.literal_compare_with_bank(ocb, bank, target)? == CompareResult::Greater {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn fresh_var_bank_for_clauses(bank: &TermBank, first: &Clause, second: &Clause) -> VarBank {
@@ -2410,7 +2430,7 @@ fn compute_directed_clause_paramodulants(
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for pair in paramodulation_pair_positions(bank, source, target, no_top, pm_type) {
-        let effective_pm_type = effective_paramodulation_type(bank, ocb, pair.source(), pm_type);
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, pair.source(), pm_type)?;
         let paramodulant = match effective_pm_type {
             ParamodulationType::Plain => {
                 clause_ordered_paramod(bank, ocb, pair.source(), pair.target())?
@@ -2525,22 +2545,22 @@ const fn paramodulation_derivation_code_with_ho(
 }
 
 fn effective_paramodulation_type(
-    bank: &TermBank,
+    bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
     pm_type: ParamodulationType,
-) -> ParamodulationType {
+) -> Result<ParamodulationType, Diagnostic> {
     match pm_type {
-        ParamodulationType::Plain => ParamodulationType::Plain,
-        ParamodulationType::Simultaneous => ParamodulationType::Simultaneous,
+        ParamodulationType::Plain => Ok(ParamodulationType::Plain),
+        ParamodulationType::Simultaneous => Ok(ParamodulationType::Simultaneous),
         ParamodulationType::OrientedSimultaneous => {
             let literal = from_pos
                 .literal()
                 .expect("paramodulation source position must select a literal");
             if literal.is_oriented() {
-                ParamodulationType::Simultaneous
+                Ok(ParamodulationType::Simultaneous)
             } else {
-                ParamodulationType::Plain
+                Ok(ParamodulationType::Plain)
             }
         }
         ParamodulationType::DecreasingSimultaneous => {
@@ -2550,17 +2570,17 @@ fn effective_paramodulation_type(
             let rep_side = from_pos
                 .get_other_side()
                 .expect("paramodulation source position must select an opposite side");
-            if to_greater(
+            if to_greater_with_bank(
                 ocb,
-                bank.signature(),
+                bank,
                 &max_side,
                 &rep_side,
                 DerefType::Always,
                 DerefType::Always,
-            ) {
-                ParamodulationType::Simultaneous
+            )? {
+                Ok(ParamodulationType::Simultaneous)
             } else {
-                ParamodulationType::Plain
+                Ok(ParamodulationType::Plain)
             }
         }
         ParamodulationType::SizeDecreasingSimultaneous => {
@@ -2571,20 +2591,20 @@ fn effective_paramodulation_type(
                 .get_other_side()
                 .expect("paramodulation source position must select an opposite side");
             if term_standard_weight(&max_side) > term_standard_weight(&rep_side) {
-                ParamodulationType::Simultaneous
+                Ok(ParamodulationType::Simultaneous)
             } else {
-                ParamodulationType::Plain
+                Ok(ParamodulationType::Plain)
             }
         }
-        ParamodulationType::SuperSimultaneous => ParamodulationType::SuperSimultaneous,
+        ParamodulationType::SuperSimultaneous => Ok(ParamodulationType::SuperSimultaneous),
         ParamodulationType::OrientedSuperSimultaneous => {
             let literal = from_pos
                 .literal()
                 .expect("paramodulation source position must select a literal");
             if literal.is_oriented() {
-                ParamodulationType::SuperSimultaneous
+                Ok(ParamodulationType::SuperSimultaneous)
             } else {
-                ParamodulationType::Plain
+                Ok(ParamodulationType::Plain)
             }
         }
     }
@@ -2596,8 +2616,8 @@ mod tests {
         clause_ordered_paramod, clause_ordered_sim_paramod, clause_ordered_super_sim_paramod,
         compute_all_paramodulants, compute_all_paramodulants_indexed,
         compute_all_paramodulants_with_docs, compute_clause_clause_paramodulants,
-        paramod_from_side_positions, paramod_into_positions, paramodulation_pair_positions,
-        ParamodulationType,
+        effective_paramodulation_type, paramod_from_side_positions, paramod_into_positions,
+        paramodulation_pair_positions, ParamodulationType,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -2674,6 +2694,15 @@ mod tests {
             true,
             bank.signature(),
             HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn kbo6_lambda_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LambdaOrder,
         )
     }
 
@@ -2788,6 +2817,13 @@ mod tests {
         position
     }
 
+    fn eta_expanded_arrow_const(bank: &mut TermBank, head: &Term) -> Term {
+        let i_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&i_type, 0);
+        let matrix = apply_terms(bank, head, std::slice::from_ref(&db0)).unwrap();
+        close_with_type_prefix(bank, std::slice::from_ref(&i_type), &matrix).unwrap()
+    }
+
     #[test]
     fn paramod_from_side_positions_follow_c_side_order_and_skip_selected() {
         let mut bank = test_bank();
@@ -2814,6 +2850,31 @@ mod tests {
         assert_eq!(positions[1].side(), EqnSide::RightSide);
         assert_eq!(positions[2].literal_index(), Some(2));
         assert_eq!(positions[2].side(), EqnSide::LeftSide);
+    }
+
+    #[test]
+    fn effective_paramodulation_type_decreasing_uses_banked_lambda_ordering() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let f = typed_arrow_const(&mut bank, "pm_effective_eta_f");
+        let eta_f = eta_expanded_arrow_const(&mut bank, &f);
+        let mut source = lit(&mut bank, &eta_f, &f, true);
+        maximal(&mut source);
+        let clause = Clause::alloc(EqnList::from_vec(vec![source]));
+        let from_pos = top_left_position(&clause);
+        let mut ocb = kbo6_lambda_ocb(&bank);
+
+        assert_eq!(
+            effective_paramodulation_type(
+                &mut bank,
+                &mut ocb,
+                &from_pos,
+                ParamodulationType::DecreasingSimultaneous,
+            )
+            .unwrap(),
+            ParamodulationType::Plain
+        );
     }
 
     #[test]

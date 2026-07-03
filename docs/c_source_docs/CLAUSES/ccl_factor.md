@@ -97,9 +97,9 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 ### Rust Port Status
 
 - `src/clauses/factor.rs` ports first-order ordered factor candidate enumeration (`ClausePosFirstOrderedFactorLiterals` / `ClausePosNextOrderedFactorLiterals`) and single ordered-factor construction (`ComputeOrderedFactor`).
-- The port preserves C's pair ordering, second-literal side retry, post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
+- The port preserves C's pair ordering, second-literal side retry, bank-backed post-unifier maximality check, normalized copy excluding the second literal, and resolved/duplicate cleanup.
 - `src/clauses/factor.rs` also ports equality factor candidate enumeration (`ClausePosFirstEqualityFactorSides` / `ClausePosNextEqualityFactorSides`) and `ComputeEqualityFactor` for both first-order complete-MGU candidates and higher-order CSU enumeration through the shared `CsuIterator`.
-- The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, lambda normalization after condition insertion, resolved/duplicate cleanup, and multi-CSU result-stack shape.
+- The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, bank-backed `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, lambda normalization after condition insertion, resolved/duplicate cleanup, and multi-CSU result-stack shape.
 - The all-factor wrappers now attach `DCOrderedFactor` / ordinary or higher-order `DCEqFactor` derivation entries with the source clause reference and expose opt-in represented `DocClauseCreationDefault(..., inf_factor/inf_efactor, ...)` output.
 
 ### Change Later
