@@ -80,8 +80,8 @@ impl<V: Clone> IntMap<V> {
     }
 
     #[must_use]
-    pub fn get_val(&self, key: IntMapKey) -> Option<&V> {
-        match &self.repr {
+    pub fn get_val(&mut self, key: IntMapKey) -> Option<&V> {
+        match &mut self.repr {
             IntMapRepr::Empty => None,
             IntMapRepr::Single {
                 key: single_key,
@@ -95,7 +95,7 @@ impl<V: Clone> IntMap<V> {
             }
             IntMapRepr::Array(array) => {
                 if key <= self.max_key {
-                    array.existing_element(key).and_then(Option::as_ref)
+                    array.element(key).and_then(Option::as_ref)
                 } else {
                     None
                 }
@@ -162,7 +162,7 @@ impl<V: Clone> IntMap<V> {
                 if key > self.max_key {
                     return None;
                 }
-                let result = array.existing_element(key).and_then(Clone::clone);
+                let result = array.element(key).and_then(Clone::clone);
                 if result.is_some() {
                     let deleted = array.assign(key, None);
                     debug_assert!(deleted);
@@ -256,8 +256,11 @@ impl<V: Clone> IntMap<V> {
     }
 
     #[must_use]
-    pub const fn storage_estimate(&self) -> usize {
-        1 + self.entry_no
+    pub fn storage_estimate(&self) -> usize {
+        match &self.repr {
+            IntMapRepr::Array(array) => 1 + array.size(),
+            _ => 1 + self.entry_no,
+        }
     }
 
     fn ensure_ref_slot(&mut self, key: IntMapKey) {
@@ -491,6 +494,41 @@ mod tests {
         assert_eq!(map.entry_count_estimate(), 2);
         assert_eq!(map.get_ref(1), &None);
         assert_eq!(map.entry_count_estimate(), 3);
+    }
+
+    #[test]
+    fn array_get_val_below_low_key_grows_backing_range_like_c() {
+        let mut map = IntMap::new();
+        map.assign(10, "ten");
+        map.assign(11, "eleven");
+        assert_eq!(map.map_type(), IntMapType::Array);
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(11));
+        let before_storage = map.storage_estimate();
+
+        assert_eq!(map.get_val(9), None);
+
+        assert!(map.storage_estimate() > before_storage);
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(11));
+        assert_eq!(map.entry_count_estimate(), 2);
+    }
+
+    #[test]
+    fn array_delete_miss_below_low_key_grows_backing_range_like_c() {
+        let mut map = IntMap::new();
+        map.assign(10, "ten");
+        map.assign(11, "eleven");
+        assert_eq!(map.map_type(), IntMapType::Array);
+        let before_storage = map.storage_estimate();
+
+        assert_eq!(map.del_key(9), None);
+
+        assert!(map.storage_estimate() > before_storage);
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(11));
+        assert_eq!(map.entry_count_estimate(), 2);
+        assert_eq!(map.get_val(10), Some(&"ten"));
     }
 
     #[test]

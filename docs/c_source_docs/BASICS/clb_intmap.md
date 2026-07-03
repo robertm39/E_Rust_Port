@@ -132,4 +132,8 @@ Source files reviewed: `BASICS/clb_intmap.h`, `BASICS/clb_intmap.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- `IntMapGetVal` and `IntMapDelKey` call `PDRangeArrElementP` for array-backed maps whenever `key <= max_key`, so a failed read or delete below the current range-array offset can allocate and shift the backing array without changing `min_key`, `max_key`, or `entry_no`. Rust preserves this through mutable lookup/delete and storage-estimate tests; a cleaned API should split side-effect-free lookup from C-compatible ranged-array access after callers are audited.
 <!-- END MANUAL REVIEW: c_source_docs -->
