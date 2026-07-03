@@ -103,4 +103,8 @@ Source files reviewed: `BASICS/clb_floattrees.h`, `BASICS/clb_floattrees.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- `splay_tree` and `FloatTreeInsert` compare keys by subtracting `double` values and testing the result against zero. This makes `-0.0` and `+0.0` duplicate keys while preserving the already-stored node representation, and it gives NaN keys accidental behavior that depends on the current root. Rust preserves the signed-zero duplicate semantics, but uses a deterministic lawful total ordering for NaN buckets because C's NaN behavior is not a transitive map ordering. Revisit whether NaN keys should be rejected at a higher level once all float-key callers are ported and compared against C.
 <!-- END MANUAL REVIEW: c_source_docs -->

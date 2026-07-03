@@ -86,13 +86,16 @@ impl<V1, V2> FloatTree<V1, V2> {
 
     pub fn store(&mut self, key: f64, val1: V1, val2: V2) -> bool {
         let key = FloatTreeKey::new(key);
-        self.root_key = Some(key);
         match self.entries.entry(key) {
             Entry::Vacant(entry) => {
+                self.root_key = Some(key);
                 entry.insert(FloatTreeEntry { val1, val2 });
                 true
             }
-            Entry::Occupied(_) => false,
+            Entry::Occupied(entry) => {
+                self.root_key = Some(*entry.key());
+                false
+            }
         }
     }
 
@@ -103,21 +106,21 @@ impl<V1, V2> FloatTree<V1, V2> {
 
     pub fn find_splayed(&mut self, key: f64) -> Option<&FloatTreeEntry<V1, V2>> {
         let key = FloatTreeKey::new(key);
-        if self.entries.contains_key(&key) {
-            self.root_key = Some(key);
-            self.entries.get(&key)
-        } else {
-            None
+        let found = self.entries.get_key_value(&key);
+        if let Some((stored_key, _entry)) = found {
+            self.root_key = Some(*stored_key);
         }
+        found.map(|(_stored_key, entry)| entry)
     }
 
     pub fn find_mut(&mut self, key: f64) -> Option<&mut FloatTreeEntry<V1, V2>> {
         let key = FloatTreeKey::new(key);
-        let found = self.entries.get_mut(&key);
-        if found.is_some() {
-            self.root_key = Some(key);
+        if let Some((stored_key, _entry)) = self.entries.get_key_value(&key) {
+            self.root_key = Some(*stored_key);
+            self.entries.get_mut(&key)
+        } else {
+            None
         }
-        found
     }
 
     pub fn extract_entry(&mut self, key: f64) -> Option<(f64, FloatTreeEntry<V1, V2>)> {
@@ -222,6 +225,7 @@ mod tests {
         tree.store(3.0, 30, 0);
         tree.store(-0.0, 0, 0);
         assert!(!tree.store(0.0, 999, 999));
+        assert_eq!(tree.root_key().unwrap().to_bits(), (-0.0_f64).to_bits());
         tree.store(f64::INFINITY, 100, 0);
         tree.store(-2.0, -20, 0);
 
@@ -233,6 +237,25 @@ mod tests {
             visited,
             vec![(-2.0, -20), (-0.0, 0), (3.0, 30), (f64::INFINITY, 100)]
         );
+    }
+
+    #[test]
+    fn signed_zero_accesses_track_the_stored_key_representation() {
+        let mut tree = FloatTree::new();
+        assert!(tree.store(-0.0, 10, 0));
+        assert!(!tree.store(0.0, 99, 99));
+        assert_eq!(tree.root_key().unwrap().to_bits(), (-0.0_f64).to_bits());
+
+        assert_eq!(tree.find_splayed(0.0).unwrap().val1, 10);
+        assert_eq!(tree.root_key().unwrap().to_bits(), (-0.0_f64).to_bits());
+
+        tree.find_mut(0.0).unwrap().val1 = 20;
+        assert_eq!(tree.root_key().unwrap().to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(tree.find(-0.0).unwrap().val1, 20);
+
+        let (key, entry) = tree.extract_entry(0.0).unwrap();
+        assert_eq!(key.to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(entry.val1, 20);
     }
 
     #[test]
