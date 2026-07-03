@@ -1,7 +1,10 @@
 use crate::basics::error::Diagnostic;
 use crate::terms::ho_csu::Limits;
-use crate::terms::lambda::{close_with_db_var, close_with_type_prefix, fresh_var_with_args};
-use crate::terms::simpletypes::{get_ret_type, Type};
+use crate::terms::lambda::{
+    close_with_db_var, close_with_type_prefix, fresh_var_with_args, whnf_step,
+};
+use crate::terms::signature::SIG_PHONY_APP_CODE;
+use crate::terms::simpletypes::{get_ret_type, type_get_max_arity, Type};
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 
@@ -63,6 +66,90 @@ pub const fn inc_elimination(limits: Limits) -> Limits {
 pub struct IdentificationBinding {
     pub left_target: Term,
     pub right_target: Term,
+}
+
+/// Builds the C `build_projection` binding for visible argument `idx`.
+///
+/// `idx` is zero-based over the applied free variable's visible arguments,
+/// excluding the head at argument slot 0. Returns `None` for the C `NULL`
+/// cases where a quick rigid-head check proves the projection cannot solve the
+/// current equation.
+///
+/// # Errors
+///
+/// Returns diagnostics from weak-head normalization, fresh-variable
+/// application, term-bank insertion, or lambda construction.
+///
+/// # Panics
+///
+/// Panics if `flex` is not an applied free variable, if `rhs` is a lambda, if
+/// `idx` is out of range, if required terms are untyped, or if the selected
+/// argument has an incompatible return type.
+pub fn build_projection(
+    bank: &mut TermBank,
+    flex: &Term,
+    rhs: &Term,
+    idx: usize,
+) -> Result<Option<Term>, Diagnostic> {
+    assert!(
+        flex.is_applied_free_var(),
+        "projection expects an applied free variable"
+    );
+    assert!(!rhs.is_lambda(), "projection rhs must not be a lambda");
+    assert!(
+        idx < flex.arity() - 1,
+        "projection argument index is out of range"
+    );
+
+    let var_type = top_level_free_head(flex)
+        .type_()
+        .expect("projection flex head has a type");
+    let raw_arg = flex
+        .argument(idx + 1)
+        .unwrap_or_else(|| panic!("flex argument {} is uninitialized", idx + 1));
+    let arg = if rhs.is_top_level_free_var() {
+        raw_arg
+    } else {
+        whnf_step(bank, &raw_arg)?
+    };
+    let arg_type = arg.type_().expect("projection argument has a type");
+    assert_eq!(
+        get_ret_type(&var_type),
+        get_ret_type(&arg_type),
+        "projection requires matching return types"
+    );
+
+    if projection_fails_fast(&arg, rhs) {
+        return Ok(None);
+    }
+
+    let matrix = if arg_type.is_arrow() {
+        let db_vars = db_vars_for_type_prefix(bank, &var_type);
+        assert!(
+            idx < db_vars.len(),
+            "projection argument index exceeds flex type prefix"
+        );
+        let matrix = Term::top_alloc(SIG_PHONY_APP_CODE, arg_type.arity());
+        matrix.set_argument(0, db_vars[idx].clone());
+        for index in 1..arg_type.arity() {
+            matrix.set_argument(
+                index,
+                fresh_var_with_args(bank, &db_vars, &arg_type.args()[index - 1])?,
+            );
+        }
+        bank.term_top_insert(matrix)?
+    } else {
+        let db_index = (type_get_max_arity(&var_type) - idx - 1)
+            .try_into()
+            .expect("type arity fits in a FunCode");
+        bank.request_db_var(&arg_type, db_index)
+    };
+
+    Ok(Some(close_with_type_prefix(
+        bank,
+        type_prefix(&var_type),
+        &matrix,
+    )?))
 }
 
 /// Builds the C `build_elim` binding that drops visible argument `idx`.
@@ -179,6 +266,33 @@ fn top_level_free_head(term: &Term) -> Term {
     }
 }
 
+fn top_level_db_head(term: &Term) -> Term {
+    if term.is_applied_db_var() {
+        term.argument(0)
+            .expect("applied DB variable has an initialized head")
+    } else {
+        assert!(term.is_db_var(), "expected a top-level DB variable");
+        term.clone()
+    }
+}
+
+fn projection_fails_fast(arg: &Term, rhs: &Term) -> bool {
+    if arg.is_top_level_free_var() || rhs.is_top_level_free_var() {
+        return false;
+    }
+    if arg.is_top_level_db_var() && rhs.is_top_level_db_var() {
+        return top_level_db_head(arg) != top_level_db_head(rhs);
+    }
+    if !arg.is_top_level_db_var()
+        && !rhs.is_top_level_db_var()
+        && !arg.is_lambda()
+        && !rhs.is_lambda()
+    {
+        return arg.f_code() != rhs.f_code();
+    }
+    !arg.is_lambda() && !rhs.is_lambda() && (arg.is_top_level_db_var() != rhs.is_top_level_db_var())
+}
+
 fn type_prefix(type_: &Type) -> &[Type] {
     if type_.is_arrow() {
         &type_.args()[..type_.arity() - 1]
@@ -187,12 +301,26 @@ fn type_prefix(type_: &Type) -> &[Type] {
     }
 }
 
+fn db_vars_for_type_prefix(bank: &mut TermBank, type_: &Type) -> Vec<Term> {
+    let prefix = type_prefix(type_);
+    prefix
+        .iter()
+        .enumerate()
+        .map(|(index, type_)| {
+            let db_index = (prefix.len() - index - 1)
+                .try_into()
+                .expect("type prefix length fits in a FunCode");
+            bank.request_db_var(type_, db_index)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_elim, build_trivial_ident, elimination_count, identification_count, imitation_count,
-        inc_elimination, inc_identification, inc_imitation, inc_projection, projection_count,
-        ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
+        build_elim, build_projection, build_trivial_ident, elimination_count, identification_count,
+        imitation_count, inc_elimination, inc_identification, inc_imitation, inc_projection,
+        projection_count, ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
     };
     use crate::terms::lambda::{apply_terms, beta_normalize_db};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
@@ -328,6 +456,89 @@ mod tests {
         assert_eq!(binding.right_target.type_(), Some(unary));
         assert_eq!(left.f_code(), SIG_PHONY_APP_CODE);
         assert_eq!(right.f_code(), SIG_PHONY_APP_CODE);
+    }
+
+    #[test]
+    fn projection_binding_returns_selected_non_function_argument() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &unary);
+        let a = typed_const(&mut bank, "proj_a", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&a)).unwrap();
+
+        let binding = build_projection(&mut bank, &flex, &a, 0)
+            .unwrap()
+            .expect("matching rigid head should project");
+        let applied = apply_terms(&mut bank, &binding, std::slice::from_ref(&a)).unwrap();
+        let normalized = beta_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(binding.type_(), Some(unary));
+        assert_eq!(normalized, a);
+    }
+
+    #[test]
+    fn projection_binding_rejects_mismatched_rigid_heads() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &unary);
+        let a = typed_const(&mut bank, "proj_reject_a", &individual);
+        let b = typed_const(&mut bank, "proj_reject_b", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&a)).unwrap();
+
+        assert!(build_projection(&mut bank, &flex, &b, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn projection_binding_builds_fresh_args_for_function_argument() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let flex_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![predicate.clone(), bool_type.clone()]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &flex_type);
+        let p = bank.vars().var_assert_alloc(-102, &predicate);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&p)).unwrap();
+
+        let binding = build_projection(&mut bank, &flex, &p, 0)
+            .unwrap()
+            .expect("matching functional argument should project");
+        let applied = apply_terms(&mut bank, &binding, std::slice::from_ref(&p)).unwrap();
+        let normalized = beta_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(binding.type_(), Some(flex_type));
+        assert!(normalized.is_applied_free_var());
+        assert_eq!(normalized.argument(0), Some(p.clone()));
+        assert_eq!(normalized.type_(), Some(bool_type));
+        assert_eq!(normalized.arity(), 2);
+        let synthesized_arg = normalized
+            .argument(1)
+            .expect("projected predicate application has an argument");
+        assert!(synthesized_arg.is_applied_free_var());
+        assert_eq!(synthesized_arg.type_(), Some(individual));
+        assert_eq!(synthesized_arg.argument(1), Some(p));
     }
 
     #[test]
