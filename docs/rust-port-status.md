@@ -51,7 +51,7 @@ Implemented:
 
 Pending:
 
-- Remaining learning/support consumers outside the KB and direct-example path still need executable wrappers and filesystem regression coverage.
+- No additional learning/support executable wrappers are currently known from the reviewed `PROVER`, `SIMPLE_APPS`, and standalone `EXTERNAL` application inventory; remaining work here is filesystem regression coverage and direct C/Rust executable comparison.
 - Reference executable comparison on a larger learned-data corpus, direct-example protocol corpus, platform-specific file/broken-pipe suffixes, platform-specific empty-test-set floating-point spelling, and performance coverage for the TSM build/classification path.
 
 Change-later notes:
