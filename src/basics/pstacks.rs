@@ -57,8 +57,8 @@ impl<T> PStack<T> {
     }
 
     #[must_use]
-    pub fn top_stack_pointer(&self) -> Option<PStackPointer> {
-        self.stack_pointer().checked_sub(1)
+    pub fn top_stack_pointer(&self) -> PStackPointer {
+        self.stack_pointer() - 1
     }
 
     #[must_use]
@@ -106,41 +106,94 @@ impl<T> PStack<T> {
         self.stack.pop()
     }
 
-    pub fn discard_top(&mut self) -> bool {
-        self.stack.pop().is_some()
+    /// Discard the top stack element.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the C `PStackDiscardTop`
+    /// assertion.
+    pub fn discard_top(&mut self) {
+        assert!(
+            !self.is_empty(),
+            "PStackDiscardTop called on an empty stack"
+        );
+        let _discarded = self.stack.pop();
     }
 
+    /// Return the top stack element.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the C `PStackTop`
+    /// assertion.
     #[must_use]
-    pub fn top(&self) -> Option<&T> {
-        self.stack.last()
+    pub fn top(&self) -> &T {
+        assert!(!self.is_empty(), "PStackTop called on an empty stack");
+        self.stack
+            .last()
+            .unwrap_or_else(|| panic!("PStackTop lost non-empty top element"))
     }
 
-    pub fn top_mut(&mut self) -> Option<&mut T> {
-        self.stack.last_mut()
+    /// Return a mutable reference to the top stack element.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the C `PStackTopAddr`
+    /// assertion.
+    pub fn top_mut(&mut self) -> &mut T {
+        assert!(!self.is_empty(), "PStackTopAddr called on an empty stack");
+        self.stack
+            .last_mut()
+            .unwrap_or_else(|| panic!("PStackTopAddr lost non-empty top element"))
     }
 
+    /// Return the second item on the stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack has fewer than two elements, matching the C
+    /// `PStackBelowTop` assertion.
     #[must_use]
-    pub fn below_top(&self) -> Option<&T> {
-        self.stack.get(self.stack.len().checked_sub(2)?)
+    pub fn below_top(&self) -> &T {
+        assert!(
+            self.stack.len() >= 2,
+            "PStackBelowTop called with fewer than two elements"
+        );
+        &self.stack[self.stack.len() - 2]
     }
 
+    /// Return the element at stack position `pos`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `pos` is negative or outside the current stack, matching
+    /// the C `PStackElement` assertion.
     #[must_use]
-    pub fn element(&self, pos: PStackPointer) -> Option<&T> {
-        self.element_index(pos)
-            .and_then(|index| self.stack.get(index))
+    pub fn element(&self, pos: PStackPointer) -> &T {
+        let index = self.element_index_or_panic(pos, "PStackElement");
+        &self.stack[index]
     }
 
-    pub fn element_mut(&mut self, pos: PStackPointer) -> Option<&mut T> {
-        self.element_index(pos)
-            .and_then(|index| self.stack.get_mut(index))
+    /// Return a mutable reference to the element at stack position `pos`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `pos` is negative or outside the current stack, matching
+    /// the C `PStackElementRef` assertion.
+    pub fn element_mut(&mut self, pos: PStackPointer) -> &mut T {
+        let index = self.element_index_or_panic(pos, "PStackElementRef");
+        &mut self.stack[index]
     }
 
-    pub fn assign(&mut self, pos: PStackPointer, value: T) -> bool {
-        let Some(element) = self.element_mut(pos) else {
-            return false;
-        };
+    /// Assign `value` at stack position `pos`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `pos` is negative or outside the current stack, matching
+    /// the C `PStackAssign*` macro precondition.
+    pub fn assign(&mut self, pos: PStackPointer, value: T) {
+        let element = self.element_mut(pos);
         *element = value;
-        true
     }
 
     #[must_use]
@@ -151,9 +204,15 @@ impl<T> PStack<T> {
         self.stack.iter().any(|element| element == value)
     }
 
-    pub fn discard_element(&mut self, pos: PStackPointer) -> Option<T> {
-        self.element_index(pos)
-            .map(|index| self.stack.swap_remove(index))
+    /// Remove stack position `pos` by swapping in the current top element.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `pos` is negative or outside the current stack, matching
+    /// the C `PStackDiscardElement` assertion.
+    pub fn discard_element(&mut self, pos: PStackPointer) -> T {
+        let index = self.element_index_or_panic(pos, "PStackDiscardElement");
+        self.stack.swap_remove(index)
     }
 
     pub fn sort_by<F>(&mut self, mut compare: F)
@@ -176,9 +235,7 @@ impl<T> PStack<T> {
     {
         while lower < upper {
             let index = isize::midpoint(lower, upper);
-            let Some(element) = self.element(index) else {
-                break;
-            };
+            let element = self.element(index);
             match compare(key, element) {
                 Ordering::Less => upper = index - 1,
                 Ordering::Greater => lower = index + 1,
@@ -196,9 +253,7 @@ impl<T> PStack<T> {
             let Some(candidate) = next_merge_candidate(st1, st2, &mut compare) else {
                 break;
             };
-            let duplicate = res
-                .top()
-                .is_some_and(|top| compare(top, &candidate) == Ordering::Equal);
+            let duplicate = !res.is_empty() && compare(res.top(), &candidate) == Ordering::Equal;
             if !duplicate {
                 res.push(candidate);
             }
@@ -227,6 +282,11 @@ impl<T> PStack<T> {
     fn element_index(&self, pos: PStackPointer) -> Option<usize> {
         let index = usize::try_from(pos).ok()?;
         (index < self.stack.len()).then_some(index)
+    }
+
+    fn element_index_or_panic(&self, pos: PStackPointer, caller: &str) -> usize {
+        self.element_index(pos)
+            .unwrap_or_else(|| panic!("{caller} called with invalid position {pos}"))
     }
 }
 
@@ -282,10 +342,7 @@ where
     } else if st2.is_empty() {
         st1.pop()
     } else {
-        let take_first = match (st1.top(), st2.top()) {
-            (Some(left), Some(right)) => compare(left, right) == Ordering::Less,
-            _ => false,
-        };
+        let take_first = compare(st1.top(), st2.top()) == Ordering::Less;
         if take_first {
             st1.pop()
         } else {
@@ -311,14 +368,15 @@ mod tests {
         assert_eq!(stack.allocated_size(), 4);
         assert_eq!(stack.len(), 3);
         assert_eq!(stack.stack_pointer(), 3);
-        assert_eq!(stack.top_stack_pointer(), Some(2));
-        assert_eq!(stack.top(), Some(&30));
-        assert_eq!(stack.below_top(), Some(&20));
+        assert_eq!(stack.top_stack_pointer(), 2);
+        assert_eq!(stack.top(), &30);
+        assert_eq!(stack.below_top(), &20);
         assert_eq!(stack.pop(), Some(30));
 
         stack.reset();
         assert!(stack.is_empty());
         assert_eq!(stack.allocated_size(), 4);
+        assert_eq!(stack.top_stack_pointer(), -1);
     }
 
     #[test]
@@ -334,16 +392,68 @@ mod tests {
             stack.push(value);
         }
 
-        assert_eq!(stack.element(2), Some(&3));
-        assert_eq!(stack.element(-1), None);
-        assert!(stack.assign(2, 30));
-        assert_eq!(stack.element(2), Some(&30));
+        assert_eq!(stack.element(2), &3);
+        stack.assign(2, 30);
+        assert_eq!(stack.element(2), &30);
         assert!(stack.contains_value(&30));
         assert!(!stack.contains_value(&3));
 
-        assert_eq!(stack.discard_element(1), Some(2));
+        assert_eq!(stack.discard_element(1), 2);
         assert_eq!(stack.as_slice(), &[1, 4, 30]);
-        assert!(!stack.assign(10, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackTop called on an empty stack")]
+    fn top_panics_on_empty_like_c_assertion() {
+        let stack = PStack::<usize>::new();
+        let _value = stack.top();
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackTopAddr called on an empty stack")]
+    fn top_mut_panics_on_empty_like_c_assertion() {
+        let mut stack = PStack::<usize>::new();
+        let _value = stack.top_mut();
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackDiscardTop called on an empty stack")]
+    fn discard_top_panics_on_empty_like_c_assertion() {
+        let mut stack = PStack::<usize>::new();
+        stack.discard_top();
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackBelowTop called with fewer than two elements")]
+    fn below_top_panics_with_fewer_than_two_elements_like_c_assertion() {
+        let mut stack = PStack::new();
+        stack.push(1);
+        let _value = stack.below_top();
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackElement called with invalid position -1")]
+    fn element_panics_on_negative_position_like_c_assertion() {
+        let mut stack = PStack::new();
+        stack.push(1);
+        let _value = stack.element(-1);
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackElementRef called with invalid position 1")]
+    fn element_mut_panics_on_position_at_stack_pointer_like_c_assertion() {
+        let mut stack = PStack::new();
+        stack.push(1);
+        let _value = stack.element_mut(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackDiscardElement called with invalid position 2")]
+    fn discard_element_panics_on_position_at_stack_pointer_like_c_assertion() {
+        let mut stack = PStack::new();
+        stack.push(1);
+        stack.push(2);
+        let _value = stack.discard_element(2);
     }
 
     #[test]
