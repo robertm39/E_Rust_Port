@@ -103,6 +103,27 @@ where
         }
         status
     }
+
+    /// Mirrors the C `TCPChannelWrite` queue choice exactly.
+    ///
+    /// The C source enqueues outbound messages in `channel->out`, but
+    /// `TCPChannelWrite` checks and drains `channel->in`. Keep this as an
+    /// explicit compatibility path; ordinary Rust callers should use
+    /// [`TcpChannel::write`].
+    pub fn write_c_in_queue(&mut self) -> MsgStatus {
+        let Some(stream) = self.stream.as_mut() else {
+            return MsgStatus::Error;
+        };
+        let Some(current) = self.in_queue.front_mut() else {
+            return MsgStatus::Success;
+        };
+
+        let status = tcp_msg_write_to(stream, current);
+        if status == MsgStatus::Success {
+            let _ = self.in_queue.pop_front();
+        }
+        status
+    }
 }
 
 fn channel_error(message: impl Into<String>) -> Diagnostic {
@@ -228,6 +249,34 @@ mod tests {
         );
         let stream = channel.into_inner().unwrap();
         assert_eq!(stream.written, packed("wait"));
+    }
+
+    #[test]
+    fn c_in_queue_write_ignores_queued_outbound_messages() {
+        let mut channel = TcpChannel::new(Duplex::new(Vec::new(), usize::MAX, usize::MAX));
+        channel.send_str("queued").unwrap();
+
+        assert_eq!(channel.write_c_in_queue(), MsgStatus::Success);
+        assert!(channel.has_out_msg());
+        assert_eq!(channel.out_len(), 1);
+
+        let stream = channel.into_inner().unwrap();
+        assert!(stream.written.is_empty());
+    }
+
+    #[test]
+    fn c_in_queue_write_consumes_complete_inbound_message() {
+        let incoming = packed("cmd");
+        let mut channel = TcpChannel::new(Duplex::new(incoming, usize::MAX, usize::MAX));
+
+        assert_eq!(channel.read(), MsgStatus::Success);
+        assert!(channel.has_in_msg());
+        assert_eq!(channel.write_c_in_queue(), MsgStatus::Success);
+
+        assert_eq!(channel.in_len(), 0);
+        assert!(!channel.has_in_msg());
+        let stream = channel.into_inner().unwrap();
+        assert!(stream.written.is_empty());
     }
 
     #[test]
