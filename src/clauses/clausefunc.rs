@@ -3033,7 +3033,7 @@ pub fn tformula_write_app_encode(
             bank,
             true,
         )?;
-        return eqn_write_app_encode(
+        return tformula_write_app_encoded_literal(
             output,
             bank,
             &literal,
@@ -3043,6 +3043,14 @@ pub fn tformula_write_app_encode(
 
     if tformula_is_quantified(bank, form) {
         return tformula_write_app_encoded_quantifier(output, bank, form);
+    }
+
+    if form.f_code() == SIG_ITE_CODE {
+        return tformula_write_app_encoded_ite(output, bank, form);
+    }
+
+    if form.f_code() == SIG_LET_CODE {
+        return tformula_write_app_encoded_let(output, bank, form);
     }
 
     if form.arity() == 1 {
@@ -3104,16 +3112,235 @@ pub fn tformula_app_encode_string(bank: &mut TermBank, form: &Term) -> Result<St
 /// arguments, matching the C assertions and direct argument access.
 pub fn tformula_preload_types(bank: &mut TermBank, form: &Term) -> Result<(), Diagnostic> {
     if tformula_is_literal(bank, form) {
-        let _left = term_app_encode(&formula_argument(form, 0), bank.signature_mut())?;
-        let _right = term_app_encode(&formula_argument(form, 1), bank.signature_mut())?;
+        tformula_preload_app_encoded_formula_or_term(bank, &formula_argument(form, 0))?;
+        tformula_preload_app_encoded_formula_or_term(bank, &formula_argument(form, 1))?;
     } else if tformula_is_quantified(bank, form) {
         tformula_preload_types(bank, &formula_argument(form, 1))?;
+    } else if form.f_code() == SIG_ITE_CODE {
+        for index in 0..form.arity() {
+            tformula_preload_app_encoded_formula_or_term(bank, &formula_argument(form, index))?;
+        }
+    } else if form.f_code() == SIG_LET_CODE {
+        tformula_preload_app_encoded_let(bank, form)?;
     } else if form.arity() == 1 {
         tformula_preload_types(bank, &formula_argument(form, 0))?;
     } else {
         assert_eq!(form.arity(), 2, "PreloadTypes expects a binary formula");
         tformula_preload_types(bank, &formula_argument(form, 0))?;
         tformula_preload_types(bank, &formula_argument(form, 1))?;
+    }
+    Ok(())
+}
+
+fn tformula_write_app_encoded_literal(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    literal: &Eqn,
+    negated: bool,
+) -> Result<(), Diagnostic> {
+    let positive = literal.is_positive() ^ negated;
+    if literal.is_equ_lit(bank) {
+        tformula_write_app_encoded_formula_or_term(output, bank, literal.left())?;
+        if !positive {
+            output
+                .write_char('!')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        }
+        output
+            .write_char('=')
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        tformula_write_app_encoded_formula_or_term(output, bank, literal.right())?;
+    } else {
+        if !positive {
+            output
+                .write_char('~')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))?;
+        }
+        tformula_write_app_encoded_formula_or_term(output, bank, literal.left())?;
+    }
+    Ok(())
+}
+
+fn tformula_preload_app_encoded_formula_or_term(
+    bank: &mut TermBank,
+    term: &Term,
+) -> Result<(), Diagnostic> {
+    if term.f_code() == SIG_ITE_CODE {
+        for index in 0..term.arity() {
+            tformula_preload_app_encoded_formula_or_term(bank, &formula_argument(term, index))?;
+        }
+        return Ok(());
+    }
+
+    if term.f_code() == SIG_LET_CODE {
+        return tformula_preload_app_encoded_let(bank, term);
+    }
+
+    if term.type_().as_ref().is_some_and(Type::is_bool) {
+        if tformula_is_app_encoded_formula_node(bank, term) {
+            return tformula_preload_types(bank, term);
+        }
+        let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
+        let mut sink = String::new();
+        return eqn_write_app_encode(&mut sink, bank, &literal, false);
+    }
+    let _encoded = term_app_encode(term, bank.signature_mut())?;
+    Ok(())
+}
+
+fn tformula_write_app_encoded_formula_or_term(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    term: &Term,
+) -> Result<(), Diagnostic> {
+    if term.f_code() == SIG_ITE_CODE {
+        return tformula_write_app_encoded_ite(output, bank, term);
+    }
+
+    if term.f_code() == SIG_LET_CODE {
+        return tformula_write_app_encoded_let(output, bank, term);
+    }
+
+    if term.type_().as_ref().is_some_and(Type::is_bool) {
+        if tformula_is_app_encoded_formula_node(bank, term) {
+            return tformula_write_app_encode(output, bank, term);
+        }
+        let literal = Eqn::alloc(term.clone(), bank.true_term().clone(), bank, true)?;
+        return eqn_write_app_encode(output, bank, &literal, false);
+    }
+
+    let encoded = term_app_encode(term, bank.signature_mut())?;
+    bank.write_term(output, &encoded, true)
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write equation"))
+}
+
+fn tformula_is_app_encoded_formula_node(bank: &TermBank, term: &Term) -> bool {
+    tformula_is_literal(bank, term)
+        || tformula_is_quantified(bank, term)
+        || term.f_code() == bank.signature().not_code()
+        || term.f_code() == SIG_ITE_CODE
+        || term.f_code() == SIG_LET_CODE
+        || tformula_app_encoded_binary_operator(bank, term.f_code()).is_some()
+}
+
+fn tformula_write_app_encoded_ite(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(), Diagnostic> {
+    assert_eq!(form.arity(), 3, "$ite formula must have three arguments");
+    output
+        .write_str("$ite(")
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+    for index in 0..form.arity() {
+        if index != 0 {
+            output
+                .write_char(',')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        }
+        tformula_write_app_encoded_formula_or_term(output, bank, &formula_argument(form, index))?;
+    }
+    output
+        .write_char(')')
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))
+}
+
+fn tformula_preload_app_encoded_let(bank: &mut TermBank, form: &Term) -> Result<(), Diagnostic> {
+    assert!(form.arity() >= 1, "$let formula must have at least a body");
+    for index in 0..form.arity().saturating_sub(1) {
+        let definition = formula_argument(form, index);
+        let (left, right) = tformula_app_encoded_let_definition_parts(&definition);
+        tformula_preload_app_encoded_formula_or_term(bank, &left)?;
+        tformula_preload_app_encoded_formula_or_term(bank, &right)?;
+    }
+    tformula_preload_app_encoded_formula_or_term(bank, &formula_argument(form, form.arity() - 1))
+}
+
+fn tformula_write_app_encoded_let(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    form: &Term,
+) -> Result<(), Diagnostic> {
+    assert!(form.arity() >= 1, "$let formula must have at least a body");
+    let mut definitions = Vec::with_capacity(form.arity().saturating_sub(1));
+    for index in 0..form.arity().saturating_sub(1) {
+        definitions.push(tformula_app_encoded_let_definition_parts(
+            &formula_argument(form, index),
+        ));
+    }
+
+    output
+        .write_str("$let(")
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+    tformula_write_app_encoded_let_declarations(output, bank, &definitions)?;
+    output
+        .write_char(',')
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+    tformula_write_app_encoded_let_definitions(output, bank, &definitions)?;
+    output
+        .write_char(',')
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+    tformula_write_app_encoded_formula_or_term(
+        output,
+        bank,
+        &formula_argument(form, form.arity() - 1),
+    )?;
+    output
+        .write_char(')')
+        .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))
+}
+
+fn tformula_app_encoded_let_definition_parts(definition: &Term) -> (Term, Term) {
+    assert!(definition.arity() == 2, "$let definition must be binary");
+    (
+        formula_argument(definition, 0),
+        formula_argument(definition, 1),
+    )
+}
+
+fn tformula_write_app_encoded_let_declarations(
+    output: &mut impl fmt::Write,
+    bank: &TermBank,
+    definitions: &[(Term, Term)],
+) -> Result<(), Diagnostic> {
+    for (index, (left, _right)) in definitions.iter().enumerate() {
+        if index != 0 {
+            output
+                .write_char(',')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        }
+        bank.write_term(output, left, true)
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        output
+            .write_char(':')
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        let type_ = left
+            .type_()
+            .unwrap_or_else(|| panic!("$let definition left side must have a type"));
+        let type_name = type_app_encoded_name(&type_)?;
+        output
+            .write_str(&type_name)
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+    }
+    Ok(())
+}
+
+fn tformula_write_app_encoded_let_definitions(
+    output: &mut impl fmt::Write,
+    bank: &mut TermBank,
+    definitions: &[(Term, Term)],
+) -> Result<(), Diagnostic> {
+    for (index, (left, right)) in definitions.iter().enumerate() {
+        if index != 0 {
+            output
+                .write_char(',')
+                .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        }
+        tformula_write_app_encoded_formula_or_term(output, bank, left)?;
+        output
+            .write_str(":=")
+            .map_err(|_| Diagnostic::new(ErrorCode::OTHER_ERROR, "failed to write formula"))?;
+        tformula_write_app_encoded_formula_or_term(output, bank, right)?;
     }
     Ok(())
 }
@@ -8943,6 +9170,60 @@ mod tests {
             rendered,
             format!("![{x_name}:$i, {y_name}:$i]:{x_name}=app_quant_a")
         );
+    }
+
+    #[test]
+    fn tformula_app_encode_renders_fool_formula_and_term_positions() {
+        let mut bank = test_bank();
+        let value_type = bank.signature().type_bank().default_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate_type =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    value_type.clone(),
+                    bool_type.clone(),
+                ]));
+        let p_code = bank.signature_mut().insert_id("app_fool_p", 1, false);
+        bank.signature_mut()
+            .declare_final_type(p_code, predicate_type)
+            .unwrap();
+        let f_code = bank.signature_mut().insert_id("app_fool_f", 0, false);
+        bank.signature_mut()
+            .declare_final_type(f_code, bool_type)
+            .unwrap();
+
+        let a = typed_const(&mut bank, "app_fool_a");
+        let b = typed_const(&mut bank, "app_fool_b");
+        let c = typed_const(&mut bank, "app_fool_c");
+        let atom = bool_result_unary_with_code(&mut bank, p_code, &a);
+        let bool_ite = bool_ite(&mut bank, &atom, &atom, &atom);
+        let term_ite = typed_ite(&mut bank, &atom, &a, &b);
+        let f = bank.create_const_term(f_code).unwrap();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let definition = bool_binary_with_code(&mut bank, eqn_code, &f, &atom);
+        let let_formula = let_term(&mut bank, &[definition], &f);
+        let true_term = bank.true_term().clone();
+
+        let bool_ite_lit = literal(&mut bank, &bool_ite, &true_term, true);
+        let bool_ite_formula =
+            tformula_lit_alloc(&mut bank, &bool_ite_lit, ProblemType::FirstOrder).unwrap();
+        let term_ite_lit = literal(&mut bank, &term_ite, &c, true);
+        let term_ite_formula =
+            tformula_lit_alloc(&mut bank, &term_ite_lit, ProblemType::FirstOrder).unwrap();
+        let let_lit = literal(&mut bank, &let_formula, &true_term, true);
+        let let_formula = tformula_lit_alloc(&mut bank, &let_lit, ProblemType::FirstOrder).unwrap();
+
+        let bool_ite_rendered = tformula_app_encode_string(&mut bank, &bool_ite_formula).unwrap();
+        let term_ite_rendered = tformula_app_encode_string(&mut bank, &term_ite_formula).unwrap();
+        let let_rendered = tformula_app_encode_string(&mut bank, &let_formula).unwrap();
+
+        assert!(bool_ite_rendered.starts_with("$ite("));
+        assert!(!bool_ite_rendered.contains("=$true"));
+        assert!(term_ite_rendered.contains("$ite("));
+        assert!(term_ite_rendered.contains("=app_fool_c"));
+        assert!(let_rendered.starts_with("$let("));
+        assert!(let_rendered.contains(":="));
     }
 
     #[test]

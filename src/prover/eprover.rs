@@ -4809,13 +4809,6 @@ fn simple_app_encoded_formula_set(
 ) -> Result<Option<FormulaSet>, Diagnostic> {
     let mut set = FormulaSet::new();
     for formula in formulas {
-        if formula
-            .formulas
-            .iter()
-            .any(|formula| simple_fof_formula_needs_app_encode_bridge(formula, bank))
-        {
-            return Ok(None);
-        }
         let Some(term_formula) = simple_fof_formulas_to_tformula(&formula.formulas, bank)? else {
             return Ok(None);
         };
@@ -4947,52 +4940,6 @@ fn simple_fof_quantified_formula_to_tformula(
         body = tformula_fcode_alloc(bank, quantifier, variable.clone(), Some(body))?;
     }
     Ok(Some(body))
-}
-
-fn simple_fof_formula_needs_app_encode_bridge(formula: &SimpleFofFormula, bank: &TermBank) -> bool {
-    match formula {
-        SimpleFofFormula::Truth(_) => false,
-        SimpleFofFormula::Literal(literal) => {
-            (literal.right() == bank.true_term()
-                && matches!(literal.left().f_code(), SIG_ITE_CODE | SIG_LET_CODE))
-                || (literal.is_equ_lit(bank)
-                    && simple_fof_term_contains_fool(&[literal.left(), literal.right()]))
-        }
-        SimpleFofFormula::Implication {
-            antecedents,
-            consequents,
-        }
-        | SimpleFofFormula::ReverseImplication {
-            antecedents,
-            consequents,
-        } => {
-            simple_fof_formulas_need_app_encode_bridge(antecedents, bank)
-                || simple_fof_formulas_need_app_encode_bridge(consequents, bank)
-        }
-        SimpleFofFormula::Equivalence { left, right }
-        | SimpleFofFormula::Xor { left, right }
-        | SimpleFofFormula::Nand { left, right }
-        | SimpleFofFormula::Nor { left, right } => {
-            simple_fof_formulas_need_app_encode_bridge(left, bank)
-                || simple_fof_formulas_need_app_encode_bridge(right, bank)
-        }
-        SimpleFofFormula::Conjunction(formulas)
-        | SimpleFofFormula::Disjunction(formulas)
-        | SimpleFofFormula::Negation(formulas)
-        | SimpleFofFormula::Universal { formulas, .. }
-        | SimpleFofFormula::Existential { formulas, .. } => {
-            simple_fof_formulas_need_app_encode_bridge(formulas, bank)
-        }
-    }
-}
-
-fn simple_fof_formulas_need_app_encode_bridge(
-    formulas: &[SimpleFofFormula],
-    bank: &TermBank,
-) -> bool {
-    formulas
-        .iter()
-        .any(|formula| simple_fof_formula_needs_app_encode_bridge(formula, bank))
 }
 
 fn write_simple_app_encoded_formula_set<W: Write + ?Sized>(
@@ -15039,18 +14986,20 @@ mod tests {
     }
 
     #[test]
-    fn app_encode_formula_set_conversion_uses_owner_for_plain_formulas() {
+    fn app_encode_formula_set_conversion_uses_owner_for_supported_fof_formulas() {
         let _guard = global_state_lock();
         let plain_path = temp_path("app-encode-owner-plain");
-        let bridge_path = temp_path("app-encode-owner-bridge");
+        let fool_path = temp_path("app-encode-owner-fool");
         std::fs::write(&plain_path, "fof(owner_plain, axiom, (p(a)&q(a))).\n").unwrap();
         std::fs::write(
-            &bridge_path,
-            "fof(owner_bridge, axiom, $ite(p(a), q(a), r(a))).\n",
+            &fool_path,
+            "fof(owner_ite, axiom, $ite(p(a), q(a), r(a))).\n\
+             fof(owner_let, axiom, $let(f:$o, f := p(a), f)).\n\
+             fof(owner_eq, axiom, ($ite(p(a), q(a), r(a)) = s(a))).\n",
         )
         .unwrap();
         let plain_arg = plain_path.to_string_lossy().into_owned();
-        let bridge_arg = bridge_path.to_string_lossy().into_owned();
+        let fool_arg = fool_path.to_string_lossy().into_owned();
         let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
 
         let plain = parse_app_encode_file(&plain_arg, IoFormat::Auto, &mut bank).unwrap();
@@ -15063,12 +15012,19 @@ mod tests {
         assert!(rendered.contains("tff(owner_plain, axiom, "));
         assert!(rendered.contains('&'));
 
-        let bridge = parse_app_encode_file(&bridge_arg, IoFormat::Auto, &mut bank).unwrap();
-        assert!(simple_app_encoded_formula_set(&bridge.formulas, &mut bank)
+        let fool = parse_app_encode_file(&fool_arg, IoFormat::Auto, &mut bank).unwrap();
+        let fool_set = simple_app_encoded_formula_set(&fool.formulas, &mut bank)
             .unwrap()
-            .is_none());
+            .expect("FOOL formulas should use FormulaSetAppEncode");
+        let rendered = fool_set
+            .app_encode_string(&mut bank, ProblemType::FirstOrder, true)
+            .unwrap();
+        assert!(rendered.contains("tff(owner_ite, axiom, $ite("));
+        assert!(rendered.contains("tff(owner_let, axiom, $let("));
+        assert!(rendered.contains("tff(owner_eq, axiom, ($ite("));
+        assert!(rendered.contains("<=>"));
         std::fs::remove_file(&plain_path).unwrap();
-        std::fs::remove_file(&bridge_path).unwrap();
+        std::fs::remove_file(&fool_path).unwrap();
     }
 
     #[test]
