@@ -68,6 +68,64 @@ pub struct IdentificationBinding {
     pub right_target: Term,
 }
 
+/// Builds the C `build_imitation` binding for a rigid-symbol `rhs`.
+///
+/// Returns `None` for the C `NULL` cases: variable-headed RHS, phony
+/// application RHS, or a rigid symbol without a monomorphic signature type.
+///
+/// # Errors
+///
+/// Returns diagnostics from fresh-variable application, term-bank insertion, or
+/// lambda construction.
+///
+/// # Panics
+///
+/// Panics if `rhs` is a phony application headed by a lambda, if `flex` is not
+/// a top-level free variable, or if the flex head is untyped.
+pub fn build_imitation(
+    bank: &mut TermBank,
+    flex: &Term,
+    rhs: &Term,
+) -> Result<Option<Term>, Diagnostic> {
+    if rhs.is_phony_app() || rhs.is_free_var() || rhs.is_db_var() {
+        assert!(
+            !rhs.is_phony_app() || !rhs.argument(0).is_some_and(|head| head.is_lambda()),
+            "imitation phony-app rhs must not have a lambda head"
+        );
+        return Ok(None);
+    }
+
+    let Some(rigid_type) = bank.signature().get_type(rhs.f_code()).cloned() else {
+        return Ok(None);
+    };
+    let var_type = top_level_free_head(flex)
+        .type_()
+        .expect("imitation flex head has a type");
+    let db_vars = db_vars_for_type_prefix(bank, &var_type);
+
+    let matrix = if rigid_type.is_arrow() {
+        let matrix = Term::top_alloc(rhs.f_code(), rigid_type.arity() - 1);
+        for index in 0..rigid_type.arity() - 1 {
+            matrix.set_argument(
+                index,
+                fresh_var_with_args(bank, &db_vars, &rigid_type.args()[index])?,
+            );
+        }
+        matrix.set_type(Some(get_ret_type(&rigid_type)));
+        bank.term_top_insert(matrix)?
+    } else {
+        let matrix = Term::const_cell_alloc(rhs.f_code());
+        matrix.set_type(Some(rigid_type));
+        bank.term_top_insert(matrix)?
+    };
+
+    Ok(Some(close_with_type_prefix(
+        bank,
+        type_prefix(&var_type),
+        &matrix,
+    )?))
+}
+
 /// Builds the C `build_projection` binding for visible argument `idx`.
 ///
 /// `idx` is zero-based over the applied free variable's visible arguments,
@@ -318,9 +376,9 @@ fn db_vars_for_type_prefix(bank: &mut TermBank, type_: &Type) -> Vec<Term> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_elim, build_projection, build_trivial_ident, elimination_count, identification_count,
-        imitation_count, inc_elimination, inc_identification, inc_imitation, inc_projection,
-        projection_count, ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
+        build_elim, build_imitation, build_projection, build_trivial_ident, elimination_count,
+        identification_count, imitation_count, inc_elimination, inc_identification, inc_imitation,
+        inc_projection, projection_count, ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
     };
     use crate::terms::lambda::{apply_terms, beta_normalize_db};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
@@ -456,6 +514,86 @@ mod tests {
         assert_eq!(binding.right_target.type_(), Some(unary));
         assert_eq!(left.f_code(), SIG_PHONY_APP_CODE);
         assert_eq!(right.f_code(), SIG_PHONY_APP_CODE);
+    }
+
+    #[test]
+    fn imitation_binding_returns_none_for_variable_rhs() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let flex_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &flex_type);
+        let arg = typed_const(&mut bank, "imit_var_arg", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&arg)).unwrap();
+        let rhs = bank.vars().var_assert_alloc(-102, &individual);
+
+        assert!(build_imitation(&mut bank, &flex, &rhs).unwrap().is_none());
+    }
+
+    #[test]
+    fn imitation_binding_closes_constant_rhs_under_flex_prefix() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let flex_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &flex_type);
+        let a = typed_const(&mut bank, "imit_const_a", &individual);
+        let c = typed_const(&mut bank, "imit_const_c", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&a)).unwrap();
+
+        let binding = build_imitation(&mut bank, &flex, &c)
+            .unwrap()
+            .expect("rigid constant should imitate");
+        let applied = apply_terms(&mut bank, &binding, std::slice::from_ref(&a)).unwrap();
+        let normalized = beta_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(binding.type_(), Some(flex_type));
+        assert_eq!(normalized, c);
+    }
+
+    #[test]
+    fn imitation_binding_synthesizes_args_for_rigid_function() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &predicate);
+        let a = typed_const(&mut bank, "imit_func_a", &individual);
+        let rigid = typed_const(&mut bank, "imit_func_f", &predicate);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&a)).unwrap();
+
+        let binding = build_imitation(&mut bank, &flex, &rigid)
+            .unwrap()
+            .expect("rigid function should imitate");
+        let applied = apply_terms(&mut bank, &binding, std::slice::from_ref(&a)).unwrap();
+        let normalized = beta_normalize_db(&mut bank, &applied).unwrap();
+
+        assert_eq!(binding.type_(), Some(predicate));
+        assert_eq!(normalized.f_code(), rigid.f_code());
+        assert_eq!(normalized.type_(), Some(bool_type));
+        assert_eq!(normalized.arity(), 1);
+        let synthesized_arg = normalized
+            .argument(0)
+            .expect("imitated rigid application has a synthesized argument");
+        assert!(synthesized_arg.is_applied_free_var());
+        assert_eq!(synthesized_arg.type_(), Some(individual));
+        assert_eq!(synthesized_arg.argument(1), Some(a));
     }
 
     #[test]
