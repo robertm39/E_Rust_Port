@@ -6,7 +6,8 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_PE_RESOLVE};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqnlist::EqnList;
-use crate::clauses::satinterface::SatClauseSet;
+use crate::clauses::picosat::PicoSat;
+use crate::clauses::satinterface::{picosat_error_to_diagnostic, SatClauseSet};
 use crate::clauses::tautologies::{clause_is_tautology, clause_is_tautology_real};
 use crate::terms::functypes::FunCode;
 use crate::terms::match_mgu::{subst_match_complete, subst_mgu_complete};
@@ -190,6 +191,11 @@ struct TaskElimination {
     archive_intermediates: Vec<Clause>,
 }
 
+enum GateValidationBackend<'a> {
+    Internal,
+    PicoSat(&'a mut PicoSat),
+}
+
 /// Performs the currently ported predicate-elimination path.
 ///
 /// This mirrors the `ccl_pred_elim` singular branch and the first-order
@@ -209,14 +215,71 @@ pub fn eliminate_predicates_singular(
     fresh_vars: &VarBank,
     config: PredicateEliminationConfig,
 ) -> Result<PredicateEliminationResult, Diagnostic> {
+    eliminate_predicates_singular_impl(
+        passive,
+        archive,
+        bank,
+        tmp_bank,
+        fresh_vars,
+        config,
+        GateValidationBackend::Internal,
+    )
+}
+
+/// Performs predicate elimination with runtime-loaded `PicoSAT` gate validation.
+///
+/// The caller owns the solver library handle. This wrapper resets the solver
+/// around each gate-core check to mirror C's per-check `picosat_init` /
+/// `picosat_reset` lifecycle while leaving existing internal-solver callers
+/// unchanged.
+///
+/// # Errors
+///
+/// Returns a diagnostic if predicate elimination fails, or if `PicoSAT` reset,
+/// export, solving, or core extraction fails.
+pub fn eliminate_predicates_singular_with_picosat(
+    passive: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    config: PredicateEliminationConfig,
+    solver: &mut PicoSat,
+) -> Result<PredicateEliminationResult, Diagnostic> {
+    eliminate_predicates_singular_impl(
+        passive,
+        archive,
+        bank,
+        tmp_bank,
+        fresh_vars,
+        config,
+        GateValidationBackend::PicoSat(solver),
+    )
+}
+
+fn eliminate_predicates_singular_impl(
+    passive: &mut ClauseSet,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+    tmp_bank: &mut TermBank,
+    fresh_vars: &VarBank,
+    config: PredicateEliminationConfig,
+    mut gate_backend: GateValidationBackend<'_>,
+) -> Result<PredicateEliminationResult, Diagnostic> {
     let start_count = passive.members();
     let mut last_checks = BTreeMap::new();
     let mut blocked_symbols = BTreeSet::new();
     let mut generated_count = 0;
 
     loop {
-        let (tasks, eqn_found) =
-            build_task_map(passive, bank, tmp_bank, &config, &mut blocked_symbols)?;
+        let (tasks, eqn_found) = build_task_map(
+            passive,
+            bank,
+            tmp_bank,
+            &config,
+            &mut blocked_symbols,
+            &mut gate_backend,
+        )?;
         let resolver = if eqn_found {
             ResolverKind::Equational
         } else {
@@ -445,6 +508,7 @@ fn build_task_map(
     tmp_bank: &mut TermBank,
     config: &PredicateEliminationConfig,
     blocked_symbols: &mut BTreeSet<FunCode>,
+    gate_backend: &mut GateValidationBackend<'_>,
 ) -> Result<(BTreeMap<FunCode, PredicateEliminationTask>, bool), Diagnostic> {
     let mut tasks = BTreeMap::new();
     let mut eqn_found = false;
@@ -459,7 +523,7 @@ fn build_task_map(
         );
     }
     if config.recognize_gates {
-        update_gate_status(&mut tasks, passive, bank, tmp_bank)?;
+        update_gate_status(&mut tasks, passive, bank, tmp_bank, gate_backend)?;
     } else {
         for task in tasks.values_mut() {
             declare_not_gate(task);
@@ -549,10 +613,11 @@ fn update_gate_status(
     passive: &ClauseSet,
     bank: &mut TermBank,
     tmp_bank: &mut TermBank,
+    gate_backend: &mut GateValidationBackend<'_>,
 ) -> Result<(), Diagnostic> {
     for task in tasks.values_mut() {
         if !task.positive_gates.is_empty() && !task.negative_gates.is_empty() {
-            check_unsat_and_tauto(task, passive, bank, tmp_bank)?;
+            check_unsat_and_tauto(task, passive, bank, tmp_bank, gate_backend)?;
         } else {
             declare_not_gate(task);
         }
@@ -571,6 +636,7 @@ fn check_unsat_and_tauto(
     passive: &ClauseSet,
     bank: &mut TermBank,
     tmp_bank: &mut TermBank,
+    gate_backend: &mut GateValidationBackend<'_>,
 ) -> Result<(), Diagnostic> {
     let mut gate_ids = task
         .positive_gates
@@ -632,11 +698,32 @@ fn check_unsat_and_tauto(
     }
     subst.delete();
 
-    if let Some(core) = environment.check_and_get_core() {
+    if let Some(core) = check_and_get_gate_core(&mut environment, gate_backend)? {
         check_gate_core_tautologies(task, &core, bank, tmp_bank)
     } else {
         declare_not_gate(task);
         Ok(())
+    }
+}
+
+fn check_and_get_gate_core(
+    environment: &mut SatClauseSet,
+    gate_backend: &mut GateValidationBackend<'_>,
+) -> Result<Option<Vec<Clause>>, Diagnostic> {
+    match gate_backend {
+        GateValidationBackend::Internal => Ok(environment.check_and_get_core()),
+        GateValidationBackend::PicoSat(solver) => {
+            solver
+                .reset()
+                .map_err(|error| picosat_error_to_diagnostic(&error))?;
+            let core = environment
+                .check_and_get_core_with_picosat(solver)
+                .map_err(|error| picosat_error_to_diagnostic(&error))?;
+            solver
+                .reset()
+                .map_err(|error| picosat_error_to_diagnostic(&error))?;
+            Ok(core)
+        }
     }
 }
 
