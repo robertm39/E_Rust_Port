@@ -100,12 +100,15 @@ impl<T> PQueue<T> {
         }
     }
 
-    pub fn get_next(&mut self) -> Option<T> {
+    pub fn get_next(&mut self) -> Option<T>
+    where
+        T: Clone,
+    {
         if self.is_empty() {
             return None;
         }
 
-        let result = self.queue[self.tail].take();
+        let result = self.queue[self.tail].clone();
         self.tail += 1;
         if self.tail == self.size {
             self.tail = 0;
@@ -113,7 +116,10 @@ impl<T> PQueue<T> {
         result
     }
 
-    pub fn get_last(&mut self) -> Option<T> {
+    pub fn get_last(&mut self) -> Option<T>
+    where
+        T: Clone,
+    {
         if self.is_empty() {
             return None;
         }
@@ -123,7 +129,7 @@ impl<T> PQueue<T> {
         } else {
             self.head - 1
         };
-        self.queue[self.head].take()
+        self.queue[self.head].clone()
     }
 
     #[must_use]
@@ -219,19 +225,31 @@ impl<P> PQueue<IntOrP<P>> {
         self.bury(IntOrP::Pointer(value));
     }
 
-    pub fn get_next_int(&mut self) -> Option<PQueueInt> {
+    pub fn get_next_int(&mut self) -> Option<PQueueInt>
+    where
+        P: Clone,
+    {
         self.get_next().and_then(IntOrP::into_int)
     }
 
-    pub fn get_next_pointer(&mut self) -> Option<P> {
+    pub fn get_next_pointer(&mut self) -> Option<P>
+    where
+        P: Clone,
+    {
         self.get_next().and_then(IntOrP::into_pointer)
     }
 
-    pub fn get_last_int(&mut self) -> Option<PQueueInt> {
+    pub fn get_last_int(&mut self) -> Option<PQueueInt>
+    where
+        P: Clone,
+    {
         self.get_last().and_then(IntOrP::into_int)
     }
 
-    pub fn get_last_pointer(&mut self) -> Option<P> {
+    pub fn get_last_pointer(&mut self) -> Option<P>
+    where
+        P: Clone,
+    {
         self.get_last().and_then(IntOrP::into_pointer)
     }
 
@@ -292,7 +310,9 @@ mod tests {
         assert_eq!(queue.look(), Some(&10));
         assert_eq!(queue.look_last(), Some(&20));
         assert_eq!(queue.get_next(), Some(10));
+        assert_eq!(queue.element(0), Some(&10));
         assert_eq!(queue.get_next(), Some(20));
+        assert_eq!(queue.element(1), Some(&20));
         assert_eq!(queue.get_next(), None);
     }
 
@@ -304,9 +324,12 @@ mod tests {
         }
 
         assert_eq!(queue.get_last(), Some(3));
+        assert_eq!(queue.element(2), Some(&3));
         assert_eq!(queue.look_last(), Some(&2));
         assert_eq!(queue.get_next(), Some(1));
+        assert_eq!(queue.element(0), Some(&1));
         assert_eq!(queue.get_last(), Some(2));
+        assert_eq!(queue.element(1), Some(&2));
         assert!(queue.is_empty());
     }
 
@@ -418,5 +441,6 @@ mod tests {
         queue.store_pointer("term");
         assert_eq!(queue.get_next_int(), None);
         assert!(queue.is_empty());
+        assert_eq!(queue.element(0).and_then(IntOrP::as_pointer), Some(&"term"));
     }
 }
