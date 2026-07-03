@@ -34,16 +34,28 @@ fn read_fgets_chunk(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
+fn c_string_prefix(bytes: &[u8]) -> &[u8] {
+    let nul_pos = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    &bytes[..nul_pos]
+}
+
+fn c_strings_equal(left: &[u8], right: &[u8]) -> bool {
+    c_string_prefix(left) == c_string_prefix(right)
+}
+
 pub fn read_text_block(
     result: &mut DynamicString,
     reader: &mut impl BufRead,
     terminator: &[u8],
 ) -> io::Result<bool> {
     while let Some(chunk) = read_fgets_chunk(reader)? {
-        if chunk == terminator {
+        if c_strings_equal(&chunk, terminator) {
             return Ok(true);
         }
-        result.append_bytes_with_str_growth(&chunk);
+        result.append_bytes_with_str_growth(c_string_prefix(&chunk));
     }
     Ok(false)
 }
@@ -59,10 +71,10 @@ where
 {
     for received in received_strings {
         let bytes = received.as_ref();
-        if bytes == terminator {
+        if c_strings_equal(bytes, terminator) {
             return true;
         }
-        result.append_bytes_with_str_growth(bytes);
+        result.append_bytes_with_str_growth(c_string_prefix(bytes));
     }
     false
 }
@@ -81,10 +93,10 @@ pub fn tcp_read_text_block_from(
             ));
         }
         let received = message.unpack();
-        if received == terminator {
+        if c_strings_equal(&received, terminator) {
             return Ok(true);
         }
-        result.append_bytes_with_str_growth(&received);
+        result.append_bytes_with_str_growth(c_string_prefix(&received));
     }
 }
 
@@ -130,6 +142,16 @@ mod tests {
     }
 
     #[test]
+    fn read_text_block_uses_c_string_semantics_for_nul_bytes() {
+        let mut result = DynamicString::new();
+        result.append_str("prefix:");
+        let mut input = Cursor::new(b"one\0hidden\nTERM\0ignored\nunread\n".to_vec());
+
+        assert!(read_text_block(&mut result, &mut input, b"TERM\0other").unwrap());
+        assert_eq!(result.view_bytes(), b"prefix:one");
+    }
+
+    #[test]
     fn tcp_read_text_block_stops_at_matching_received_string() {
         let mut result = DynamicString::new();
         assert!(tcp_read_text_block(
@@ -149,6 +171,18 @@ mod tests {
             b"END\n"
         ));
         assert_eq!(result.view_bytes(), b"alpha\ntail\n");
+    }
+
+    #[test]
+    fn tcp_read_text_block_uses_c_string_semantics_for_nul_bytes() {
+        let mut result = DynamicString::new();
+
+        assert!(tcp_read_text_block(
+            &mut result,
+            [b"one\0hidden\n".as_slice(), b"TERM\0ignored\n".as_slice()],
+            b"TERM\0other"
+        ));
+        assert_eq!(result.view_bytes(), b"one");
     }
 
     #[test]
