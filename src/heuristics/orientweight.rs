@@ -248,8 +248,8 @@ pub fn clause_orient_weight_compute(
 /// Computes C `ClauseOrientWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn clause_orient_weight_compute_with_ocb(
     param: &OrientWeightParam,
@@ -299,8 +299,8 @@ pub fn orient_lmax_weight_compute(param: &OrientWeightParam, clause: &Clause) ->
 /// Computes C `OrientLMaxWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn orient_lmax_weight_compute_with_ocb(
     param: &OrientWeightParam,
@@ -515,6 +515,54 @@ mod tests {
         assert_close(actual, expected);
         assert!(target.query_prop(CP_IS_ORIENTED));
         assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn orient_weight_parse_banked_callbacks_mark_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+
+        let mut orient_target = parsed_unit_clause(&mut bank, "a", "f(a)", true);
+        let mut orient_marked = orient_target.clone();
+        let mut orient_manual_ocb = kbo_ocb(&bank);
+        assert!(orient_marked.cond_mark_maximal_terms(&mut orient_manual_ocb, &bank));
+        let orient_param = clause_orient_weight_init(2, 1, 7.0, 5.0, 3.0, 1.0);
+        let orient_expected = clause_orient_weight_compute(&orient_param, &bank, &orient_marked);
+        let mut orient_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut orient =
+            clause_orient_weight_parse(&mut orient_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut orient_ocb = kbo_ocb(&bank);
+
+        let orient_actual = orient
+            .compute_eval_with_bank(&mut orient_ocb, &mut bank, &mut orient_target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(orient_actual, orient_expected);
+        assert!(orient_target.query_prop(CP_IS_ORIENTED));
+        assert!(orient_target.literals().as_slice()[0].is_maximal());
+        assert_eq!(orient_scanner.current_token().literal(), "tail");
+
+        let mut lmax_target = parsed_unit_clause(&mut bank, "b", "g(b)", true);
+        let mut lmax_marked = lmax_target.clone();
+        let mut lmax_manual_ocb = kbo_ocb(&bank);
+        assert!(lmax_marked.cond_mark_maximal_terms(&mut lmax_manual_ocb, &bank));
+        let lmax_param = orient_lmax_weight_init(2, 1, 7.0, 5.0, 3.0, 1.0);
+        let lmax_expected = orient_lmax_weight_compute(&lmax_param, &lmax_marked);
+        let mut lmax_scanner = Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut lmax =
+            orient_lmax_weight_parse(&mut lmax_scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut lmax_ocb = kbo_ocb(&bank);
+
+        let lmax_actual = lmax
+            .compute_eval_with_bank(&mut lmax_ocb, &mut bank, &mut lmax_target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(lmax_actual, lmax_expected);
+        assert!(lmax_target.query_prop(CP_IS_ORIENTED));
+        assert!(lmax_target.literals().as_slice()[0].is_maximal());
+        assert_eq!(lmax_scanner.current_token().literal(), "tail");
     }
 
     #[test]

@@ -229,8 +229,8 @@ pub fn clause_refined_weight_compute(
 /// Computes C `ClauseRefinedWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn clause_refined_weight_compute_with_ocb(
     param: &RefinedWeightParam,
@@ -279,8 +279,8 @@ pub fn clause_refined_weight2_compute(
 /// Computes C `ClauseRefinedWeight2Compute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn clause_refined_weight2_compute_with_ocb(
     param: &RefinedWeightParam,
@@ -498,6 +498,57 @@ mod tests {
         assert_close(actual, expected);
         assert!(target.query_prop(CP_IS_ORIENTED));
         assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn refined_weight_parse_banked_callbacks_mark_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+
+        let mut standard_target = parsed_unit_clause(&mut bank, "a", "f(a)", true);
+        let mut standard_marked = standard_target.clone();
+        let mut standard_manual_ocb = kbo_ocb(&bank);
+        assert!(standard_marked.cond_mark_maximal_terms(&mut standard_manual_ocb, &bank));
+        let standard_param = clause_refined_weight_init(2, 1, 7.0, 5.0, 3.0, 1.0);
+        let standard_expected =
+            clause_refined_weight_compute(&standard_param, &bank, &standard_marked);
+        let mut standard_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut refined = clause_refined_weight_parse(&mut standard_scanner)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut standard_ocb = kbo_ocb(&bank);
+
+        let standard_actual = refined
+            .compute_eval_with_bank(&mut standard_ocb, &mut bank, &mut standard_target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(standard_actual, standard_expected);
+        assert!(standard_target.query_prop(CP_IS_ORIENTED));
+        assert!(standard_target.literals().as_slice()[0].is_maximal());
+        assert_eq!(standard_scanner.current_token().literal(), "tail");
+
+        let mut encoding_target = parsed_unit_clause(&mut bank, "b", "g(b)", true);
+        let mut encoding_marked = encoding_target.clone();
+        let mut encoding_manual_ocb = kbo_ocb(&bank);
+        assert!(encoding_marked.cond_mark_maximal_terms(&mut encoding_manual_ocb, &bank));
+        let encoding_param = clause_refined_weight_init(2, 1, 7.0, 5.0, 3.0, 2.5);
+        let encoding_expected =
+            clause_refined_weight2_compute(&encoding_param, &bank, &encoding_marked);
+        let mut encoding_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,7.0,5.0,3.0,2.5) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut refined2 = clause_refined_weight2_parse(&mut encoding_scanner)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut encoding_ocb = kbo_ocb(&bank);
+
+        let encoding_actual = refined2
+            .compute_eval_with_bank(&mut encoding_ocb, &mut bank, &mut encoding_target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(encoding_actual, encoding_expected);
+        assert!(encoding_target.query_prop(CP_IS_ORIENTED));
+        assert!(encoding_target.literals().as_slice()[0].is_maximal());
+        assert_eq!(encoding_scanner.current_token().literal(), "tail");
     }
 
     #[test]

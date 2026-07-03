@@ -97,10 +97,13 @@ Source files reviewed: `HEURISTICS/che_orientweight.h`, `HEURISTICS/che_orientwe
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
+### Change Later
+
+- Once all proof-control evaluation sites can pass both the active `OCB` and mutable owner bank, route ordinary HCB evaluation through the banked WFCB path and collapse any remaining immutable orient-weight scoring fallbacks without changing the mark-then-score sequence.
+
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
-- Change later candidate: once all proof-control evaluation sites can pass both the active `OCB` and mutable owner bank, route ordinary HCB evaluation through the banked WFCB path and collapse any remaining immutable orient-weight scoring fallbacks without changing the mark-then-score sequence.
 <!-- END MANUAL REVIEW: c_source_docs -->

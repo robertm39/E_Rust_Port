@@ -530,8 +530,8 @@ pub fn rdag_weight_compute(param: &RDagWeightParam, clause: &Clause) -> f64 {
 /// Computes C `RDAGWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn rdag_weight_compute_with_ocb(
     param: &RDagWeightParam,
