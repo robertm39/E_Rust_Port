@@ -113,6 +113,7 @@ Source files reviewed: `BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `DBGPrintHeap` has separate integer and `%p` pointer-address output branches, both in the heap's internal array order. Rust keeps separate debug-string helpers so pointer-shaped heaps do not accidentally display pointee values.
+- `MinHeapPopMin` reports an empty heap through `SysError("Trying to get an element from an empty heap", -1)` instead of returning a null/optional result. Rust now exposes this as an explicit nonempty pop helper while retaining a separate option-returning helper for Rust-owned drain loops.
 - `MinHeapRemoveElement` asserts `idx >= 0 && idx < PStackGetSP(h->arr)` before touching the backing `PStack`. `MinHeapUpdateElement` and `MinHeapIncrKey` can no-op for empty-heap root index `0`, but positive out-of-range indices hit `PStackElementRef` assertions before doing useful work. `MinHeapDecrKey` delegates directly to `drop_down`, so positive out-of-range leaf-shaped indices can no-op without a stack assertion.
 - `MinHeapDecrKey` calls `drop_down`, while `MinHeapIncrKey` calls `bubble_up`; the helper directions follow the C implementation even though the names read backwards for a conventional min-heap.
 
@@ -125,6 +126,7 @@ Source files reviewed: `BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`.
 ### Change Later
 
 - The generated source comment for `MinHeapPopMin` says "Pop the maximum element" even though the public name and implementation pop the minimum; later source cleanup should correct the comment only after compatibility docs no longer need to quote it verbatim.
+- Empty `MinHeapPopMin` is a fatal C error. Future Rust-only heap callers should use an explicitly named `try_`/optional API for ordinary draining rather than weakening the compatibility-shaped nonempty pop contract.
 - The `MinHeapDecrKey`/`MinHeapIncrKey` names and helper directions are confusing. After all heap callers are audited, consider exposing clearer Rust-only names while retaining compatibility wrappers if needed.
 - The invalid-index behavior is uneven across `update`, `remove`, `incr`, and `decr` paths. Once drop-in compatibility is secured, a cleaned API should prefer one explicit checked contract over the current mix of assertions and accidental no-ops.
 <!-- END MANUAL REVIEW: c_source_docs -->

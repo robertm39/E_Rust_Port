@@ -99,6 +99,24 @@ where
         Some(result)
     }
 
+    /// Pop the minimum element with the C `MinHeapPopMin` empty-heap contract.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the heap is empty. The C implementation reports this path
+    /// through `SysError("Trying to get an element from an empty heap", -1)`.
+    #[must_use]
+    pub fn pop_min_nonempty(&mut self) -> T {
+        assert!(
+            !self.entries.is_empty(),
+            "Trying to get an element from an empty heap"
+        );
+        match self.pop_min() {
+            Some(value) => value,
+            None => panic!("MinHeapPopMin lost non-empty heap element"),
+        }
+    }
+
     pub fn update_element(&mut self, index: usize) {
         if self.entries.is_empty() && index == 0 {
             return;
@@ -305,10 +323,30 @@ mod tests {
         });
 
         assert_eq!(indices.borrow()[2], 0);
-        let popped = heap.pop_min().unwrap();
+        let popped = heap.pop_min_nonempty();
         assert_eq!(popped.id, 2);
         assert_eq!(indices.borrow()[2], -1);
         assert_eq!(heap.peek_min().unwrap().id, 3);
+    }
+
+    #[test]
+    fn pop_min_nonempty_matches_c_minimum_pop_contract() {
+        let mut heap = MinHeap::new(i64::cmp);
+        heap.add_int(4);
+        heap.add_int(1);
+        heap.add_int(3);
+
+        assert_eq!(heap.pop_min_nonempty(), 1);
+        assert_eq!(heap.pop_min_nonempty(), 3);
+        assert_eq!(heap.pop_min_nonempty(), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "Trying to get an element from an empty heap")]
+    fn pop_min_nonempty_panics_on_empty_like_c_sys_error() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        let _value = heap.pop_min_nonempty();
     }
 
     #[test]
