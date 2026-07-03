@@ -479,6 +479,9 @@ fn parse_c_double(argument: &str) -> Option<f64> {
     if value.is_infinite() && !is_named_infinite(trimmed) {
         return None;
     }
+    if decimal_double_underflowed(trimmed, value) {
+        return None;
+    }
     Some(value)
 }
 
@@ -552,11 +555,32 @@ fn parse_c_hex_double(argument: &str) -> Option<f64> {
     }
     let binary_exponent = i32::try_from(binary_exponent).ok()?;
     let value = significand * 2.0_f64.powi(binary_exponent);
-    if value.is_infinite() {
+    if matches!(
+        value.classify(),
+        std::num::FpCategory::Infinite
+            | std::num::FpCategory::Zero
+            | std::num::FpCategory::Subnormal
+    ) {
         return None;
     }
 
     Some(if negative { -value } else { value })
+}
+
+fn decimal_double_underflowed(argument: &str, value: f64) -> bool {
+    decimal_significand_has_nonzero_digit(argument)
+        && matches!(
+            value.classify(),
+            std::num::FpCategory::Zero | std::num::FpCategory::Subnormal
+        )
+}
+
+fn decimal_significand_has_nonzero_digit(argument: &str) -> bool {
+    let (_, unsigned) = split_c_float_sign(argument);
+    unsigned
+        .bytes()
+        .take_while(|byte| !matches!(byte, b'e' | b'E'))
+        .any(|byte| matches!(byte, b'1'..=b'9'))
 }
 
 fn split_c_float_sign(argument: &str) -> (bool, &str) {
@@ -837,6 +861,10 @@ mod tests {
             (-0.5_f64).to_bits()
         );
         assert_eq!(
+            get_float_arg(option, "0e-9999").unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
+        assert_eq!(
             get_float_arg(option, "0x.8p1").unwrap().to_bits(),
             1.0_f64.to_bits()
         );
@@ -848,8 +876,15 @@ mod tests {
             get_float_arg(option, "-0x0p1024").unwrap().to_bits(),
             (-0.0_f64).to_bits()
         );
+        assert_eq!(
+            get_float_arg(option, "0x0p-1074").unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
         assert!(get_float_arg(option, "0x1.2").is_err());
         assert!(get_float_arg(option, "0x1p1024").is_err());
+        assert!(get_float_arg(option, "1e-309").is_err());
+        assert!(get_float_arg(option, "5e-324").is_err());
+        assert!(get_float_arg(option, "0x1p-1074").is_err());
     }
 
     #[test]
