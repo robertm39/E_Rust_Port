@@ -771,6 +771,7 @@ fn parse_options() -> PclStepParseOptions {
     PclStepParseOptions {
         problem_type: ProblemType::FirstOrder,
         support_shell_pcl: true,
+        ..PclStepParseOptions::default()
     }
 }
 

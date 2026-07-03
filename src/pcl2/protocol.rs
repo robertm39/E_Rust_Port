@@ -538,6 +538,7 @@ mod tests {
                 PclStepParseOptions {
                     problem_type: ProblemType::FirstOrder,
                     support_shell_pcl: true,
+                    ..PclStepParseOptions::default()
                 },
             )
             .unwrap();
@@ -587,6 +588,7 @@ mod tests {
                 PclStepParseOptions {
                     problem_type: ProblemType::FirstOrder,
                     support_shell_pcl: true,
+                    ..PclStepParseOptions::default()
                 },
             )
             .unwrap();

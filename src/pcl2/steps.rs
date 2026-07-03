@@ -3,8 +3,9 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::ProblemType;
 use crate::clauses::clause::{
-    clause_pcl_parse, clause_pcl_string, clause_print_lop_format_string,
+    clause_pcl_parse_with_options, clause_pcl_string, clause_print_lop_format_string,
     clause_print_tptp_format_string, clause_print_tstp_core_string, clause_tstp_string, Clause,
+    ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     FormulaProperties, CP_TYPE_1, CP_TYPE_2, CP_TYPE_3, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE,
@@ -300,6 +301,7 @@ pub fn step_id_compare(left: &PclId, right: &PclId) -> i32 {
 pub struct PclStepParseOptions {
     pub problem_type: ProblemType,
     pub support_shell_pcl: bool,
+    pub clause_parse_options: ClauseParseOptions,
 }
 
 impl Default for PclStepParseOptions {
@@ -307,6 +309,7 @@ impl Default for PclStepParseOptions {
         Self {
             problem_type: ProblemType::FirstOrder,
             support_shell_pcl: false,
+            clause_parse_options: ClauseParseOptions::default(),
         }
     }
 }
@@ -470,7 +473,12 @@ impl PclStep {
             properties.set(PCL_IS_SHELL_STEP);
             PclStepLogic::Shell
         } else if scanner.test_tok(TokenType::OPEN_SQUARE) {
-            let clause = clause_pcl_parse(scanner, bank, options.problem_type)?;
+            let clause = clause_pcl_parse_with_options(
+                scanner,
+                bank,
+                options.problem_type,
+                options.clause_parse_options,
+            )?;
             properties.delete(PCL_IS_FOF_STEP);
             PclStepLogic::Clause(Box::new(clause))
         } else {
@@ -971,11 +979,13 @@ mod tests {
         PCL_TYPE_UNKNOWN, SHELL_PCL_STEP_WARNING,
     };
     use crate::basics::simple_stuff::ProblemType;
+    use crate::clauses::clause::ClauseParseOptions;
     use crate::clauses::inferencedoc::ProofDocOutputFormat;
     use crate::inout::scanner::{IoFormat, Scanner, TokenType};
     use crate::pcl2::idents::PclId;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
+    use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
 
     fn parse_id(source: &str) -> PclId {
@@ -1005,10 +1015,39 @@ mod tests {
             PclStepParseOptions {
                 problem_type: ProblemType::FirstOrder,
                 support_shell_pcl,
+                ..PclStepParseOptions::default()
             },
         )
         .unwrap();
         (step, bank, scanner)
+    }
+
+    fn parse_two_clause_arg_pairs(options: PclStepParseOptions) -> ((Term, Term), (Term, Term)) {
+        let mut bank = test_bank();
+        let mut scanner = Scanner::from_user_string(
+            "1 : : [++p(X,Y)] : initial\n2 : : [++q(Y,X)] : initial\n",
+            false,
+        )
+        .unwrap();
+        scanner.set_format(IoFormat::Tptp);
+        let first = PclStep::parse(&mut scanner, &mut bank, options).unwrap();
+        let second = PclStep::parse(&mut scanner, &mut bank, options).unwrap();
+
+        (
+            clause_first_two_args(&first),
+            clause_first_two_args(&second),
+        )
+    }
+
+    fn clause_first_two_args(step: &PclStep) -> (Term, Term) {
+        let PclStepLogic::Clause(clause) = step.logic() else {
+            panic!("expected clausal PCL step");
+        };
+        let literal = &clause.literals().as_slice()[0];
+        (
+            literal.left().argument(0).unwrap(),
+            literal.left().argument(1).unwrap(),
+        )
     }
 
     #[test]
@@ -1071,6 +1110,26 @@ mod tests {
         let (empty, scanner) = parse_type(": rest");
         assert_eq!(empty, PCL_TYPE_AXIOM);
         assert!(scanner.test_tok(TokenType::COLON));
+    }
+
+    #[test]
+    fn full_step_clause_parse_options_can_share_external_variable_names() {
+        let ((local_x, local_y), (local_y_reparsed, local_x_reparsed)) =
+            parse_two_clause_arg_pairs(PclStepParseOptions::default());
+        assert_eq!(local_y_reparsed, local_x);
+        assert_eq!(local_x_reparsed, local_y);
+
+        let shared_options = PclStepParseOptions {
+            clause_parse_options: ClauseParseOptions {
+                clauses_have_local_variables: false,
+                ..ClauseParseOptions::default()
+            },
+            ..PclStepParseOptions::default()
+        };
+        let ((shared_x, shared_y), (second_first_arg, second_second_arg)) =
+            parse_two_clause_arg_pairs(shared_options);
+        assert_eq!(second_first_arg, shared_y);
+        assert_eq!(second_second_arg, shared_x);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::{set_verbose_level, verbout2};
+use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::inout::commandline::{
     get_float_arg, get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -269,6 +270,10 @@ fn parse_options() -> PclStepParseOptions {
     PclStepParseOptions {
         problem_type: ProblemType::FirstOrder,
         support_shell_pcl: false,
+        clause_parse_options: ClauseParseOptions {
+            clauses_have_local_variables: false,
+            ..ClauseParseOptions::default()
+        },
     }
 }
 
@@ -396,8 +401,8 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        negative_example_budget, print_help, process_options, run, DirectExamplesConfig,
-        RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
+        negative_example_budget, parse_options, print_help, process_options, run,
+        DirectExamplesConfig, RunCommand, OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -735,6 +740,29 @@ mod tests {
 
         assert_eq!(status, 0);
         assert_eq!(stderr, "direct_examples: PCL input read\n");
+    }
+
+    #[test]
+    fn compressed_pcl_input_shares_external_variable_names_like_c() {
+        let _guard = global_state_lock();
+        let (status, output, stderr) = run_with_stdin(
+            &[PROGRAM_NAME],
+            "1 : : [++p(X,Y)] : initial\n2 : : [++q(Y,X)] : initial\n",
+        );
+
+        assert_eq!(status, 0);
+        assert!(output.contains("p(X1,X2) <- ."));
+        assert!(output.contains("q(X2,X1) <- ."));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn parse_options_disable_local_clause_variables_like_c() {
+        assert!(
+            !parse_options()
+                .clause_parse_options
+                .clauses_have_local_variables
+        );
     }
 
     #[test]
