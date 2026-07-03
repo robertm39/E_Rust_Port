@@ -136,19 +136,35 @@ impl<T> PListArena<T> {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics when `element` names a valid anchor or a detached/corrupt cell.
+    /// This mirrors the C `PListExtract` assertions that the input cell is
+    /// linked into a list and is not the anchor.
     pub fn extract(&mut self, element: PListHandle) -> Option<PListHandle> {
-        let cell = self.cell(element)?;
-        if cell.is_anchor {
-            return None;
-        }
-        let pred = cell.pred?;
-        let succ = cell.succ?;
-        if pred == element || succ == element {
-            return None;
-        }
-        if !self.is_valid(pred) || !self.is_valid(succ) {
-            return None;
-        }
+        let (is_anchor, pred, succ) = {
+            let cell = self.cell(element)?;
+            (cell.is_anchor, cell.pred, cell.succ)
+        };
+        assert!(!is_anchor, "PListExtract expects a non-anchor cell");
+        let pred = pred.unwrap_or_else(|| panic!("PListExtract expects a linked predecessor"));
+        let succ = succ.unwrap_or_else(|| panic!("PListExtract expects a linked successor"));
+        assert_ne!(
+            pred, element,
+            "PListExtract expects predecessor to differ from element"
+        );
+        assert_ne!(
+            succ, element,
+            "PListExtract expects successor to differ from element"
+        );
+        assert!(
+            self.is_valid(pred),
+            "PListExtract predecessor must be a valid cell"
+        );
+        assert!(
+            self.is_valid(succ),
+            "PListExtract successor must be a valid cell"
+        );
 
         self.cell_mut(pred)?.succ = Some(succ);
         self.cell_mut(succ)?.pred = Some(pred);
@@ -412,14 +428,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_anchor_extraction_and_attached_reinsertion() {
+    fn rejects_attached_reinsertion() {
         let mut arena = PListArena::new();
         let anchor = arena.alloc_list();
         let first = arena.store_after(anchor, 1).unwrap();
 
-        assert_eq!(arena.extract(anchor), None);
         assert!(!arena.insert_after(anchor, first));
         assert_eq!(arena.handles(anchor), vec![first]);
+    }
+
+    #[test]
+    #[should_panic(expected = "PListExtract expects a non-anchor cell")]
+    fn extract_asserts_on_anchor_like_c() {
+        let mut arena = PListArena::<i32>::new();
+        let anchor = arena.alloc_list();
+
+        let _ = arena.extract(anchor);
+    }
+
+    #[test]
+    #[should_panic(expected = "PListExtract expects a linked predecessor")]
+    fn extract_asserts_on_detached_cell_like_c() {
+        let mut arena = PListArena::new();
+        let source = arena.alloc_list();
+        let cell = arena.store_after(source, 1).unwrap();
+        assert_eq!(arena.extract(cell), Some(cell));
+
+        let _ = arena.extract(cell);
     }
 
     #[test]
