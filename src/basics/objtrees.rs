@@ -88,14 +88,17 @@ where
         self.extract_object(&key)
     }
 
-    pub fn merge_unique(&mut self, add: Self) -> bool {
-        let mut all_unique = true;
+    /// # Panics
+    ///
+    /// Panics if `add` contains an object already present in this tree. This
+    /// mirrors the C `PTreeObjMerge` assertion that input trees are disjoint.
+    pub fn merge_unique(&mut self, add: Self) {
         for object in add.objects {
-            if self.store(object).is_some() {
-                all_unique = false;
-            }
+            assert!(
+                self.store(object).is_none(),
+                "ObjTree merge expects disjoint trees"
+            );
         }
-        all_unique
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -166,12 +169,16 @@ mod tests {
     }
 
     #[test]
-    fn merge_unique_consumes_source_and_reports_duplicates() {
+    fn merge_unique_consumes_disjoint_source() {
         let mut base = tree(&[1, 3]);
-        assert!(base.merge_unique(tree(&[2, 4])));
+        base.merge_unique(tree(&[2, 4]));
         assert_eq!(base.to_vec(), vec![1, 2, 3, 4]);
-        assert!(!base.merge_unique(tree(&[4, 5])));
-        assert_eq!(base.to_vec(), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "ObjTree merge expects disjoint trees")]
+    fn merge_unique_asserts_on_duplicate_like_c() {
+        tree(&[1, 3]).merge_unique(tree(&[3, 4]));
     }
 
     #[test]

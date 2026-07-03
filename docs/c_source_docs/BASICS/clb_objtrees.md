@@ -109,4 +109,8 @@ Source files reviewed: `BASICS/clb_objtrees.h`, `BASICS/clb_objtrees.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- `PTreeObjMerge` asserts that inserted objects are not already present, but in release builds the returned duplicate node is only assigned to an unused local and is not freed. Rust enforces the disjoint-merge precondition with an assertion instead of reproducing the leak-shaped release path; a cleaned API should keep this as an explicit `Result` or prevalidated merge operation.
 <!-- END MANUAL REVIEW: c_source_docs -->
