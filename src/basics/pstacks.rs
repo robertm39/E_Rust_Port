@@ -106,6 +106,19 @@ impl<T> PStack<T> {
         self.stack.pop()
     }
 
+    /// Pop the top stack element.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the C `PStackPop`
+    /// assertion.
+    pub fn pop_nonempty(&mut self) -> T {
+        assert!(!self.is_empty(), "PStackPop called on an empty stack");
+        self.stack
+            .pop()
+            .unwrap_or_else(|| panic!("PStackPop lost non-empty top element"))
+    }
+
     /// Discard the top stack element.
     ///
     /// # Panics
@@ -372,6 +385,7 @@ mod tests {
         assert_eq!(stack.top(), &30);
         assert_eq!(stack.below_top(), &20);
         assert_eq!(stack.pop(), Some(30));
+        assert_eq!(stack.pop_nonempty(), 20);
 
         stack.reset();
         assert!(stack.is_empty());
@@ -421,6 +435,13 @@ mod tests {
     fn discard_top_panics_on_empty_like_c_assertion() {
         let mut stack = PStack::<usize>::new();
         stack.discard_top();
+    }
+
+    #[test]
+    #[should_panic(expected = "PStackPop called on an empty stack")]
+    fn pop_nonempty_panics_on_empty_like_c_assertion() {
+        let mut stack = PStack::<usize>::new();
+        let _value = stack.pop_nonempty();
     }
 
     #[test]

@@ -163,7 +163,7 @@ Source files reviewed: `BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `PStackFindP` performs raw pointer identity comparison, while `PStackFindInt` compares integer payload values. Rust keeps these as distinct helpers so borrowed-object searches do not accidentally become structural equality checks.
-- `PStackTop`, `PStackTopAddr`, `PStackBelowTop`, `PStackElement`, `PStackElementRef`, `PStackDiscardTop`, and `PStackDiscardElement` assert their non-empty/range preconditions before reading or mutating the backing stack. Rust compatibility-shaped methods should keep those as panics rather than optional access.
+- `PStackTop`, `PStackTopAddr`, `PStackBelowTop`, `PStackPop`, `PStackElement`, `PStackElementRef`, `PStackDiscardTop`, and `PStackDiscardElement` assert their non-empty/range preconditions before reading or mutating the backing stack. Rust compatibility-shaped methods keep those as panics rather than optional access, while retaining a separate option-returning drain helper for Rust-owned control flow.
 - `PStackGetTopSP` is a signed macro returning `current - 1`, so an empty stack reports `-1`; it is not an optional value in C.
 
 ### Porting Focus
@@ -174,5 +174,5 @@ Source files reviewed: `BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`.
 
 ### Change Later
 
-- `PStack` mixes assertion-backed operations (`Top`, `Pop`, indexed access, and discard) with callers that often conceptually want checked draining. Preserve assertion behavior on C-shaped APIs for compatibility, but future Rust-only helpers should use explicit `try_` names so optional control flow is not confused with the original stack contract.
+- `PStack` mixes assertion-backed operations (`Top`, `Pop`, indexed access, and discard) with callers that often conceptually want checked draining. Rust keeps both shapes represented; future Rust-only helpers should use explicit `try_` names so optional control flow is not confused with the original stack contract.
 <!-- END MANUAL REVIEW: c_source_docs -->
