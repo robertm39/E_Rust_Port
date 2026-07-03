@@ -105,4 +105,12 @@ Source files reviewed: `TERMS/cte_ho_bindings.h`, `TERMS/cte_ho_bindings.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Compatibility Notes
+
+- `cte_ho_bindings.c` stores four binding-generation counters in one `Limits_t` word: imitation in bits 0-5, projection in bits 6-11, identification in bits 12-17, and elimination in bits 18-23. Rust now ports the masks, field accessors, and C-shaped increment helpers in `src/terms/ho_bindings.rs`; actual `ComputeNextBinding` construction remains pending.
+
+### Change-Later Observations
+
+- The `INC_IMIT`/`INC_PROJ`/`INC_IDENT`/`INC_ELIM` macros increment their selected six-bit field without masking the incremented result back down to six bits, so overflow can carry into the next field. Rust preserves that arithmetic in the helper layer; a cleaned CSU binding API should use typed counters and explicit limit checks once reference behavior is covered.
 <!-- END MANUAL REVIEW: c_source_docs -->

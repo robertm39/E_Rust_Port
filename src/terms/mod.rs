@@ -4,6 +4,7 @@ pub mod fixpoint_unif;
 pub mod fp_index;
 pub mod functypes;
 pub mod garbage_coll;
+pub mod ho_bindings;
 pub mod ho_csu;
 pub mod idx_fp;
 pub mod lambda;
