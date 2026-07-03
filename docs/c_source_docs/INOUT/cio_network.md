@@ -120,14 +120,14 @@ Source files reviewed: `INOUT/cio_network.h`, `INOUT/cio_network.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack and payload read accumulation, partial single-read/write status behavior, blocking send/receive loops, string send/receive wrappers, safe `TcpListener`/`TcpStream` socket constructors, and Linux server-socket creation with `SO_REUSEADDR` plus C backlog setup before wrapping the listening socket.
+- `src/inout/network.rs` ports the `MsgStatus` discriminants, `TCPMsgCell` allocation shape, four-byte network-order total-length header, C-string prefix truncation for pack/unpack and payload read accumulation, partial single-read/write status behavior, blocking send/receive loops, string send/receive wrappers, safe `TcpListener`/`TcpStream` socket constructors including C's final-address client-connect outcome, and Linux server-socket creation with `SO_REUSEADDR` plus C backlog setup before wrapping the listening socket.
 - Tests cover message status values, new-message shape, packed header bytes, NUL truncation during pack/unpack/read accumulation, partial writes, send loops, partial header/payload reads, closed-connection reporting, empty-payload status, receive loops, string wrappers, and ephemeral server binding.
 
 ### Change Later
 
 - `TCPMsgRead` prints header and payload read progress directly to stdout, treats an empty-payload message as a closed connection after reading the header, and appends payload data through C-string APIs after partial reads. Rust keeps the wire format, embedded-NUL truncation, and empty-payload status quirk, but truncates only within initialized read bytes; C writes the terminator at the requested read length rather than the actual short-read length, which can expose uninitialized buffer contents. Keep avoiding that unsafe tail unless byte-for-byte debug output compatibility becomes required.
 - `create_server_sock_nofail` sets `SO_REUSEADDR` before binding. Rust now preserves that setup on Linux through a scoped socket-library boundary, but non-Linux reuse semantics and raw descriptor-number behavior remain deferred until server/client programs require byte-identical platform behavior.
-- `create_client_sock_nofail` continues iterating after a successful connection, which can leak or replace an earlier successful socket depending on later address records. Rust returns the first successful `TcpStream`; preserve that divergence unless a compatibility test shows a caller relies on the C loop's final-address behavior.
+- `create_client_sock_nofail` continues iterating after a successful connection, which can leak or replace an earlier successful socket depending on later address records. Rust now preserves the returned final-address success/failure outcome, but ownership closes earlier successful `TcpStream`s instead of preserving C's descriptor leak.
 
 ### Porting Focus
 

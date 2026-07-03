@@ -1,6 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 
 pub const TCP_BACKLOG: usize = 10;
 pub const TCP_BUF_SIZE: usize = 1025;
@@ -300,22 +300,33 @@ pub fn create_client_socket_no_fail(host: &str, port: u16) -> Result<TcpStream, 
         .to_socket_addrs()
         .map_err(|error| network_error(format!("Could not resolve address ({error})")))?;
 
-    let mut last_error = None;
-    for address in addresses {
-        match TcpStream::connect(address) {
-            Ok(stream) => return Ok(stream),
-            Err(error) => last_error = Some(error),
-        }
-    }
-
-    Err(network_error(match last_error {
-        Some(error) => format!("Could not create connected socket: {error}"),
-        None => "Could not resolve address".to_owned(),
-    }))
+    connect_client_like_c(addresses, TcpStream::connect).map_err(|last_error| {
+        network_error(match last_error {
+            Some(error) => format!("Could not create connected socket: {error}"),
+            None => "Could not resolve address".to_owned(),
+        })
+    })
 }
 
 pub fn create_client_socket(host: &str, port: u16) -> Result<TcpStream, Diagnostic> {
     create_client_socket_no_fail(host, port)
+}
+
+fn connect_client_like_c<I, F, T, E>(addresses: I, mut connect: F) -> Result<T, Option<E>>
+where
+    I: IntoIterator<Item = SocketAddr>,
+    F: FnMut(SocketAddr) -> Result<T, E>,
+{
+    let mut result = None;
+    for address in addresses {
+        result = Some(connect(address));
+    }
+
+    match result {
+        Some(Ok(stream)) => Ok(stream),
+        Some(Err(error)) => Err(Some(error)),
+        None => Err(None),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -457,11 +468,12 @@ mod platform_server_socket {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_server_socket, tcp_msg_read_from, tcp_msg_recv_from, tcp_msg_send_to,
-        tcp_msg_write_to, tcp_string_recv_from, tcp_string_send_to, MsgStatus, TcpMessage,
-        TCP_HEADER_SIZE,
+        connect_client_like_c, create_server_socket, tcp_msg_read_from, tcp_msg_recv_from,
+        tcp_msg_send_to, tcp_msg_write_to, tcp_string_recv_from, tcp_string_send_to, MsgStatus,
+        TcpMessage, TCP_HEADER_SIZE,
     };
     use std::io::{self, Cursor, Read, Write};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     struct LimitedReader {
         inner: Cursor<Vec<u8>>,
@@ -512,6 +524,10 @@ mod tests {
 
     fn packed_bytes(text: &str) -> Vec<u8> {
         TcpMessage::pack(text).unwrap().content_bytes().to_vec()
+    }
+
+    fn loopback_addr(port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
     }
 
     #[test]
@@ -681,5 +697,33 @@ mod tests {
     fn server_socket_wrapper_binds_to_ephemeral_port() {
         let listener = create_server_socket(0).unwrap();
         assert_ne!(listener.local_addr().unwrap().port(), 0);
+    }
+
+    #[test]
+    fn client_socket_loop_uses_final_address_outcome_like_c() {
+        let addresses = [loopback_addr(1), loopback_addr(2), loopback_addr(3)];
+        let mut attempts = Vec::new();
+        let result = connect_client_like_c(addresses, |address| {
+            attempts.push(address.port());
+            if address.port() == 2 {
+                Ok(format!("connected:{}", address.port()))
+            } else {
+                Err(format!("failed:{}", address.port()))
+            }
+        });
+
+        assert_eq!(attempts, [1, 2, 3]);
+        assert_eq!(result, Err(Some("failed:3".to_owned())));
+
+        let addresses = [loopback_addr(4), loopback_addr(5)];
+        let result = connect_client_like_c(addresses, |address| {
+            if address.port() == 5 {
+                Ok(format!("connected:{}", address.port()))
+            } else {
+                Err(format!("failed:{}", address.port()))
+            }
+        });
+
+        assert_eq!(result.as_deref(), Ok("connected:5"));
     }
 }
