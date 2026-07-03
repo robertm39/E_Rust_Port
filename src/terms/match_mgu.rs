@@ -226,7 +226,7 @@ pub fn subst_mgu_complete(t: &Term, s: &Term, subst: &mut Substitution) -> bool 
 ///
 /// The first-order MGU routines can still be used for ordinary first-order
 /// subterms in a higher-order problem. Lambda terms, DB variables, and phony
-/// applications require the not-yet-ported higher-order unification iterator.
+/// applications require the higher-order CSU path.
 #[must_use]
 pub fn term_has_higher_order_unification_surface(term: &Term) -> bool {
     let mut stack = vec![term.clone()];

@@ -922,16 +922,15 @@ impl TermBank {
     ///
     /// # Panics
     ///
-    /// Panics if a ground term is not shared, or if a free/DB variable has no
-    /// type, matching the C preconditions for `TBInsertOpt`.
+    /// Panics if a free/DB variable has no type, matching the C preconditions
+    /// for `TBInsertOpt`.
     pub fn insert_opt(&mut self, term: &Term, deref: DerefType) -> Result<Term, Diagnostic> {
         let (term, current_deref, limit) = self.deref_root_no_whnf(term, deref)?;
         if term_is_ground_for_insert(&term) {
-            assert!(
-                term.is_shared(),
-                "optimized ground insertion expects sharing"
-            );
-            return Ok(term);
+            if term.is_shared() {
+                return Ok(term);
+            }
+            return self.insert(&term, DerefType::Never);
         }
         self.insert_opt_derefed(&term, current_deref, limit)
     }
@@ -3123,11 +3122,10 @@ impl TermBank {
         limit: usize,
     ) -> Result<Term, Diagnostic> {
         if term_is_ground_for_insert(term) {
-            assert!(
-                term.is_shared(),
-                "optimized ground insertion expects sharing"
-            );
-            return Ok(term.clone());
+            if term.is_shared() {
+                return Ok(term.clone());
+            }
+            return self.insert(term, DerefType::Never);
         }
         if term.is_free_var() {
             let type_ = term.type_().expect("free variable must have a type");
@@ -3432,6 +3430,7 @@ mod tests {
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::inout::scanner::{Scanner, TokenType};
     use crate::terms::functypes::FunCode;
+    use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::replace::{term_add_rw_link, RwResultType};
     use crate::terms::signature::{
         Signature, FP_IS_FLOAT, FP_IS_INTEGER, FP_IS_OBJECT, FP_IS_RATIONAL, SIG_CONS_CODE,
@@ -5617,6 +5616,33 @@ mod tests {
         let inserted = fixture.bank.insert_opt(&app, DerefType::Once).unwrap();
 
         assert_expanded_with_bank_var(&fixture, &inserted);
+    }
+
+    #[test]
+    fn optimized_insertion_shares_dereferenced_ground_lambda_app_var() {
+        let mut sig = Signature::new(TypeBank::new());
+        sig.insert_internal_codes().unwrap();
+        let i_type = sig.type_bank().i_type();
+        let a_code = sig.insert_id("opt_ground_lambda_a", 0, false);
+        sig.declare_type(a_code, i_type.clone()).unwrap();
+        let mut bank = TermBank::new(sig).unwrap();
+        let arrow_type = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![i_type.clone(), i_type.clone()]));
+        let a = bank.create_const_term(a_code).unwrap();
+        let lambda = close_with_type_prefix(&mut bank, std::slice::from_ref(&i_type), &a).unwrap();
+        let function = Term::const_cell_alloc(-2);
+        function.set_type(Some(arrow_type));
+        function.set_binding(Some(lambda.clone()));
+        let db0 = bank.request_db_var(&i_type, 0);
+        let app = apply_terms(&mut bank, &function, std::slice::from_ref(&db0)).unwrap();
+
+        let inserted = bank.insert_opt(&app, DerefType::Always).unwrap();
+
+        assert!(inserted.is_shared());
+        assert!(inserted.is_phony_app());
+        assert_eq!(inserted.argument(0), Some(lambda));
     }
 
     #[test]

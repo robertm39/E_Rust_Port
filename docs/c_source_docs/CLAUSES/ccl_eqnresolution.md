@@ -87,10 +87,10 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 
 ### Rust Port Status Notes
 
-- Rust now ports the first-order `ComputeEqRes` paths used by destructive equality resolution and all-resolvent generation, including MGU construction, C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, `EqnListLambdaNormalize` before false-literal and duplicate cleanup, negative-literal iteration with an explicit maximal-literal filter, and insertion of first-order generated resolvents into a caller-owned clause set.
-- The same first-order MGU subset now runs inside higher-order problem mode when the selected disequality has no lambda/DB-variable/phony-application surface and the produced substitution has no higher-order binding.
-- The all-resolvent wrapper and destructive variable-normalization wrapper now attach `DCEqRes` and `DCDesEqRes` derivation entries, respectively, and expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
-- Full higher-order CSU enumeration through the `res_cls` stack and `subst_is_ho` propagation to higher-order derivation flags remain pending.
+- Rust now ports the single-result `ComputeEqRes` MGU path used by destructive equality resolution, including higher-order problem-mode arrow-variable bindings and `SubstHasHOBinding` propagation to higher-order `DCDesEqRes`.
+- Rust now ports `ComputeAllEqnResolvents` generation over the higher-order CSU iterator in higher-order mode, including C-shaped non-selected literal substitution normalization, optimized copying except the resolved literal, `EqnListLambdaNormalize` before false-literal and duplicate cleanup, negative-literal iteration with an explicit maximal-literal filter, C stack-pop insertion order, aggregate `subst_is_ho` propagation to higher-order `DCEqRes`, and insertion into a caller-owned clause set.
+- The all-resolvent wrapper and destructive variable-normalization wrapper expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
+- Proof-state-owned `freshvars` reuse and broader C trace coverage for multi-CSU equality-resolution order/performance remain pending.
 
 ### Change-Later Observations
 
@@ -98,8 +98,8 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 - `build_resolvent` normalizes copied resolvent literals before removing false and duplicate literals, so DB-lambda beta/eta reduction can affect which literals are cleaned up and can trigger `EqnMap` truth/polarity side effects. Rust preserves that ordering explicitly through `EqnList::lambda_normalize`.
 - `EqResOnMaximalLiteralsOnly` is a mutable C global controlling the public literal iterators. Rust exposes the default-filter behavior as an explicit boolean argument for now; revisit the API once option/global-state ownership is centralized.
 - C `ComputeEqRes` returns either one clause or fills a result stack depending on whether `res_cls` is NULL. Rust separates these into single-resolvent and all-resolvent helpers so callers do not depend on a null-stack mode switch.
-- In the higher-order path, C pushes each CSU resolvent onto `res_cls` and `ComputeAllEqnResolvents` later pops that stack, reversing CSU enumeration order before insertion. First-order generation has at most one resolvent per literal; preserve or intentionally revise the reversal when HO enumeration is ported.
-- C sets `subst_is_ho` from `SubstHasHOBinding` after a unifier is accepted, then `ComputeAllEqnResolvents` turns `DCEqRes` into a higher-order derivation entry only for those substitutions. Rust currently treats higher-order-problem first-order subset results as ordinary `DCEqRes` and keeps arrow-typed bindings behind the CSU diagnostic until full HO derivation metadata is wired.
+- In the higher-order path, C pushes each CSU resolvent onto `res_cls` and `ComputeAllEqnResolvents` later pops that stack, reversing CSU enumeration order before insertion. Rust mirrors this with a temporary vector and `pop`; preserve or intentionally revise the reversal only with proof-output trace data.
+- C ORs `subst_is_ho` across all CSU results for one selected literal before derivation entries are pushed, so one higher-order binding marks every popped resolvent from that literal as higher-order. Rust mirrors that aggregate flag; a cleaned internal API could track the flag per resolvent after drop-in proof compatibility is secured.
 - C stores generated-resolvent parent pointers in the derivation stack. Rust records compact clause references in `DCEqRes` entries; replace them with stable handles before proof reconstruction traverses parent clauses.
 
 ### Porting Focus

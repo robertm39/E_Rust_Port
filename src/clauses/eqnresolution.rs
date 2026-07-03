@@ -1,14 +1,15 @@
-use crate::basics::error::{Diagnostic, ErrorCode};
+use crate::basics::error::Diagnostic;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::derivation::{clause_push_derivation, DC_DES_EQ_RES, DC_EQ_RES};
+use crate::clauses::derivation::{clause_push_derivation, set_is_ho, DC_DES_EQ_RES, DC_EQ_RES};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::inferencedoc::{
     ClauseCreationInference, ClauseCreationParents, ClauseModificationInference, ProofDocSession,
 };
-use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
+use crate::terms::ho_csu::CsuIterator;
+use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
@@ -17,16 +18,15 @@ use std::{collections::BTreeMap, fmt};
 /// C `EqResOnMaximalLiteralsOnly` default.
 pub const EQ_RES_ON_MAXIMAL_LITERALS_ONLY: bool = true;
 
-/// Builds the first-order single-clause C `ComputeEqRes` result.
+/// Builds the single-clause C `ComputeEqRes` result.
 ///
-/// In higher-order problem mode, this uses the same first-order MGU path for
-/// ordinary first-order subterms and reports an explicit diagnostic when the
-/// candidate needs full CSU enumeration.
+/// This is the `res_cls == NULL` C branch: it uses the complete-MGU wrapper once
+/// and does not enumerate higher-order CSU alternatives.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if a higher-order candidate needs full CSU enumeration,
-/// or if term-bank insertion fails while copying the resolvent.
+/// Returns a diagnostic if term-bank insertion fails while copying the
+/// resolvent.
 ///
 /// # Panics
 ///
@@ -37,6 +37,78 @@ pub fn compute_eq_res(
     clause: &Clause,
     literal_index: usize,
 ) -> Result<Option<Clause>, Diagnostic> {
+    let (resolvent, _) = compute_eq_res_with_ho_flag(bank, clause, literal_index)?;
+    Ok(resolvent)
+}
+
+fn compute_eq_res_with_ho_flag(
+    bank: &mut TermBank,
+    clause: &Clause,
+    literal_index: usize,
+) -> Result<(Option<Clause>, bool), Diagnostic> {
+    let literal = eq_res_literal(clause, literal_index);
+    let mut subst = Substitution::new();
+    if !subst_mgu_complete(literal.left(), literal.right(), &mut subst) {
+        return Ok((None, false));
+    }
+
+    let subst_is_ho = subst.has_ho_binding();
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    let resolvent = match build_resolvent(bank, clause, literal_index, &freshvars, &mut subst) {
+        Ok(resolvent) => resolvent,
+        Err(err) => {
+            subst.backtrack();
+            return Err(err);
+        }
+    };
+    subst.backtrack();
+    Ok((Some(resolvent), subst_is_ho))
+}
+
+fn compute_eq_res_csu_resolvents(
+    bank: &mut TermBank,
+    clause: &Clause,
+    literal_index: usize,
+) -> Result<(Vec<Clause>, bool), Diagnostic> {
+    let literal = eq_res_literal(clause, literal_index);
+    let mut subst = Substitution::new();
+    let mut iter = CsuIterator::new(literal.left(), literal.right(), &subst);
+    let freshvars = fresh_var_bank_for_clause(bank, clause);
+    let mut resolvents = Vec::new();
+    let mut subst_is_ho = false;
+
+    loop {
+        let has_next = match iter.next_csu_element(bank, &mut subst) {
+            Ok(has_next) => has_next,
+            Err(err) => {
+                iter.destroy(&mut subst);
+                return Err(err);
+            }
+        };
+        if !has_next {
+            break;
+        }
+
+        subst_is_ho |= subst.has_ho_binding();
+        let resolvent = match build_resolvent(bank, clause, literal_index, &freshvars, &mut subst) {
+            Ok(resolvent) => resolvent,
+            Err(err) => {
+                iter.destroy(&mut subst);
+                return Err(err);
+            }
+        };
+        let is_empty = resolvent.is_empty();
+        resolvents.push(resolvent);
+        if is_empty {
+            break;
+        }
+    }
+
+    iter.destroy(&mut subst);
+    Ok((resolvents, subst_is_ho))
+}
+
+fn eq_res_literal(clause: &Clause, literal_index: usize) -> &Eqn {
     let literal = clause
         .literals()
         .as_slice()
@@ -46,34 +118,7 @@ pub fn compute_eq_res(
         literal.is_negative(),
         "equality resolution expects a negative literal"
     );
-    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
-    if higher_order_problem
-        && (term_has_higher_order_unification_surface(literal.left())
-            || term_has_higher_order_unification_surface(literal.right()))
-    {
-        return Err(higher_order_eq_res_diagnostic());
-    }
-
-    let mut subst = Substitution::new();
-    if !subst_mgu_complete(literal.left(), literal.right(), &mut subst) {
-        return Ok(None);
-    }
-    if higher_order_problem && subst.has_ho_binding_for_problem(ProblemType::HigherOrder) {
-        subst.backtrack();
-        return Err(higher_order_eq_res_diagnostic());
-    }
-
-    let freshvars = fresh_var_bank_for_clause(bank, clause);
-    let resolvent = build_resolvent(bank, clause, literal_index, &freshvars, &mut subst)?;
-    subst.backtrack();
-    Ok(Some(resolvent))
-}
-
-fn higher_order_eq_res_diagnostic() -> Diagnostic {
-    Diagnostic::new(
-        ErrorCode::OTHER_ERROR,
-        "higher-order equality-resolution CSU enumeration is not ported yet",
-    )
+    literal
 }
 
 fn build_resolvent(
@@ -144,12 +189,11 @@ fn is_eq_res_candidate(literal: &Eqn, maximal_only: bool) -> bool {
     literal.is_negative() && (!maximal_only || literal.is_maximal())
 }
 
-/// Computes all first-order equality resolvents and inserts them into `store`.
+/// Computes all equality resolvents and inserts them into `store`.
 ///
-/// This mirrors C `ComputeAllEqnResolvents` for the first-order MGU path. Higher
-/// order CSU enumeration still belongs to a later slice, so higher-order problem
-/// type is rejected through [`compute_eq_res`]. Use
-/// [`compute_all_eqn_resolvents_with_docs`] for represented
+/// This mirrors C `ComputeAllEqnResolvents`: first-order mode uses the single
+/// complete-MGU path, while higher-order mode enumerates the CSU stack through
+/// `CsuIterator`. Use [`compute_all_eqn_resolvents_with_docs`] for represented
 /// proof-documentation output.
 ///
 /// # Errors
@@ -164,7 +208,7 @@ pub fn compute_all_eqn_resolvents(
     compute_all_eqn_resolvents_impl::<String>(bank, clause, store, maximal_only, None)
 }
 
-/// Computes all first-order equality resolvents while emitting represented C
+/// Computes all equality resolvents while emitting represented C
 /// `DocClauseCreationDefault(..., inf_eres, ...)` output.
 ///
 /// # Errors
@@ -194,10 +238,18 @@ fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
         return Ok(resolv_count);
     }
 
+    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
     let mut next = first_eq_res_literal_index(clause, maximal_only);
     while let Some(index) = next {
         next = next_eq_res_literal_index(clause, index, maximal_only);
-        if let Some(mut resolvent) = compute_eq_res(bank, clause, index)? {
+        let (mut resolvents, subst_is_ho) = if higher_order_problem {
+            compute_eq_res_csu_resolvents(bank, clause, index)?
+        } else {
+            let (resolvent, subst_is_ho) = compute_eq_res_with_ho_flag(bank, clause, index)?;
+            (resolvent.into_iter().collect(), subst_is_ho)
+        };
+
+        while let Some(mut resolvent) = resolvents.pop() {
             resolv_count += 1;
             resolvent.set_proof_depth(clause.proof_depth().saturating_add(1));
             resolvent.set_proof_size(clause.proof_size().saturating_add(1));
@@ -213,7 +265,12 @@ fn compute_all_eqn_resolvents_impl<W: fmt::Write>(
                     None,
                 )?;
             }
-            clause_push_derivation(&mut resolvent, DC_EQ_RES, Some(clause), None);
+            let operation = if subst_is_ho {
+                set_is_ho(DC_EQ_RES)
+            } else {
+                DC_EQ_RES
+            };
+            clause_push_derivation(&mut resolvent, operation, Some(clause), None);
             store.insert(resolvent);
         }
     }
@@ -272,14 +329,16 @@ fn clause_er_normalize_var_impl<W: fmt::Write>(
         for (index, literal) in clause.literals().as_slice().iter().enumerate() {
             if literal.is_negative() && (literal.is_pure_var() || (strong && literal.is_part_var()))
             {
-                if let Some(resolvent) = compute_eq_res(bank, &clause, index)? {
-                    resolved = Some(resolvent);
+                if let (Some(resolvent), subst_is_ho) =
+                    compute_eq_res_with_ho_flag(bank, &clause, index)?
+                {
+                    resolved = Some((resolvent, subst_is_ho));
                     break;
                 }
             }
         }
 
-        let Some(resolvent) = resolved else {
+        let Some((resolvent, subst_is_ho)) = resolved else {
             break;
         };
         count += 1;
@@ -297,7 +356,12 @@ fn clause_er_normalize_var_impl<W: fmt::Write>(
                 None,
             )?;
         }
-        clause_push_derivation(&mut clause, DC_DES_EQ_RES, None, None);
+        let operation = if subst_is_ho {
+            set_is_ho(DC_DES_EQ_RES)
+        } else {
+            DC_DES_EQ_RES
+        };
+        clause_push_derivation(&mut clause, operation, None, None);
     }
 
     Ok((clause, count))
@@ -310,18 +374,19 @@ mod tests {
         compute_all_eqn_resolvents_with_docs, compute_eq_res, first_eq_res_literal_index,
         next_eq_res_literal_index,
     };
-    use crate::basics::error::ErrorCode;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        ClauseDerivationRef, DerivationEntry, DC_DES_EQ_RES, DC_EQ_RES,
+        set_is_ho, ClauseDerivationRef, DerivationEntry, DC_DES_EQ_RES, DC_EQ_RES,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::EP_IS_MAXIMAL;
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
+    use crate::heuristics::hcb::{HeuristicParmsCell, UnifMode};
+    use crate::terms::ho_csu::init_unif_limits;
     use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
@@ -342,6 +407,16 @@ mod tests {
         reset_problem_type();
         set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
         ProblemTypeReset
+    }
+
+    fn init_unif_limits_for_test(unif_mode: UnifMode) {
+        let mut parms = HeuristicParmsCell {
+            unif_mode,
+            ..HeuristicParmsCell::default()
+        };
+        parms.max_unifiers = 8;
+        parms.max_unif_steps = 64;
+        init_unif_limits(&parms);
     }
 
     fn test_bank() -> TermBank {
@@ -650,6 +725,7 @@ mod tests {
     fn compute_all_eqn_resolvents_higher_order_uses_first_order_subset() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Single);
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "er_ho_fo_a");
@@ -672,7 +748,43 @@ mod tests {
     }
 
     #[test]
-    fn compute_eq_res_higher_order_arrow_binding_remains_diagnostic() {
+    fn compute_all_eqn_resolvents_higher_order_enumerates_csu_pattern_result() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let function = typed_arrow_var(&mut bank, -2);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let applied = apply_terms(&mut bank, &function, std::slice::from_ref(&db0)).unwrap();
+        let a = typed_const(&mut bank, "er_ho_csu_a");
+        let b = typed_const(&mut bank, "er_ho_csu_b");
+        let mut diseq = lit(&mut bank, &applied, &a, false);
+        diseq.set_prop(EP_IS_MAXIMAL);
+        let rest = lit(&mut bank, &applied, &b, true);
+        let clause = Clause::alloc(EqnList::from_vec(vec![rest, diseq]));
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_eqn_resolvents(&mut bank, &clause, &mut store, true).unwrap();
+
+        assert_eq!(count, 1);
+        let resolvent = store.iter().next().expect("CSU resolvent inserted");
+        assert_eq!(resolvent.literal_number(), 1);
+        let literal = &resolvent.literals().as_slice()[0];
+        assert!(literal.is_positive());
+        assert_eq!(literal.left(), &a);
+        assert_eq!(literal.right(), &b);
+        assert_eq!(
+            resolvent.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(set_is_ho(DC_EQ_RES)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_eq_res_higher_order_arrow_binding_uses_single_mgu_path() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
@@ -682,10 +794,11 @@ mod tests {
         diseq.set_prop(EP_IS_MAXIMAL);
         let clause = Clause::alloc(EqnList::from_vec(vec![diseq]));
 
-        let error = compute_eq_res(&mut bank, &clause, 0).unwrap_err();
+        let resolvent = compute_eq_res(&mut bank, &clause, 0)
+            .unwrap()
+            .expect("single ComputeEqRes MGU path accepts arrow-variable binding");
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("CSU enumeration"));
+        assert!(resolvent.is_empty());
     }
 
     #[test]
