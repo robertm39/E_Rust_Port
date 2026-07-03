@@ -126,6 +126,20 @@ pub fn temp_file_remove(name: &Path) -> Result<bool, Diagnostic> {
     Ok(lock_temp_file_store().remove(name))
 }
 
+/// Removes a temporary file, asserting the C `TempFileRemove` registry precondition.
+///
+/// # Panics
+///
+/// Panics after a successful unlink if `name` was not registered as a
+/// temporary file, matching the C assertion after `StrTreeDeleteEntry`.
+pub fn temp_file_remove_asserting(name: &Path) -> Result<(), Diagnostic> {
+    assert!(
+        temp_file_remove(name)?,
+        "TempFileRemove requires a registered temporary file"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 fn registered_temp_file_count() -> usize {
     lock_temp_file_store().len()
@@ -157,7 +171,8 @@ pub(crate) fn temp_file_test_lock() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     use super::{
         registered_temp_file_count, reset_temp_files_for_tests, temp_file_cleanup,
-        temp_file_create, temp_file_name, temp_file_register, temp_file_remove, TEMP_PREFIX,
+        temp_file_create, temp_file_name, temp_file_register, temp_file_remove,
+        temp_file_remove_asserting, TEMP_PREFIX,
     };
     use crate::basics::error::ErrorCode;
     use std::ffi::OsString;
@@ -264,6 +279,33 @@ mod tests {
         assert!(!temp_file_register(&path));
         assert_eq!(registered_temp_file_count(), 1);
         assert!(temp_file_remove(&path).unwrap());
+    }
+
+    #[test]
+    fn temp_file_remove_asserting_matches_registered_c_path() {
+        let _guard = global_test_lock();
+        reset_temp_files_for_tests();
+        let path = target_dir().join(format!("{TEMP_PREFIX}asserting-remove.tmp"));
+        cleanup_path(&path);
+        std::fs::write(&path, b"x").unwrap();
+        assert!(temp_file_register(&path));
+
+        temp_file_remove_asserting(&path).unwrap();
+
+        assert!(!path.exists());
+        assert_eq!(registered_temp_file_count(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "TempFileRemove requires a registered temporary file")]
+    fn temp_file_remove_asserting_matches_c_registry_precondition() {
+        let _guard = global_test_lock();
+        reset_temp_files_for_tests();
+        let path = target_dir().join(format!("{TEMP_PREFIX}asserting-unregistered.tmp"));
+        cleanup_path(&path);
+        std::fs::write(&path, b"x").unwrap();
+
+        let _ = temp_file_remove_asserting(&path);
     }
 
     #[test]
