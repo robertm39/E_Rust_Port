@@ -107,7 +107,7 @@ use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{
     test_id as scanner_test_id, test_tok as scanner_test_tok, token_pos_rep, IoFormat, Scanner,
-    TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
+    TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL, MAX_TOKEN_LOOKAHEAD,
 };
 use crate::inout::signals::{
     configure_time_limits, e_signal_setup, finalize_cpu_limit_outcome, silent_time_out,
@@ -12486,44 +12486,67 @@ fn parse_simple_fof_tstp_equality_right_term(
 }
 
 fn simple_fof_starts_tstp_application_formula(scanner: &Scanner) -> bool {
-    simple_fof_starts_tstp_logical_head_application(scanner)
-        || simple_fof_starts_tstp_parenthesized_lambda_application(scanner)
-        || simple_fof_starts_tstp_parenthesized_application_formula(scanner)
-        || simple_fof_starts_tstp_parenthesized_application_head(scanner)
-        || (scanner.test_tok(TokenType::NAME | TokenType::SEM_IDENT)
-            && scanner_test_tok(scanner.look_token(1), TokenType::APPLICATION))
+    simple_fof_starts_tstp_application_formula_at(scanner, 0)
+        || (scanner.test_tok(TokenType::OPEN_BRACKET)
+            && simple_fof_starts_tstp_application_formula_at(scanner, 1))
 }
 
-fn simple_fof_starts_tstp_parenthesized_lambda_application(scanner: &Scanner) -> bool {
-    scanner.test_tok(TokenType::OPEN_BRACKET)
-        && scanner_test_tok(scanner.look_token(1), TokenType::LAMBDA_QUANTOR)
+fn simple_fof_starts_tstp_application_formula_at(scanner: &Scanner, look: usize) -> bool {
+    simple_fof_starts_tstp_logical_head_application_at(scanner, look)
+        || simple_fof_starts_tstp_parenthesized_lambda_application_at(scanner, look)
+        || simple_fof_starts_tstp_parenthesized_application_formula_at(scanner, look)
+        || simple_fof_starts_tstp_parenthesized_application_head_at(scanner, look)
+        || (scanner_test_tok_at(scanner, look, TokenType::NAME | TokenType::SEM_IDENT)
+            && scanner_test_tok_at(scanner, look + 1, TokenType::APPLICATION))
 }
 
-fn simple_fof_starts_tstp_parenthesized_application_formula(scanner: &Scanner) -> bool {
-    scanner.test_tok(TokenType::OPEN_BRACKET)
-        && scanner_test_tok(
-            scanner.look_token(1),
-            TokenType::NAME | TokenType::SEM_IDENT,
-        )
-        && scanner_test_tok(scanner.look_token(2), TokenType::APPLICATION)
+fn simple_fof_starts_tstp_parenthesized_lambda_application_at(
+    scanner: &Scanner,
+    look: usize,
+) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && scanner_test_tok_at(scanner, look + 1, TokenType::LAMBDA_QUANTOR)
 }
 
-fn simple_fof_starts_tstp_parenthesized_application_head(scanner: &Scanner) -> bool {
-    scanner.test_tok(TokenType::OPEN_BRACKET)
-        && scanner_test_tok(
-            scanner.look_token(1),
-            TokenType::NAME | TokenType::SEM_IDENT,
-        )
-        && scanner_test_tok(scanner.look_token(2), TokenType::CLOSE_BRACKET)
-        && scanner_test_tok(scanner.look_token(3), TokenType::APPLICATION)
+fn simple_fof_starts_tstp_parenthesized_application_formula_at(
+    scanner: &Scanner,
+    look: usize,
+) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && scanner_test_tok_at(scanner, look + 1, TokenType::NAME | TokenType::SEM_IDENT)
+        && scanner_test_tok_at(scanner, look + 2, TokenType::APPLICATION)
 }
 
-fn simple_fof_starts_tstp_logical_head_application(scanner: &Scanner) -> bool {
-    scanner.test_tok(TokenType::OPEN_BRACKET)
-        && (scanner_test_tok(scanner.look_token(1), TokenType::FOF_BIN_OP)
-            || scanner_test_tok(scanner.look_token(1), TokenType::TILDE_SIGN))
-        && scanner_test_tok(scanner.look_token(2), TokenType::CLOSE_BRACKET)
-        && scanner_test_tok(scanner.look_token(3), TokenType::APPLICATION)
+fn simple_fof_starts_tstp_parenthesized_application_head_at(
+    scanner: &Scanner,
+    look: usize,
+) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && scanner_test_tok_at(scanner, look + 1, TokenType::NAME | TokenType::SEM_IDENT)
+        && scanner_test_tok_at(scanner, look + 2, TokenType::CLOSE_BRACKET)
+        && scanner_test_tok_at(scanner, look + 3, TokenType::APPLICATION)
+}
+
+fn simple_fof_starts_tstp_logical_head_application_at(scanner: &Scanner, look: usize) -> bool {
+    scanner_test_tok_at(scanner, look, TokenType::OPEN_BRACKET)
+        && (scanner_test_tok_at(scanner, look + 1, TokenType::FOF_BIN_OP)
+            || scanner_test_tok_at(scanner, look + 1, TokenType::TILDE_SIGN))
+        && scanner_test_tok_at(scanner, look + 2, TokenType::CLOSE_BRACKET)
+        && scanner_test_tok_at(scanner, look + 3, TokenType::APPLICATION)
+}
+
+fn scanner_test_tok_at(scanner: &Scanner, look: usize, toks: TokenType) -> bool {
+    if look < MAX_TOKEN_LOOKAHEAD {
+        return scanner_test_tok(scanner.look_token(look), toks);
+    }
+
+    let mut lookahead = scanner.clone();
+    for _ in 0..look {
+        if lookahead.next_token().is_err() {
+            return false;
+        }
+    }
+    lookahead.test_tok(toks)
 }
 
 fn parse_simple_fof_atomic_formula_or_literal(
@@ -12581,50 +12604,9 @@ fn simple_fof_tstp_equality_right_starts_formula_operand(scanner: &Scanner, left
 }
 
 fn simple_fof_equality_right_starts_tstp_application_formula(scanner: &Scanner) -> bool {
-    simple_fof_equality_right_starts_tstp_logical_head_application(scanner)
-        || simple_fof_equality_right_starts_tstp_parenthesized_lambda_application(scanner)
-        || simple_fof_equality_right_starts_tstp_parenthesized_application_formula(scanner)
-        || simple_fof_equality_right_starts_tstp_parenthesized_application_head(scanner)
-        || (scanner_test_tok(
-            scanner.look_token(1),
-            TokenType::NAME | TokenType::SEM_IDENT,
-        ) && scanner_test_tok(scanner.look_token(2), TokenType::APPLICATION))
-}
-
-fn simple_fof_equality_right_starts_tstp_parenthesized_lambda_application(
-    scanner: &Scanner,
-) -> bool {
-    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
-        && scanner_test_tok(scanner.look_token(2), TokenType::LAMBDA_QUANTOR)
-}
-
-fn simple_fof_equality_right_starts_tstp_parenthesized_application_formula(
-    scanner: &Scanner,
-) -> bool {
-    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
-        && scanner_test_tok(
-            scanner.look_token(2),
-            TokenType::NAME | TokenType::SEM_IDENT,
-        )
-        && scanner_test_tok(scanner.look_token(3), TokenType::APPLICATION)
-}
-
-fn simple_fof_equality_right_starts_tstp_parenthesized_application_head(scanner: &Scanner) -> bool {
-    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
-        && scanner_test_tok(
-            scanner.look_token(2),
-            TokenType::NAME | TokenType::SEM_IDENT,
-        )
-        && scanner_test_tok(scanner.look_token(3), TokenType::CLOSE_BRACKET)
-        && scanner_test_tok(scanner.look_token(4), TokenType::APPLICATION)
-}
-
-fn simple_fof_equality_right_starts_tstp_logical_head_application(scanner: &Scanner) -> bool {
-    scanner_test_tok(scanner.look_token(1), TokenType::OPEN_BRACKET)
-        && (scanner_test_tok(scanner.look_token(2), TokenType::FOF_BIN_OP)
-            || scanner_test_tok(scanner.look_token(2), TokenType::TILDE_SIGN))
-        && scanner_test_tok(scanner.look_token(3), TokenType::CLOSE_BRACKET)
-        && scanner_test_tok(scanner.look_token(4), TokenType::APPLICATION)
+    simple_fof_starts_tstp_application_formula_at(scanner, 1)
+        || (scanner_test_tok_at(scanner, 1, TokenType::OPEN_BRACKET)
+            && simple_fof_starts_tstp_application_formula_at(scanner, 2))
 }
 
 fn parse_simple_fof_distinct_formula(
@@ -15379,10 +15361,14 @@ mod tests {
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
              tff(c_type, type, c: $i).\n\
+             thf(g_type, type, g: $i > $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
              fof(curried_eq, axiom, (h @ a) @ b = c).\n\
              fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
-             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n",
+             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
+             fof(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
+             fof(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             fof(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -15403,6 +15389,9 @@ mod tests {
         assert!(printed.contains("(h,a),b)=c)."));
         assert!(printed.contains("tff(curried_eq_right, axiom, c=app_"));
         assert!(printed.contains("tff(curried_eq_right_plain, axiom, c=app_"));
+        assert!(printed.contains("tff(wrapped_curried_eq, axiom, app_"));
+        assert!(printed.contains("tff(wrapped_curried_eq_right, axiom, c=app_"));
+        assert!(printed.contains("tff(parenthesized_head_eq_right, axiom, c=app_"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -15414,8 +15403,12 @@ mod tests {
         std::fs::write(
             &path,
             "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
              tff(p_type, type, p: $i > $o).\n\
-             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n",
+             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n\
+             fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
+             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -15433,6 +15426,10 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.starts_with(&default_preprocessing_debug_line()));
         assert!(printed.contains("tff(lambda_app, axiom, app_"));
+        assert!(printed.contains("tff(lambda_eq_left, axiom, app_"));
+        assert!(printed.contains("(f,a)=b)."));
+        assert!(printed.contains("tff(lambda_eq_right, axiom, b=app_"));
+        assert!(printed.contains("(f,a))."));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -16699,10 +16696,14 @@ mod tests {
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
              tff(c_type, type, c: $i).\n\
+             thf(g_type, type, g: $i > $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
              fof(curried_eq, axiom, (h @ a) @ b = c).\n\
              fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
-             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n",
+             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
+             fof(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
+             fof(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             fof(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -16732,8 +16733,12 @@ mod tests {
         std::fs::write(
             &path,
             "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
              tff(p_type, type, p: $i > $o).\n\
-             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n",
+             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n\
+             fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
+             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -24122,10 +24127,68 @@ mod tests {
             "tff(a_type, type, a: $i).\n\
              tff(b_type, type, b: $i).\n\
              tff(c_type, type, c: $i).\n\
+             thf(g_type, type, g: $i > $i).\n\
              thf(h_type, type, h: $i > $i > $i).\n\
              fof(curried_eq, axiom, (h @ a) @ b = c).\n\
              fof(curried_eq_right, axiom, c = (h @ a) @ b).\n\
-             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n",
+             fof(curried_eq_right_plain, axiom, c = h @ a @ b).\n\
+             fof(wrapped_curried_eq, axiom, ((h @ a) @ b) = c).\n\
+             fof(wrapped_curried_eq_right, axiom, c = ((h @ a) @ b)).\n\
+             fof(parenthesized_head_eq_right, axiom, c = (g) @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--print-formulas", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        let cnf_lines = printed
+            .lines()
+            .filter(|line| line.starts_with("cnf(i_0_"))
+            .collect::<Vec<_>>();
+        assert_eq!(cnf_lines.len(), 6, "{printed}");
+        assert_eq!(
+            cnf_lines
+                .iter()
+                .filter(|line| line.contains("h(a,b)=c"))
+                .count(),
+            2,
+            "{printed}"
+        );
+        assert_eq!(
+            cnf_lines
+                .iter()
+                .filter(|line| line.contains("c=h(a,b)"))
+                .count(),
+            3,
+            "{printed}"
+        );
+        assert!(cnf_lines.iter().any(|line| line.contains("c=g(a)")));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_print_formulas_lowers_tstp_lambda_application_formula() {
+        let _guard = global_state_lock();
+        let path = temp_path("print-formulas-tstp-lambda-application");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
+             tff(p_type, type, p: $i > $o).\n\
+             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n\
+             fof(lambda_eq_left, axiom, ((^[X: $i]: f @ X) @ a) = b).\n\
+             fof(lambda_eq_right, axiom, b = ((^[X: $i]: f @ X) @ a)).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
@@ -24146,49 +24209,9 @@ mod tests {
             .filter(|line| line.starts_with("cnf(i_0_"))
             .collect::<Vec<_>>();
         assert_eq!(cnf_lines.len(), 3, "{printed}");
-        assert!(cnf_lines.iter().any(|line| line.contains("h(a,b)=c")));
-        assert_eq!(
-            cnf_lines
-                .iter()
-                .filter(|line| line.contains("c=h(a,b)"))
-                .count(),
-            2,
-            "{printed}"
-        );
-        assert!(stderr.is_empty());
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn run_print_formulas_lowers_tstp_lambda_application_formula() {
-        let _guard = global_state_lock();
-        let path = temp_path("print-formulas-tstp-lambda-application");
-        std::fs::write(
-            &path,
-            "tff(a_type, type, a: $i).\n\
-             tff(p_type, type, p: $i > $o).\n\
-             fof(lambda_app, axiom, (^[X: $i]: p @ X) @ a).\n",
-        )
-        .unwrap();
-        let path_arg = path.to_string_lossy().into_owned();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
-        let status = run(
-            ["eprover", "--print-formulas", path_arg.as_str()],
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap();
-
-        assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
-        let printed = String::from_utf8(stdout).unwrap();
-        let cnf_lines = printed
-            .lines()
-            .filter(|line| line.starts_with("cnf(i_0_"))
-            .collect::<Vec<_>>();
-        assert_eq!(cnf_lines.len(), 1, "{printed}");
-        assert!(cnf_lines[0].contains("(p(a))"));
+        assert!(cnf_lines.iter().any(|line| line.contains("(p(a))")));
+        assert!(cnf_lines.iter().any(|line| line.contains("f(a)=b")));
+        assert!(cnf_lines.iter().any(|line| line.contains("b=f(a)")));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
@@ -25290,6 +25313,37 @@ mod tests {
              thf(p_type, type, p: person > $o).\n\
              thf(lambda_fact, axiom, (^[X: person]: p @ X) @ a).\n\
              thf(goal, conjecture, p @ a).\n",
+        )
+        .unwrap();
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run(
+            ["eprover", "--output-level=0", path_arg.as_str()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(status, ErrorCode::PROOF_FOUND.exit_status());
+        let printed = String::from_utf8(stdout).unwrap();
+        assert!(printed.contains("\n% Proof found!\n% SZS status Theorem\n"));
+        assert!(stderr.is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_proves_parenthesized_fof_lambda_application_equality() {
+        let _guard = global_state_lock();
+        let path = temp_path("parenthesized-fof-lambda-application-equality-proof");
+        std::fs::write(
+            &path,
+            "tff(a_type, type, a: $i).\n\
+             tff(b_type, type, b: $i).\n\
+             tff(f_type, type, f: $i > $i).\n\
+             fof(fact, axiom, f @ a = b).\n\
+             fof(goal, conjecture, ((^[X: $i]: f @ X) @ a) = b).\n",
         )
         .unwrap();
         let path_arg = path.to_string_lossy().into_owned();
