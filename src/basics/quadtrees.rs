@@ -138,6 +138,10 @@ where
     }
 
     pub fn find(&mut self, key: &QuadKey<P>) -> Option<&V> {
+        self.find_splayed(key)
+    }
+
+    pub fn find_splayed(&mut self, key: &QuadKey<P>) -> Option<&V> {
         if self.entries.contains_key(key) {
             self.root_key = Some(key.clone());
             self.entries.get(key)
@@ -268,6 +272,20 @@ mod tests {
         *tree.find_mut(&first_key).unwrap() = 11;
         assert_eq!(tree.root_key(), Some(&first_key));
         assert_eq!(tree.find(&first_key), Some(&11));
+    }
+
+    #[test]
+    fn splayed_find_tracks_recent_root_like_c() {
+        let mut tree = QuadTree::new();
+        let first_key = key(1, 0, 2, 0);
+        let second_key = key(2, 0, 3, 0);
+        tree.store(first_key.clone(), 10);
+        tree.store(second_key.clone(), 20);
+
+        assert_eq!(tree.find_splayed(&first_key), Some(&10));
+        assert_eq!(tree.root_key(), Some(&first_key));
+        assert_eq!(tree.find_splayed(&key(9, 0, 9, 0)), None);
+        assert_eq!(tree.root_key(), Some(&first_key));
     }
 
     #[test]

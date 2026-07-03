@@ -106,4 +106,9 @@ Source files reviewed: `BASICS/clb_quadtrees.h`, `BASICS/clb_quadtrees.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- `QuadTreeFind`, `QuadTreeInsert`, and `QuadTreeExtractEntry` splay the raw root as a side effect, including miss-nearest rebalancing. Rust exposes successful splayed lookup/root tracking, but exact miss-splay locality and raw pointer-address ordering should be revisited only if comparison caches make this path hot.
+- `DoubleKeyCmp` subtracts the integer fields after pointer comparison, which can overflow for extreme `int` values. Rust uses ordinary integer ordering; keep the cleaner comparison unless reference tests show callers depend on the subtraction-shaped result magnitude.
 <!-- END MANUAL REVIEW: c_source_docs -->
