@@ -5,9 +5,9 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{tptp_types_combine, CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausecpos::unpack_clause_pos;
 use crate::clauses::clausepos::ClausePos;
-use crate::clauses::clausepos_tree::clause_key;
+use crate::clauses::clausepos_tree::{clause_key, ClauseTPos};
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::derivation::{clause_push_derivation, DC_PARAMOD, DC_SIM_PARAMOD};
+use crate::clauses::derivation::{clause_push_derivation, set_is_ho, DC_PARAMOD, DC_SIM_PARAMOD};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnSide, EP_FROM_CLAUSE_LIT, EP_IS_MAXIMAL, EP_IS_PM_INTO_LIT};
 use crate::clauses::eqnlist::EqnList;
@@ -21,6 +21,7 @@ use crate::clauses::subterm_tree::SubtermOcc;
 use crate::heuristics::to_params::TermOrdering;
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::ho_csu::CsuIterator;
 use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
 use crate::terms::replace::tb_term_pos_replace;
 use crate::terms::subst::Substitution;
@@ -619,6 +620,18 @@ fn compute_from_position_into_occurrence(
     pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder && pm_type == ParamodulationType::Plain {
+        return compute_plain_from_position_into_occurrence_csu(
+            bank,
+            ocb,
+            from_pos,
+            occurrence,
+            store,
+            parent_alias,
+            doc_context,
+        );
+    }
+
     let mut paramod_count = 0;
     ensure_higher_order_paramodulation_terms_subset(ocb, &[occurrence.term()], || {
         higher_order_paramod_diagnostic_for_type(pm_type)
@@ -703,6 +716,19 @@ fn compute_indexed_sources_into_position(
     pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder && pm_type == ParamodulationType::Plain {
+        return compute_plain_indexed_sources_into_position_csu(
+            bank,
+            ocb,
+            overlap_term,
+            into_pos,
+            from_index,
+            store,
+            parent_alias,
+            doc_context,
+        );
+    }
+
     let mut paramod_count = 0;
     let parent_key = clause_key(parent_alias);
     for occurrence in unifiable_occurrences(from_index, overlap_term) {
@@ -767,6 +793,437 @@ fn compute_indexed_sources_into_position(
         }
     }
     Ok(paramod_count)
+}
+
+fn compute_plain_from_position_into_occurrence_csu(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    occurrence: &SubtermOcc,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
+    let from_term = from_pos
+        .get_side()
+        .expect("indexed source position must select a side");
+    let from_other = from_pos
+        .get_other_side()
+        .expect("indexed source position must select an opposite side");
+    ensure_higher_order_paramodulation_ordering_supported(
+        ocb,
+        &[&from_term, &from_other, occurrence.term()],
+        higher_order_paramod_diagnostic,
+    )?;
+
+    let mut subst = Substitution::new();
+    let mut iter = CsuIterator::new(&from_term, occurrence.term(), &subst);
+    let mut paramod_count = 0;
+
+    loop {
+        let has_next = match iter.next_csu_element(bank, &mut subst) {
+            Ok(has_next) => has_next,
+            Err(err) => {
+                iter.destroy(&mut subst);
+                return Err(err);
+            }
+        };
+        if !has_next {
+            break;
+        }
+
+        if !indexed_source_allows_under_subst(bank, ocb, from_pos) {
+            continue;
+        }
+        let subst_is_ho = subst.has_ho_binding();
+        let effective_pm_type =
+            effective_paramodulation_type(bank, ocb, from_pos, ParamodulationType::Plain);
+
+        for into_clause_pos in occurrence.position_clauses().entries() {
+            for into_cpos in into_clause_pos.positions() {
+                let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
+                if let Err(err) =
+                    ensure_indexed_plain_paramodulation_ordering_supported(ocb, from_pos, &into_pos)
+                {
+                    iter.destroy(&mut subst);
+                    return Err(err);
+                }
+                if !indexed_target_allows_under_subst(
+                    bank,
+                    ocb,
+                    &into_pos,
+                    into_clause_pos.clause(),
+                ) {
+                    continue;
+                }
+
+                let from_clause = from_pos
+                    .clause()
+                    .expect("indexed source position must be backed by a clause");
+                let freshvars =
+                    fresh_var_bank_for_clauses(bank, from_clause, into_clause_pos.clause());
+                let paramodulant = match indexed_plain_paramod_construct_with_subst(
+                    bank,
+                    from_pos,
+                    &into_pos,
+                    from_clause,
+                    into_clause_pos.clause(),
+                    &freshvars,
+                    &mut subst,
+                ) {
+                    Ok(paramodulant) => paramodulant,
+                    Err(err) => {
+                        iter.destroy(&mut subst);
+                        return Err(err);
+                    }
+                };
+                let Some(mut paramodulant) = paramodulant else {
+                    continue;
+                };
+                paramod_count += 1;
+                update_paramodulant_info(&mut paramodulant, into_clause_pos.clause(), parent_alias);
+                document_paramodulant_creation(
+                    doc_context,
+                    bank,
+                    &mut paramodulant,
+                    effective_pm_type,
+                    into_clause_pos.clause(),
+                    parent_alias,
+                )?;
+                clause_push_derivation(
+                    &mut paramodulant,
+                    paramodulation_derivation_code_with_ho(effective_pm_type, subst_is_ho),
+                    Some(into_clause_pos.clause()),
+                    Some(parent_alias),
+                );
+                store.insert(paramodulant);
+            }
+        }
+    }
+
+    iter.destroy(&mut subst);
+    Ok(paramod_count)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed CSU helper keeps selected target, source occurrence, and optional docs explicit"
+)]
+fn compute_plain_indexed_sources_into_position_csu(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    overlap_term: &Term,
+    into_pos: &ClausePos,
+    from_index: &OverlapIndex<'_>,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
+    let into_side = into_pos
+        .get_side()
+        .expect("indexed target position must select a side");
+    let into_other = into_pos
+        .get_other_side()
+        .expect("indexed target position must select an opposite side");
+    ensure_higher_order_paramodulation_ordering_supported(
+        ocb,
+        &[overlap_term, &into_side, &into_other],
+        higher_order_paramod_diagnostic,
+    )?;
+
+    let mut paramod_count = 0;
+    let parent_key = clause_key(parent_alias);
+    for occurrence in unifiable_occurrences(from_index, overlap_term) {
+        ensure_higher_order_paramodulation_ordering_supported(
+            ocb,
+            &[overlap_term, occurrence.term()],
+            higher_order_paramod_diagnostic,
+        )?;
+        let mut subst = Substitution::new();
+        let mut iter = CsuIterator::new(overlap_term, occurrence.term(), &subst);
+
+        loop {
+            let has_next = match iter.next_csu_element(bank, &mut subst) {
+                Ok(has_next) => has_next,
+                Err(err) => {
+                    iter.destroy(&mut subst);
+                    return Err(err);
+                }
+            };
+            if !has_next {
+                break;
+            }
+
+            if !indexed_target_allows_under_subst(bank, ocb, into_pos, parent_alias) {
+                continue;
+            }
+            let subst_is_ho = subst.has_ho_binding();
+
+            for from_clause_pos in occurrence.position_clauses().entries() {
+                if from_clause_pos.clause_key() == parent_key {
+                    continue;
+                }
+                let generated = match compute_plain_indexed_sources_from_clause_entry_csu(
+                    bank,
+                    ocb,
+                    from_clause_pos,
+                    into_pos,
+                    store,
+                    parent_alias,
+                    &mut subst,
+                    subst_is_ho,
+                    doc_context,
+                ) {
+                    Ok(generated) => generated,
+                    Err(err) => {
+                        iter.destroy(&mut subst);
+                        return Err(err);
+                    }
+                };
+                paramod_count += generated;
+            }
+        }
+
+        iter.destroy(&mut subst);
+    }
+
+    Ok(paramod_count)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed CSU helper keeps source entry, target position, active substitution, and optional docs explicit"
+)]
+fn compute_plain_indexed_sources_from_clause_entry_csu(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    source_entry: &ClauseTPos,
+    into_pos: &ClausePos,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+    subst: &mut Substitution,
+    subst_is_ho: bool,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    for source_cpos in source_entry.positions() {
+        let source_pos = unpack_clause_pos(*source_cpos, source_entry.clause().clone());
+        ensure_indexed_plain_paramodulation_ordering_supported(ocb, &source_pos, into_pos)?;
+        if !indexed_source_allows_under_subst(bank, ocb, &source_pos) {
+            continue;
+        }
+
+        let effective_pm_type =
+            effective_paramodulation_type(bank, ocb, &source_pos, ParamodulationType::Plain);
+        let freshvars = fresh_var_bank_for_clauses(bank, source_entry.clause(), parent_alias);
+        let paramodulant = indexed_plain_paramod_construct_with_subst(
+            bank,
+            &source_pos,
+            into_pos,
+            source_entry.clause(),
+            parent_alias,
+            &freshvars,
+            subst,
+        )?;
+        let Some(mut paramodulant) = paramodulant else {
+            continue;
+        };
+
+        paramod_count += 1;
+        update_paramodulant_info(&mut paramodulant, parent_alias, source_entry.clause());
+        document_paramodulant_creation(
+            doc_context,
+            bank,
+            &mut paramodulant,
+            effective_pm_type,
+            parent_alias,
+            source_entry.clause(),
+        )?;
+        clause_push_derivation(
+            &mut paramodulant,
+            paramodulation_derivation_code_with_ho(effective_pm_type, subst_is_ho),
+            Some(parent_alias),
+            Some(source_entry.clause()),
+        );
+        store.insert(paramodulant);
+    }
+    Ok(paramod_count)
+}
+
+fn indexed_source_allows_under_subst(
+    bank: &TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+) -> bool {
+    let from_clause = from_pos
+        .clause()
+        .expect("indexed source position must be backed by a clause");
+    let from_index = from_pos
+        .literal_index()
+        .expect("indexed source position must select a clause literal");
+    let from_literal = from_pos
+        .literal()
+        .expect("indexed source position must select a literal");
+    let from_term = from_pos
+        .get_side()
+        .expect("indexed source position must select a side");
+    let from_other = from_pos
+        .get_other_side()
+        .expect("indexed source position must select an opposite side");
+
+    (from_literal.is_oriented()
+        || !to_greater(
+            ocb,
+            bank.signature(),
+            &from_other,
+            &from_term,
+            DerefType::Always,
+            DerefType::Always,
+        ))
+        && eqn_is_strictly_maximal_under_subst(ocb, bank, from_clause, from_index)
+}
+
+fn indexed_target_allows_under_subst(
+    bank: &TermBank,
+    ocb: &mut OrderControlBlock,
+    into_pos: &ClausePos,
+    into_clause: &Clause,
+) -> bool {
+    let into_index = into_pos
+        .literal_index()
+        .expect("indexed target position must select a clause literal");
+    let into_literal = into_pos
+        .literal()
+        .expect("indexed target position must select a literal");
+    let into_side = into_pos
+        .get_side()
+        .expect("indexed target position must select a side");
+    let into_other = into_pos
+        .get_other_side()
+        .expect("indexed target position must select an opposite side");
+
+    (into_literal.is_oriented()
+        || !to_greater(
+            ocb,
+            bank.signature(),
+            &into_other,
+            &into_side,
+            DerefType::Always,
+            DerefType::Always,
+        ))
+        && ((into_literal.is_positive()
+            && eqn_is_strictly_maximal_under_subst(ocb, bank, into_clause, into_index))
+            || (into_literal.is_negative()
+                && eqn_is_maximal_under_subst(ocb, bank, into_clause, into_index)))
+}
+
+fn ensure_indexed_plain_paramodulation_ordering_supported(
+    ocb: &OrderControlBlock,
+    from_pos: &ClausePos,
+    into_pos: &ClausePos,
+) -> Result<(), Diagnostic> {
+    let from_term = from_pos
+        .get_side()
+        .expect("indexed source position must select a side");
+    let from_other = from_pos
+        .get_other_side()
+        .expect("indexed source position must select an opposite side");
+    let into_subterm = into_pos
+        .get_subterm()
+        .expect("indexed target position must select a subterm");
+    let into_side = into_pos
+        .get_side()
+        .expect("indexed target position must select a side");
+    let into_other = into_pos
+        .get_other_side()
+        .expect("indexed target position must select an opposite side");
+
+    ensure_higher_order_paramodulation_ordering_supported(
+        ocb,
+        &[
+            &from_term,
+            &from_other,
+            &into_subterm,
+            &into_side,
+            &into_other,
+        ],
+        higher_order_paramod_diagnostic,
+    )
+}
+
+fn indexed_plain_paramod_construct_with_subst(
+    bank: &mut TermBank,
+    from: &ClausePos,
+    into: &ClausePos,
+    from_clause: &Clause,
+    into_clause: &Clause,
+    freshvars: &VarBank,
+    subst: &mut Substitution,
+) -> Result<Option<Clause>, Diagnostic> {
+    let into_index = into
+        .literal_index()
+        .expect("indexed target position must select a clause literal");
+    let from_index = from
+        .literal_index()
+        .expect("indexed source position must select a clause literal");
+    let into_literal = into
+        .literal()
+        .expect("indexed target position must select a literal");
+
+    let backtrack = subst.len();
+    let result = (|| {
+        let _ = into_clause.literals().subst_norm(subst, freshvars);
+        let _ = from_clause.literals().subst_norm(subst, freshvars);
+
+        let from_rhs = from
+            .get_other_side()
+            .expect("indexed source position must select an opposite side");
+        let into_rhs = into
+            .get_other_side()
+            .expect("indexed target position must select an opposite side");
+        let into_subterm = into
+            .get_subterm()
+            .expect("indexed target position must select a subterm");
+
+        let new_lhs = tb_term_pos_replace(
+            bank,
+            &from_rhs,
+            into.term_pos(),
+            DerefType::Always,
+            0,
+            Some(&into_subterm),
+        )?;
+        let new_rhs = bank.insert(&into_rhs, DerefType::Always)?;
+
+        if into_literal.is_positive() && new_lhs == new_rhs {
+            return Ok(None);
+        }
+
+        let mut into_copy = into_clause
+            .literals()
+            .copy_opt_except_index(Some(into_index), bank)?;
+        if into_copy.find_true(bank).is_some() {
+            return Ok(None);
+        }
+        let from_copy = from_clause
+            .literals()
+            .copy_opt_except_index(Some(from_index), bank)?;
+        if from_copy.find_true(bank).is_some() {
+            return Ok(None);
+        }
+
+        into_copy.append(from_copy);
+        let pm_lit = Eqn::alloc(new_lhs, new_rhs, bank, into_literal.is_positive())?;
+        let mut new_literals = EqnList::new();
+        new_literals.push(pm_lit);
+        new_literals.append(into_copy);
+        new_literals.lambda_normalize(bank)?;
+        new_literals.remove_resolved(bank);
+        new_literals.remove_duplicates(bank);
+        Ok(Some(Clause::alloc(new_literals)))
+    })();
+    subst.backtrack_to_pos(backtrack);
+    result
 }
 
 fn indexed_effective_paramodulation_type(
@@ -878,6 +1335,24 @@ fn ensure_higher_order_paramodulation_terms_subset(
     }
     if ocb.ordering_type != TermOrdering::Kbo6
         || terms
+            .iter()
+            .any(|term| term_has_higher_order_unification_surface(term))
+    {
+        return Err(diagnostic());
+    }
+    Ok(())
+}
+
+fn ensure_higher_order_paramodulation_ordering_supported(
+    ocb: &OrderControlBlock,
+    terms: &[&Term],
+    diagnostic: impl Fn() -> Diagnostic,
+) -> Result<(), Diagnostic> {
+    if problem_type() != ProblemType::HigherOrder {
+        return Ok(());
+    }
+    if ocb.ordering_type != TermOrdering::Kbo6
+        && terms
             .iter()
             .any(|term| term_has_higher_order_unification_surface(term))
     {
@@ -1798,6 +2273,18 @@ const fn paramodulation_derivation_code(pm_type: ParamodulationType) -> i64 {
     }
 }
 
+const fn paramodulation_derivation_code_with_ho(
+    pm_type: ParamodulationType,
+    subst_is_ho: bool,
+) -> i64 {
+    let code = paramodulation_derivation_code(pm_type);
+    if subst_is_ho {
+        set_is_ho(code)
+    } else {
+        code
+    }
+}
+
 fn effective_paramodulation_type(
     bank: &TermBank,
     ocb: &mut OrderControlBlock,
@@ -1881,7 +2368,7 @@ mod tests {
     use crate::clauses::clausepos::ClausePos;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        ClauseDerivationRef, DerivationEntry, DC_PARAMOD, DC_SIM_PARAMOD,
+        set_is_ho, ClauseDerivationRef, DerivationEntry, DC_PARAMOD, DC_SIM_PARAMOD,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{
@@ -1891,8 +2378,10 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::global_indices::GlobalIndices;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
+    use crate::heuristics::hcb::{HeuristicParmsCell, UnifMode};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::ho_csu::init_unif_limits;
     use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
@@ -1913,6 +2402,16 @@ mod tests {
         reset_problem_type();
         set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
         ProblemTypeReset
+    }
+
+    fn init_unif_limits_for_test(unif_mode: UnifMode) {
+        let mut parms = HeuristicParmsCell {
+            unif_mode,
+            ..HeuristicParmsCell::default()
+        };
+        parms.max_unifiers = 8;
+        parms.max_unif_steps = 64;
+        init_unif_limits(&parms);
     }
 
     fn test_bank() -> TermBank {
@@ -1955,6 +2454,31 @@ mod tests {
     fn typed_var(bank: &TermBank, f_code: i64) -> Term {
         let type_ = bank.signature().type_bank().default_type();
         bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_arrow_type(bank: &mut TermBank) -> crate::terms::simpletypes::Type {
+        let type_ = bank.signature().type_bank().default_type();
+        bank.signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![type_.clone(), type_]))
+    }
+
+    fn typed_arrow_var(bank: &mut TermBank, f_code: i64) -> Term {
+        let type_ = typed_arrow_type(bank);
+        bank.vars().var_assert_alloc(f_code, &type_)
+    }
+
+    fn typed_arrow_const(bank: &mut TermBank, name: &str) -> Term {
+        let type_ = typed_arrow_type(bank);
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, type_.clone())
+                .unwrap();
+        }
+        let term = Term::const_cell_alloc(f_code);
+        term.set_type(Some(type_));
+        bank.insert(&term, DerefType::Never).unwrap()
     }
 
     fn typed_unary_code(bank: &mut TermBank, name: &str) -> i64 {
@@ -2636,6 +3160,65 @@ mod tests {
             stored.derivation().unwrap().as_slice(),
             &[
                 DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_higher_order_plain_uses_csu_and_tags_derivation() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
+        let mut bank = test_bank();
+        let source_left = typed_arrow_var(&mut bank, -2_450);
+        let source_right = typed_arrow_const(&mut bank, "pm_idx_ho_plain_source_right");
+        let target_left = typed_arrow_const(&mut bank, "pm_idx_ho_plain_target_left");
+        let target_right = typed_arrow_const(&mut bank, "pm_idx_ho_plain_target_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        source.set_proof_depth(2);
+        source.set_proof_size(4);
+        target.set_proof_depth(5);
+        target.set_proof_size(7);
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut target, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store.iter().next().expect("one indexed paramodulant");
+        assert_eq!(stored.proof_depth(), 6);
+        assert_eq!(stored.proof_size(), 12);
+        assert_eq!(stored.literal_number(), 1);
+        let generated = &stored.literals().as_slice()[0];
+        assert_eq!(generated.left(), &source_right);
+        assert_eq!(generated.right(), &target_right);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(set_is_ho(DC_PARAMOD)),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
             ]
