@@ -202,7 +202,9 @@ pub fn tcp_msg_read_from(reader: &mut impl Read, message: &mut TcpMessage) -> Ms
     match reader.read(&mut buffer[..chunk_len]) {
         Ok(0) => MsgStatus::ConnClosed,
         Ok(read) => {
-            message.content.extend_from_slice(&buffer[..read]);
+            message
+                .content
+                .extend_from_slice(c_string_prefix(&buffer[..read]));
             message.transmission_count += read;
             if message.is_complete() {
                 MsgStatus::Success
@@ -603,6 +605,24 @@ mod tests {
         );
         assert!(message.is_complete());
         assert_eq!(message.unpack(), b"hello");
+    }
+
+    #[test]
+    fn read_accumulates_payload_with_c_string_truncation() {
+        let bytes = TcpMessage::pack_payload(b"a\0b")
+            .unwrap()
+            .content_bytes()
+            .to_vec();
+        let mut reader = LimitedReader::new(bytes, usize::MAX);
+        let mut message = TcpMessage::new();
+
+        assert_eq!(
+            tcp_msg_read_from(&mut reader, &mut message),
+            MsgStatus::Success
+        );
+        assert_eq!(message.transmission_count(), TCP_HEADER_SIZE + 3);
+        assert_eq!(message.raw_payload_bytes(), b"a");
+        assert_eq!(message.unpack(), b"a");
     }
 
     #[test]
