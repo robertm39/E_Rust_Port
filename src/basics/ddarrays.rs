@@ -1,5 +1,7 @@
 pub type DDArrayIndex = isize;
 
+use std::fmt::Write as _;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DDArray {
     size: usize,
@@ -100,6 +102,21 @@ impl DDArray {
             let new = data.element(idx).unwrap_or(0.0);
             self.assign(idx, old + new);
         }
+    }
+
+    #[must_use]
+    pub fn debug_print_string(&mut self, size: usize) -> String {
+        let mut result = String::new();
+        for index in 0..size {
+            let value = self.element(index_to_dd(index)).unwrap_or(0.0);
+            let write_result = write!(&mut result, " {value:5.3} ");
+            debug_assert!(write_result.is_ok());
+            if (index + 1).is_multiple_of(10) {
+                result.push('\n');
+            }
+        }
+        result.push('\n');
+        result
     }
 
     #[must_use]
@@ -217,5 +234,20 @@ mod tests {
         assert_eq!(array.select_part(-0.1, 2), None);
         assert_eq!(array.select_part(0.5, 0), None);
         assert_eq!(array.select_part(0.5, 3), None);
+    }
+
+    #[test]
+    fn debug_print_matches_c_format_and_uses_mutating_element_access() {
+        let mut array = DDArray::new(3, 4);
+        array.assign(0, 1.0);
+        array.assign(1, -2.25);
+        array.assign(2, 12.5);
+
+        assert_eq!(
+            array.debug_print_string(12),
+            " 1.000  -2.250  12.500  0.000  0.000  0.000  0.000  0.000  0.000  0.000 \n 0.000  0.000 \n"
+        );
+        assert_eq!(array.size(), 12);
+        assert_eq!(array.existing_element(11), Some(0.0));
     }
 }

@@ -93,6 +93,7 @@ Source files reviewed: `BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `DDArrayDebugPrint` calls `DDArrayElement` for every printed position, so asking it to print beyond the current allocation enlarges and zero-fills the array as a side effect. Rust preserves this in the explicit debug-string helper.
 
 ### Porting Focus
 
