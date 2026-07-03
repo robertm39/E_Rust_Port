@@ -139,6 +139,7 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `PQueueGetNext` and `PQueueGetLast` return an `IntOrP` by value and only move `tail`/`head`; they do not clear the backing ring slot. `PQueueReset` likewise only rewinds `head` and `tail`. Absolute-slot access through `PQueueElement` can still observe old payload words after extraction or reset, and Rust preserves this compatibility shape by cloning/copying extracted payloads.
+- `PQueueGetNext`, `PQueueGetLast`, `PQueueLook`, and `PQueueLookLast` assert that the queue is non-empty before accessing the backing ring. Rust preserves these as explicit panics on the C-shaped methods.
 
 ### Porting Focus
 
@@ -146,4 +147,8 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 - Future non-compatibility queue APIs should avoid exposing stale absolute slots after extraction or reset and can drop/reset owned Rust payloads eagerly, but that must stay separate from the C-shaped `PQueue` surface.
+
+### Change-Later Candidates
+
+- Empty queue extraction/look operations are assertion failures in the C API. The Rust compatibility surface now panics the same way, but higher-level Rust-only callers that naturally model optional work queues should use a separate `try_` API rather than weakening the C-shaped methods.
 <!-- END MANUAL REVIEW: c_source_docs -->

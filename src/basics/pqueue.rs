@@ -100,15 +100,21 @@ impl<T> PQueue<T> {
         }
     }
 
-    pub fn get_next(&mut self) -> Option<T>
+    /// Extract the next queue value.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the queue is empty, matching the C `PQueueGetNext`
+    /// assertion.
+    pub fn get_next(&mut self) -> T
     where
         T: Clone,
     {
-        if self.is_empty() {
-            return None;
-        }
+        assert!(!self.is_empty(), "PQueueGetNext called on an empty queue");
 
-        let result = self.queue[self.tail].clone();
+        let result = self.queue[self.tail]
+            .clone()
+            .unwrap_or_else(|| panic!("PQueue used tail slot was empty"));
         self.tail += 1;
         if self.tail == self.size {
             self.tail = 0;
@@ -116,42 +122,58 @@ impl<T> PQueue<T> {
         result
     }
 
-    pub fn get_last(&mut self) -> Option<T>
+    /// Extract the newest queue value, viewing the queue as a stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the queue is empty, matching the C `PQueueGetLast`
+    /// assertion.
+    pub fn get_last(&mut self) -> T
     where
         T: Clone,
     {
-        if self.is_empty() {
-            return None;
-        }
+        assert!(!self.is_empty(), "PQueueGetLast called on an empty queue");
 
         self.head = if self.head == 0 {
             self.size - 1
         } else {
             self.head - 1
         };
-        self.queue[self.head].clone()
+        self.queue[self.head]
+            .clone()
+            .unwrap_or_else(|| panic!("PQueue used head slot was empty"))
     }
 
     #[must_use]
-    pub fn look(&self) -> Option<&T> {
-        if self.is_empty() {
-            None
-        } else {
-            self.queue[self.tail].as_ref()
-        }
+    /// Return the next queue value without extracting it.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the queue is empty, matching the C `PQueueLook` assertion.
+    pub fn look(&self) -> &T {
+        assert!(!self.is_empty(), "PQueueLook called on an empty queue");
+        self.queue[self.tail]
+            .as_ref()
+            .unwrap_or_else(|| panic!("PQueue used tail slot was empty"))
     }
 
     #[must_use]
-    pub fn look_last(&self) -> Option<&T> {
-        if self.is_empty() {
-            return None;
-        }
+    /// Return the newest queue value without extracting it.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the queue is empty, matching the C `PQueueLookLast`
+    /// assertion.
+    pub fn look_last(&self) -> &T {
+        assert!(!self.is_empty(), "PQueueLookLast called on an empty queue");
         let index = if self.head == 0 {
             self.size - 1
         } else {
             self.head - 1
         };
-        self.queue[index].as_ref()
+        self.queue[index]
+            .as_ref()
+            .unwrap_or_else(|| panic!("PQueue used head slot was empty"))
     }
 
     #[must_use]
@@ -229,48 +251,48 @@ impl<P> PQueue<IntOrP<P>> {
     where
         P: Clone,
     {
-        self.get_next().and_then(IntOrP::into_int)
+        self.get_next().into_int()
     }
 
     pub fn get_next_pointer(&mut self) -> Option<P>
     where
         P: Clone,
     {
-        self.get_next().and_then(IntOrP::into_pointer)
+        self.get_next().into_pointer()
     }
 
     pub fn get_last_int(&mut self) -> Option<PQueueInt>
     where
         P: Clone,
     {
-        self.get_last().and_then(IntOrP::into_int)
+        self.get_last().into_int()
     }
 
     pub fn get_last_pointer(&mut self) -> Option<P>
     where
         P: Clone,
     {
-        self.get_last().and_then(IntOrP::into_pointer)
+        self.get_last().into_pointer()
     }
 
     #[must_use]
     pub fn look_int(&self) -> Option<PQueueInt> {
-        self.look().and_then(IntOrP::as_int)
+        self.look().as_int()
     }
 
     #[must_use]
     pub fn look_pointer(&self) -> Option<&P> {
-        self.look().and_then(IntOrP::as_pointer)
+        self.look().as_pointer()
     }
 
     #[must_use]
     pub fn look_last_int(&self) -> Option<PQueueInt> {
-        self.look_last().and_then(IntOrP::as_int)
+        self.look_last().as_int()
     }
 
     #[must_use]
     pub fn look_last_pointer(&self) -> Option<&P> {
-        self.look_last().and_then(IntOrP::as_pointer)
+        self.look_last().as_pointer()
     }
 }
 
@@ -307,13 +329,13 @@ mod tests {
         queue.store(20);
 
         assert_eq!(queue.cardinality(), 2);
-        assert_eq!(queue.look(), Some(&10));
-        assert_eq!(queue.look_last(), Some(&20));
-        assert_eq!(queue.get_next(), Some(10));
+        assert_eq!(queue.look(), &10);
+        assert_eq!(queue.look_last(), &20);
+        assert_eq!(queue.get_next(), 10);
         assert_eq!(queue.element(0), Some(&10));
-        assert_eq!(queue.get_next(), Some(20));
+        assert_eq!(queue.get_next(), 20);
         assert_eq!(queue.element(1), Some(&20));
-        assert_eq!(queue.get_next(), None);
+        assert!(queue.is_empty());
     }
 
     #[test]
@@ -323,12 +345,12 @@ mod tests {
             queue.store(value);
         }
 
-        assert_eq!(queue.get_last(), Some(3));
+        assert_eq!(queue.get_last(), 3);
         assert_eq!(queue.element(2), Some(&3));
-        assert_eq!(queue.look_last(), Some(&2));
-        assert_eq!(queue.get_next(), Some(1));
+        assert_eq!(queue.look_last(), &2);
+        assert_eq!(queue.get_next(), 1);
         assert_eq!(queue.element(0), Some(&1));
-        assert_eq!(queue.get_last(), Some(2));
+        assert_eq!(queue.get_last(), 2);
         assert_eq!(queue.element(1), Some(&2));
         assert!(queue.is_empty());
     }
@@ -341,9 +363,9 @@ mod tests {
         queue.bury(0);
 
         assert_eq!(queue.cardinality(), 3);
-        assert_eq!(queue.get_next(), Some(0));
-        assert_eq!(queue.get_next(), Some(1));
-        assert_eq!(queue.get_next(), Some(2));
+        assert_eq!(queue.get_next(), 0);
+        assert_eq!(queue.get_next(), 1);
+        assert_eq!(queue.get_next(), 2);
     }
 
     #[test]
@@ -359,10 +381,10 @@ mod tests {
         assert_eq!(queue.cardinality(), 4);
         assert_eq!(queue.element(4), Some(&0));
         assert_eq!(queue.element(7), Some(&3));
-        assert_eq!(queue.get_next(), Some(0));
-        assert_eq!(queue.get_next(), Some(1));
-        assert_eq!(queue.get_next(), Some(2));
-        assert_eq!(queue.get_next(), Some(3));
+        assert_eq!(queue.get_next(), 0);
+        assert_eq!(queue.get_next(), 1);
+        assert_eq!(queue.get_next(), 2);
+        assert_eq!(queue.get_next(), 3);
     }
 
     #[test]
@@ -371,16 +393,16 @@ mod tests {
         for value in [1, 2, 3] {
             queue.store(value);
         }
-        assert_eq!(queue.get_next(), Some(1));
+        assert_eq!(queue.get_next(), 1);
         queue.store(4);
         queue.store(5);
 
         assert_eq!(queue.allocated_size(), 8);
         assert_eq!(queue.tail_index(), 5);
-        assert_eq!(queue.get_next(), Some(2));
-        assert_eq!(queue.get_next(), Some(3));
-        assert_eq!(queue.get_next(), Some(4));
-        assert_eq!(queue.get_next(), Some(5));
+        assert_eq!(queue.get_next(), 2);
+        assert_eq!(queue.get_next(), 3);
+        assert_eq!(queue.get_next(), 4);
+        assert_eq!(queue.get_next(), 5);
     }
 
     #[test]
@@ -414,11 +436,24 @@ mod tests {
         assert_eq!(queue.allocated_size(), 4);
         assert_eq!(queue.element(0), Some(&"a"));
         assert_eq!(queue.element(1), Some(&"b"));
-        assert_eq!(queue.get_next(), None);
         queue.store("c");
         assert_eq!(queue.element(0), Some(&"c"));
         assert_eq!(queue.element(1), Some(&"b"));
-        assert_eq!(queue.get_next(), Some("c"));
+        assert_eq!(queue.get_next(), "c");
+    }
+
+    #[test]
+    #[should_panic(expected = "PQueueGetNext called on an empty queue")]
+    fn get_next_panics_on_empty_like_c_assertion() {
+        let mut queue = PQueue::<usize>::with_size(4);
+        let _value = queue.get_next();
+    }
+
+    #[test]
+    #[should_panic(expected = "PQueueLook called on an empty queue")]
+    fn look_panics_on_empty_like_c_assertion() {
+        let queue = PQueue::<usize>::with_size(4);
+        let _value = queue.look();
     }
 
     #[test]

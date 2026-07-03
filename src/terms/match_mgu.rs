@@ -152,19 +152,9 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
     let mut result = true;
     while !jobs.is_empty() {
         let mut right_deref = DerefType::Always;
-        let mut right = term_deref(
-            &jobs
-                .get_last()
-                .expect("unification queue stores complete pairs"),
-            &mut right_deref,
-        );
+        let mut right = term_deref(&jobs.get_last(), &mut right_deref);
         let mut left_deref = DerefType::Always;
-        let mut left = term_deref(
-            &jobs
-                .get_last()
-                .expect("unification queue stores complete pairs"),
-            &mut left_deref,
-        );
+        let mut left = term_deref(&jobs.get_last(), &mut left_deref);
 
         if right.is_free_var() {
             std::mem::swap(&mut left, &mut right);
