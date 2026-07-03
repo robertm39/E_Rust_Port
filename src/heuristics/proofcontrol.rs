@@ -84,10 +84,11 @@ use crate::clauses::tautologies::clause_is_tautology;
 use crate::heuristics::axiomscan::{clause_scan_ac, clause_set_scan_ac};
 use crate::heuristics::clausesetfeatures::SpecFeatureCell;
 use crate::heuristics::hcb::{
-    hcb_clause_evaluate, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
-    hcb_single_weight_clause_select_with, hcb_standard_clause_select_with, AcHandling,
-    ExtInferenceType, GroundingStrategy, HcbSelectFunction, HeuristicParmsCell,
-    ParamodulationType as HcbParamodulationType, PrimEnumMode, SplitClassType, SplitType,
+    hcb_clause_evaluate_with_bank, hcb_clause_set_delete_bad_clauses, hcb_clause_set_reweight,
+    hcb_clause_set_reweight_with_bank, hcb_single_weight_clause_select_with,
+    hcb_standard_clause_select_with, AcHandling, ExtInferenceType, GroundingStrategy,
+    HcbSelectFunction, HeuristicParmsCell, ParamodulationType as HcbParamodulationType,
+    PrimEnumMode, SplitClassType, SplitType,
 };
 use crate::heuristics::hcbadmin::HcbAdmin;
 use crate::heuristics::heuristic_lookup::get_heuristic_handle_with_context;
@@ -934,12 +935,20 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
         get_heuristic_handle_with_context("Uniq", &mut control.hcbs, &mut control.wfcbs, context)?;
 
     {
-        let ProofControl { hcbs, wfcbs, .. } = control;
+        let ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = control;
         let uniq_hcb = hcbs
             .hcb(uniq_hcb_handle)
             .ok_or_else(|| unknown_heuristic_handle("Uniq"))?;
+        let ocb = ocb.as_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "ProofStateInit requires initialized proof-control ordering",
+            )
+        })?;
         let (terms, axioms) = state.terms_and_axioms_mut();
-        hcb_clause_set_reweight(uniq_hcb, wfcbs, terms, axioms);
+        hcb_clause_set_reweight_with_bank(uniq_hcb, wfcbs, ocb, terms, axioms)?;
     }
 
     let ordered_axioms = state.axioms().eval_order_cloned(0);
@@ -953,10 +962,18 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
     let mut watchlist_removed = 0;
 
     {
-        let ProofControl { hcbs, wfcbs, .. } = control;
+        let ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = control;
         let active_hcb = hcbs
             .hcb(active_hcb_handle)
             .ok_or_else(|| unknown_heuristic_handle("active"))?;
+        let ocb = ocb.as_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "ProofStateInit requires initialized proof-control ordering",
+            )
+        })?;
 
         for source in ordered_axioms {
             let mut new = source.copy_to_bank(state.terms_mut())?;
@@ -974,7 +991,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
             }
             watchlist_removed += watchlist_outcome.removed;
 
-            hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut new);
+            hcb_clause_evaluate_with_bank(active_hcb, wfcbs, ocb, state.terms_mut(), &mut new)?;
             if let Some((output, session)) = doc_context.as_mut() {
                 session.doc_clause_quote(output, state.terms(), 6, &mut new, Some("eval"), None)?;
             }
@@ -1479,12 +1496,20 @@ fn proof_state_reset_processed_impl<W: fmt::Write>(
     let mut reset = 0;
 
     {
-        let ProofControl { hcbs, wfcbs, .. } = control;
+        let ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = control;
         let active_hcb = hcbs
             .hcb(active_hcb_handle)
             .ok_or_else(|| unknown_heuristic_handle("active"))?;
-        let mut evaluate = |bank: &TermBank, clause: &mut Clause| {
-            hcb_clause_evaluate(active_hcb, wfcbs, bank, clause);
+        let ocb = ocb.as_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "ProofStateResetProcessed requires initialized proof-control ordering",
+            )
+        })?;
+        let mut evaluate = |bank: &mut TermBank, clause: &mut Clause| {
+            hcb_clause_evaluate_with_bank(active_hcb, wfcbs, ocb, bank, clause)
         };
 
         reset += proof_state_reset_processed_set_by(
@@ -1540,7 +1565,7 @@ fn proof_state_reset_processed_set_by<E, W: fmt::Write>(
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic>
 where
-    E: FnMut(&TermBank, &mut Clause),
+    E: FnMut(&mut TermBank, &mut Clause) -> Result<(), Diagnostic>,
 {
     let mut reset = 0;
     while !processed_set_by_slot(state, slot).is_empty() {
@@ -1569,7 +1594,7 @@ fn proof_state_reset_processed_clause<E, W: fmt::Write>(
     doc_context: &mut Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<(), Diagnostic>
 where
-    E: FnMut(&TermBank, &mut Clause),
+    E: FnMut(&mut TermBank, &mut Clause) -> Result<(), Diagnostic>,
 {
     if options.record_gc_selection {
         clause_push_derivation(&mut handle, DC_CNF_EVAL_GC, None, None);
@@ -1578,7 +1603,7 @@ where
         let (terms, archive) = state.terms_and_archive_mut();
         clause_archive(archive, handle, terms)?
     };
-    evaluate(state.terms(), &mut requeued);
+    evaluate(state.terms_mut(), &mut requeued)?;
     requeued.del_prop(CP_IS_ORIENTED);
     if let Some((output, session)) = doc_context.as_mut() {
         session.doc_clause_quote(
@@ -2420,6 +2445,41 @@ pub fn proof_control_clause_set_reweight(
     Ok(())
 }
 
+/// Re-evaluates every clause in a set with mutable term-bank ordering context.
+///
+/// This is the bank-backed counterpart of C `ClauseSetReweight` used by
+/// proof-control paths that may run higher-order ordering-aware WFCBs.
+///
+/// # Errors
+///
+/// Returns a diagnostic if proof-control has no active HCB, no initialized
+/// ordering control block, or if bank-backed ordering preparation fails.
+pub fn proof_control_clause_set_reweight_with_bank(
+    control: &mut ProofControl,
+    terms: &mut TermBank,
+    set: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    let active_hcb_handle = control.active_hcb.ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ClauseSetReweight requires initialized proof-control heuristic",
+        )
+    })?;
+    let ProofControl {
+        hcbs, wfcbs, ocb, ..
+    } = control;
+    let active_hcb = hcbs
+        .hcb(active_hcb_handle)
+        .ok_or_else(|| unknown_heuristic_handle("active"))?;
+    let ocb = ocb.as_mut().ok_or_else(|| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "ClauseSetReweight requires initialized proof-control ordering",
+        )
+    })?;
+    hcb_clause_set_reweight_with_bank(active_hcb, wfcbs, ocb, terms, set)
+}
+
 /// Applies C `ForwardContractSetReweight`.
 ///
 /// # Errors
@@ -2445,7 +2505,7 @@ pub fn proof_state_forward_contract_set_reweight(
     if empty.is_some() {
         return Ok(empty);
     }
-    proof_control_clause_set_reweight(control, state.terms(), set)?;
+    proof_control_clause_set_reweight_with_bank(control, state.terms_mut(), set)?;
     Ok(None)
 }
 
@@ -2465,6 +2525,22 @@ pub fn proof_control_clause_set_filter_reweigth(
     proof_control_clause_set_reweight(control, terms, set)
 }
 
+/// Bank-backed counterpart of [`proof_control_clause_set_filter_reweigth`].
+///
+/// # Errors
+///
+/// Returns a diagnostic if HCB reweighting or ordering is not initialized, or
+/// if bank-backed ordering preparation fails.
+pub fn proof_control_clause_set_filter_reweigth_with_bank(
+    control: &mut ProofControl,
+    terms: &mut TermBank,
+    set: &mut ClauseSet,
+    count_eliminated: &mut u64,
+) -> Result<(), Diagnostic> {
+    *count_eliminated += i64_to_u64_saturating(set.filter_trivial(terms));
+    proof_control_clause_set_reweight_with_bank(control, terms, set)
+}
+
 /// Correctly spelled alias for [`proof_control_clause_set_filter_reweigth`].
 ///
 /// # Errors
@@ -2477,6 +2553,22 @@ pub fn proof_control_clause_set_filter_reweight(
     count_eliminated: &mut u64,
 ) -> Result<(), Diagnostic> {
     proof_control_clause_set_filter_reweigth(control, terms, set, count_eliminated)
+}
+
+/// Correctly spelled alias for
+/// [`proof_control_clause_set_filter_reweigth_with_bank`].
+///
+/// # Errors
+///
+/// Returns a diagnostic if HCB reweighting or ordering is not initialized, or
+/// if bank-backed ordering preparation fails.
+pub fn proof_control_clause_set_filter_reweight_with_bank(
+    control: &mut ProofControl,
+    terms: &mut TermBank,
+    set: &mut ClauseSet,
+    count_eliminated: &mut u64,
+) -> Result<(), Diagnostic> {
+    proof_control_clause_set_filter_reweigth_with_bank(control, terms, set, count_eliminated)
 }
 
 /// Returns a Rust-side estimate for C `ProofStateStorage`.
@@ -2621,8 +2713,13 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
         let processed_count = state.statistics().processed_count;
         state.statistics_mut().forward_contract_base = processed_count;
         let mut unprocessed = std::mem::take(state.unprocessed_mut());
-        proof_control_clause_set_reweight(control, state.terms(), &mut unprocessed)?;
+        let reweight_result = proof_control_clause_set_reweight_with_bank(
+            control,
+            state.terms_mut(),
+            &mut unprocessed,
+        );
         *state.unprocessed_mut() = unprocessed;
+        reweight_result?;
     }
 
     if current_storage > control.heuristic_parms().delete_bad_limit {
@@ -7440,10 +7537,18 @@ pub fn proof_state_eval_clause_set(
     })?;
 
     {
-        let ProofControl { hcbs, wfcbs, .. } = control;
+        let ProofControl {
+            hcbs, wfcbs, ocb, ..
+        } = control;
         let active_hcb = hcbs
             .hcb(active_hcb_handle)
             .ok_or_else(|| unknown_heuristic_handle("active"))?;
+        let ocb = ocb.as_mut().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::OTHER_ERROR,
+                "eval_clause_set requires initialized proof-control ordering",
+            )
+        })?;
 
         for _ in 0..pending {
             let Some(mut clause) = state.eval_store_mut().extract_first() else {
@@ -7452,7 +7557,17 @@ pub fn proof_state_eval_clause_set(
                     "eval_clause_set eval_store changed while evaluating clauses",
                 ));
             };
-            hcb_clause_evaluate(active_hcb, wfcbs, state.terms(), &mut clause);
+            let evaluation = hcb_clause_evaluate_with_bank(
+                active_hcb,
+                wfcbs,
+                ocb,
+                state.terms_mut(),
+                &mut clause,
+            );
+            if let Err(err) = evaluation {
+                state.eval_store_mut().insert(clause);
+                return Err(err);
+            }
             state.eval_store_mut().insert(clause);
         }
     }
@@ -7827,9 +7942,9 @@ mod tests {
     use super::{
         apply_terms, close_with_db_var, compute_ext_eq_fact, compute_ext_eq_res, compute_ext_sup,
         do_literal_selection, do_literal_selection_with_bank, do_literal_selection_with_selector,
-        proof_control_alloc, proof_control_clause_set_filter_reweigth,
-        proof_control_clause_set_reweight, proof_control_init, proof_control_init_heuristics,
-        proof_control_reset_sat_solver, proof_state_check_ac_status,
+        proof_control_alloc, proof_control_clause_set_filter_reweigth_with_bank,
+        proof_control_clause_set_reweight_with_bank, proof_control_init,
+        proof_control_init_heuristics, proof_control_reset_sat_solver, proof_state_check_ac_status,
         proof_state_check_ac_status_with_output, proof_state_check_watchlist_with_docs,
         proof_state_check_watchlist_with_output, proof_state_cleanup_unprocessed_clauses,
         proof_state_cleanup_unprocessed_clauses_with, proof_state_eval_clause_set,
@@ -8308,7 +8423,7 @@ mod tests {
     ) {
         state.unprocessed_mut().insert(clause);
         let mut unprocessed = std::mem::take(state.unprocessed_mut());
-        proof_control_clause_set_reweight(control, state.terms(), &mut unprocessed)
+        proof_control_clause_set_reweight_with_bank(control, state.terms_mut(), &mut unprocessed)
             .unwrap_or_else(|err| panic!("{err}"));
         *state.unprocessed_mut() = unprocessed;
     }
@@ -9049,6 +9164,7 @@ mod tests {
         clause.set_prop(CP_INPUT_FORMULA);
         state.processed_pos_rules_mut().insert(clause);
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
         init_fifo_hcb(&mut control, &state, "ResetProcessedDocTest");
         let mut session =
             ProofDocSession::new(ProofDocOutputFormat::Pcl, 6, ProblemType::FirstOrder);
@@ -9100,6 +9216,7 @@ mod tests {
             .query_prop(CP_IS_GLOBAL_INDEXED));
 
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
         init_fifo_hcb(&mut control, &state, "ResetProcessedGlobalIdxTest");
         let reset =
             proof_state_reset_processed_with_global_indices(&mut state, &mut control, &mut indices)
@@ -10335,12 +10452,13 @@ mod tests {
         set.insert(trivial);
         set.insert(survivor);
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
         init_fifo_hcb(&mut control, &state, "FilterReweightTest");
         let mut eliminated = 0;
 
-        proof_control_clause_set_filter_reweigth(
+        proof_control_clause_set_filter_reweigth_with_bank(
             &mut control,
-            state.terms(),
+            state.terms_mut(),
             &mut set,
             &mut eliminated,
         )
@@ -10350,6 +10468,67 @@ mod tests {
         assert_eq!(set.members(), 1);
         let survivor = set.find_by_id(4_098).unwrap();
         assert!(survivor.evaluations().is_some());
+    }
+
+    #[test]
+    fn proof_control_clause_set_reweight_with_bank_handles_lambda_order_refined_weight() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = {
+            let terms = state.terms_mut();
+            let binder_type = terms.signature().type_bank().bool_type();
+            let db0 = terms.request_db_var(&binder_type, 0);
+            let lambda =
+                close_with_db_var(terms, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
+            let predicate = unary_predicate_const(terms, "pc_reweight_lambda_pred");
+            let arg = typed_const(terms, "pc_reweight_lambda_arg");
+            let atom = apply_terms(terms, &predicate, std::slice::from_ref(&arg))
+                .unwrap_or_else(|err| panic!("{err}"));
+            let applied = apply_terms(terms, &lambda, std::slice::from_ref(&atom))
+                .unwrap_or_else(|err| panic!("{err}"));
+            let truth = terms.true_term().clone();
+            let mut clause = Clause::alloc(EqnList::from_vec(vec![literal(
+                terms, &applied, &truth, true,
+            )]));
+            clause.set_ident(4_099);
+            clause
+        };
+        let mut set = ClauseSet::new();
+        set.insert(clause);
+        let mut control = proof_control_alloc();
+        control.set_ocb(OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            state.terms().signature(),
+            HoOrderKind::LambdaOrder,
+        ));
+        let mut params = HeuristicParmsCell {
+            heuristic_name: "LambdaRefinedReweightTest".to_owned(),
+            ..HeuristicParmsCell::default()
+        };
+        let mut hcb_defs = vec![
+            "LambdaRefinedReweightTest=(1*Refinedweight(ConstPrio,2,1,1.0,1.0,1.0))".to_owned(),
+        ];
+        proof_control_init_heuristics(
+            &mut control,
+            state.axioms(),
+            &mut params,
+            &FvIndexParams::default(),
+            &[],
+            &mut hcb_defs,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        proof_control_clause_set_reweight_with_bank(&mut control, state.terms_mut(), &mut set)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let evaluated = set.find_by_id(4_099).unwrap();
+        let evaluations = evaluated
+            .evaluations()
+            .expect("banked proof-control reweight attaches evaluations");
+        assert_eq!(evaluations.eval_no(), 1);
+        assert!(evaluated.literals().as_slice()[0].query_prop(EP_MAX_IS_UP_TO_DATE));
     }
 
     #[test]
@@ -10478,11 +10657,16 @@ mod tests {
         state.unprocessed_mut().insert(second);
 
         let mut control = proof_control_alloc();
+        control.set_ocb(kbo_ocb(state.terms()));
         init_fifo_hcb(&mut control, &state, "CleanupDeleteBadTest");
         {
             let mut unprocessed = std::mem::take(state.unprocessed_mut());
-            proof_control_clause_set_reweight(&mut control, state.terms(), &mut unprocessed)
-                .unwrap_or_else(|err| panic!("{err}"));
+            proof_control_clause_set_reweight_with_bank(
+                &mut control,
+                state.terms_mut(),
+                &mut unprocessed,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
             *state.unprocessed_mut() = unprocessed;
         }
         control.heuristic_parms_mut().delete_bad_limit = 0;

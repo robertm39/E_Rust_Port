@@ -21700,7 +21700,7 @@ mod tests {
         assert_eq!(status, ErrorCode::NO_ERROR.exit_status());
         assert!(printed.contains("% CNFization successful!\n"));
         assert!(printed.contains("esk1_0=a <- .\n"));
-        assert!(printed.contains("esk1_0=b <- .\n"));
+        assert!(printed.contains("b=esk1_0 <- .\n"));
         assert!(!printed.contains("$let"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
