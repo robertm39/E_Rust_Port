@@ -126,9 +126,11 @@ Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 
 ### Compatibility Notes
 
+- `cte_ho_csu.h` encodes constraint progress in an unsigned word: low two bits are the state (`CONSTRAINT_STATE`), the remaining bits are the counter (`CONSTRAINT_COUNTER`), and `BUILD_CONSTR` simply ORs the supplied state into the shifted counter. Rust now exposes the same state tags, limits aliases, move-kind constants, and bit-packing helpers in `src/terms/ho_csu.rs`.
 - `InitUnifLimits` stores a file-static `HeuristicParms_p`; the CSU iterator later reads `max_unif_steps`, `fixpoint_oracle`, `pattern_oracle`, `max_unifiers`, and `unif_mode`, while binding generation uses the projection/imitation/identification/elimination limits from the same parameter cell. Rust currently exposes a safe snapshot of those fields and updates it from proof-control initialization.
 
 ### Change-Later Observations
 
+- `BUILD_CONSTR(c, s)` does not mask `s` to the low two state bits, so an invalid state value can also change the decoded counter. Rust preserves the macro shape for compatibility; a cleaned CSU API should make state construction typed and reject out-of-range states once reference behavior is locked down.
 - The C global stores a pointer, so later mutation of the same `HeuristicParmsCell` would be observable by CSU enumeration. Rust intentionally stores a snapshot until the full CSU iterator exists; revisit this if mutable post-init heuristic parameters become part of the Rust proof-search lifecycle.
 <!-- END MANUAL REVIEW: c_source_docs -->

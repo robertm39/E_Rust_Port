@@ -3,6 +3,36 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 static HO_CSU_PARAMS: RwLock<Option<HoCsuParams>> = RwLock::new(None);
 
+pub type StateTag = u64;
+pub type Limits = u64;
+
+pub const INIT_TAG: StateTag = 0;
+pub const RIGID_PROCESSED_TAG: StateTag = 1;
+pub const SOLVED_BY_ORACLE_TAG: StateTag = 2;
+pub const DECOMPOSED_VAR: StateTag = 3;
+
+pub const BT_STEP_SIZE: usize = 4;
+pub const BURY_KIND: i32 = 0;
+pub const STORE_KIND: i32 = 1;
+
+/// Mirrors C `CONSTRAINT_STATE(c)`.
+#[must_use]
+pub const fn constraint_state(constraint: StateTag) -> StateTag {
+    constraint & 3
+}
+
+/// Mirrors C `CONSTRAINT_COUNTER(c)`.
+#[must_use]
+pub const fn constraint_counter(constraint: StateTag) -> StateTag {
+    constraint >> 2
+}
+
+/// Mirrors C `BUILD_CONSTR(c, s)`.
+#[must_use]
+pub const fn build_constraint(counter: StateTag, state: StateTag) -> StateTag {
+    (counter << 2) | state
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HoCsuParams {
     pub func_proj_limit: i32,
@@ -58,8 +88,38 @@ fn write_params() -> RwLockWriteGuard<'static, Option<HoCsuParams>> {
 
 #[cfg(test)]
 mod tests {
-    use super::HoCsuParams;
+    use super::{
+        build_constraint, constraint_counter, constraint_state, HoCsuParams, BT_STEP_SIZE,
+        BURY_KIND, DECOMPOSED_VAR, INIT_TAG, RIGID_PROCESSED_TAG, SOLVED_BY_ORACLE_TAG, STORE_KIND,
+    };
     use crate::heuristics::hcb::{HeuristicParmsCell, UnifMode};
+
+    #[test]
+    fn state_tag_values_match_c_header() {
+        assert_eq!(INIT_TAG, 0);
+        assert_eq!(RIGID_PROCESSED_TAG, 1);
+        assert_eq!(SOLVED_BY_ORACLE_TAG, 2);
+        assert_eq!(DECOMPOSED_VAR, 3);
+        assert_eq!(BT_STEP_SIZE, 4);
+        assert_eq!(BURY_KIND, 0);
+        assert_eq!(STORE_KIND, 1);
+    }
+
+    #[test]
+    fn constraint_bit_packing_matches_c_macros() {
+        let encoded = build_constraint(17, DECOMPOSED_VAR);
+        assert_eq!(encoded, (17 << 2) | 3);
+        assert_eq!(constraint_state(encoded), DECOMPOSED_VAR);
+        assert_eq!(constraint_counter(encoded), 17);
+    }
+
+    #[test]
+    fn constraint_build_does_not_mask_state_like_c_macro() {
+        let encoded = build_constraint(0, 4);
+        assert_eq!(encoded, 4);
+        assert_eq!(constraint_state(encoded), INIT_TAG);
+        assert_eq!(constraint_counter(encoded), 1);
+    }
 
     #[test]
     fn ho_csu_params_snapshot_keeps_fields_read_by_c_csu_helpers() {
