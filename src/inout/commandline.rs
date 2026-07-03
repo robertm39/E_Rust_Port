@@ -471,6 +471,9 @@ fn parse_c_double(argument: &str) -> Option<f64> {
     if let Some(value) = parse_c_named_double(trimmed) {
         return Some(value);
     }
+    if let Some(value) = parse_c_hex_double(trimmed) {
+        return Some(value);
+    }
 
     let value = trimmed.parse::<f64>().ok()?;
     if value.is_infinite() && !is_named_infinite(trimmed) {
@@ -480,11 +483,7 @@ fn parse_c_double(argument: &str) -> Option<f64> {
 }
 
 fn parse_c_named_double(argument: &str) -> Option<f64> {
-    let (negative, unsigned) = match argument.as_bytes().first() {
-        Some(b'+') => (false, &argument[1..]),
-        Some(b'-') => (true, &argument[1..]),
-        _ => (false, argument),
-    };
+    let (negative, unsigned) = split_c_float_sign(argument);
     let lower = unsigned.to_ascii_lowercase();
 
     let value = if matches!(lower.as_str(), "inf" | "infinity") {
@@ -496,6 +495,107 @@ fn parse_c_named_double(argument: &str) -> Option<f64> {
     };
 
     Some(if negative { -value } else { value })
+}
+
+fn parse_c_hex_double(argument: &str) -> Option<f64> {
+    let (negative, unsigned) = split_c_float_sign(argument);
+    let rest = unsigned
+        .strip_prefix("0x")
+        .or_else(|| unsigned.strip_prefix("0X"))?;
+    let bytes = rest.as_bytes();
+    let mut index = 0_usize;
+    let mut significand = 0.0_f64;
+    let mut hex_digits = 0_usize;
+    let mut fractional_digits = 0_usize;
+    let mut seen_dot = false;
+
+    while let Some(byte) = bytes.get(index).copied() {
+        if let Some(digit) = hex_digit_value(byte) {
+            significand = significand.mul_add(16.0, f64::from(digit));
+            hex_digits += 1;
+            if seen_dot {
+                fractional_digits += 1;
+            }
+            index += 1;
+        } else if byte == b'.' && !seen_dot {
+            seen_dot = true;
+            index += 1;
+        } else {
+            break;
+        }
+    }
+
+    let has_exponent_marker = bytes
+        .get(index)
+        .copied()
+        .is_some_and(|byte| matches!(byte, b'p' | b'P'));
+    if hex_digits == 0 || !has_exponent_marker || !significand.is_finite() {
+        return None;
+    }
+    index += 1;
+
+    let (exponent_negative, exponent, next_index) = parse_decimal_exponent(&rest[index..])?;
+    index += next_index;
+    if index != bytes.len() {
+        return None;
+    }
+
+    let signed_exponent = if exponent_negative {
+        exponent.checked_neg()?
+    } else {
+        exponent
+    };
+    let fractional_offset = i64::try_from(fractional_digits).ok()?.checked_mul(4)?;
+    let binary_exponent = signed_exponent.checked_sub(fractional_offset)?;
+    if significand == 0.0 {
+        return Some(if negative { -0.0 } else { 0.0 });
+    }
+    let binary_exponent = i32::try_from(binary_exponent).ok()?;
+    let value = significand * 2.0_f64.powi(binary_exponent);
+    if value.is_infinite() {
+        return None;
+    }
+
+    Some(if negative { -value } else { value })
+}
+
+fn split_c_float_sign(argument: &str) -> (bool, &str) {
+    match argument.as_bytes().first() {
+        Some(b'+') => (false, &argument[1..]),
+        Some(b'-') => (true, &argument[1..]),
+        _ => (false, argument),
+    }
+}
+
+fn hex_digit_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn parse_decimal_exponent(argument: &str) -> Option<(bool, i64, usize)> {
+    let bytes = argument.as_bytes();
+    let (negative, mut index) = match bytes.first() {
+        Some(b'+') => (false, 1_usize),
+        Some(b'-') => (true, 1_usize),
+        _ => (false, 0_usize),
+    };
+    let mut value = 0_i64;
+    let digit_start = index;
+
+    while let Some(byte @ b'0'..=b'9') = bytes.get(index).copied() {
+        value = value.checked_mul(10)?.checked_add(i64::from(byte - b'0'))?;
+        index += 1;
+    }
+
+    if index == digit_start {
+        None
+    } else {
+        Some((negative, value, index))
+    }
 }
 
 fn is_named_infinite(argument: &str) -> bool {
@@ -724,6 +824,32 @@ mod tests {
         assert!(get_float_arg(option, "nan").unwrap().is_nan());
         assert!(get_float_arg(option, "NAN(payload_1)").unwrap().is_nan());
         assert!(get_float_arg(option, "nan(payload-)").is_err());
+        assert_eq!(
+            get_float_arg(option, "0x1p2").unwrap().to_bits(),
+            4.0_f64.to_bits()
+        );
+        assert_eq!(
+            get_float_arg(option, "0x1.8p+2").unwrap().to_bits(),
+            6.0_f64.to_bits()
+        );
+        assert_eq!(
+            get_float_arg(option, "-0X1p-1").unwrap().to_bits(),
+            (-0.5_f64).to_bits()
+        );
+        assert_eq!(
+            get_float_arg(option, "0x.8p1").unwrap().to_bits(),
+            1.0_f64.to_bits()
+        );
+        assert_eq!(
+            get_float_arg(option, "0x0p1024").unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
+        assert_eq!(
+            get_float_arg(option, "-0x0p1024").unwrap().to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert!(get_float_arg(option, "0x1.2").is_err());
+        assert!(get_float_arg(option, "0x1p1024").is_err());
     }
 
     #[test]
