@@ -74,10 +74,16 @@ Source files reviewed: `SIMPLE_APPS/ex_commandline.c`.
 - Small application code. Useful as integration examples for command-line and term/formula APIs.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `src/simple_apps/ex_commandline.rs` and the `ex_commandline` Cargo binary now port the standalone CLIB command-line demo: C-shaped help text, required integer and optional floating-point example options, underscore long-option names, default stdin marker insertion, remaining-argument printing, and option-output ordering.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- This file is a parser demonstration, not a prover feature. Keep the executable visible while pursuing drop-in source-tree coverage, but decide later whether release packaging should install example binaries.
+- The C option table uses underscore long-option names and gives `--int_example` a default string even though the option requires an argument. Rust preserves both for compatibility; a cleaned example would likely use hyphenated names and remove the unused default.
 <!-- END MANUAL REVIEW: c_source_docs -->

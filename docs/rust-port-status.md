@@ -600,6 +600,33 @@ Change-later notes:
 - C parses `-r`/`--print-reference-number` into the global `TBPrintInternalInfo`, then `main` immediately sets `TBPrintInternalInfo = true` before printing. Rust validates the option but preserves the observable forced-on comments; a cleaned CLI should either honor the option or remove it.
 - C's `TBPrintBankInOrder` builds a temporary numeric tree by traversing all term-store hash buckets before printing in ascending `entry_no`. Rust sorts the collected bank terms directly, which preserves the observable order; revisit only if future profiling needs to model the temporary allocation shape.
 
+## ex_commandline Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/simple_apps/ex_commandline.rs`
+- `src/bin/ex_commandline.rs`
+
+C source references:
+
+- `eprover/SIMPLE_APPS/ex_commandline.c`
+- `eprover/INOUT/cio_commandline.c`
+- `eprover/INOUT/cio_commandline.h`
+
+Implemented:
+
+- Standalone `ex_commandline` demo binary integration, including C-shaped help text, underscore long-option spellings, required integer example output, optional floating-point example output with the default `3.1415` and `%f`-style six-decimal rendering, remaining-argument printing, default stdin marker insertion through `-`, and unit coverage for help, defaults, option output ordering, and numeric validation.
+
+Pending:
+
+- Direct byte-for-byte comparison against a built C `ex_commandline` executable remains pending for the full help stream and platform-specific command-line parser diagnostics.
+
+Change-later notes:
+
+- `ex_commandline.c` is a CLIB command-line parser example rather than a theorem-prover user tool. Keep it for drop-in source-tree coverage, but a future installed binary set may choose to omit or hide it once compatibility requirements are explicit.
+- The C option names use underscores (`--int_example`, `--float_example`) and the integer option has a default string despite being declared as required. Rust preserves both; a cleaned CLI would probably use hyphenated names and remove the dead default.
+
 ## epclextract Executable
 
 Rust files:

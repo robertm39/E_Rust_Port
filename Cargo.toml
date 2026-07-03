@@ -30,6 +30,10 @@ name = "term2dag"
 path = "src/bin/term2dag.rs"
 
 [[bin]]
+name = "ex_commandline"
+path = "src/bin/ex_commandline.rs"
+
+[[bin]]
 name = "epclextract"
 path = "src/bin/epclextract.rs"
 
