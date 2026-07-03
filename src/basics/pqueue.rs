@@ -186,15 +186,19 @@ impl<T> PQueue<T> {
     }
 
     #[must_use]
+    /// Advance an absolute queue slot with the C `PQueueIncIndex` arithmetic.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the queue size cannot be represented as a C-shaped index or
+    /// if advancing `index` would overflow the C-shaped index type.
     pub fn inc_index(&self, index: PQueueIndex) -> PQueueIndex {
-        let Some(index) = checked_index(index, self.size) else {
-            return -1;
-        };
-        let next = (index + 1) % self.size;
-        if next == self.head {
+        let size = PQueueIndex::try_from(self.size).expect("PQueue size fits C long");
+        let next = index.checked_add(1).expect("PQueueIncIndex index overflow") % size;
+        if next == self.head_index() {
             -1
         } else {
-            usize_to_queue_index(next)
+            next
         }
     }
 
@@ -430,6 +434,19 @@ mod tests {
         }
 
         assert_eq!(values, vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn increment_index_uses_c_raw_modulo_shape() {
+        let mut queue = PQueue::with_size(4);
+        queue.store(10);
+        queue.store(20);
+
+        assert_eq!(queue.head_index(), 2);
+        assert_eq!(queue.inc_index(-1), 0);
+        assert_eq!(queue.inc_index(1), -1);
+        assert_eq!(queue.inc_index(3), 0);
+        assert_eq!(queue.inc_index(4), 1);
     }
 
     #[test]

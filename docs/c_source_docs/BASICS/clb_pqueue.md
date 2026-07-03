@@ -141,6 +141,7 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 - `PQueueGetNext` and `PQueueGetLast` return an `IntOrP` by value and only move `tail`/`head`; they do not clear the backing ring slot. `PQueueReset` likewise only rewinds `head` and `tail`. Absolute-slot access through `PQueueElement` can still observe old payload words after extraction or reset, and Rust preserves this compatibility shape by cloning/copying extracted payloads.
 - `PQueueGetNext`, `PQueueGetLast`, `PQueueLook`, and `PQueueLookLast` assert that the queue is non-empty before accessing the backing ring. Rust preserves these as explicit panics on the C-shaped methods.
 - `PQueueElement` is raw absolute-slot access (`queue->queue[index]`) with no optional result. Valid callers supply an allocated slot that has been initialized by earlier store/bury activity; out-of-range or never-initialized slots are invariant violations in the Rust compatibility surface.
+- `PQueueIncIndex` applies raw C modulo arithmetic to the supplied absolute slot and only returns `-1` when the resulting next slot equals `head`. Rust preserves that modulo shape for representable indices instead of treating invalid raw indices as checked lookup failures.
 
 ### Porting Focus
 
@@ -152,5 +153,5 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 ### Change Later
 
 - Empty queue extraction/look operations are assertion failures in the C API. The Rust compatibility surface now panics the same way, but higher-level Rust-only callers that naturally model optional work queues should use a separate `try_` API rather than weakening the C-shaped methods.
-- Absolute-slot access exposes stale payloads after extraction/reset and has raw-index preconditions. A cleaned queue API should hide absolute slots behind iteration or return checked `Option` values outside the compatibility layer.
+- Absolute-slot access exposes stale payloads after extraction/reset, and `PQueueIncIndex` can alias out-of-range raw indices through modulo arithmetic. A cleaned queue API should hide absolute slots behind iteration or return checked `Option` values outside the compatibility layer.
 <!-- END MANUAL REVIEW: c_source_docs -->
