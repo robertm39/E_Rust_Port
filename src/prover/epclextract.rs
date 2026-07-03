@@ -2,6 +2,7 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -377,7 +378,10 @@ fn full_parse_options() -> PclStepParseOptions {
     PclStepParseOptions {
         problem_type: ProblemType::FirstOrder,
         support_shell_pcl: true,
-        ..PclStepParseOptions::default()
+        clause_parse_options: ClauseParseOptions {
+            clauses_have_local_variables: false,
+            ..ClauseParseOptions::default()
+        },
     }
 }
 
@@ -556,7 +560,7 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
+    use super::{full_parse_options, print_help, run, OUTPUT_CLOSE_ERROR, PROGRAM_NAME};
     use crate::basics::error::ErrorCode;
     use crate::prover::version::VERSION;
     use crate::test_support::global_state_lock;
@@ -620,6 +624,15 @@ mod tests {
         assert_eq!(status, 0);
         assert_eq!(version, format!("{PROGRAM_NAME} {VERSION}\n"));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn full_parse_options_disable_local_clause_variables_like_c() {
+        assert!(
+            !full_parse_options()
+                .clause_parse_options
+                .clauses_have_local_variables
+        );
     }
 
     #[test]
