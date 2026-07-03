@@ -10,6 +10,7 @@ use crate::heuristics::to_params::{
 use crate::heuristics::wfcbadmin::WfcbAdmin;
 use crate::inout::basicparser::{parse_bool, parse_int, parse_int_limited, parse_int_max};
 use crate::inout::scanner::{describe_token, token_pos_rep, Scanner, TokenType};
+use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::RewriteLevel;
 
@@ -882,6 +883,41 @@ pub fn hcb_clause_evaluate_into<Data>(
     }
 }
 
+/// Evaluates a mutable clause through every WFCB in `hcb` with explicit
+/// owner-bank ordering context.
+///
+/// # Errors
+///
+/// Returns a diagnostic from bank-backed ordering preparation.
+///
+/// # Panics
+///
+/// Panics under the same handle and evaluation-width conditions as
+/// [`hcb_clause_evaluate_into`].
+pub fn hcb_clause_evaluate_into_with_bank<Data>(
+    hcb: &HcbCell<Data>,
+    admin: &mut WfcbAdmin,
+    evaluations: &mut EvalCell,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<(), Diagnostic> {
+    assert_eq!(
+        evaluations.eval_no(),
+        hcb.wfcb_no(),
+        "evaluation width must match HCB WFCB count"
+    );
+
+    let empty = clause.is_sem_false();
+    for (pos, wfcb_handle) in hcb.wfcb_list.iter().copied().enumerate() {
+        let wfcb = admin
+            .wfcb_mut(wfcb_handle)
+            .unwrap_or_else(|| panic!("unknown WFCB handle {wfcb_handle}"));
+        wfcb.add_evaluation_with_bank(evaluations, ocb, bank, clause, pos, empty)?;
+    }
+    Ok(())
+}
+
 /// Evaluates a clause through every WFCB in `hcb` and stores the resulting
 /// evaluation list on the clause.
 ///
@@ -904,6 +940,34 @@ pub fn hcb_clause_evaluate<Data>(
     clause.add_eval_cell(evaluations);
 }
 
+/// Evaluates a clause through every WFCB in `hcb` with mutable owner-bank
+/// context and stores the resulting evaluation list on the clause.
+///
+/// # Errors
+///
+/// Returns a diagnostic from bank-backed ordering preparation.
+///
+/// # Panics
+///
+/// Panics if `clause` already has evaluations or if an HCB WFCB handle does
+/// not exist in `admin`.
+pub fn hcb_clause_evaluate_with_bank<Data>(
+    hcb: &HcbCell<Data>,
+    admin: &mut WfcbAdmin,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<(), Diagnostic> {
+    assert!(
+        clause.evaluations().is_none(),
+        "clause must not already have evaluations"
+    );
+    let mut evaluations = evals_alloc(hcb.wfcb_no());
+    hcb_clause_evaluate_into_with_bank(hcb, admin, &mut evaluations, ocb, bank, clause)?;
+    clause.add_eval_cell(evaluations);
+    Ok(())
+}
+
 pub fn hcb_clause_set_reweight<Data>(
     hcb: &HcbCell<Data>,
     admin: &mut WfcbAdmin,
@@ -915,6 +979,26 @@ pub fn hcb_clause_set_reweight<Data>(
         hcb_clause_evaluate(hcb, admin, bank, clause);
     }
     set.rebuild_eval_indices();
+}
+
+/// Re-evaluates every clause in a set with mutable owner-bank context.
+///
+/// # Errors
+///
+/// Returns a diagnostic from bank-backed ordering preparation.
+pub fn hcb_clause_set_reweight_with_bank<Data>(
+    hcb: &HcbCell<Data>,
+    admin: &mut WfcbAdmin,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    set: &mut ClauseSet,
+) -> Result<(), Diagnostic> {
+    set.remove_evaluations();
+    for clause in set.iter_mut() {
+        hcb_clause_evaluate_with_bank(hcb, admin, ocb, bank, clause)?;
+    }
+    set.rebuild_eval_indices();
+    Ok(())
 }
 
 /// Returns the current evaluation index and advances the standard-selection
@@ -2429,11 +2513,11 @@ pub fn str_to_unif_mode(value: &str) -> Option<UnifMode> {
 mod tests {
     use super::{
         bool_name, ext_inference_type_name_raw, hcb_add_wfcb, hcb_alloc, hcb_clause_evaluate,
-        hcb_clause_evaluate_into, hcb_clause_set_del_prop, hcb_clause_set_delete_bad_clauses,
-        hcb_single_weight_clause_select_with, hcb_standard_clause_select,
-        hcb_standard_clause_select_with, hcb_standard_selection_eval_and_advance,
-        heuristic_parms_alloc, heuristic_parms_initialize, heuristic_parms_parse,
-        heuristic_parms_parse_into, heuristic_parms_parse_into_report,
+        hcb_clause_evaluate_into, hcb_clause_evaluate_with_bank, hcb_clause_set_del_prop,
+        hcb_clause_set_delete_bad_clauses, hcb_single_weight_clause_select_with,
+        hcb_standard_clause_select, hcb_standard_clause_select_with,
+        hcb_standard_selection_eval_and_advance, heuristic_parms_alloc, heuristic_parms_initialize,
+        heuristic_parms_parse, heuristic_parms_parse_into, heuristic_parms_parse_into_report,
         heuristic_parms_print_string, prim_enum_mode_name_raw, str_to_ext_inference_type,
         str_to_prim_enum_mode, str_to_prim_enum_mode_raw, str_to_unif_mode, str_to_unif_mode_raw,
         unif_mode_name_raw, AcHandling, ExtInferenceType, GroundingStrategy, HcbCell,
@@ -2447,14 +2531,16 @@ mod tests {
         MAX_PM_INDEX_NAME_LEN, NO_ELIM_LEIBNIZ, NO_EXT_SUP,
     };
     use crate::basics::error::ErrorCode;
+    use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_DELETE_CLAUSE, CP_INITIAL};
+    use crate::clauses::clause_props::{CP_DELETE_CLAUSE, CP_INITIAL, CP_IS_ORIENTED};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::neweval::{evals_alloc, EvalPriority, PRIO_BEST, PRIO_NORMAL};
     use crate::heuristics::to_params::{OrderParmsCell, TermOrdering};
-    use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
+    use crate::heuristics::wfcb::{wfcb_alloc, wfcb_alloc_with_bank, BoxedWfcb};
     use crate::heuristics::wfcbadmin::WfcbAdmin;
     use crate::inout::scanner::Scanner;
+    use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::Signature;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::RewriteLevel;
@@ -3280,6 +3366,26 @@ mod tests {
     }
 
     #[test]
+    fn hcb_clause_evaluate_with_bank_uses_banked_wfcb_dispatch() {
+        let mut admin = WfcbAdmin::new();
+        let first = admin.add_wfcb("first", boxed_hcb_test_wfcb_with_bank(4.0));
+        let mut hcb = hcb_alloc();
+        hcb_add_wfcb(&mut hcb, first, 1);
+        let mut bank = hcb_test_bank();
+        let mut ocb = hcb_empty_ocb(&bank);
+        let mut clause = Clause::empty();
+
+        hcb_clause_evaluate_with_bank(&hcb, &mut admin, &mut ocb, &mut bank, &mut clause)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let evaluations = clause.evaluations().expect("HCB attaches evaluations");
+        assert_eq!(evaluations.eval_no(), 1);
+        assert_eq!(evaluations.eval(0).heuristic().to_bits(), 6.0_f32.to_bits());
+        assert_eq!(evaluations.eval(0).priority(), PRIO_BEST);
+        assert!(clause.query_prop(CP_IS_ORIENTED));
+    }
+
+    #[test]
     #[should_panic(expected = "clause must not already have evaluations")]
     fn hcb_clause_evaluate_rejects_existing_clause_evaluations() {
         let mut admin = WfcbAdmin::new();
@@ -3325,6 +3431,20 @@ mod tests {
         data.map_or(0.0, |data| data.weight)
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "test callback must match the banked WFCB signature"
+    )]
+    fn hcb_test_eval_with_bank(
+        data: Option<&mut HcbEvalData>,
+        _ocb: &mut OrderControlBlock,
+        _bank: &mut TermBank,
+        clause: &mut Clause,
+    ) -> Result<f64, crate::basics::error::Diagnostic> {
+        clause.set_prop(CP_IS_ORIENTED);
+        Ok(data.map_or(0.0, |data| data.weight + 2.0))
+    }
+
     fn hcb_test_priority(_bank: &TermBank, _clause: &Clause) -> EvalPriority {
         PRIO_NORMAL + 3
     }
@@ -3336,6 +3456,25 @@ mod tests {
 
     fn hcb_test_bank() -> TermBank {
         TermBank::new(Signature::new(TypeBank::new())).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn hcb_empty_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Empty,
+            false,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn boxed_hcb_test_wfcb_with_bank(weight: f64) -> BoxedWfcb {
+        Box::new(wfcb_alloc_with_bank(
+            hcb_test_eval,
+            hcb_test_eval_with_bank,
+            hcb_test_priority,
+            hcb_test_exit,
+            Some(HcbEvalData { weight }),
+        ))
     }
 
     fn assert_substrings_in_order(text: &str, needles: &[&str]) {

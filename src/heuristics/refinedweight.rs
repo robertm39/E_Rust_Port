@@ -1,7 +1,7 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -100,8 +100,9 @@ pub fn clause_refined_weight_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<RefinedWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         clause_refined_weight_wfcb_compute,
+        clause_refined_weight_wfcb_compute_with_bank,
         prio_fun,
         refined_weight_exit,
         Some(clause_refined_weight_init(
@@ -125,8 +126,9 @@ pub fn clause_refined_weight2_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<RefinedWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         clause_refined_weight2_wfcb_compute,
+        clause_refined_weight2_wfcb_compute_with_bank,
         prio_fun,
         refined_weight_exit,
         Some(clause_refined_weight_init(
@@ -240,6 +242,22 @@ pub fn clause_refined_weight_compute_with_ocb(
     clause_refined_weight_compute(param, bank, clause)
 }
 
+/// Computes C `ClauseRefinedWeightCompute` with bank-backed ordering
+/// preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn clause_refined_weight_compute_with_bank(
+    param: &RefinedWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(clause_refined_weight_compute(param, bank, clause))
+}
+
 #[must_use]
 pub fn clause_refined_weight2_compute(
     param: &RefinedWeightParam,
@@ -274,6 +292,22 @@ pub fn clause_refined_weight2_compute_with_ocb(
     clause_refined_weight2_compute(param, bank, clause)
 }
 
+/// Computes C `ClauseRefinedWeight2Compute` with bank-backed ordering
+/// preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn clause_refined_weight2_compute_with_bank(
+    param: &RefinedWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(clause_refined_weight2_compute(param, bank, clause))
+}
+
 fn clause_refined_weight_wfcb_compute(
     data: Option<&mut RefinedWeightParam>,
     bank: &TermBank,
@@ -285,6 +319,18 @@ fn clause_refined_weight_wfcb_compute(
     }
 }
 
+fn clause_refined_weight_wfcb_compute_with_bank(
+    data: Option<&mut RefinedWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    match data {
+        Some(data) => clause_refined_weight_compute_with_bank(data, ocb, bank, clause),
+        None => panic!("Refinedweight WFCB requires initialized weight parameters"),
+    }
+}
+
 fn clause_refined_weight2_wfcb_compute(
     data: Option<&mut RefinedWeightParam>,
     bank: &TermBank,
@@ -292,6 +338,18 @@ fn clause_refined_weight2_wfcb_compute(
 ) -> f64 {
     match data {
         Some(data) => clause_refined_weight2_compute(data, bank, clause),
+        None => panic!("Refinedweight2 WFCB requires initialized weight parameters"),
+    }
+}
+
+fn clause_refined_weight2_wfcb_compute_with_bank(
+    data: Option<&mut RefinedWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    match data {
+        Some(data) => clause_refined_weight2_compute_with_bank(data, ocb, bank, clause),
         None => panic!("Refinedweight2 WFCB requires initialized weight parameters"),
     }
 }

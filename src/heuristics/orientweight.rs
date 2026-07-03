@@ -1,7 +1,7 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -119,8 +119,9 @@ pub fn clause_orient_weight_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<OrientWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         clause_orient_weight_wfcb_compute,
+        clause_orient_weight_wfcb_compute_with_bank,
         prio_fun,
         orient_weight_exit,
         Some(clause_orient_weight_init(
@@ -144,8 +145,9 @@ pub fn orient_lmax_weight_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<OrientWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         orient_lmax_weight_wfcb_compute,
+        orient_lmax_weight_wfcb_compute_with_bank,
         prio_fun,
         orient_weight_exit,
         Some(orient_lmax_weight_init(
@@ -259,6 +261,22 @@ pub fn clause_orient_weight_compute_with_ocb(
     clause_orient_weight_compute(param, bank, clause)
 }
 
+/// Computes C `ClauseOrientWeightCompute` with bank-backed ordering
+/// preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn clause_orient_weight_compute_with_bank(
+    param: &OrientWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(clause_orient_weight_compute(param, bank, clause))
+}
+
 #[must_use]
 pub fn orient_lmax_weight_compute(param: &OrientWeightParam, clause: &Clause) -> f64 {
     let mut result = 0.0;
@@ -294,6 +312,22 @@ pub fn orient_lmax_weight_compute_with_ocb(
     orient_lmax_weight_compute(param, clause)
 }
 
+/// Computes C `OrientLMaxWeightCompute` with bank-backed ordering
+/// preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn orient_lmax_weight_compute_with_bank(
+    param: &OrientWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(orient_lmax_weight_compute(param, clause))
+}
+
 fn clause_orient_weight_wfcb_compute(
     data: Option<&mut OrientWeightParam>,
     bank: &TermBank,
@@ -305,6 +339,18 @@ fn clause_orient_weight_wfcb_compute(
     }
 }
 
+fn clause_orient_weight_wfcb_compute_with_bank(
+    data: Option<&mut OrientWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    match data {
+        Some(data) => clause_orient_weight_compute_with_bank(data, ocb, bank, clause),
+        None => panic!("Orientweight WFCB requires initialized weight parameters"),
+    }
+}
+
 fn orient_lmax_weight_wfcb_compute(
     data: Option<&mut OrientWeightParam>,
     _bank: &TermBank,
@@ -312,6 +358,18 @@ fn orient_lmax_weight_wfcb_compute(
 ) -> f64 {
     match data {
         Some(data) => orient_lmax_weight_compute(data, clause),
+        None => panic!("OrientLMaxWeight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn orient_lmax_weight_wfcb_compute_with_bank(
+    data: Option<&mut OrientWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    match data {
+        Some(data) => orient_lmax_weight_compute_with_bank(data, ocb, bank, clause),
         None => panic!("OrientLMaxWeight WFCB requires initialized weight parameters"),
     }
 }

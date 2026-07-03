@@ -91,6 +91,7 @@ Source files reviewed: `HEURISTICS/che_wfcb.h`, `HEURISTICS/che_wfcb.c`.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Ordering comparisons feed simplification and inference eligibility; preserve tie-breakers, cache use, and incomparability results.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
+- `ClauseAddEvaluation` itself is generic, but C WFCB data may carry an `OCB` pointer and evaluation callbacks may mutate clause orientation/maximality while scoring. Rust now keeps the immutable callback path and adds an explicit banked WFCB callback path for mutable-clause callers that can supply the active `OCB` and owner `TermBank`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
@@ -99,4 +100,5 @@ Source files reviewed: `HEURISTICS/che_wfcb.h`, `HEURISTICS/che_wfcb.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+- Change later candidate: once proof-control always owns the active `OCB`, term bank, and mutable clause at evaluation sites, route ordinary HCB evaluation through the banked WFCB path and remove any remaining immutable scoring fallbacks for C callbacks that perform maximal marking.
 <!-- END MANUAL REVIEW: c_source_docs -->

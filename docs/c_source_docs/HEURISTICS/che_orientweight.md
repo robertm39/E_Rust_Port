@@ -93,7 +93,7 @@ Source files reviewed: `HEURISTICS/che_orientweight.h`, `HEURISTICS/che_orientwe
 - Memory ownership is explicit in the C API; identify which returned pointers are owned by the caller and which are borrowed/shared before porting.
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Heuristic values are part of strategy behavior; preserve formulae, defaults, and parse names before optimizing.
-- `ClauseOrientWeightCompute` and `OrientLMaxWeightCompute` call `ClauseCondMarkMaximalTerms(local->ocb, clause)` before applying unorientable/maximal-literal penalties; the Rust port preserves that ordering with explicit OCB-backed helpers until WFCB/proof-state ownership can pass mutable clauses directly.
+- `ClauseOrientWeightCompute` and `OrientLMaxWeightCompute` call `ClauseCondMarkMaximalTerms(local->ocb, clause)` before applying unorientable/maximal-literal penalties; the Rust port preserves that ordering with explicit OCB-backed helpers and banked WFCB callbacks for mutable-clause callers that can pass the owner bank.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
@@ -102,5 +102,5 @@ Source files reviewed: `HEURISTICS/che_orientweight.h`, `HEURISTICS/che_orientwe
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
-- Change later candidate: once heuristic evaluation owns both the `OCB` and mutable clause, collapse the temporary explicit OCB-backed Rust helpers back into the normal WFCB evaluation path without changing the mark-then-score sequence.
+- Change later candidate: once all proof-control evaluation sites can pass both the active `OCB` and mutable owner bank, route ordinary HCB evaluation through the banked WFCB path and collapse any remaining immutable orient-weight scoring fallbacks without changing the mark-then-score sequence.
 <!-- END MANUAL REVIEW: c_source_docs -->
