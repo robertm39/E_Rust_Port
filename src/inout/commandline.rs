@@ -468,6 +468,10 @@ fn parse_c_double(argument: &str) -> Option<f64> {
         return None;
     }
 
+    if let Some(value) = parse_c_named_double(trimmed) {
+        return Some(value);
+    }
+
     let value = trimmed.parse::<f64>().ok()?;
     if value.is_infinite() && !is_named_infinite(trimmed) {
         return None;
@@ -475,11 +479,42 @@ fn parse_c_double(argument: &str) -> Option<f64> {
     Some(value)
 }
 
+fn parse_c_named_double(argument: &str) -> Option<f64> {
+    let (negative, unsigned) = match argument.as_bytes().first() {
+        Some(b'+') => (false, &argument[1..]),
+        Some(b'-') => (true, &argument[1..]),
+        _ => (false, argument),
+    };
+    let lower = unsigned.to_ascii_lowercase();
+
+    let value = if matches!(lower.as_str(), "inf" | "infinity") {
+        f64::INFINITY
+    } else if lower == "nan" || is_c_nan_payload(&lower) {
+        f64::NAN
+    } else {
+        return None;
+    };
+
+    Some(if negative { -value } else { value })
+}
+
 fn is_named_infinite(argument: &str) -> bool {
     matches!(
         argument.to_ascii_lowercase().as_str(),
         "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
     )
+}
+
+fn is_c_nan_payload(argument: &str) -> bool {
+    let Some(payload) = argument
+        .strip_prefix("nan(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    else {
+        return false;
+    };
+    payload
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn wrap_c_style(text: &str, width: usize) -> Vec<String> {
@@ -684,6 +719,11 @@ mod tests {
             ErrorCode::USAGE_ERROR
         );
         assert!(get_float_arg(option, "inf").unwrap().is_infinite());
+        assert!(get_float_arg(option, "INFINITY").unwrap().is_infinite());
+        assert!(get_float_arg(option, "-INF").unwrap().is_sign_negative());
+        assert!(get_float_arg(option, "nan").unwrap().is_nan());
+        assert!(get_float_arg(option, "NAN(payload_1)").unwrap().is_nan());
+        assert!(get_float_arg(option, "nan(payload-)").is_err());
     }
 
     #[test]
