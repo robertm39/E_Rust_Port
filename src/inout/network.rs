@@ -172,20 +172,64 @@ pub fn tcp_msg_write_to(writer: &mut impl Write, message: &mut TcpMessage) -> Ms
 }
 
 pub fn tcp_msg_read_from(reader: &mut impl Read, message: &mut TcpMessage) -> MsgStatus {
+    tcp_msg_read_from_impl(reader, message, |_| {})
+}
+
+pub fn tcp_msg_read_from_tracing(
+    reader: &mut impl Read,
+    message: &mut TcpMessage,
+    trace: &mut impl Write,
+) -> MsgStatus {
+    tcp_msg_read_from_impl(reader, message, |event| {
+        let _ = match event {
+            TcpMsgReadTrace::HeaderRead(count) => writeln!(trace, "read(Size)={count}"),
+            TcpMsgReadTrace::ExpectedLength(len) => {
+                writeln!(trace, "Message expected with {len} bytes")
+            }
+            TcpMsgReadTrace::PayloadRead(count) => writeln!(trace, "read(msg)={count}"),
+        };
+    })
+}
+
+enum TcpMsgReadTrace {
+    HeaderRead(isize),
+    ExpectedLength(usize),
+    PayloadRead(isize),
+}
+
+fn read_trace_count(read: usize) -> isize {
+    isize::try_from(read).unwrap_or(isize::MAX)
+}
+
+fn tcp_msg_read_from_impl(
+    reader: &mut impl Read,
+    message: &mut TcpMessage,
+    mut trace: impl FnMut(TcpMsgReadTrace),
+) -> MsgStatus {
     if message.transmission_count < TCP_HEADER_SIZE {
         let target = &mut message.len_buf[message.transmission_count..TCP_HEADER_SIZE];
         match reader.read(target) {
-            Ok(0) => return MsgStatus::ConnClosed,
+            Ok(0) => {
+                trace(TcpMsgReadTrace::HeaderRead(0));
+                return MsgStatus::ConnClosed;
+            }
             Ok(read) => {
+                trace(TcpMsgReadTrace::HeaderRead(read_trace_count(read)));
                 message.transmission_count += read;
                 if message.transmission_count < TCP_HEADER_SIZE {
                     return MsgStatus::Incomplete;
                 }
+                let expected =
+                    usize::try_from(u32::from_be_bytes(message.len_buf)).unwrap_or(usize::MAX);
+                trace(TcpMsgReadTrace::ExpectedLength(expected));
                 if append_header(message) == MsgStatus::Error {
                     return MsgStatus::Error;
                 }
             }
-            Err(_) => return MsgStatus::Error,
+            Err(_) => {
+                trace(TcpMsgReadTrace::HeaderRead(-1));
+                return MsgStatus::Error;
+            }
         }
     }
 
@@ -200,8 +244,12 @@ pub fn tcp_msg_read_from(reader: &mut impl Read, message: &mut TcpMessage) -> Ms
     let chunk_len = remaining.min(TCP_BUF_SIZE - 1);
     let mut buffer = [0; TCP_BUF_SIZE];
     match reader.read(&mut buffer[..chunk_len]) {
-        Ok(0) => MsgStatus::ConnClosed,
+        Ok(0) => {
+            trace(TcpMsgReadTrace::PayloadRead(0));
+            MsgStatus::ConnClosed
+        }
         Ok(read) => {
+            trace(TcpMsgReadTrace::PayloadRead(read_trace_count(read)));
             message
                 .content
                 .extend_from_slice(c_string_prefix(&buffer[..read]));
@@ -212,7 +260,10 @@ pub fn tcp_msg_read_from(reader: &mut impl Read, message: &mut TcpMessage) -> Ms
                 MsgStatus::Incomplete
             }
         }
-        Err(_) => MsgStatus::Error,
+        Err(_) => {
+            trace(TcpMsgReadTrace::PayloadRead(-1));
+            MsgStatus::Error
+        }
     }
 }
 
@@ -235,6 +286,22 @@ pub fn tcp_msg_recv_from(reader: &mut impl Read) -> (TcpMessage, MsgStatus) {
     let mut message = TcpMessage::new();
     loop {
         let status = tcp_msg_read_from(reader, &mut message);
+        match status {
+            MsgStatus::Success | MsgStatus::Error | MsgStatus::ConnClosed => {
+                return (message, status);
+            }
+            MsgStatus::Incomplete => {}
+        }
+    }
+}
+
+pub fn tcp_msg_recv_from_tracing(
+    reader: &mut impl Read,
+    trace: &mut impl Write,
+) -> (TcpMessage, MsgStatus) {
+    let mut message = TcpMessage::new();
+    loop {
+        let status = tcp_msg_read_from_tracing(reader, &mut message, trace);
         match status {
             MsgStatus::Success | MsgStatus::Error | MsgStatus::ConnClosed => {
                 return (message, status);
@@ -468,9 +535,9 @@ mod platform_server_socket {
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_client_like_c, create_server_socket, tcp_msg_read_from, tcp_msg_recv_from,
-        tcp_msg_send_to, tcp_msg_write_to, tcp_string_recv_from, tcp_string_send_to, MsgStatus,
-        TcpMessage, TCP_HEADER_SIZE,
+        connect_client_like_c, create_server_socket, tcp_msg_read_from, tcp_msg_read_from_tracing,
+        tcp_msg_recv_from, tcp_msg_recv_from_tracing, tcp_msg_send_to, tcp_msg_write_to,
+        tcp_string_recv_from, tcp_string_send_to, MsgStatus, TcpMessage, TCP_HEADER_SIZE,
     };
     use std::io::{self, Cursor, Read, Write};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -667,6 +734,44 @@ mod tests {
             MsgStatus::ConnClosed
         );
         assert_eq!(message.message_len(), Some(TCP_HEADER_SIZE));
+    }
+
+    #[test]
+    fn read_tracing_matches_c_debug_lines() {
+        let mut reader = Cursor::new(packed_bytes("hi"));
+        let mut message = TcpMessage::new();
+        let mut trace = Vec::new();
+
+        assert_eq!(
+            tcp_msg_read_from_tracing(&mut reader, &mut message, &mut trace),
+            MsgStatus::Success
+        );
+        assert_eq!(
+            String::from_utf8(trace).unwrap(),
+            "read(Size)=4\nMessage expected with 6 bytes\nread(msg)=2\n"
+        );
+        assert_eq!(message.unpack(), b"hi");
+    }
+
+    #[test]
+    fn recv_tracing_accumulates_c_debug_lines_across_partial_reads() {
+        let mut reader = LimitedReader::new(packed_bytes("ready"), 3);
+        let mut trace = Vec::new();
+
+        let (message, status) = tcp_msg_recv_from_tracing(&mut reader, &mut trace);
+
+        assert_eq!(status, MsgStatus::Success);
+        assert_eq!(message.unpack(), b"ready");
+        assert_eq!(
+            String::from_utf8(trace).unwrap(),
+            concat!(
+                "read(Size)=3\n",
+                "read(Size)=1\n",
+                "Message expected with 9 bytes\n",
+                "read(msg)=3\n",
+                "read(msg)=2\n"
+            )
+        );
     }
 
     #[test]
