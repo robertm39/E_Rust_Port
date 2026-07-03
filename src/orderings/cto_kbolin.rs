@@ -1,10 +1,13 @@
 //! Linear-time first-order KBO6 implementation from `cto_kbolin`.
 
+use crate::basics::error::Diagnostic;
 use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::orderings::ocb::OrderControlBlock;
+use crate::terms::lambda::{beta_normalize_db, lambda_eta_reduce_db};
 use crate::terms::signature::{Signature, SIG_TRUE_CODE};
 use crate::terms::simpletypes::Type;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_is_ground;
 use crate::terms::termtypes::{
     term_deref, term_identity_id, DerefType, Term, TP_IS_DB_VAR, TP_PRED_POS,
@@ -65,6 +68,76 @@ pub fn kbo6_greater(
     deref_t: DerefType,
 ) -> bool {
     kbo6_compare(ocb, signature, s, t, deref_s, deref_t) == CompareResult::Greater
+}
+
+/// Compare two terms with the KBO6 Lambda-order owner-bank normalization path.
+///
+/// This ports the C `kbolincmp_lambda` wrapper for callers that can provide the
+/// term bank used for instantiated insertion, beta-normalization, and
+/// eta-reduction. Other KBO6 branches use the same comparison logic as
+/// [`kbo6_compare`].
+///
+/// # Errors
+///
+/// Returns a diagnostic if instantiated insertion or lambda normalization fails.
+///
+/// # Panics
+///
+/// Panics under the same structural invariants as [`kbo6_compare`].
+pub fn kbo6_compare_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> Result<CompareResult, Diagnostic> {
+    kbo6_reset(ocb);
+    if problem_type() == ProblemType::HigherOrder {
+        return match ocb.ho_order_kind {
+            HoOrderKind::LfhoOrder => Ok(kbo_lin_cmp_lfho(
+                ocb,
+                bank.signature(),
+                s,
+                t,
+                deref_s,
+                deref_t,
+            )),
+            HoOrderKind::LambdaOrder => {
+                let s = lambda_order_prepare(bank, s, deref_s)?;
+                let t = lambda_order_prepare(bank, t, deref_t)?;
+                Ok(kbo_lin_cmp_lambda_no_bank(
+                    ocb,
+                    bank.signature(),
+                    &s,
+                    &t,
+                    DerefType::Never,
+                    DerefType::Never,
+                ))
+            }
+        };
+    }
+    Ok(kbo_lin_cmp(ocb, bank.signature(), s, t, deref_s, deref_t))
+}
+
+/// Return whether `s` is strictly greater than `t` using bank-backed KBO6.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed Lambda-order preparation fails.
+///
+/// # Panics
+///
+/// Panics under the same structural invariants as [`kbo6_compare_with_bank`].
+pub fn kbo6_greater_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> Result<bool, Diagnostic> {
+    Ok(kbo6_compare_with_bank(ocb, bank, s, t, deref_s, deref_t)? == CompareResult::Greater)
 }
 
 fn kbo6_reset(ocb: &mut OrderControlBlock) {
@@ -382,6 +455,16 @@ pub(crate) fn kbo6_lambda_order_can_skip_bank_normalization(term: &Term, deref: 
         }
     }
     true
+}
+
+fn lambda_order_prepare(
+    bank: &mut TermBank,
+    term: &Term,
+    deref: DerefType,
+) -> Result<Term, Diagnostic> {
+    let instantiated = bank.insert_instantiated_deref(term, deref)?;
+    let beta_normal = beta_normalize_db(bank, &instantiated)?;
+    lambda_eta_reduce_db(bank, &beta_normal)
 }
 
 fn kbo_lin_cmp_lambda_no_bank(
@@ -1144,14 +1227,17 @@ fn initialized_arg(term: &Term, index: usize) -> Term {
 
 #[cfg(test)]
 mod tests {
-    use super::{kbo6_compare, kbo6_greater, kbo6_lambda_order_can_skip_bank_normalization};
+    use super::{
+        kbo6_compare, kbo6_compare_with_bank, kbo6_greater, kbo6_greater_with_bank,
+        kbo6_lambda_order_can_skip_bank_normalization,
+    };
     use crate::basics::partial_orderings::{CompareResult, HoOrderKind};
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::cto_kbo::kbo_compare;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
-    use crate::terms::lambda::close_with_db_var;
+    use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::subst::Substitution;
@@ -1548,7 +1634,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Lambda-order KBO6 term ordering is not ported yet")]
-    fn kbo6_higher_order_lambda_order_rejects_lambda_surface_terms_pending_bank_normalization() {
+    fn kbo6_higher_order_lambda_order_non_bank_api_rejects_lambda_surface_terms() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
@@ -1568,6 +1654,43 @@ mod tests {
             DerefType::Never,
             DerefType::Never,
         );
+    }
+
+    #[test]
+    fn kbo6_higher_order_lambda_order_bank_api_normalizes_lambda_applications() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let binder_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&binder_type, 0);
+        let lambda =
+            close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
+        let arg = typed_const(&mut bank, "kbo6_lambda_bank_arg");
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&arg))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = lambda_ocb(bank.signature());
+
+        assert_eq!(
+            kbo6_compare_with_bank(
+                &mut ocb,
+                &mut bank,
+                &applied,
+                &arg,
+                DerefType::Never,
+                DerefType::Never,
+            )
+            .unwrap_or_else(|err| panic!("{err}")),
+            CompareResult::Equal
+        );
+        assert!(!kbo6_greater_with_bank(
+            &mut ocb,
+            &mut bank,
+            &applied,
+            &arg,
+            DerefType::Never,
+            DerefType::Never,
+        )
+        .unwrap_or_else(|err| panic!("{err}")));
     }
 
     #[test]

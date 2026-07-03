@@ -6,13 +6,16 @@ use crate::basics::pstacks::PStackPointer;
 use crate::heuristics::to_params::TermOrdering;
 use crate::inout::scanner::{token_pos_rep, Scanner, Token, TokenType};
 use crate::orderings::cto_kbo::{kbo_compare, kbo_greater};
-use crate::orderings::cto_kbolin::{kbo6_compare, kbo6_greater};
+use crate::orderings::cto_kbolin::{
+    kbo6_compare, kbo6_compare_with_bank, kbo6_greater, kbo6_greater_with_bank,
+};
 use crate::orderings::cto_lpo::{
     lpo4_compare, lpo4_compare_copy, lpo4_greater, lpo4_greater_copy, lpo_compare,
     lpo_compare_copy, lpo_greater, lpo_greater_copy,
 };
 use crate::orderings::ocb::{OrderControlBlock, W_DEFAULT_WEIGHT};
 use crate::terms::signature::Signature;
+use crate::terms::termbanks::TermBank;
 use crate::terms::termtypes::{DerefType, Term};
 
 /// Test whether `s` is greater than `t` in the ordering described by `ocb`.
@@ -47,6 +50,30 @@ pub fn to_greater(
     }
 }
 
+/// Test whether `s` is greater than `t`, using bank-backed comparison paths
+/// where the selected ordering needs term-bank normalization.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed ordering preparation fails.
+///
+/// # Panics
+///
+/// Panics under the same invariants as [`to_greater`].
+pub fn to_greater_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> Result<bool, Diagnostic> {
+    match ocb.ordering_type {
+        TermOrdering::Kbo6 => kbo6_greater_with_bank(ocb, bank, s, t, deref_s, deref_t),
+        _ => Ok(to_greater(ocb, bank.signature(), s, t, deref_s, deref_t)),
+    }
+}
+
 /// Compare `s` and `t` in the ordering described by `ocb`.
 ///
 /// # Panics
@@ -77,6 +104,30 @@ pub fn to_compare(
         TermOrdering::NoOrdering | TermOrdering::Optimize => {
             panic!("non-concrete term ordering cannot compare terms")
         }
+    }
+}
+
+/// Compare `s` and `t`, using bank-backed comparison paths where the selected
+/// ordering needs term-bank normalization.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed ordering preparation fails.
+///
+/// # Panics
+///
+/// Panics under the same invariants as [`to_compare`].
+pub fn to_compare_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    s: &Term,
+    t: &Term,
+    deref_s: DerefType,
+    deref_t: DerefType,
+) -> Result<CompareResult, Diagnostic> {
+    match ocb.ordering_type {
+        TermOrdering::Kbo6 => kbo6_compare_with_bank(ocb, bank, s, t, deref_s, deref_t),
+        _ => Ok(to_compare(ocb, bank.signature(), s, t, deref_s, deref_t)),
     }
 }
 

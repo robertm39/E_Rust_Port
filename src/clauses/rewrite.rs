@@ -18,7 +18,7 @@ use crate::clauses::eqn_props::{
 use crate::clauses::inferencedoc::ProofDocSession;
 use crate::clauses::subterm_index::SubtermIndex;
 use crate::clauses::subterm_tree::SubtermOcc;
-use crate::orderings::cto_orderings::to_greater;
+use crate::orderings::cto_orderings::to_greater_with_bank;
 use crate::orderings::ocb::OrderControlBlock;
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::replace::{term_add_rw_link, term_follow_top_rw_chain, RwResultType};
@@ -1405,14 +1405,7 @@ fn instance_is_rule(
         return Ok(false);
     }
 
-    Ok(to_greater(
-        ocb,
-        bank.signature(),
-        lside,
-        rside,
-        DerefType::Once,
-        DerefType::Once,
-    ))
+    to_greater_with_bank(ocb, bank, lside, rside, DerefType::Once, DerefType::Once)
 }
 
 fn subst_complete_min_instance(
