@@ -53,6 +53,12 @@ where
         self.keys.get(key)
     }
 
+    pub fn find_splayed(&mut self, key: &K) -> Option<&K> {
+        let found = self.keys.get(key)?.clone();
+        self.root_key = Some(found);
+        self.keys.get(key)
+    }
+
     #[must_use]
     pub fn find_binary(&self, key: &K) -> Option<&K> {
         self.find(key)
@@ -209,6 +215,19 @@ mod tests {
         assert_eq!(tree.root_key(), Some(&10));
         assert_eq!(tree.find(&3), Some(&3));
         assert_eq!(tree.find_binary(&99), None);
+    }
+
+    #[test]
+    fn splayed_find_changes_root_for_later_root_extraction_like_c() {
+        let mut tree = tree(&[1, 2, 3]);
+        assert_eq!(tree.root_key(), Some(&3));
+
+        assert_eq!(tree.find_splayed(&1), Some(&1));
+        assert_eq!(tree.root_key(), Some(&1));
+        assert_eq!(tree.extract_root_key(), Some(1));
+
+        assert_eq!(tree.find_splayed(&99), None);
+        assert_ne!(tree.root_key(), Some(&99));
     }
 
     #[test]

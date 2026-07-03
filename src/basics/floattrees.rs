@@ -101,6 +101,16 @@ impl<V1, V2> FloatTree<V1, V2> {
         self.entries.get(&FloatTreeKey::new(key))
     }
 
+    pub fn find_splayed(&mut self, key: f64) -> Option<&FloatTreeEntry<V1, V2>> {
+        let key = FloatTreeKey::new(key);
+        if self.entries.contains_key(&key) {
+            self.root_key = Some(key);
+            self.entries.get(&key)
+        } else {
+            None
+        }
+    }
+
     pub fn find_mut(&mut self, key: f64) -> Option<&mut FloatTreeEntry<V1, V2>> {
         let key = FloatTreeKey::new(key);
         let found = self.entries.get_mut(&key);
@@ -160,6 +170,20 @@ mod tests {
         tree.find_mut(1.0).unwrap().val2 = 101;
         assert_eq!(tree.root_key(), Some(1.0));
         assert_eq!(tree.find(1.0).unwrap().val2, 101);
+    }
+
+    #[test]
+    fn splayed_find_tracks_recent_root_like_c() {
+        let mut tree = FloatTree::new();
+        tree.store(1.0, "one", 1);
+        tree.store(2.0, "two", 2);
+        tree.store(3.0, "three", 3);
+        assert_eq!(tree.root_key(), Some(3.0));
+
+        assert_eq!(tree.find_splayed(1.0).unwrap().val1, "one");
+        assert_eq!(tree.root_key(), Some(1.0));
+        assert_eq!(tree.find_splayed(99.0), None);
+        assert_eq!(tree.root_key(), Some(1.0));
     }
 
     #[test]

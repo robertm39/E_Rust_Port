@@ -65,6 +65,15 @@ impl<V1, V2> NumTree<V1, V2> {
         self.entries.get(&key)
     }
 
+    pub fn find_splayed(&mut self, key: NumTreeKey) -> Option<&NumTreeEntry<V1, V2>> {
+        if self.entries.contains_key(&key) {
+            self.root_key = Some(key);
+            self.entries.get(&key)
+        } else {
+            None
+        }
+    }
+
     pub fn find_mut(&mut self, key: NumTreeKey) -> Option<&mut NumTreeEntry<V1, V2>> {
         let found = self.entries.get_mut(&key);
         if found.is_some() {
@@ -171,6 +180,31 @@ mod tests {
         tree.find_mut(1).unwrap().val2 = 101;
         assert_eq!(tree.root_key(), Some(1));
         assert_eq!(tree.find(1).unwrap().val2, 101);
+    }
+
+    #[test]
+    fn splayed_find_changes_root_for_later_root_extraction_like_c() {
+        let mut tree = NumTree::new();
+        tree.store(1, "one", 1);
+        tree.store(2, "two", 2);
+        tree.store(3, "three", 3);
+        assert_eq!(tree.root_key(), Some(3));
+
+        assert_eq!(tree.find_splayed(1).unwrap().val1, "one");
+        assert_eq!(tree.root_key(), Some(1));
+        assert_eq!(
+            tree.extract_root(),
+            Some((
+                1,
+                NumTreeEntry {
+                    val1: "one",
+                    val2: 1
+                }
+            ))
+        );
+
+        assert_eq!(tree.find_splayed(99), None);
+        assert_ne!(tree.root_key(), Some(99));
     }
 
     #[test]
