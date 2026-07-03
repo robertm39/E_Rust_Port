@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
 #[cfg(not(test))]
 use crate::basics::os_wrapper::set_memory_limit;
@@ -128,7 +128,6 @@ use crate::terms::termfunc::{term_app_encode, term_collect_variables, term_stand
 use crate::terms::termtypes::{term_identity_id, DerefType, RewriteLevel, Term};
 use crate::terms::typebanks::TypeBank;
 
-const MEGA: u64 = 1_048_576;
 const C_INT_MAX: i64 = i32::MAX as i64;
 const DEFAULT_CLASSIFICATION_TIMEOUT_PERCENTAGE: i64 = 2;
 const DEFAULT_DELETE_BAD_LIMIT: i64 = i64::MAX;

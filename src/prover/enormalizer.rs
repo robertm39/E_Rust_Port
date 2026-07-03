@@ -1,3 +1,4 @@
+use crate::basics::defines::MEGA;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
@@ -39,7 +40,6 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "enormalizer";
-const MEGA: u64 = 1_048_576;
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
 

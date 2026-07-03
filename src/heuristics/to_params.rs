@@ -1,3 +1,4 @@
+use crate::basics::defines::bool_to_str;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::partial_orderings::HoOrderKind;
 use crate::inout::basicparser::{parse_bool, parse_int};
@@ -792,11 +793,7 @@ fn name_index(name: &str, names: &[&str]) -> Option<usize> {
 }
 
 fn bool_name(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    bool_to_str(value)
 }
 
 fn usize_from_c_enum(value: i32) -> usize {

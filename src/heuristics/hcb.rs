@@ -1,3 +1,4 @@
+use crate::basics::defines::bool_to_str;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{FormulaProperties, CP_DELETE_CLAUSE};
@@ -2347,11 +2348,7 @@ pub fn heuristic_parms_print_string(handle: &HeuristicParmsCell) -> String {
 
 #[must_use]
 pub const fn bool_name(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    bool_to_str(value)
 }
 
 #[must_use]

@@ -1,4 +1,4 @@
-use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+use crate::basics::defines::{bool_to_str, DEFAULT_COMCHAR_RAW};
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
@@ -1927,11 +1927,7 @@ fn spec_class_error(message: &str) -> Diagnostic {
 }
 
 fn bool_string(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    bool_to_str(value)
 }
 
 const fn bool_int(value: bool) -> i32 {

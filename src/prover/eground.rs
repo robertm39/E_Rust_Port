@@ -1,4 +1,4 @@
-use crate::basics::defines::DEFAULT_COMCHAR_RAW;
+use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{
     current_resource_usage, format_resource_usage, get_system_phys_memory, set_memory_limit,
@@ -40,7 +40,6 @@ const TFORM_RENAME_LIMIT_STR: &str = "24";
 const TFORM_MINISCOPE_LIMIT_STR: &str = "1000";
 const OUTPUT_CLOSE_ERROR: &str =
     "Output stream to be closed reports error (probably broken pipe, file system full or quota exceeded)";
-const MEGA: u64 = 1_048_576;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {

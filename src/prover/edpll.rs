@@ -1,3 +1,4 @@
+use crate::basics::defines::MEGA;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::os_wrapper::{get_system_phys_memory, set_memory_limit};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -20,7 +21,6 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROGRAM_NAME: &str = "edpll";
-const MEGA: u64 = 1_048_576;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionCode {
