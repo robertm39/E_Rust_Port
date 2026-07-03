@@ -76,6 +76,10 @@ pub fn perma_string_store(text: String) -> Arc<str> {
     lock_global_registry().perma_string_store(text)
 }
 
+pub fn maybe_perma_string_store(text: Option<String>) -> Option<Arc<str>> {
+    text.map(perma_string_store)
+}
+
 pub fn perma_strings_free() {
     lock_global_registry().clear();
 }
@@ -83,8 +87,8 @@ pub fn perma_strings_free() {
 #[cfg(test)]
 mod tests {
     use super::{
-        maybe_perma_string, perma_string, perma_string_store, perma_strings_free,
-        PermaStringRegistry,
+        maybe_perma_string, maybe_perma_string_store, perma_string, perma_string_store,
+        perma_strings_free, PermaStringRegistry,
     };
     use std::sync::Arc;
 
@@ -127,15 +131,19 @@ mod tests {
     fn global_helpers_match_c_null_and_free_shapes() {
         perma_strings_free();
         assert!(maybe_perma_string(None).is_none());
+        assert!(maybe_perma_string_store(None).is_none());
 
         let first = maybe_perma_string(Some("alpha")).unwrap();
         let second = perma_string_store(String::from("alpha"));
         assert!(Arc::ptr_eq(&first, &second));
 
+        let third = maybe_perma_string_store(Some(String::from("beta"))).unwrap();
+        assert_eq!(&*third, "beta");
+
         perma_strings_free();
-        let third = perma_string("alpha");
-        assert_eq!(&*third, "alpha");
-        assert!(!Arc::ptr_eq(&first, &third));
+        let new_first = perma_string("alpha");
+        assert_eq!(&*new_first, "alpha");
+        assert!(!Arc::ptr_eq(&first, &new_first));
         perma_strings_free();
     }
 }

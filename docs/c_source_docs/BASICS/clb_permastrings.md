@@ -89,4 +89,11 @@ Source files reviewed: `BASICS/clb_permastrings.h`, `BASICS/clb_permastrings.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `PermaString` always duplicates the input before insertion and asserts that the returned pointer is not the caller's pointer, even when the string is new. Rust returns owned `Arc<str>` handles, so pointer identity is stable for Rust holders but not allocator-address-compatible with C.
+- `PermaStringStore` frees the caller-owned input even when the registry already contains the same string, and `PermaStringStore(NULL)` returns `NULL`. Rust models the owned optional shape with `maybe_perma_string_store`, but ordinary Rust callers should prefer owned strings or explicit interned handles rather than raw ownership transfer.
+- `PermaStringsFree` invalidates every previously returned C pointer. Rust `Arc<str>` handles remain valid after registry clearing, which is safer for in-process tests but not exact dangling-pointer compatibility.
+- The registry is a file-static `StrTree`, so lookup/insertion can reorganize by string key and cleanup is process-global. Rust uses a mutex-protected `BTreeSet`; exact C splay locality and allocator-address reuse are not modeled.
 <!-- END MANUAL REVIEW: c_source_docs -->
