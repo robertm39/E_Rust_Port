@@ -119,16 +119,30 @@ impl DDArray {
         result
     }
 
+    /// Return the C `DDArraySelectPart` partition value for the first `size`
+    /// elements.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `part` is outside the inclusive `0.0..=1.0` range, when
+    /// `part` is NaN, when `size` is zero, or when `size` exceeds the current
+    /// logical allocation. These are assertion failures in the C helper.
     #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
         clippy::cast_sign_loss
     )]
-    pub fn select_part(&mut self, part: f64, size: usize) -> Option<f64> {
-        if !(0.0..=1.0).contains(&part) || size == 0 || size > self.size {
-            return None;
-        }
+    pub fn select_part(&mut self, part: f64, size: usize) -> f64 {
+        assert!(
+            (0.0..=1.0).contains(&part),
+            "DDArraySelectPart part must be in the inclusive 0.0..=1.0 range"
+        );
+        assert!(size > 0, "DDArraySelectPart size must be non-zero");
+        assert!(
+            size <= self.size,
+            "DDArraySelectPart size exceeds allocated array size"
+        );
 
         let rank_float = (size - 1) as f64 * part;
         let rank1 = rank_float as usize;
@@ -162,6 +176,10 @@ impl DDArray {
         let second = if rank2 == rank1 {
             self.array[start]
         } else {
+            assert!(
+                rank1 != size - 1,
+                "DDArraySelectPart second rank must be inside array"
+            );
             let mut minimum = self.array[start + 1];
             for index in start + 1..size {
                 minimum = minimum.min(self.array[index]);
@@ -169,7 +187,7 @@ impl DDArray {
             minimum
         };
 
-        Some(f64::midpoint(self.array[start], second))
+        f64::midpoint(self.array[start], second)
     }
 }
 
@@ -187,6 +205,10 @@ fn index_to_dd(index: usize) -> DDArrayIndex {
 #[cfg(test)]
 mod tests {
     use super::{index_to_dd, DDArray};
+
+    fn assert_same_f64(actual: f64, expected: f64) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
 
     #[test]
     fn initializes_to_zero_and_grows_by_fixed_blocks() {
@@ -222,18 +244,38 @@ mod tests {
             array.assign(index_to_dd(index), value);
         }
 
-        assert_eq!(array.select_part(0.5, 6), Some(6.0));
+        assert_same_f64(array.select_part(0.5, 6), 6.0);
         let mut values = array.as_slice()[..6].to_vec();
         values.sort_by(f64::total_cmp);
         assert_eq!(values, vec![1.0, 3.0, 5.0, 7.0, 9.0, 11.0]);
     }
 
     #[test]
-    fn select_part_rejects_invalid_bounds() {
+    #[should_panic(expected = "DDArraySelectPart part must be in the inclusive 0.0..=1.0 range")]
+    fn select_part_panics_on_low_part_like_c_assertion() {
         let mut array = DDArray::new(2, 2);
-        assert_eq!(array.select_part(-0.1, 2), None);
-        assert_eq!(array.select_part(0.5, 0), None);
-        assert_eq!(array.select_part(0.5, 3), None);
+        let _value = array.select_part(-0.1, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "DDArraySelectPart part must be in the inclusive 0.0..=1.0 range")]
+    fn select_part_panics_on_nan_part_like_c_assertion() {
+        let mut array = DDArray::new(2, 2);
+        let _value = array.select_part(f64::NAN, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "DDArraySelectPart size must be non-zero")]
+    fn select_part_panics_on_zero_size_like_c_assertion() {
+        let mut array = DDArray::new(2, 2);
+        let _value = array.select_part(0.5, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "DDArraySelectPart size exceeds allocated array size")]
+    fn select_part_panics_on_oversized_request_like_c_assertion() {
+        let mut array = DDArray::new(2, 2);
+        let _value = array.select_part(0.5, 3);
     }
 
     #[test]

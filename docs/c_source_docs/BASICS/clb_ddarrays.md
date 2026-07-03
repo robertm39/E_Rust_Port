@@ -94,6 +94,11 @@ Source files reviewed: `BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `DDArrayDebugPrint` calls `DDArrayElement` for every printed position, so asking it to print beyond the current allocation enlarges and zero-fills the array as a side effect. Rust preserves this in the explicit debug-string helper.
+- `DDArraySelectPart` asserts that `part` is in the inclusive `[0, 1]` range, `size` is positive, and the allocated array already covers the requested prefix before partitioning the backing array in place.
+
+### Change-Later Candidates
+
+- `DDArraySelectPart` treats invalid percentile/range requests as assertion failures. The compatibility-shaped Rust method should keep panicking, while user-facing statistics APIs should validate inputs before calling it or expose a separate checked wrapper.
 
 ### Porting Focus
 
