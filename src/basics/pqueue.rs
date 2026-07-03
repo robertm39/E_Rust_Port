@@ -73,7 +73,6 @@ impl<T> PQueue<T> {
     }
 
     pub fn reset(&mut self) {
-        while self.get_next().is_some() {}
         self.head = 0;
         self.tail = 0;
     }
@@ -381,8 +380,8 @@ mod tests {
     }
 
     #[test]
-    fn reset_preserves_allocation_and_empties_logical_contents() {
-        let mut queue = PQueue::with_size(2);
+    fn reset_preserves_allocation_and_absolute_slots_like_c() {
+        let mut queue = PQueue::with_size(4);
         queue.store("a");
         queue.store("b");
         assert_eq!(queue.allocated_size(), 4);
@@ -390,8 +389,12 @@ mod tests {
         queue.reset();
         assert!(queue.is_empty());
         assert_eq!(queue.allocated_size(), 4);
+        assert_eq!(queue.element(0), Some(&"a"));
+        assert_eq!(queue.element(1), Some(&"b"));
         assert_eq!(queue.get_next(), None);
         queue.store("c");
+        assert_eq!(queue.element(0), Some(&"c"));
+        assert_eq!(queue.element(1), Some(&"b"));
         assert_eq!(queue.get_next(), Some("c"));
     }
 
