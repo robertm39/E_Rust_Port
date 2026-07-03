@@ -72,12 +72,18 @@ impl<T> PLocalStack<T> {
     }
 
     /// Push without growing, matching the C macro's caller-managed contract.
-    pub fn push(&mut self, value: T) -> bool {
-        if self.data.len() >= self.size {
-            return false;
-        }
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack has no free slot. C callers must use
+    /// `PLocalStackEnsureSpace` before raw `PLocalStackPush`; safe Rust turns a
+    /// missed ensure into an explicit panic instead of an out-of-bounds write.
+    pub fn push(&mut self, value: T) {
+        assert!(
+            self.data.len() < self.size,
+            "PLocalStackPush called without enough reserved space"
+        );
         self.data.push(value);
-        true
     }
 
     /// Ensure room for one slot, then push.
@@ -87,12 +93,20 @@ impl<T> PLocalStack<T> {
     /// Panics if stack growth would overflow `usize`.
     pub fn push_growing(&mut self, value: T) {
         self.ensure_space(1);
-        let pushed = self.push(value);
-        debug_assert!(pushed);
+        self.push(value);
     }
 
-    pub fn pop(&mut self) -> Option<T> {
-        self.data.pop()
+    /// Pop the top element.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the non-optional
+    /// `PLocalStackPop` macro contract.
+    #[must_use]
+    pub fn pop(&mut self) -> T {
+        self.data
+            .pop()
+            .unwrap_or_else(|| panic!("PLocalStackPop called on an empty stack"))
     }
 
     pub fn push_slice(&mut self, values: &[T])
@@ -101,8 +115,7 @@ impl<T> PLocalStack<T> {
     {
         self.ensure_space(values.len());
         for value in values {
-            let pushed = self.push(value.clone());
-            debug_assert!(pushed);
+            self.push(value.clone());
         }
     }
 
@@ -112,8 +125,7 @@ impl<T> PLocalStack<T> {
     {
         self.ensure_space(values.len());
         for value in values.iter().rev() {
-            let pushed = self.push(value.clone());
-            debug_assert!(pushed);
+            self.push(value.clone());
         }
     }
 
@@ -208,15 +220,22 @@ impl<T, Tag> PLocalTaggedStack<T, Tag> {
     }
 
     /// Push one tagged value without growing.
-    pub fn push(&mut self, value: T, tag: Tag) -> bool {
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack does not have two free pointer slots for the
+    /// portable non-`TAGGED_POINTERS` representation. C callers must ensure
+    /// space before raw `PLocalTaggedStackPush`; safe Rust reports missed
+    /// ensures explicitly.
+    pub fn push(&mut self, value: T, tag: Tag) {
         let Some(required_slots) = self.current_slots().checked_add(2) else {
-            return false;
+            panic!("PLocalTaggedStack capacity overflow");
         };
-        if required_slots > self.size {
-            return false;
-        }
+        assert!(
+            required_slots <= self.size,
+            "PLocalTaggedStackPush called without enough reserved space"
+        );
         self.data.push((value, tag));
-        true
     }
 
     /// Ensure room for one tagged entry, then push.
@@ -226,12 +245,20 @@ impl<T, Tag> PLocalTaggedStack<T, Tag> {
     /// Panics if stack growth would overflow `usize`.
     pub fn push_growing(&mut self, value: T, tag: Tag) {
         self.ensure_space(1);
-        let pushed = self.push(value, tag);
-        debug_assert!(pushed);
+        self.push(value, tag);
     }
 
-    pub fn pop(&mut self) -> Option<(T, Tag)> {
-        self.data.pop()
+    /// Pop the top tagged entry.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the non-optional
+    /// `PLocalTaggedStackPop` macro contract.
+    #[must_use]
+    pub fn pop(&mut self) -> (T, Tag) {
+        self.data
+            .pop()
+            .unwrap_or_else(|| panic!("PLocalTaggedStackPop called on an empty stack"))
     }
 
     pub fn push_slice(&mut self, values: &[T], tag: Tag)
@@ -241,8 +268,7 @@ impl<T, Tag> PLocalTaggedStack<T, Tag> {
     {
         self.ensure_space(values.len());
         for value in values {
-            let pushed = self.push(value.clone(), tag.clone());
-            debug_assert!(pushed);
+            self.push(value.clone(), tag.clone());
         }
     }
 
@@ -253,8 +279,7 @@ impl<T, Tag> PLocalTaggedStack<T, Tag> {
     {
         self.ensure_space(values.len());
         for value in values.iter().rev() {
-            let pushed = self.push(value.clone(), tag.clone());
-            debug_assert!(pushed);
+            self.push(value.clone(), tag.clone());
         }
     }
 
@@ -295,15 +320,23 @@ mod tests {
     fn push_does_not_grow_but_ensure_space_uses_c_equality_rule() {
         let mut stack = PLocalStack::with_size(2);
 
-        assert!(stack.push(1));
-        assert!(stack.push(2));
-        assert!(!stack.push(3));
+        stack.push(1);
+        stack.push(2);
         assert_eq!(stack.allocated_size(), 2);
 
         stack.ensure_space(1);
         assert_eq!(stack.allocated_size(), 4);
-        assert!(stack.push(3));
+        stack.push(3);
         assert_eq!(stack.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "PLocalStackPush called without enough reserved space")]
+    fn raw_push_panics_without_reserved_space() {
+        let mut stack = PLocalStack::with_size(1);
+        stack.push(1);
+
+        stack.push(2);
     }
 
     #[test]
@@ -321,10 +354,17 @@ mod tests {
         stack.push_growing("c");
 
         assert_eq!(stack.allocated_size(), 4);
-        assert_eq!(stack.pop(), Some("c"));
-        assert_eq!(stack.pop(), Some("b"));
-        assert_eq!(stack.pop(), Some("a"));
-        assert_eq!(stack.pop(), None);
+        assert_eq!(stack.pop(), "c");
+        assert_eq!(stack.pop(), "b");
+        assert_eq!(stack.pop(), "a");
+    }
+
+    #[test]
+    #[should_panic(expected = "PLocalStackPop called on an empty stack")]
+    fn raw_pop_panics_on_empty_stack() {
+        let mut stack = PLocalStack::<usize>::with_size(1);
+
+        let _ = stack.pop();
     }
 
     #[test]
@@ -337,7 +377,7 @@ mod tests {
         let mut reversed = PLocalStack::with_size(2);
         reversed.push_slice_reversed(&args);
         assert_eq!(reversed.as_slice(), &[3, 2, 1]);
-        assert_eq!(reversed.pop(), Some(1));
+        assert_eq!(reversed.pop(), 1);
     }
 
     #[test]
@@ -351,9 +391,25 @@ mod tests {
         stack.push_growing("term-b", 2_u8);
         assert_eq!(stack.allocated_slots(), 8);
         assert_eq!(stack.current_entries(), 2);
-        assert_eq!(stack.pop(), Some(("term-b", 2)));
-        assert_eq!(stack.pop(), Some(("term-a", 1)));
-        assert_eq!(stack.pop(), None);
+        assert_eq!(stack.pop(), ("term-b", 2));
+        assert_eq!(stack.pop(), ("term-a", 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "PLocalTaggedStackPush called without enough reserved space")]
+    fn tagged_raw_push_panics_without_reserved_space() {
+        let mut stack = PLocalTaggedStack::with_size(2);
+        stack.push("term-a", 1_u8);
+
+        stack.push("term-b", 2_u8);
+    }
+
+    #[test]
+    #[should_panic(expected = "PLocalTaggedStackPop called on an empty stack")]
+    fn tagged_raw_pop_panics_on_empty_stack() {
+        let mut stack = PLocalTaggedStack::<usize, u8>::with_size(2);
+
+        let _ = stack.pop();
     }
 
     #[test]
@@ -363,8 +419,8 @@ mod tests {
         stack.push_slice_reversed(&args, 9_u8);
 
         assert_eq!(stack.current_entries(), 3);
-        assert_eq!(stack.pop(), Some(("x", 9)));
-        assert_eq!(stack.pop(), Some(("y", 9)));
-        assert_eq!(stack.pop(), Some(("z", 9)));
+        assert_eq!(stack.pop(), ("x", 9));
+        assert_eq!(stack.pop(), ("y", 9));
+        assert_eq!(stack.pop(), ("z", 9));
     }
 }

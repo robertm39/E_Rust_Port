@@ -100,10 +100,19 @@ Source files reviewed: `BASICS/clb_plocalstacks.h`, `BASICS/clb_plocalstacks.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PLocalStackPush`, `PLocalStackPop`, and `PLocalTaggedStackPop` are raw macros without recoverable error returns; callers are expected to ensure capacity/non-emptiness before use. Rust compatibility methods keep the same non-optional surface and panic when safe Rust detects a missed precondition.
+- `PLocalTaggedStackPush` has two C variants. The raw low-bit `TAGGED_POINTERS` branch asserts pointer alignment and tag width before packing the tag into the value pointer; the portable branch stores value and tag in two pointer slots. Rust currently models the portable two-slot accounting instead of raw pointer tagging.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change-Later Candidates
+
+- Raw push/pop macros can write past capacity or underflow if a caller skips `EnsureSpace` or emptiness checks. After compatibility is secured, consider scoped traversal helpers that make the required checks structural rather than caller discipline.
+- `PLocalStackTop` returns the current stack pointer/count, not the top value. A later cleaned API should use clearer naming while preserving the C macro spelling for compatibility wrappers.
+- `PLocalStackGrow` copies `old_size` pointer slots, not only initialized/current entries, so C may copy unused slots during growth. Rust avoids uninitialized data, but benchmark-sensitive ports should confirm whether copying full capacity ever mattered for locality.
+- The safe Rust tagged stack models the portable two-slot branch, not low-bit pointer tagging. Revisit only if profiling proves the packed representation matters and either a safe representation is available or the project-level unsafe policy is explicitly changed for this non-DLL use case.
 <!-- END MANUAL REVIEW: c_source_docs -->
