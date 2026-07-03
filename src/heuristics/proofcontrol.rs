@@ -705,7 +705,7 @@ pub fn proof_state_init_indexing(
             "ProofStateInit requires initialized proof-control ordering",
         ));
     };
-    Ok(state.init_watchlist(ocb))
+    state.init_watchlist(ocb)
 }
 
 /// Initializes the currently ported proof-state portions of C

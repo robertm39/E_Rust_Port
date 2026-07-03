@@ -1746,15 +1746,19 @@ impl ProofState {
     /// installed. The C helper also inserts the result into `state->wlindices`;
     /// that global-index side effect remains pending until global indices are
     /// represented in Rust.
-    pub fn init_watchlist(&mut self, ocb: &mut OrderControlBlock) -> i64 {
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn init_watchlist(&mut self, ocb: &mut OrderControlBlock) -> Result<i64, Diagnostic> {
         let Self {
             terms, watchlist, ..
         } = self;
         let Some(watchlist) = watchlist.as_mut() else {
-            return 0;
+            return Ok(0);
         };
 
-        watchlist.mark_maximal_terms(ocb, terms);
+        watchlist.mark_maximal_terms_with_bank(ocb, terms)?;
         let mut temp = ClauseSet::new();
         while let Some(clause) = watchlist.extract_first() {
             temp.insert(clause);
@@ -1762,7 +1766,7 @@ impl ProofState {
 
         let inserted = watchlist.indexed_insert_clause_set_owned(&mut temp, terms);
         debug_assert!(temp.is_empty());
-        inserted
+        Ok(inserted)
     }
 
     /// Initializes and installs the FV-index anchors attached by C
@@ -2779,7 +2783,7 @@ mod tests {
         state.init_fvi_anchors(&params).unwrap();
         let mut ocb = test_ocb(&state);
 
-        assert_eq!(state.init_watchlist(&mut ocb), 2);
+        assert_eq!(state.init_watchlist(&mut ocb).unwrap(), 2);
 
         let watchlist = state.watchlist().unwrap();
         assert_eq!(watchlist.members(), 2);
@@ -2800,7 +2804,7 @@ mod tests {
         state.discard_watchlist();
         let mut ocb = test_ocb(&state);
 
-        assert_eq!(state.init_watchlist(&mut ocb), 0);
+        assert_eq!(state.init_watchlist(&mut ocb).unwrap(), 0);
         assert!(state.watchlist().is_none());
     }
 }

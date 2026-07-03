@@ -277,6 +277,32 @@ pub fn order_evaluate(ocb: &mut OrderControlBlock, bank: &TermBank, axioms: &mut
     result as f64
 }
 
+/// Evaluates an ordering on the current axiom clause set using bank-backed
+/// ordering preparation when needed.
+///
+/// This preserves C `OrderEvaluate`'s maximal-marking side effect while letting
+/// higher-order ordering branches use owner-bank normalization.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed term ordering preparation fails.
+#[allow(clippy::cast_precision_loss)]
+pub fn order_evaluate_with_bank(
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
+) -> Result<f64, Diagnostic> {
+    axioms.mark_maximal_terms_with_bank(ocb, bank)?;
+    let mut result = 0;
+    result += clause_set_count_maximal_terms(axioms) * MAX_TERM_PENALTY;
+    result += clause_set_count_maximal_literals(axioms) * MAX_LITERAL_PENALTY;
+    result += clause_set_count_unorientable_literals(axioms) * UNORIENT_LITERAL_PENALTY;
+    if ocb.ordering_type == TermOrdering::Kbo {
+        result *= KBO_BONUS;
+    }
+    Ok(result as f64)
+}
+
 #[must_use]
 pub fn describe_auto_ordering(oparms: &OrderParmsCell) -> String {
     format!(
@@ -488,7 +514,7 @@ fn order_find_optimal_with_params(
         None,
         higher_order_problem,
     )?;
-    let mut best_eval = order_evaluate(&mut best_ocb, bank, axioms);
+    let mut best_eval = order_evaluate_with_bank(&mut best_ocb, bank, axioms)?;
 
     while order_next_ordering(&mut local, &search_mask) {
         let mut next_ocb = to_create_ordering(
@@ -499,7 +525,7 @@ fn order_find_optimal_with_params(
             None,
             higher_order_problem,
         )?;
-        let next_eval = order_evaluate(&mut next_ocb, bank, axioms);
+        let next_eval = order_evaluate_with_bank(&mut next_ocb, bank, axioms)?;
         if next_eval < best_eval {
             best_ocb = next_ocb;
             best_eval = next_eval;
@@ -570,15 +596,16 @@ fn literal_cmp_from_raw(value: i64) -> Result<LiteralCmp, Diagnostic> {
 mod tests {
     use super::{
         auto_ordering_analysis_string, auto_ordering_params, describe_auto_ordering,
-        generate_auto_ordering, init_oparms, order_evaluate, order_find_optimal_with_params,
-        order_next_const_weight, order_next_ordering, order_next_prec_gen, order_next_type,
-        order_next_weight_gen, print_oparms_for_mode_string, print_oparms_string,
-        to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS, MAX_CONST_WEIGHT,
-        MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
+        generate_auto_ordering, init_oparms, order_evaluate, order_evaluate_with_bank,
+        order_find_optimal_with_params, order_next_const_weight, order_next_ordering,
+        order_next_prec_gen, order_next_type, order_next_weight_gen, print_oparms_for_mode_string,
+        print_oparms_string, to_create_ordering, to_select_ordering, AutoOrderingMode, KBO_BONUS,
+        MAX_CONST_WEIGHT, MAX_LITERAL_PENALTY, MAX_TERM_PENALTY, UNORIENT_LITERAL_PENALTY,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::CompareResult;
     use crate::basics::partial_orderings::HoOrderKind;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
@@ -594,11 +621,13 @@ mod tests {
     };
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::functypes::FunCode;
+    use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE, SIG_TRUE_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn signature() -> Signature {
         let mut signature = Signature::new(TypeBank::new());
@@ -610,6 +639,20 @@ mod tests {
 
     fn term_bank() -> TermBank {
         TermBank::new(signature()).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
     }
 
     fn individual(bank: &TermBank) -> Type {
@@ -711,6 +754,45 @@ mod tests {
 
         assert!(expected > 0);
         assert_eq!(score, expected as f64);
+    }
+
+    #[test]
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::float_cmp,
+        reason = "test asserts exact C-shaped integer penalty accumulation as double"
+    )]
+    fn order_evaluate_with_bank_accepts_lambda_order_beta_surface_axioms() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = term_bank();
+        let binder_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&binder_type, 0);
+        let lambda =
+            close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
+        let arg = typed_const(&mut bank, "order_eval_lambda_arg", &binder_type);
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&arg))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut axioms =
+            ClauseSet::from_clauses([clause(vec![literal(&mut bank, &applied, &arg)])]);
+        let mut ocb = OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LambdaOrder,
+        );
+
+        let score = order_evaluate_with_bank(&mut ocb, &mut bank, &mut axioms)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let expected = clause_set_count_maximal_terms(&axioms) * MAX_TERM_PENALTY
+            + clause_set_count_maximal_literals(&axioms) * MAX_LITERAL_PENALTY
+            + clause_set_count_unorientable_literals(&axioms) * UNORIENT_LITERAL_PENALTY;
+
+        assert!(expected > 0);
+        assert_eq!(score, expected as f64);
+        assert!(axioms
+            .iter()
+            .all(|clause| clause.query_prop(crate::clauses::clause_props::CP_IS_ORIENTED)));
     }
 
     #[test]

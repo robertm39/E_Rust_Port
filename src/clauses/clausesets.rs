@@ -823,6 +823,23 @@ impl ClauseSet {
         }
     }
 
+    /// Orient and mark maximal literals in every clause in set order using
+    /// bank-backed ordering preparation when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic if bank-backed term ordering preparation fails.
+    pub fn mark_maximal_terms_with_bank(
+        &mut self,
+        ocb: &mut OrderControlBlock,
+        bank: &mut TermBank,
+    ) -> Result<(), Diagnostic> {
+        for clause in &mut self.clauses {
+            clause.mark_maximal_terms_with_bank(ocb, bank)?;
+        }
+        Ok(())
+    }
+
     pub fn term_set_prop(&self, prop: TermProperties) {
         for clause in &self.clauses {
             clause.term_set_prop(prop);
@@ -1598,7 +1615,7 @@ mod tests {
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::pstacks::PStack;
-    use crate::basics::simple_stuff::ProblemType;
+    use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::sysdate::SysDate;
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{
@@ -1617,16 +1634,32 @@ mod tests {
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::{IoFormat, Scanner};
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::lambda::{apply_terms, close_with_db_var};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::{DerefType, Term, TP_CHECK_FLAG};
     use crate::terms::typebanks::TypeBank;
+    use crate::test_support::global_state_lock;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
         TermBank::new(signature).unwrap()
+    }
+
+    struct ProblemTypeReset;
+
+    impl Drop for ProblemTypeReset {
+        fn drop(&mut self) {
+            reset_problem_type();
+        }
+    }
+
+    fn set_problem_type_for_test(problem_type: ProblemType) -> ProblemTypeReset {
+        reset_problem_type();
+        set_problem_type(problem_type).unwrap_or_else(|err| panic!("{err}"));
+        ProblemTypeReset
     }
 
     fn typed_const(bank: &mut TermBank, name: &str) -> Term {
@@ -1675,6 +1708,15 @@ mod tests {
             true,
             bank.signature(),
             HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn kbo6_lambda_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
+            true,
+            bank.signature(),
+            HoOrderKind::LambdaOrder,
         )
     }
 
@@ -2399,6 +2441,31 @@ mod tests {
         assert_eq!(clauses[0].literals().query_prop_number(EP_IS_MAXIMAL), 1);
         assert_eq!(clauses[1].literals().query_prop_number(EP_IS_MAXIMAL), 1);
         assert_eq!(clauses[0].literals().as_slice()[0].left(), &f_a);
+    }
+
+    #[test]
+    fn mark_maximal_terms_with_bank_accepts_lambda_order_beta_surface_set() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let binder_type = bank.signature().type_bank().default_type();
+        let db0 = bank.request_db_var(&binder_type, 0);
+        let lambda =
+            close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
+        let arg = typed_const(&mut bank, "clauseset_lambda_order_arg");
+        let applied = apply_terms(&mut bank, &lambda, std::slice::from_ref(&arg))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let clause = clause_from(vec![literal(&mut bank, &applied, &arg, true)]);
+        let mut set = ClauseSet::from_clauses([clause]);
+        let mut ocb = kbo6_lambda_ocb(&bank);
+
+        set.mark_maximal_terms_with_bank(&mut ocb, &mut bank)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let clause = set.iter().next().expect("test set has one clause");
+        assert!(clause.query_prop(CP_IS_ORIENTED));
+        assert_eq!(clause.literals().query_prop_number(EP_IS_MAXIMAL), 1);
+        assert!(!clause.literals().as_slice()[0].is_oriented());
     }
 
     #[test]
