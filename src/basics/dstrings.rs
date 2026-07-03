@@ -91,9 +91,19 @@ impl DynamicString {
         self.bytes.clone()
     }
 
+    /// Copy the bytes excluding the first and last byte.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the string has fewer than two bytes, matching the C
+    /// `DStrCopyCore` assertion.
     #[must_use]
-    pub fn copy_core(&self) -> Option<Vec<u8>> {
-        (self.bytes.len() >= 2).then(|| self.bytes[1..self.bytes.len() - 1].to_vec())
+    pub fn copy_core(&self) -> Vec<u8> {
+        assert!(
+            self.bytes.len() >= 2,
+            "DStrCopyCore requires at least two bytes"
+        );
+        self.bytes[1..self.bytes.len() - 1].to_vec()
     }
 
     pub fn set(&mut self, value: &str) {
@@ -256,7 +266,7 @@ mod tests {
         let mut string = DynamicString::new();
         assert_eq!(string.delete_last_char(), 0);
         string.set("\"core\"");
-        assert_eq!(string.copy_core(), Some(b"core".to_vec()));
+        assert_eq!(string.copy_core(), b"core".to_vec());
         assert_eq!(string.delete_last_char(), b'"');
         assert_eq!(string.copy(), b"\"core".to_vec());
 
@@ -267,6 +277,14 @@ mod tests {
 
         string.minimize();
         assert_eq!(string.allocated_mem(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "DStrCopyCore requires at least two bytes")]
+    fn copy_core_panics_on_short_string_like_c_assertion() {
+        let string = DynamicString::new();
+
+        let _ = string.copy_core();
     }
 
     #[test]
