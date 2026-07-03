@@ -5,7 +5,7 @@ use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
 use crate::clauses::clausesets::ClauseSet;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc, wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -221,8 +221,8 @@ pub fn tptp_type_weight_compute(param: &VarWeightParam, bank: &TermBank, clause:
 /// Computes C `TPTPTypeWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn tptp_type_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -232,6 +232,21 @@ pub fn tptp_type_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     tptp_type_weight_compute(param, bank, clause)
+}
+
+/// Computes C `TPTPTypeWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn tptp_type_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(tptp_type_weight_compute(param, bank, clause))
 }
 
 #[must_use]
@@ -250,8 +265,9 @@ pub fn tptp_type_weight_wfcb_init(
     hypothesis_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         tptp_type_weight_wfcb_compute,
+        tptp_type_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(tptp_type_weight_init(
@@ -328,8 +344,8 @@ pub fn sig_weight_compute(
 /// Computes C `SigWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn sig_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -339,6 +355,21 @@ pub fn sig_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     sig_weight_compute(param, bank, bank.signature(), clause)
+}
+
+/// Computes C `SigWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn sig_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(sig_weight_compute(param, bank, bank.signature(), clause))
 }
 
 #[must_use]
@@ -356,8 +387,9 @@ pub fn sig_weight_wfcb_init(
     sig_size_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         sig_weight_wfcb_compute,
+        sig_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(sig_weight_init(
@@ -431,8 +463,8 @@ pub fn proof_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Cl
 /// Computes C `ProofWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn proof_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -442,6 +474,21 @@ pub fn proof_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     proof_weight_compute(param, bank, clause)
+}
+
+/// Computes C `ProofWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn proof_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(proof_weight_compute(param, bank, clause))
 }
 
 #[must_use]
@@ -460,8 +507,9 @@ pub fn proof_weight_wfcb_init(
     proof_depth_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         proof_weight_wfcb_compute,
+        proof_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(proof_weight_init(
@@ -564,8 +612,8 @@ pub fn depth_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
 /// Computes C `DepthWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn depth_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -575,6 +623,21 @@ pub fn depth_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     depth_weight_compute(param, clause)
+}
+
+/// Computes C `DepthWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn depth_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(depth_weight_compute(param, clause))
 }
 
 #[must_use]
@@ -592,8 +655,9 @@ pub fn depth_weight_wfcb_init(
     term_weight_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         depth_weight_wfcb_compute,
+        depth_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(depth_weight_init(
@@ -689,8 +753,8 @@ pub fn weight_less_depth_compute(param: &VarWeightParam, clause: &Clause) -> f64
 /// Computes C `WeightLessDepthCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn weight_less_depth_compute_with_ocb(
     param: &VarWeightParam,
@@ -700,6 +764,21 @@ pub fn weight_less_depth_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     weight_less_depth_compute(param, clause)
+}
+
+/// Computes C `WeightLessDepthCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn weight_less_depth_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(weight_less_depth_compute(param, clause))
 }
 
 #[must_use]
@@ -717,8 +796,9 @@ pub fn weight_less_depth_wfcb_init(
     term_depth_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         weight_less_depth_wfcb_compute,
+        weight_less_depth_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(weight_less_depth_init(
@@ -791,8 +871,8 @@ pub fn nl_weight_compute(param: &VarWeightParam, bank: &TermBank, clause: &Claus
 /// Computes C `NLWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn nl_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -802,6 +882,21 @@ pub fn nl_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     nl_weight_compute(param, bank, clause)
+}
+
+/// Computes C `NLWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn nl_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(nl_weight_compute(param, bank, clause))
 }
 
 #[must_use]
@@ -819,8 +914,9 @@ pub fn nl_weight_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         nl_weight_wfcb_compute,
+        nl_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(nl_weight_init(
@@ -913,8 +1009,9 @@ pub fn pn_refined_weight_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         pn_refined_weight_wfcb_compute,
+        pn_refined_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(pn_refined_weight_init(
@@ -1003,8 +1100,8 @@ pub fn pn_refined_weight_compute(param: &VarWeightParam, bank: &TermBank, clause
 /// Computes C `PNRefinedWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn pn_refined_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -1016,6 +1113,21 @@ pub fn pn_refined_weight_compute_with_ocb(
     pn_refined_weight_compute(param, bank, clause)
 }
 
+/// Computes C `PNRefinedWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn pn_refined_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(pn_refined_weight_compute(param, bank, clause))
+}
+
 fn pn_refined_weight_wfcb_compute(
     data: Option<&mut VarWeightParam>,
     bank: &TermBank,
@@ -1024,12 +1136,30 @@ fn pn_refined_weight_wfcb_compute(
     pn_refined_weight_compute(var_weight_data(data, "PNRefinedweight"), bank, clause)
 }
 
+fn pn_refined_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    pn_refined_weight_compute_with_bank(var_weight_data(data, "PNRefinedweight"), ocb, bank, clause)
+}
+
 fn tptp_type_weight_wfcb_compute(
     data: Option<&mut VarWeightParam>,
     bank: &TermBank,
     clause: &Clause,
 ) -> f64 {
     tptp_type_weight_compute(var_weight_data(data, "TPTPTypeweight"), bank, clause)
+}
+
+fn tptp_type_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    tptp_type_weight_compute_with_bank(var_weight_data(data, "TPTPTypeweight"), ocb, bank, clause)
 }
 
 fn sig_weight_wfcb_compute(
@@ -1045,12 +1175,30 @@ fn sig_weight_wfcb_compute(
     )
 }
 
+fn sig_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    sig_weight_compute_with_bank(var_weight_data(data, "Sigweight"), ocb, bank, clause)
+}
+
 fn proof_weight_wfcb_compute(
     data: Option<&mut VarWeightParam>,
     bank: &TermBank,
     clause: &Clause,
 ) -> f64 {
     proof_weight_compute(var_weight_data(data, "Proofweight"), bank, clause)
+}
+
+fn proof_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    proof_weight_compute_with_bank(var_weight_data(data, "Proofweight"), ocb, bank, clause)
 }
 
 fn depth_weight_wfcb_compute(
@@ -1061,12 +1209,30 @@ fn depth_weight_wfcb_compute(
     depth_weight_compute(var_weight_data(data, "Depthweight"), clause)
 }
 
+fn depth_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    depth_weight_compute_with_bank(var_weight_data(data, "Depthweight"), ocb, bank, clause)
+}
+
 fn weight_less_depth_wfcb_compute(
     data: Option<&mut VarWeightParam>,
     _bank: &TermBank,
     clause: &Clause,
 ) -> f64 {
     weight_less_depth_compute(var_weight_data(data, "WLessDWeight"), clause)
+}
+
+fn weight_less_depth_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    weight_less_depth_compute_with_bank(var_weight_data(data, "WLessDWeight"), ocb, bank, clause)
 }
 
 fn nl_weight_wfcb_compute(
@@ -1077,12 +1243,30 @@ fn nl_weight_wfcb_compute(
     nl_weight_compute(var_weight_data(data, "NLweight"), bank, clause)
 }
 
+fn nl_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    nl_weight_compute_with_bank(var_weight_data(data, "NLweight"), ocb, bank, clause)
+}
+
 fn sym_type_weight_wfcb_compute(
     data: Option<&mut VarWeightParam>,
     _bank: &TermBank,
     clause: &Clause,
 ) -> f64 {
     sym_type_weight_compute(var_weight_data(data, "SymbolTypeweight"), clause)
+}
+
+fn sym_type_weight_wfcb_compute_with_bank(
+    data: Option<&mut VarWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    sym_type_weight_compute_with_bank(var_weight_data(data, "SymbolTypeweight"), ocb, bank, clause)
 }
 
 fn clause_weight_age_wfcb_compute(
@@ -1144,8 +1328,8 @@ pub fn sym_type_weight_compute(param: &VarWeightParam, clause: &Clause) -> f64 {
 /// Computes C `SymTypeWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 #[must_use]
 pub fn sym_type_weight_compute_with_ocb(
     param: &VarWeightParam,
@@ -1155,6 +1339,21 @@ pub fn sym_type_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     sym_type_weight_compute(param, clause)
+}
+
+/// Computes C `SymTypeWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn sym_type_weight_compute_with_bank(
+    param: &VarWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(sym_type_weight_compute(param, clause))
 }
 
 #[must_use]
@@ -1173,8 +1372,9 @@ pub fn sym_type_weight_wfcb_init(
     pos_multiplier: f64,
     app_var_mult: f64,
 ) -> Wfcb<VarWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         sym_type_weight_wfcb_compute,
+        sym_type_weight_wfcb_compute_with_bank,
         prio_fun,
         var_weight_exit,
         Some(sym_type_weight_init(
@@ -1496,6 +1696,7 @@ mod tests {
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::neweval::PRIO_NORMAL;
     use crate::heuristics::to_params::TermOrdering;
+    use crate::heuristics::wfcb::Wfcb;
     use crate::inout::scanner::Scanner;
     use crate::orderings::ocb::OrderControlBlock;
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
@@ -1599,6 +1800,30 @@ mod tests {
         assert!(target.literals().as_slice()[0].is_maximal());
     }
 
+    fn assert_banked_wfcb_matches_manual(
+        bank: &mut TermBank,
+        mut target: Clause,
+        wfcb: &mut Wfcb<VarWeightParam>,
+        expected_compute: impl FnOnce(&Clause, &TermBank) -> f64,
+    ) {
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(bank);
+        assert!(manually_marked
+            .cond_mark_maximal_terms_with_bank(&mut manual_ocb, bank)
+            .unwrap_or_else(|err| panic!("{err}")));
+        let expected = expected_compute(&manually_marked, bank);
+        let mut ocb = kbo_ocb(bank);
+
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, bank, &mut target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(actual, expected);
+        assert_eq!(wfcb.compute_priority(bank, &target), PRIO_NORMAL);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
     #[test]
     fn tptp_type_weight_scales_only_exact_hypothesis_and_conjecture_roles() {
         let mut bank = test_bank();
@@ -1689,6 +1914,55 @@ mod tests {
         );
         assert_eq!(type_scanner.current_token().literal(), "tail");
         assert_eq!(sig_scanner.current_token().literal(), "tail");
+        assert_eq!(proof_scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn type_signature_and_proof_weight_parsers_use_banked_wfcb_callbacks() {
+        let mut bank = test_bank();
+
+        let type_param = tptp_type_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 1.0);
+        let mut type_clause = ordering_clause(&mut bank, "type_banked");
+        type_clause.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut type_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,11.0,13.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut type_wfcb =
+            tptp_type_weight_parse(&mut type_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(
+            &mut bank,
+            type_clause,
+            &mut type_wfcb,
+            |clause, bank| tptp_type_weight_compute(&type_param, bank, clause),
+        );
+        assert_eq!(type_scanner.current_token().literal(), "tail");
+
+        let sig_param = sig_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 1.0);
+        let sig_clause = ordering_clause(&mut bank, "sig_banked");
+        let mut sig_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,11.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut sig_wfcb = sig_weight_parse(&mut sig_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(&mut bank, sig_clause, &mut sig_wfcb, |clause, bank| {
+            sig_weight_compute(&sig_param, bank, bank.signature(), clause)
+        });
+        assert_eq!(sig_scanner.current_token().literal(), "tail");
+
+        let proof_param = proof_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 1.0);
+        let mut proof_clause = ordering_clause(&mut bank, "proof_banked");
+        proof_clause.set_proof_depth(2);
+        proof_clause.set_proof_size(3);
+        let mut proof_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,11.0,13.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut proof_wfcb =
+            proof_weight_parse(&mut proof_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(
+            &mut bank,
+            proof_clause,
+            &mut proof_wfcb,
+            |clause, bank| proof_weight_compute(&proof_param, bank, clause),
+        );
         assert_eq!(proof_scanner.current_token().literal(), "tail");
     }
 
@@ -1858,6 +2132,60 @@ mod tests {
     }
 
     #[test]
+    fn structural_varweight_parsers_use_banked_wfcb_callbacks() {
+        let mut bank = test_bank();
+
+        let depth_param = depth_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 1.0);
+        let depth_clause = ordering_clause(&mut bank, "depth_banked");
+        let mut depth_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,11.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut depth_wfcb =
+            depth_weight_parse(&mut depth_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(&mut bank, depth_clause, &mut depth_wfcb, |clause, _| {
+            depth_weight_compute(&depth_param, clause)
+        });
+        assert_eq!(depth_scanner.current_token().literal(), "tail");
+
+        let less_depth_param = weight_less_depth_init(2, 1, 3.0, 5.0, 7.0, 0.5, 1.0);
+        let less_depth_clause = ordering_clause(&mut bank, "less_depth_banked");
+        let mut less_depth_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,0.5) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut less_depth_wfcb =
+            weight_less_depth_parse(&mut less_depth_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(
+            &mut bank,
+            less_depth_clause,
+            &mut less_depth_wfcb,
+            |clause, _| weight_less_depth_compute(&less_depth_param, clause),
+        );
+        assert_eq!(less_depth_scanner.current_token().literal(), "tail");
+
+        let nl_param = nl_weight_init(2, 7, 1, 3.0, 5.0, 7.0, 1.0);
+        let nl_clause = ordering_clause(&mut bank, "nl_banked");
+        let mut nl_scanner = Scanner::from_user_string("(ConstPrio,2,7,1,3.0,5.0,7.0) tail", false)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut nl_wfcb = nl_weight_parse(&mut nl_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(&mut bank, nl_clause, &mut nl_wfcb, |clause, bank| {
+            nl_weight_compute(&nl_param, bank, clause)
+        });
+        assert_eq!(nl_scanner.current_token().literal(), "tail");
+
+        let sym_param = sym_type_weight_init(2, 1, 3, 11, 3.0, 5.0, 7.0, 1.0);
+        let sym_clause = ordering_clause(&mut bank, "sym_banked");
+        let mut sym_scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3,11,3.0,5.0,7.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut sym_wfcb =
+            sym_type_weight_parse(&mut sym_scanner).unwrap_or_else(|err| panic!("{err}"));
+        assert_banked_wfcb_matches_manual(&mut bank, sym_clause, &mut sym_wfcb, |clause, _| {
+            sym_type_weight_compute(&sym_param, clause)
+        });
+        assert_eq!(sym_scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
     fn pn_refined_weight_uses_negative_weights_only_for_negative_literals() {
         let mut bank = test_bank();
         let a = typed_const(&mut bank, "a");
@@ -1887,6 +2215,22 @@ mod tests {
 
         assert_close(wfcb.compute_eval(&bank, &clause), 45.0);
         assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
+    fn pn_refined_weight_parse_uses_banked_wfcb_callback() {
+        let mut bank = test_bank();
+        let param = pn_refined_weight_init(2, 1, 13, 17, 3.0, 5.0, 7.0, 1.0);
+        let clause = ordering_clause(&mut bank, "pn_banked");
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,13,17,3.0,5.0,7.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = pn_refined_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_banked_wfcb_matches_manual(&mut bank, clause, &mut wfcb, |clause, bank| {
+            pn_refined_weight_compute(&param, bank, clause)
+        });
         assert_eq!(scanner.current_token().literal(), "tail");
     }
 
