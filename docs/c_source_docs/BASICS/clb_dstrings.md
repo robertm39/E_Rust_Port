@@ -119,6 +119,7 @@ Source files reviewed: `BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `DStrAddress` checks only `index > len`, so `index == len` returns the address of the trailing NUL for allocated strings. Rust preserves this as `Some(0)` for allocated buffers while keeping a never-allocated empty string as no address.
 
 ### Porting Focus
 

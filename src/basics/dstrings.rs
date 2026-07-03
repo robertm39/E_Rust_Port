@@ -80,7 +80,10 @@ impl DynamicString {
 
     #[must_use]
     pub fn address(&self, index: usize) -> Option<u8> {
-        self.bytes.get(index).copied()
+        self.bytes
+            .get(index)
+            .copied()
+            .or_else(|| (index == self.bytes.len() && self.mem > 0).then_some(0))
     }
 
     #[must_use]
@@ -225,7 +228,27 @@ mod tests {
         assert_eq!(string.view_bytes(), b"abcdef-12x,y,z");
         assert_eq!(string.last_char(), b'z');
         assert_eq!(string.address(2), Some(b'c'));
+        assert_eq!(string.address(string.len()), Some(0));
         assert_eq!(string.address(99), None);
+    }
+
+    #[test]
+    fn address_exposes_allocated_c_nul_slot_at_len() {
+        let mut string = DynamicString::new();
+        assert_eq!(string.address(0), None);
+
+        string.append_str("");
+        assert_eq!(string.len(), 0);
+        assert_eq!(string.address(0), Some(0));
+
+        string.append_str("abc");
+        assert_eq!(string.address(3), Some(0));
+
+        string.reset();
+        assert_eq!(string.address(0), Some(0));
+
+        string.minimize();
+        assert_eq!(string.address(0), None);
     }
 
     #[test]
