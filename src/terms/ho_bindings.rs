@@ -1,11 +1,16 @@
 use crate::basics::error::Diagnostic;
-use crate::terms::ho_csu::Limits;
+use crate::terms::ho_csu::{
+    build_constraint, constraint_counter, constraint_state, HoCsuParams, Limits, StateTag,
+    DECOMPOSED_VAR,
+};
 use crate::terms::lambda::{
     apply_terms, close_with_db_var, close_with_type_prefix, fresh_var_with_args, whnf_step,
 };
 use crate::terms::signature::SIG_PHONY_APP_CODE;
 use crate::terms::simpletypes::{arrow_type_flattened, get_ret_type, type_get_max_arity, Type};
+use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
+use crate::terms::termfunc::term_is_ground;
 use crate::terms::termtypes::{DerefType, Term};
 
 pub const IMIT_MASK: Limits = 63;
@@ -66,6 +71,212 @@ pub const fn inc_elimination(limits: Limits) -> Limits {
 pub struct IdentificationBinding {
     pub left_target: Term,
     pub right_target: Term,
+}
+
+/// Computes the next C `ComputeNextBinding` substitution step.
+///
+/// Returns the packed next state and whether `subst` changed.
+///
+/// # Errors
+///
+/// Returns diagnostics from any generated binding constructor.
+///
+/// # Panics
+///
+/// Panics if `flex` is not a top-level free variable, or if C preconditions for
+/// the generated binding are violated.
+pub fn compute_next_binding(
+    bank: &mut TermBank,
+    flex: &Term,
+    rhs: &Term,
+    state: StateTag,
+    applied_bindings: &mut Limits,
+    subst: &mut Substitution,
+    params: &HoCsuParams,
+) -> Result<(StateTag, bool), Diagnostic> {
+    assert!(
+        flex.is_top_level_free_var(),
+        "ComputeNextBinding expects a top-level free-variable flex side"
+    );
+    let mut counter = constraint_counter(state);
+    let mut end_state = constraint_state(state);
+    let original_subst = subst.len();
+
+    if end_state != DECOMPOSED_VAR {
+        let num_args_left = visible_arg_count(flex);
+        let num_args_right = usize::from(rhs.is_top_level_free_var()) * visible_arg_count(rhs);
+        let limit = 1 + 2 * num_args_left + 2 * num_args_right + 1;
+        let mut target_found = false;
+
+        while !target_found && counter < limit as StateTag {
+            let counter_index = usize::try_from(counter).expect("constraint counter fits in usize");
+            if counter == 0 {
+                counter += 1;
+                target_found =
+                    try_imitation_step(bank, flex, rhs, applied_bindings, subst, params)?;
+            } else if (num_args_left != 0 || num_args_right != 0)
+                && counter_index <= num_args_left + num_args_right
+            {
+                let step = BindingStep {
+                    flex,
+                    rhs,
+                    counter_index,
+                    num_args_left,
+                    num_args_right,
+                };
+                target_found = try_projection_step(bank, &step, applied_bindings, subst, params)?;
+                counter += 1;
+            } else if (num_args_left != 0 || num_args_right != 0)
+                && counter_index <= 2 * (num_args_left + num_args_right)
+            {
+                if limit_allows(elimination_count(*applied_bindings), params.elim_limit) {
+                    let step = BindingStep {
+                        flex,
+                        rhs,
+                        counter_index,
+                        num_args_left,
+                        num_args_right,
+                    };
+                    target_found = apply_elimination_step(bank, &step, applied_bindings, subst)?;
+                    counter += 1;
+                } else {
+                    counter = (2 * (num_args_left + num_args_right) + 1) as StateTag;
+                }
+            } else if counter_index == 2 * (num_args_left + num_args_right) + 1
+                && rhs.is_top_level_free_var()
+                && top_level_free_head(flex) != top_level_free_head(rhs)
+            {
+                counter += 1;
+                end_state = DECOMPOSED_VAR;
+                target_found =
+                    apply_identification_step(bank, flex, rhs, applied_bindings, subst, params)?;
+            } else {
+                counter += 1;
+            }
+        }
+    }
+
+    Ok((
+        build_constraint(counter, end_state),
+        subst.len() != original_subst,
+    ))
+}
+
+struct BindingStep<'a> {
+    flex: &'a Term,
+    rhs: &'a Term,
+    counter_index: usize,
+    num_args_left: usize,
+    num_args_right: usize,
+}
+
+fn try_imitation_step(
+    bank: &mut TermBank,
+    flex: &Term,
+    rhs: &Term,
+    applied_bindings: &mut Limits,
+    subst: &mut Substitution,
+    params: &HoCsuParams,
+) -> Result<bool, Diagnostic> {
+    if rhs.is_top_level_free_var()
+        || !limit_allows(imitation_count(*applied_bindings), params.imit_limit)
+    {
+        return Ok(false);
+    }
+    let Some(target) = build_imitation(bank, flex, rhs)? else {
+        return Ok(false);
+    };
+    subst.add_binding(&top_level_free_head(flex), &target);
+    if !term_is_ground(&target) {
+        *applied_bindings = inc_imitation(*applied_bindings);
+    }
+    Ok(true)
+}
+
+fn try_projection_step(
+    bank: &mut TermBank,
+    step: &BindingStep<'_>,
+    applied_bindings: &mut Limits,
+    subst: &mut Substitution,
+    params: &HoCsuParams,
+) -> Result<bool, Diagnostic> {
+    let left_side = step.num_args_left != 0 && step.counter_index <= step.num_args_left;
+    let arg = if left_side {
+        step.flex.argument(step.counter_index)
+    } else {
+        step.rhs.argument(step.counter_index - step.num_args_left)
+    }
+    .unwrap_or_else(|| panic!("projection candidate argument is uninitialized"));
+    let head_type = top_level_free_head(if left_side { step.flex } else { step.rhs })
+        .type_()
+        .expect("projection candidate head has a type");
+    let arg_type = arg
+        .type_()
+        .expect("projection candidate argument has a type");
+
+    if get_ret_type(&head_type) != get_ret_type(&arg_type)
+        || (!limit_allows(projection_count(*applied_bindings), params.func_proj_limit)
+            && arg_type.is_arrow())
+    {
+        return Ok(false);
+    }
+
+    let offset = if left_side { 1 } else { step.num_args_left + 1 };
+    let (projection_flex, projection_rhs) = if left_side {
+        (step.flex, step.rhs)
+    } else {
+        (step.rhs, step.flex)
+    };
+    let Some(target) = build_projection(
+        bank,
+        projection_flex,
+        projection_rhs,
+        step.counter_index - offset,
+    )?
+    else {
+        return Ok(false);
+    };
+    subst.add_binding(&top_level_free_head(projection_flex), &target);
+    *applied_bindings = inc_projection(*applied_bindings);
+    Ok(true)
+}
+
+fn apply_elimination_step(
+    bank: &mut TermBank,
+    step: &BindingStep<'_>,
+    applied_bindings: &mut Limits,
+    subst: &mut Substitution,
+) -> Result<bool, Diagnostic> {
+    let left_side = step.num_args_left != 0
+        && step.counter_index <= 2 * step.num_args_left + step.num_args_right;
+    let elimination_flex = if left_side { step.flex } else { step.rhs };
+    let offset = (if left_side { 1 } else { 2 }) * step.num_args_left + step.num_args_right + 1;
+    let target = build_elim(bank, elimination_flex, step.counter_index - offset)?;
+    subst.add_binding(&top_level_free_head(elimination_flex), &target);
+    *applied_bindings = inc_elimination(*applied_bindings);
+    Ok(true)
+}
+
+fn apply_identification_step(
+    bank: &mut TermBank,
+    flex: &Term,
+    rhs: &Term,
+    applied_bindings: &mut Limits,
+    subst: &mut Substitution,
+    params: &HoCsuParams,
+) -> Result<bool, Diagnostic> {
+    let binding = if limit_allows(identification_count(*applied_bindings), params.ident_limit) {
+        build_ident(bank, flex, rhs)?
+    } else {
+        build_trivial_ident(bank, flex, rhs)?
+    };
+    let Some(binding) = binding else {
+        return Ok(false);
+    };
+    *applied_bindings = inc_identification(*applied_bindings);
+    subst.add_binding(&top_level_free_head(flex), &binding.left_target);
+    subst.add_binding(&top_level_free_head(rhs), &binding.right_target);
+    Ok(true)
 }
 
 /// Builds the C `build_imitation` binding for a rigid-symbol `rhs`.
@@ -427,6 +638,18 @@ fn projection_fails_fast(arg: &Term, rhs: &Term) -> bool {
     !arg.is_lambda() && !rhs.is_lambda() && (arg.is_top_level_db_var() != rhs.is_top_level_db_var())
 }
 
+fn visible_arg_count(term: &Term) -> usize {
+    if term.is_applied_free_var() {
+        term.arity() - 1
+    } else {
+        0
+    }
+}
+
+fn limit_allows(count: Limits, limit: i32) -> bool {
+    limit < 0 || Limits::try_from(limit).is_ok_and(|limit| count < limit)
+}
+
 fn type_prefix(type_: &Type) -> &[Type] {
     if type_.is_arrow() {
         &type_.args()[..type_.arity() - 1]
@@ -456,13 +679,18 @@ fn db_vars_for_prefix(bank: &mut TermBank, prefix: &[Type]) -> Vec<Term> {
 mod tests {
     use super::{
         build_elim, build_ident, build_imitation, build_projection, build_trivial_ident,
-        elimination_count, identification_count, imitation_count, inc_elimination,
-        inc_identification, inc_imitation, inc_projection, projection_count, ELIM_MASK, IDENT_MASK,
-        IMIT_MASK, PROJ_MASK,
+        compute_next_binding, elimination_count, identification_count, imitation_count,
+        inc_elimination, inc_identification, inc_imitation, inc_projection, projection_count,
+        ELIM_MASK, IDENT_MASK, IMIT_MASK, PROJ_MASK,
+    };
+    use crate::heuristics::hcb::UnifMode;
+    use crate::terms::ho_csu::{
+        constraint_counter, constraint_state, HoCsuParams, Limits, DECOMPOSED_VAR, INIT_TAG,
     };
     use crate::terms::lambda::{apply_terms, beta_normalize_db};
     use crate::terms::signature::{Signature, SIG_PHONY_APP_CODE};
     use crate::terms::simpletypes::{alloc_arrow_type, Type};
+    use crate::terms::subst::Substitution;
     use crate::terms::termbanks::TermBank;
     use crate::terms::termtypes::Term;
     use crate::terms::typebanks::TypeBank;
@@ -473,6 +701,25 @@ mod tests {
             .declare_final_type(code, type_.clone())
             .unwrap();
         bank.create_const_term(code).unwrap()
+    }
+
+    fn ho_params(
+        func_proj_limit: i32,
+        imit_limit: i32,
+        ident_limit: i32,
+        elim_limit: i32,
+    ) -> HoCsuParams {
+        HoCsuParams {
+            func_proj_limit,
+            imit_limit,
+            ident_limit,
+            elim_limit,
+            unif_mode: UnifMode::Single,
+            pattern_oracle: true,
+            fixpoint_oracle: true,
+            max_unifiers: 4,
+            max_unif_steps: 256,
+        }
     }
 
     #[test]
@@ -513,6 +760,148 @@ mod tests {
         let carried = inc_imitation(IMIT_MASK);
         assert_eq!(imitation_count(carried), 0);
         assert_eq!(projection_count(carried), 1);
+    }
+
+    #[test]
+    fn compute_next_binding_imitation_binds_and_advances_counter() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let predicate = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                bool_type.clone(),
+            ]));
+        let flex = bank.vars().var_assert_alloc(-100, &bool_type);
+        let rhs = typed_const(&mut bank, "compute_imit_p", &predicate);
+        let mut limits: Limits = 0;
+        let mut subst = Substitution::new();
+
+        let (next_state, changed) = compute_next_binding(
+            &mut bank,
+            &flex,
+            &rhs,
+            INIT_TAG,
+            &mut limits,
+            &mut subst,
+            &ho_params(0, 1, 0, 0),
+        )
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(constraint_counter(next_state), 1);
+        assert_eq!(constraint_state(next_state), INIT_TAG);
+        assert_eq!(imitation_count(limits), 1);
+        assert_eq!(subst.bindings(), std::slice::from_ref(&flex));
+        let binding = flex.binding().expect("flex variable was bound");
+        assert_eq!(binding.f_code(), rhs.f_code());
+        assert_eq!(binding.type_(), Some(bool_type));
+    }
+
+    #[test]
+    fn compute_next_binding_projection_follows_imitation_slot() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let unary = bank
+            .signature_mut()
+            .type_bank_mut()
+            .insert_type_shared(alloc_arrow_type(vec![
+                individual.clone(),
+                individual.clone(),
+            ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &unary);
+        let a = typed_const(&mut bank, "compute_proj_a", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, std::slice::from_ref(&a)).unwrap();
+        let mut limits: Limits = 0;
+        let mut subst = Substitution::new();
+
+        let (next_state, changed) = compute_next_binding(
+            &mut bank,
+            &flex,
+            &a,
+            INIT_TAG,
+            &mut limits,
+            &mut subst,
+            &ho_params(0, 0, 0, 0),
+        )
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(constraint_counter(next_state), 2);
+        assert_eq!(constraint_state(next_state), INIT_TAG);
+        assert_eq!(projection_count(limits), 1);
+        assert_eq!(subst.bindings(), std::slice::from_ref(&flex_head));
+        let binding = flex_head.binding().expect("flex head was bound");
+        let applied = apply_terms(&mut bank, &binding, std::slice::from_ref(&a)).unwrap();
+        assert_eq!(beta_normalize_db(&mut bank, &applied).unwrap(), a);
+    }
+
+    #[test]
+    fn compute_next_binding_elimination_follows_failed_projections() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let individual = bank.signature().type_bank().i_type();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let binary_pred =
+            bank.signature_mut()
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(vec![
+                    individual.clone(),
+                    individual.clone(),
+                    bool_type,
+                ]));
+        let flex_head = bank.vars().var_assert_alloc(-100, &binary_pred);
+        let a = typed_const(&mut bank, "compute_elim_a", &individual);
+        let b = typed_const(&mut bank, "compute_elim_b", &individual);
+        let c = typed_const(&mut bank, "compute_elim_c", &individual);
+        let flex = apply_terms(&mut bank, &flex_head, &[a, c]).unwrap();
+        let mut limits: Limits = 0;
+        let mut subst = Substitution::new();
+
+        let (next_state, changed) = compute_next_binding(
+            &mut bank,
+            &flex,
+            &b,
+            INIT_TAG,
+            &mut limits,
+            &mut subst,
+            &ho_params(0, 0, 0, 1),
+        )
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(constraint_counter(next_state), 4);
+        assert_eq!(constraint_state(next_state), INIT_TAG);
+        assert_eq!(elimination_count(limits), 1);
+        assert_eq!(subst.bindings(), std::slice::from_ref(&flex_head));
+    }
+
+    #[test]
+    fn compute_next_binding_identification_decomposes_variable_pair() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let bool_type = bank.signature().type_bank().bool_type();
+        let left = bank.vars().var_assert_alloc(-100, &bool_type);
+        let right = bank.vars().var_assert_alloc(-102, &bool_type);
+        let mut limits: Limits = 0;
+        let mut subst = Substitution::new();
+
+        let (next_state, changed) = compute_next_binding(
+            &mut bank,
+            &left,
+            &right,
+            INIT_TAG,
+            &mut limits,
+            &mut subst,
+            &ho_params(0, 0, 1, 0),
+        )
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(constraint_counter(next_state), 2);
+        assert_eq!(constraint_state(next_state), DECOMPOSED_VAR);
+        assert_eq!(identification_count(limits), 1);
+        assert_eq!(subst.bindings(), &[left, right]);
     }
 
     #[test]
