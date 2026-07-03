@@ -26,9 +26,8 @@ use std::cmp::Ordering;
 ///
 /// # Panics
 ///
-/// Panics if a higher-order Lambda-order comparison reaches a surface that
-/// still needs owner-bank beta/eta normalization, if term argument slots are
-/// uninitialized, or if the OCB lacks KBO weight/precedence storage.
+/// Panics if term argument slots are uninitialized, or if the OCB lacks KBO
+/// weight/precedence storage.
 pub fn kbo6_compare(
     ocb: &mut OrderControlBlock,
     signature: &Signature,
@@ -42,11 +41,6 @@ pub fn kbo6_compare(
         return match ocb.ho_order_kind {
             HoOrderKind::LfhoOrder => kbo_lin_cmp_lfho(ocb, signature, s, t, deref_s, deref_t),
             HoOrderKind::LambdaOrder => {
-                assert!(
-                    kbo6_lambda_order_can_skip_bank_normalization(s, deref_s)
-                        && kbo6_lambda_order_can_skip_bank_normalization(t, deref_t),
-                    "Lambda-order KBO6 term ordering is not ported yet"
-                );
                 kbo_lin_cmp_lambda_no_bank(ocb, signature, s, t, deref_s, deref_t)
             }
         };
@@ -437,16 +431,19 @@ fn kbo_lin_cmp_lfho(
 /// owner-bank normalization path.
 ///
 /// This is intentionally conservative: it accepts terms whose exposed
-/// dereferenced shape has no lambda surface. The full C branch first inserts
+/// dereferenced shape has no lambda surface after the local weak-head reduction
+/// used by the no-bank comparator. The full C branch first inserts
 /// instantiated terms into the owner bank, beta-normalizes, and eta-reduces
-/// them; this predicate marks cases where that work is unnecessary for the
-/// current Rust subset. DB variables and variable-headed phony applications are
-/// accepted because the Lambda-order driver handles those shapes directly.
+/// them; this predicate marks cases where that owner-bank work is unnecessary
+/// for the current Rust subset. DB variables and variable-headed phony
+/// applications are accepted because the Lambda-order driver handles those
+/// shapes directly.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn kbo6_lambda_order_can_skip_bank_normalization(term: &Term, deref: DerefType) -> bool {
     let mut stack = vec![(term.clone(), deref)];
-    while let Some((candidate, mut current_deref)) = stack.pop() {
-        let current = term_deref(&candidate, &mut current_deref);
+    while let Some((candidate, current_deref)) = stack.pop() {
+        let (current, current_deref) = lambda_deref_for_kbo(&candidate, current_deref);
         if current.is_lambda() {
             return false;
         }
@@ -492,9 +489,17 @@ fn kbo_lin_cmp_lambda_no_bank(
 }
 
 fn lambda_deref_for_kbo(term: &Term, deref: DerefType) -> (Term, DerefType) {
+    if deref == DerefType::Always {
+        return (whnf_deref_for_kbo(term), DerefType::Never);
+    }
+
     let mut current_deref = deref;
     let term = term_deref(term, &mut current_deref);
-    (term, current_deref)
+    if term.is_phony_app() && term.argument(0).is_some_and(|head| head.is_lambda()) {
+        (whnf_deref_for_kbo(&term), DerefType::Never)
+    } else {
+        (term, current_deref)
+    }
 }
 
 fn mfy_vwb_lambda_lhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType) {
@@ -507,8 +512,8 @@ fn mfy_vwb_lambda_rhs(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType
 
 fn mfy_vwb_lambda(ocb: &mut OrderControlBlock, term: &Term, deref: DerefType, lhs: bool) {
     let mut stack = vec![(term.clone(), deref)];
-    while let Some((candidate, mut current_deref)) = stack.pop() {
-        let current = term_deref(&candidate, &mut current_deref);
+    while let Some((candidate, current_deref)) = stack.pop() {
+        let (current, current_deref) = lambda_deref_for_kbo(&candidate, current_deref);
         if is_fluid_lambda(&current) {
             if lhs {
                 ocb.inc_ho_var_balance(&current);
@@ -1633,8 +1638,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Lambda-order KBO6 term ordering is not ported yet")]
-    fn kbo6_higher_order_lambda_order_non_bank_api_rejects_lambda_surface_terms() {
+    fn kbo6_higher_order_lambda_order_non_bank_api_normalizes_lambda_applications() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
@@ -1643,16 +1647,19 @@ mod tests {
         let lambda =
             close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
         let arg = typed_const(&mut bank, "kbo6_lambda_pending_arg");
-        let applied = app(SIG_PHONY_APP_CODE, &[lambda, arg]);
+        let applied = app(SIG_PHONY_APP_CODE, &[lambda, arg.clone()]);
         let mut ocb = lambda_ocb(bank.signature());
 
-        let _ = kbo6_compare(
-            &mut ocb,
-            bank.signature(),
-            &applied,
-            bank.true_term(),
-            DerefType::Never,
-            DerefType::Never,
+        assert_eq!(
+            kbo6_compare(
+                &mut ocb,
+                bank.signature(),
+                &applied,
+                &arg,
+                DerefType::Never,
+                DerefType::Never,
+            ),
+            CompareResult::Equal
         );
     }
 
@@ -1701,11 +1708,16 @@ mod tests {
         let lambda =
             close_with_db_var(&mut bank, &binder_type, &db0).unwrap_or_else(|err| panic!("{err}"));
         let arg = typed_const(&mut bank, "kbo6_lambda_supported_arg");
-        let applied = app(SIG_PHONY_APP_CODE, &[lambda, arg]);
+        let applied = app(SIG_PHONY_APP_CODE, &[lambda.clone(), arg]);
         let variable = Term::const_cell_alloc(-4);
-        variable.set_binding(Some(applied));
+        variable.set_binding(Some(lambda));
 
         assert!(!kbo6_lambda_order_can_skip_bank_normalization(
+            &variable,
+            DerefType::Always
+        ));
+        variable.set_binding(Some(applied));
+        assert!(kbo6_lambda_order_can_skip_bank_normalization(
             &variable,
             DerefType::Always
         ));
