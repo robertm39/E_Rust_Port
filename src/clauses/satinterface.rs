@@ -240,6 +240,21 @@ impl SatClauseSet {
         pure
     }
 
+    pub fn export_all_to_solver_clauses(&mut self) -> Vec<Vec<i32>> {
+        self.exported = (0..self.clauses.len()).collect();
+        self.solver_clauses_for_indices(&self.exported)
+    }
+
+    pub fn export_non_pure_to_solver_clauses(&mut self) -> Vec<Vec<i32>> {
+        let _ = self.mark_pure_and_export_non_pure();
+        self.solver_clauses_for_indices(&self.exported)
+    }
+
+    #[must_use]
+    pub fn exported_indices(&self) -> &[usize] {
+        &self.exported
+    }
+
     /// Checks for unsatisfiability and returns the extracted core clauses.
     ///
     /// This mirrors `SatClauseSetCheckAndGetCore`: it refreshes pure-literal
@@ -249,8 +264,7 @@ impl SatClauseSet {
     /// deletion-minimized core in exported-clause order.
     #[must_use]
     pub fn check_and_get_core(&mut self) -> Option<Vec<Clause>> {
-        let _ = self.mark_pure_and_export_non_pure();
-        let solver_clauses = self.solver_clauses_for_indices(&self.exported);
+        let solver_clauses = self.export_non_pure_to_solver_clauses();
         if solve_sat(&solver_clauses, self.max_lit, 10_000) != SolverStatus::Unsat {
             return None;
         }
@@ -296,7 +310,7 @@ impl SatClauseSet {
         self.core.clear();
         self.core_size = 0;
 
-        let solver_clauses = self.solver_clauses_for_indices(&self.exported);
+        let solver_clauses = self.export_non_pure_to_solver_clauses();
         match solve_sat(&solver_clauses, self.max_lit, decision_limit) {
             SolverStatus::Sat => (ProverResult::Satisfiable, None),
             SolverStatus::GaveUp => (ProverResult::GaveUp, None),
@@ -884,6 +898,49 @@ mod tests {
         assert!(!set.clauses[2].has_pure_lit);
         assert_eq!(set.exported, vec![2]);
         assert_eq!(set.non_pure_cardinality(), 1);
+    }
+
+    #[test]
+    fn solver_export_helpers_preserve_c_stack_order_and_filter_shape() {
+        let mut set = SatClauseSet {
+            max_lit: 4,
+            clauses: vec![
+                SatClause {
+                    literals: vec![1, 2],
+                    source: Clause::empty(),
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![-1, 3],
+                    source: Clause::empty(),
+                    has_pure_lit: false,
+                },
+                SatClause {
+                    literals: vec![-1, 1],
+                    source: Clause::empty(),
+                    has_pure_lit: false,
+                },
+            ],
+            ..SatClauseSet::default()
+        };
+
+        assert_eq!(
+            set.export_all_to_solver_clauses(),
+            vec![vec![1, 2], vec![-1, 3], vec![-1, 1]]
+        );
+        assert_eq!(set.exported_indices(), &[0, 1, 2]);
+
+        assert_eq!(set.export_non_pure_to_solver_clauses(), vec![vec![-1, 1]]);
+        assert_eq!(set.exported_indices(), &[2]);
+        assert!(set.clauses[0].has_pure_lit);
+        assert!(set.clauses[1].has_pure_lit);
+        assert!(!set.clauses[2].has_pure_lit);
+
+        assert_eq!(
+            set.export_all_to_solver_clauses(),
+            vec![vec![1, 2], vec![-1, 3], vec![-1, 1]]
+        );
+        assert_eq!(set.exported_indices(), &[0, 1, 2]);
     }
 
     #[test]
