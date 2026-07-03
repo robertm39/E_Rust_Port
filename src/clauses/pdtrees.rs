@@ -20,6 +20,7 @@ pub struct PrefixMatch {
 pub struct PdTree {
     nodes: Vec<PdNode>,
     term_count: usize,
+    live_node_count: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,6 +42,7 @@ impl PdTree {
         Self {
             nodes: vec![PdNode::default()],
             term_count: 0,
+            live_node_count: 0,
         }
     }
 
@@ -59,7 +61,7 @@ impl PdTree {
 
     #[must_use]
     pub fn node_count(&self) -> usize {
-        self.nodes.len().saturating_sub(1)
+        self.live_node_count
     }
 
     #[must_use]
@@ -84,6 +86,7 @@ impl PdTree {
                     let created = self.nodes.len();
                     self.nodes.push(PdNode::default());
                     self.nodes[node_index].children.insert(*token, created);
+                    self.live_node_count += 1;
                     created
                 };
             node_index = next_index;
@@ -93,6 +96,56 @@ impl PdTree {
         self.nodes[node_index].terminal_count += 1;
         self.term_count += 1;
         true
+    }
+
+    pub fn delete_term(&mut self, term: &Term) -> bool {
+        let code = term_lr_traverse_code(term);
+        self.delete_code(&code)
+    }
+
+    pub fn delete_code(&mut self, code: &[PrefixToken]) -> bool {
+        let mut node_index = 0;
+        let mut path = Vec::with_capacity(code.len());
+
+        for token in code {
+            let Some(next_index) = self.nodes[node_index].children.get(token).copied() else {
+                return false;
+            };
+            path.push((node_index, *token, next_index));
+            node_index = next_index;
+        }
+
+        if self.nodes[node_index].terminal_count == 0 {
+            return false;
+        }
+
+        self.nodes[node_index].terminal_count -= 1;
+        self.term_count -= 1;
+        self.nodes[0].ref_count -= 1;
+
+        for (_, _, path_node_index) in &path {
+            self.nodes[*path_node_index].ref_count -= 1;
+        }
+
+        for (parent_index, token, dead_index) in path.into_iter().rev() {
+            if self.nodes[dead_index].ref_count != 0 {
+                break;
+            }
+            self.nodes[parent_index].children.remove(&token);
+            self.nodes[dead_index].children.clear();
+            self.nodes[dead_index].terminal_count = 0;
+            self.live_node_count -= 1;
+        }
+
+        true
+    }
+
+    pub fn delete_code_occurrences(&mut self, code: &[PrefixToken]) -> usize {
+        let mut deleted = 0;
+        while self.delete_code(code) {
+            deleted += 1;
+        }
+        deleted
     }
 
     #[must_use]
@@ -279,5 +332,82 @@ mod tests {
         let prefix = prefix_compute_term_code(&parse_in_bank(&mut bank, "f(a)"));
 
         assert_eq!(prefix_code_ref_count(&prefix, &[first, second]), 2);
+    }
+
+    #[test]
+    fn delete_term_decrements_shared_prefix_counts_and_prunes_dead_suffix() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let first = parse_in_bank(&mut bank, "f(a,b)");
+        let second = parse_in_bank(&mut bank, "f(a,c)");
+        let shared_prefix = prefix_compute_term_code(&parse_in_bank(&mut bank, "f(a)"));
+        let first_code = prefix_compute_term_code(&first);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term(&first));
+        assert!(tree.insert_term(&second));
+        assert_eq!(tree.node_count(), 4);
+
+        assert!(tree.delete_term(&first));
+
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(tree.prefix_ref_count(&shared_prefix), 1);
+        assert_eq!(tree.prefix_ref_count(&first_code), 0);
+        assert_eq!(tree.node_count(), 3);
+        assert_eq!(tree.match_prefix(&second).remains, 0);
+    }
+
+    #[test]
+    fn delete_code_removes_one_duplicate_occurrence_at_a_time() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let term = parse_in_bank(&mut bank, "f(a)");
+        let code = prefix_compute_term_code(&term);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_code(&code));
+        assert!(tree.insert_code(&code));
+
+        assert!(tree.delete_code(&code));
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(tree.prefix_ref_count(&code), 1);
+        assert_eq!(tree.node_count(), code.len());
+
+        assert!(tree.delete_code(&code));
+        assert_eq!(tree.term_count(), 0);
+        assert_eq!(tree.prefix_ref_count(&code), 0);
+        assert_eq!(tree.node_count(), 0);
+        assert!(!tree.delete_code(&code));
+    }
+
+    #[test]
+    fn delete_missing_code_leaves_tree_counts_unchanged() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let stored = parse_in_bank(&mut bank, "f(a)");
+        let missing = prefix_compute_term_code(&parse_in_bank(&mut bank, "g(a)"));
+        let stored_code = prefix_compute_term_code(&stored);
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_term(&stored));
+        assert!(!tree.delete_code(&missing));
+
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(tree.prefix_ref_count(&stored_code), 1);
+        assert_eq!(tree.node_count(), stored_code.len());
+    }
+
+    #[test]
+    fn delete_code_occurrences_removes_all_matching_duplicates() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let code = prefix_compute_term_code(&parse_in_bank(&mut bank, "f(a)"));
+        let other = prefix_compute_term_code(&parse_in_bank(&mut bank, "f(b)"));
+        let mut tree = PdTree::new();
+
+        assert!(tree.insert_code(&code));
+        assert!(tree.insert_code(&code));
+        assert!(tree.insert_code(&other));
+
+        assert_eq!(tree.delete_code_occurrences(&code), 2);
+        assert_eq!(tree.delete_code_occurrences(&code), 0);
+        assert_eq!(tree.term_count(), 1);
+        assert_eq!(tree.prefix_ref_count(&other), 1);
     }
 }
