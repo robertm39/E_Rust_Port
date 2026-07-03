@@ -118,12 +118,13 @@ Source files reviewed: `INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`.
 
 ### Rust Port Status Notes
 
-- `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers, and C-style option help rendering.
-- Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, range and bool diagnostics, float trailing-garbage/overflow rejection, and optional-argument help text.
+- `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers including LP64 `LONG_MIN` boundary acceptance, and C-style option help rendering.
+- Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, LP64 signed integer boundaries, range and bool diagnostics, float trailing-garbage/overflow rejection, and optional-argument help text.
 
 ### Change Later
 
 - `CLStateGetIntArg` and `CLStateGetFloatArg` accept an empty string as zero because `strtol`/`strtod` leave the end pointer on the terminating NUL without setting `errno`. Rust preserves that compatibility quirk; a cleaned CLI should reject empty numeric values outside compatibility mode.
+- `CLStateGetIntArg` follows the host C `long` range; current Rust compatibility treats this as the LP64 range used by E's main supported Unix-like targets. Revisit if a strict LLP64/Windows C build must be byte-compatible for command-line integer limits.
 - C float parsing delegates to the active C library and locale through `strtod`, so platform-specific forms such as hexadecimal floats, named NaNs, or locale decimal separators can vary. Rust keeps the common decimal/named-infinity surface and rejects overflow deterministically; broaden this only if reference executable tests show callers depend on libc-specific parsing.
 - C option arrays are terminated by an `option_code == 0` sentinel and may contain null short or long names. Rust uses typed slices with `Option` fields, which is safer but should remain externally equivalent for the generated executable option tables.
 

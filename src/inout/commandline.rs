@@ -415,14 +415,19 @@ fn parse_c_long(argument: &str) -> Option<i64> {
 
     let trimmed = argument.trim_start_matches(|character: char| character.is_ascii_whitespace());
     let mut chars = trimmed.char_indices();
-    let (sign, digit_start) = match chars.next() {
-        Some((_, '+')) => (1_i64, 1),
-        Some((_, '-')) => (-1_i64, 1),
-        Some((index, character)) if character.is_ascii_digit() => (1_i64, index),
+    let (negative, digit_start) = match chars.next() {
+        Some((_, '+')) => (false, 1),
+        Some((_, '-')) => (true, 1),
+        Some((index, character)) if character.is_ascii_digit() => (false, index),
         _ => return None,
     };
 
-    let mut value = 0_i64;
+    let limit = if negative {
+        i64::MIN.unsigned_abs()
+    } else {
+        i64::MAX.unsigned_abs()
+    };
+    let mut value = 0_u64;
     let mut consumed_digit = false;
     let mut end = digit_start;
     for (index, character) in trimmed[digit_start..].char_indices() {
@@ -432,14 +437,25 @@ fn parse_c_long(argument: &str) -> Option<i64> {
         }
         consumed_digit = true;
         end = digit_start + index + character.len_utf8();
-        let digit = i64::from(character as u8 - b'0');
+        let digit = u64::from(character as u8 - b'0');
         value = value.checked_mul(10)?.checked_add(digit)?;
+        if value > limit {
+            return None;
+        }
     }
 
     if !consumed_digit || !trimmed[end..].is_empty() {
         return None;
     }
-    value.checked_mul(sign)
+    if negative {
+        if value == i64::MIN.unsigned_abs() {
+            Some(i64::MIN)
+        } else {
+            i64::try_from(value).ok().map(|value| -value)
+        }
+    } else {
+        i64::try_from(value).ok()
+    }
 }
 
 fn parse_c_double(argument: &str) -> Option<f64> {
@@ -616,6 +632,21 @@ mod tests {
         assert_eq!(get_int_arg(option, "").unwrap(), 0);
         assert_eq!(get_int_arg(option, " 42").unwrap(), 42);
         assert!(get_int_arg(option, "42x").is_err());
+    }
+
+    #[test]
+    fn int_arg_accepts_long_min_and_rejects_overflow_boundaries() {
+        let option = &OPTIONS[1];
+        assert_eq!(
+            get_int_arg(option, "-9223372036854775808").unwrap(),
+            i64::MIN
+        );
+        assert_eq!(
+            get_int_arg(option, "9223372036854775807").unwrap(),
+            i64::MAX
+        );
+        assert!(get_int_arg(option, "-9223372036854775809").is_err());
+        assert!(get_int_arg(option, "9223372036854775808").is_err());
     }
 
     #[test]
