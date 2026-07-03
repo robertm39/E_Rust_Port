@@ -131,7 +131,7 @@ Source files reviewed: `TERMS/cte_ho_csu.h`, `TERMS/cte_ho_csu.c`.
 - Rust now ports the reusable `CSUIterator` state machine as `CsuIterator`: it preserves C's newest-pair queue popping, backtrack-frame queue snapshots, substitution-position restoration, `WHNF_deref` plus lambda-prefix pruning, first-order fallback outside HO multi mode, fixpoint-oracle dispatch, pattern-oracle dispatch through `subst_compute_mgu_pattern`, binding-dispatcher enumeration, rigid/phony/DB decomposition, and C argument scheduling buckets.
 - The first clause-level Rust consumers are higher-order all-resolvent equality resolution, equality factoring, and indexed plain/simultaneous/super-simultaneous paramodulation: `ComputeAllEqnResolvents`, `ComputeAllEqualityFactors`, and the caller-owned indexed `ComputeAllParamodulantsIndexed` path now drive `CsuIterator`, preserve their C-shaped result ordering where applicable, and propagate C-shaped higher-order derivation metadata.
 
-### Change-Later Observations
+### Change Later
 
 - `BUILD_CONSTR(c, s)` does not mask `s` to the low two state bits, so an invalid state value can also change the decoded counter. Rust preserves the macro shape for compatibility; a cleaned CSU API should make state construction typed and reject out-of-range states once reference behavior is locked down.
 - `NextCSUElement` comments say the iterator is destroyed after it returns false, but the function only backtracks the substitution; callers still have to call `CSUIterDestroy` to release queues/stacks. Rust keeps false-result backtracking separate from explicit `destroy`, but a cleaned public API should make the lifecycle unambiguous.

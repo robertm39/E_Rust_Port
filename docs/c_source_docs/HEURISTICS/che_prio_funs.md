@@ -177,7 +177,7 @@ Source files reviewed: `HEURISTICS/che_prio_funs.h`, `HEURISTICS/che_prio_funs.c
 - `src/heuristics/prio_funs.rs` ports the C priority constants, name table, parser lookup surface, and the currently represented clause priority functions over an explicit `&TermBank`.
 - `PrioFunPreferEasyHO` now preserves the C normal-result behavior for non-ArgCong clauses and returns `PrioBest` for represented `DCArgCong` derivations when the process problem type is higher-order.
 
-### Change-Later Observations
+### Change Later
 
 - `PrioFunPreferHOSteps` scans the derivation stack and computes a higher-order-step flag, but the computed flag is not used before returning `PrioNormal`. Rust preserves the observable result; revisit only with scheduler traces that show whether this was intended.
 - `PrioFunPreferEasyHO` computes formula/non-pattern preferences after the ArgCong special case, then discards them through `prio = PrioPrefer ? PrioNormal : PrioDefer`, making every non-ArgCong path return `PrioNormal`. Rust preserves this quirk while documenting it as a later heuristic cleanup candidate.

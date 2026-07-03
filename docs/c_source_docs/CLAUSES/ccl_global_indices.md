@@ -119,7 +119,7 @@ Source files reviewed: `CLAUSES/ccl_global_indices.h`, `CLAUSES/ccl_global_indic
 - Extension index insertion runs after backward-rewrite and PM indexes, applies the configured max-depth gate inside `ExtIndexInsert*Clause`, and deletes without a depth gate. Rust preserves that call order and gating.
 - `GlobalIndicesInsertClauseSet` returns immediately if `bw_rw_index` is null, so a PM-only configuration would not mark or insert the set through this helper. Rust preserves that no-op gate.
 
-### Change Later Candidates
+### Change Later
 
 - `GlobalIndicesReset` frees and reinitializes indexes but does not clear `CPIsGlobalIndexed` on any clauses; C callers reset after freeing clause sets. Rust mirrors the index reset and should keep clause-flag cleanup explicit if reset is ever exposed with live clauses.
 - Global indices in C store raw pointers to optional subterm, overlap, and extension indexes against the proof-state signature. Rust uses a borrowed-signature shell for now; later proof-state integration should avoid self-referential ownership, likely by moving the signature behind an explicit shared proof-session handle.

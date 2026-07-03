@@ -154,11 +154,15 @@ Source files reviewed: `CLAUSES/ccl_grounding.h`, `CLAUSES/ccl_grounding.c`.
 - `ClausePrintDimacs` takes a `FILE* out`, but the non-empty literal loop writes literal integers to `stdout` and only writes the trailing `0` line ending to `out`; Rust now preserves this through explicit split-writer helpers while retaining pure string renderers for intentionally single-buffer DIMACS output.
 - `ClauseSetPrintDimacs` has no separate header or sorting step; it delegates to `ClausePrintDimacs` for each clause in set iteration order, including the empty-clause two-clause workaround.
 - `ClauseCreateGroundInstances` prints progress comments from the low-level instance generator and then loops only while `!TimeIsUp && !MemIsLow`. The set-level grounding functions also poll those process-global flags between clauses and mark `groundset->complete` as timeout, low-memory, or complete. Rust public grounding helpers now mirror the stop/completion behavior, expose single-clause and clause-set progress output through explicit output-aware wrappers with output-format dispatch, and keep tests/reusable internals on an injected stop callback to avoid process-global races.
-- Change-later candidate: C couples grounding enumeration, final/progress output, `OutputFormat`, and resource-stop globals in the same low-level functions. Keep Rust's reusable helpers and explicit output-owner boundary unless byte-for-byte executable tests require recreating the C global coupling.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- C couples grounding enumeration, final/progress output, `OutputFormat`, and resource-stop globals in the same low-level functions. Keep Rust's reusable helpers and explicit output-owner boundary unless byte-for-byte executable tests require recreating the C global coupling.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

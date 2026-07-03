@@ -113,7 +113,7 @@ Source files reviewed: `CLAUSES/ccl_splitting.h`, `CLAUSES/ccl_splitting.c`.
 - Non-fresh arity-zero splitting now uses the proof-state definition store to reuse variant definition predicates, reuse represented formula parents, archive new reusable definition formulas, and suppress duplicate definition clauses, matching the reusable `GetDefinitions(fresh=false)` behavior. Parameterized `ClauseSplitGeneral` attempts still create fresh definitions, as in C.
 - Rust also ports the `ClauseSetSplitClauses` and `ClauseSetSplitClausesGeneral` extraction/insertion loops, including C-style return counts when non-fresh definition reuse suppresses duplicate definition clauses. Arity-zero fresh and reusable non-fresh split-definition formula archives are represented for proof-state splitting; live proof-documentation output remains pending.
 
-### Change-Later Observations
+### Change Later
 
 - C recycles the original literal cells into split result clauses and mutates the original clause into the residual clause. Rust clones `Eqn` cells while preserving shared term handles and the original residual clause metadata; revisit this if literal-cell identity or allocation reuse becomes observable in indexing or proof-output integration.
 - The C `SplitGroundOne` pre-reservation check treats `find_free_literal()` as a raw integer, so `-1` is truthy and index `0` is false. Rust intentionally mirrors that behavior; change it only behind reference tests if compatibility can be relaxed.

@@ -288,7 +288,7 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 ### Compatibility Notes
 
 - `ClauseAddEvalCell` stores the evaluation cell directly on the clause and sets `evaluation->object` to the owning clause pointer. Rust clause-owned evaluations should keep the object slot explicit until clause sets provide stable handles for eval-index lookups.
-- `ClauseCopy`, `ClauseFlatCopy`, `ClauseCopyOpt`, and `ClauseCopyDisjoint` copy core metadata but intentionally do not copy evaluations, source info, or derivation stacks because `clause_copy_meta` nulls those ownership fields. Rust copy helpers preserve the same split. Change-later candidate: once proof reconstruction uses stable clause handles instead of raw C pointers, make metadata-transfer cases such as archive copies explicit at the call site rather than relying on generic copy helpers.
+- `ClauseCopy`, `ClauseFlatCopy`, `ClauseCopyOpt`, and `ClauseCopyDisjoint` copy core metadata but intentionally do not copy evaluations, source info, or derivation stacks because `clause_copy_meta` nulls those ownership fields. Rust copy helpers preserve the same split..
 - `ClausePCLPrint` temporarily mutates the process-global `OutputFormat` to `TPTPFormat` to reuse `EqnListPrint`, then restores it. Rust preserves the bracketed PCL text with explicit TPTP equation-print options instead of hidden global mutation.
 - `ClauseParse` clears variable external-name state according to the process-global `ClausesHaveLocalVariables`/`ClausesHaveDisjointVariables` switches before dispatching on the scanner format, and allocates clause source info from the current token's source label, line, and column before consuming the clause. Rust exposes the variable-scope switches as explicit parse options with the C defaults and now preserves the scanner source label in `ClauseInfo`; full `TBTermParse` parity remains a follow-up.
 - `ClausePCLParse` only applies the local-variable clearing switch, parses a bracketed TPTP literal list, and sets the clause type to axiom when any positive literal exists or conjecture otherwise. Rust preserves that polarity-based type assignment with explicit parse options.
@@ -303,7 +303,7 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 - `ClauseCondMarkMaximalTerms` trusts `CPIsOriented` as the only cache signal and skips orientation/maximal marking completely when it is set, even if the literal list changed underneath it. Rust preserves that macro behavior; future literal mutation APIs should clear `CPIsOriented` explicitly rather than asking callers to remember the cache contract.
 - `ClauseSubsumeOrderSortLits` sorts with `EqnSubsumeInverseRefinedCompareRef`, which uses pre-sort literal positions as a tie-breaker, while `ClauseIsSubsumeOrdered` checks the result with the unrefined `EqnSubsumeInverseCompareRef`. Rust preserves this split; future APIs may want a named stable-sort contract if callers should rely on the position tie-break outside subsumption indexing.
 - `ClauseNotGreaterEqual` is documented as side-effect free, but it clears and sets `EPHasEquiv`, `EPDominates`, and `EPIsDominated` while scanning and reserves a greater left literal for a later equal right literal. Rust preserves these temporary flags and the scan cursor behavior; future comparison APIs should separate pure comparison results from scratch marker state once all callers are audited.
-- `ClauseRecognizeChoice` normalizes the candidate literal heads with `LambdaEtaReduceDB` followed by beta normalization, mutates the literal left sides only after all checks pass and only when a map is supplied, and rejects duplicate choice-symbol entries only when a map is supplied. Rust ports the represented beta-normal no-map predicate for feature classification separately from the mutating map-recording path. Change later: keep the compatibility distinction visible, but prefer separate explicit APIs over C's nullable map argument.
+- `ClauseRecognizeChoice` normalizes the candidate literal heads with `LambdaEtaReduceDB` followed by beta normalization, mutates the literal left sides only after all checks pass and only when a map is supplied, and rejects duplicate choice-symbol entries only when a map is supplied. Rust ports the represented beta-normal no-map predicate for feature classification separately from the mutating map-recording path..
 - `ClauseSetRecognizeChoice` receives an archive set but the checked implementation does not move recognized clauses into it; it only records clause pointers in the choice-symbol map. Rust records owned clause copies for now, and stable clause handles should replace those copies when choice instantiation needs exact pointer aliasing.
 
 ### Porting Focus
@@ -311,4 +311,10 @@ Source files reviewed: `CLAUSES/ccl_clauses.h`, `CLAUSES/ccl_clauses.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- Once proof reconstruction uses stable clause handles instead of raw C pointers, make metadata-transfer cases such as archive copies explicit at the call site rather than relying on generic copy helpers.
+- Keep the compatibility distinction visible, but prefer separate explicit APIs over C's nullable map argument.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

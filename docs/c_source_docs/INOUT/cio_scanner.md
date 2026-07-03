@@ -228,7 +228,7 @@ Source files reviewed: `INOUT/cio_scanner.h`, `INOUT/cio_scanner.c`.
 - The scanner now stores its active input sources in `InputStreamStack`, so automatic include splicing pushes included files as the current top stream and pops back to the parent stream at EOF like C `OpenStackedInput`/`CloseStackedInput`.
 - Tests cover token classification, lookahead, comments and skipped-token state, syntax diagnostics, format auto-detection, default-dir plus `TPTP` include lookup, explicit include parsing, selector handling, skip-tree handling, and nested automatic include splicing back to parent streams.
 
-### Change-Later Observations
+### Change Later
 
 - C automatic include splicing is driven by `include_key`, but this checkout initializes that field to `NULL` and exposes no public setter. Rust keeps an explicit constructor for compatibility tests and supported callers; decide later whether a broader public switch is needed when every parser path uses the same include owner.
 - C scanner file streams hold live `FILE*` handles and close them through `DestroyScanner`; Rust loads file bytes eagerly into `InputStream`. This avoids close-time ownership hazards but should be benchmarked and possibly replaced with a lazy backend before large-file parser parity is claimed.

@@ -115,7 +115,7 @@ Source files reviewed: `TERMS/cte_ho_bindings.h`, `TERMS/cte_ho_bindings.c`.
 - Rust also ports both identification constructors. `build_ident` allocates one fresh matrix variable over the concatenated left/right type prefixes and builds the C-ordered left/right target applications with fresh synthesized opposite-side prefix arguments; `build_trivial_ident` keeps the fallback that shares one fresh return-type matrix variable under both lambda prefixes.
 - Rust now stages `ComputeNextBinding` as `compute_next_binding`: it preserves the C counter ranges for imitation, left/right projection, left/right elimination, and identification, mutates the Rust `Substitution`, advances the packed constraint state, and reports whether the substitution stack changed. The reusable Rust `CsuIterator` now consumes this dispatcher for queue/backtracking enumeration; proof-control call-site integration remains pending.
 
-### Change-Later Observations
+### Change Later
 
 - The `INC_IMIT`/`INC_PROJ`/`INC_IDENT`/`INC_ELIM` macros increment their selected six-bit field without masking the incremented result back down to six bits, so overflow can carry into the next field. Rust preserves that arithmetic in the helper layer; a cleaned CSU binding API should use typed counters and explicit limit checks once reference behavior is covered.
 - `build_imitation` refuses rigid symbols when `SigGetType` cannot return a concrete monomorphic type, leaving polymorphic imitation unimplemented. Keep that compatibility behavior for now; after full polymorphic higher-order unification coverage exists, this is a natural place to add typed instantiation instead of returning no binding.

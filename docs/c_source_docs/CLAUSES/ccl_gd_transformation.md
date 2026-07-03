@@ -89,7 +89,7 @@ Source files reviewed: `CLAUSES/ccl_gd_transformation.h`, `CLAUSES/ccl_gd_transf
 - Supported executable prune/proof-search paths now apply `--goal-defs` and `--goal-subterm-defs` after represented SInE/relevance pruning and BCE, and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. Generated definitions are inserted into the represented axiom set, so initial docs and the saturation initial-clause count can observe them.
 - Full formula-owner preprocessing and exact integration with later predicate elimination remain pending; the current call site matches the C ordering relative to BCE and the currently unported predicate-elimination pass by running after BCE.
 
-### Change-Later Observations
+### Change Later
 
 - C traverses collected goal terms through a `PTree`, so generated definition names and insertion order can depend on raw pointer order. Rust reuses the existing deterministic `BTreeMap` keyed by term identity for ground-term collection, which is stable inside the Rust port but may differ from C definition order. Preserve this until reference traces decide whether exact pointer-order compatibility matters.
 - C keys the definition table by term-bank `entry_no` and can define a normalized left-hand side that is already an introduced definition constant if an original compound term normalizes to it. Rust mirrors that entry-number map and the resulting behavior, even though a later cleaned transform might avoid constant-to-constant follow-up definitions.

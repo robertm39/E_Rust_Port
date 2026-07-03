@@ -87,7 +87,7 @@ Source files reviewed: `CONTROL/cco_eqnresolving.h`, `CONTROL/cco_eqnresolving.c
 - First-order derivation pushes are ported for `DCEqRes` on generated resolvents and `DCDesEqRes` on destructive equality-resolution replacements.
 - Higher-order CSU enumeration, `subst_is_ho` propagation, and lambda normalization remain pending; first-order all-resolvent creation and destructive-replacement modification proof-documentation output are available through opt-in wrappers.
 
-### Change-Later Observations
+### Change Later
 
 - C `ClauseERNormalizeVar` mutates the original clause and inserts that same pointer into the supplied store only if at least one inference fired. Rust returns the owned mutated clause plus count so the proof-control caller can reinsert it into `tmp_store`; revisit the API once proof-state clause ownership has stable in-set handles.
 - The C routine increments proof depth and proof size on the mutated clause for every destructive equality-resolution step but accounts generated/resolution statistics in callers such as `insert_new_clauses`. Rust keeps that split between the clause helper and proof-control statistics.

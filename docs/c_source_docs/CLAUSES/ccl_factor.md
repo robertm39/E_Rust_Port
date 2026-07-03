@@ -102,7 +102,7 @@ Source files reviewed: `CLAUSES/ccl_factor.h`, `CLAUSES/ccl_factor.c`.
 - The equality-factor port preserves C's maximal-side cursor order, partner-side left/right retry, free-variable/equational guard, `TOGreater` side check, post-unifier maximality check, generated negative condition, normalized copy excluding the partner literal, copy excluding the first literal, lambda normalization after condition insertion, resolved/duplicate cleanup, and multi-CSU result-stack shape.
 - The all-factor wrappers now attach `DCOrderedFactor` / ordinary or higher-order `DCEqFactor` derivation entries with the source clause reference and expose opt-in represented `DocClauseCreationDefault(..., inf_factor/inf_efactor, ...)` output.
 
-### Change-Later Observations
+### Change Later
 
 - `ComputeOrderedFactor` temporarily calls `EqnSwapSidesSimple` on the source `pos2->literal` and swaps it back after directed unification. Rust uses a local clone for the swapped view; a future C cleanup could avoid mutating the input clause during a failed or successful factor attempt.
 - Ordered factoring and equality factoring both receive a reusable `VarBank_p freshvars` and reset its counts per attempt. Rust initializes normalized variables past the clause's current variable-code range to avoid collisions in the term bank's pointer-identity variable model; revisit reusable-bank performance once clause/literal ownership is fully ported.

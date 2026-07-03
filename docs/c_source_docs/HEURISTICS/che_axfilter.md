@@ -135,7 +135,7 @@ Source files reviewed: `HEURISTICS/che_axfilter.h`, `HEURISTICS/che_axfilter.c`.
 - `AxFilterDefaultSet` is one large C string assembled with line-splice syntax and mostly separated by whitespace, not explicit delimiters. Rust keeps an internal default-set string that parses to the same 21 named filters; preserve this scanner-driven construction until control-layer callers can exercise the default strategy set end to end.
 - The live `cco_sine.c` filter resolver accepts a direct inline filter only when the second token is `(`, so it uses `AxFilterDefParse` for `Threshold(...)` but rejects `name=Threshold(...)` as an unknown default-name lookup. Rust's `sine_get_filter` helper preserves that normal-build behavior and returns the default set plus any anonymous inline filter; the executable preprocessing path now uses that resolver for threshold, clause-side GSinE, and represented `LambdaDef` before relevance pruning.
 
-### Change-Later Observations
+### Change Later
 
 - `GSinEParse` recognizes the full `GeneralityMeasureNames` table but immediately rejects every measure except `GMTerms` and `GMFormulas` with "Generality measure not yet implemented"; the later D-relation code also asserts on the same unsupported measures. Rust preserves the parser rejection, but a cleaned implementation should either implement the remaining measures end to end or remove the apparent parser surface.
 - `AxFilterAlloc` leaves `threshold` uninitialized, `AxFilterPrintBuf` falls through after the `AFLambdaDefines` case, and anonymous filter names can collide with user-supplied names. Rust makes these deterministic while keeping compatibility notes; revisit them only if exact allocation or assertion behavior becomes observable in reference tests.

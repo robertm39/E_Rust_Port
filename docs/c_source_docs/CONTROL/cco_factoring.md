@@ -89,7 +89,7 @@ Source files reviewed: `CONTROL/cco_factoring.h`, `CONTROL/cco_factoring.c`.
 - Derivation pushes (`ClausePushDerivation`) are ported for the all-factor wrappers through compact clause-parent references, including higher-order `DCEqFactor` tagging when the C candidate-level flag is set.
 - Opt-in proof-documentation wrappers emit represented `DocClauseCreationDefault(..., inf_factor, ...)` and `DocClauseCreationDefault(..., inf_efactor, ...)` output for all-factor generation while keeping the plain helpers output-free.
 
-### Change-Later Observations
+### Change Later
 
 - `ComputeAllEqualityFactors` drains generated equality factors by popping a `PStack`, which reverses the order in which `ComputeEqualityFactor` pushed CSU-derived clauses. Rust mirrors this with a temporary vector and `pop`; keep this compatibility behavior visible if a later API returns an iterator instead.
 - The wrapper receives one `is_ho` flag per candidate after `ComputeEqualityFactor` has generated all factors. Because the C generator overwrites rather than aggregates the flag for accepted CSU elements, all popped factors for that candidate inherit the last accepted substitution's higher-order status. Rust mirrors this quirk until reference traces justify per-factor metadata.

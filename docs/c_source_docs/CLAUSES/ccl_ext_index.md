@@ -119,7 +119,7 @@ Source files reviewed: `CLAUSES/ccl_ext_index.h`, `CLAUSES/ccl_ext_index.c`.
 - Both insertion and deletion consume the collected `(f_code, compact_pos)` pairs by popping the stack, so observable duplicate-collapsing and tree insertion order are the reverse of collection order.
 - Clause insertion is gated by `clause->proof_depth <= max_depth`; deletion has no depth gate.
 
-### Change Later Candidates
+### Change Later
 
 - `MAYBE_NORMALIZE_APP_VAR` can rewrite applied higher-order pattern variables through `NormalizePatternAppVar`. Rust now uses term-bank metadata to skip already pattern-shaped applied free variables and to descend into non-pattern applied free variables, but this index path still does not invoke eta-reducing LFHO normalization before indexing.
 - C deletion obtains buckets with `IntMapGetRef`, which can create empty symbol slots during a delete. Rust drops empty `BTreeMap` entries; revisit this if storage accounting or debug tree shape needs to be C-identical.

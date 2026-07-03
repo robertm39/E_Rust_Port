@@ -92,7 +92,7 @@ Source files reviewed: `CLAUSES/ccl_eqnresolution.h`, `CLAUSES/ccl_eqnresolution
 - The all-resolvent wrapper and destructive variable-normalization wrapper expose opt-in proof-documentation output for represented all-resolvent creation and destructive-replacement modification steps.
 - Proof-state-owned `freshvars` reuse and broader C trace coverage for multi-CSU equality-resolution order/performance remain pending.
 
-### Change-Later Observations
+### Change Later
 
 - `build_resolvent` uses the caller-provided `freshvars` bank to normalize unbound variables before copying the resolvent. Rust currently creates a scratch fresh-variable bank and advances it beyond the clause's current variable codes so fresh variables do not alias original term-bank variables; replace this with proof-state-owned `freshvars` when that C owner is represented.
 - `build_resolvent` normalizes copied resolvent literals before removing false and duplicate literals, so DB-lambda beta/eta reduction can affect which literals are cleaned up and can trigger `EqnMap` truth/polarity side effects. Rust preserves that ordering explicitly through `EqnList::lambda_normalize`.

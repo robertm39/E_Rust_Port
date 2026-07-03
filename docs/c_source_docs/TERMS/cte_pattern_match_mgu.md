@@ -114,7 +114,7 @@ Source files reviewed: `TERMS/cte_pattern_match_mgu.h`, `TERMS/cte_pattern_match
 - Rust now ports the shared `FreshVarWArgs` helper as `fresh_var_with_args` in `src/terms/lambda.rs`. It derives the fresh head type from the supplied argument term types and requested return type, inserts the fresh head through the term bank, and uses the C-shaped `ApplyTerms` path for non-empty arguments.
 - Rust now ports `SubstComputeMguPattern` as `subst_compute_mgu_pattern` in `src/terms/pattern_match_mgu.rs`, including DB-argument remapping, flex-rigid, flex-flex same/different-head cases, C-shaped job scheduling, `WHNF_deref`, lambda-prefix pruning, eta-reduced pattern-app-variable normalization, substitution backtracking on `NOT_UNIFIABLE`/`NOT_IN_FRAGMENT`, and VarBank used-count preparation before helper-variable allocation.
 
-### Change-Later Observations
+### Change Later
 
 - `FreshVarWArgs` is implemented in the pattern-match MGU unit but is also used by higher-order binding constructors. Rust centralizes the helper with lambda application utilities; after full higher-order unification is ported, consider whether the C header/source boundary should be reflected as a dedicated higher-order construction module instead of keeping this cross-unit dependency.
 - `TermArrayNoDuplicates` copies and sorts the argument array but then compares adjacent entries in the original array, so only originally adjacent duplicates are rejected. Rust mirrors that behavior through the existing `term_array_no_duplicates` helper for pattern-app-variable normalization; revisit this after reference traces decide whether non-adjacent duplicate DB arguments must stay accepted.

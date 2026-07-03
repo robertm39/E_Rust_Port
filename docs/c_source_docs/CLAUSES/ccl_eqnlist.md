@@ -235,7 +235,7 @@ Source files reviewed: `CLAUSES/ccl_eqnlist.h`, `CLAUSES/ccl_eqnlist.c`.
 
 - `src/clauses/eqnlist.rs` represents equation lists as owned vectors and ports list construction, stack-shaped conversion, property mutation/querying, term-existence checks, `EqnMap`-style term mapping, DB-lambda beta/eta normalization over literal sides, orientation, maximal/strictly-maximal marking, extraction/insertion/deletion/append behavior, copy variants, literal cleanup, triviality checks, substitution normalization, metric/statistic collectors, complementary-literal lookup, and LOP/TPTP/TSTP rendering over the currently ported term/equation parser surface.
 
-### Change-Later Observations
+### Change Later
 
 - `EqnMap` clears `EPMaxIsUpToDate` and `EPIsOriented` only when the final left side differs from the old left side, even if the right side changed. Rust preserves that invalidation rule through both generic term mapping and lambda normalization; a cleaned literal-mutation API should decide whether right-side-only rewrites should also invalidate ordering metadata after compatibility tests cover the affected callers.
 - `EqnListLambdaNormalize` obtains the term bank from the first linked literal and is a no-op for `NULL`, which hides the bank ownership boundary inside list nodes. Rust takes the active `TermBank` explicitly; future call-site integration should keep that owner explicit rather than recreating C's implicit list-head bank lookup.

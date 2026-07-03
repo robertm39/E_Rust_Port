@@ -16,7 +16,7 @@ The Rust executable can opt into the runtime-loaded PicoSAT backend by setting `
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
 
-### C Change-Later Notes
+### C Change Later Notes
 
 When porting new code or reviewing already-ported code, document C implementation details that may make sense to change after drop-in compatibility is secured. This includes accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, confusing API boundaries, ignored parameters, counter overflows, and performance tradeoffs. Put these notes in the relevant C-source page's manual-review `Change Later` section, or in a linked status/design doc when the issue spans multiple source units.
 
@@ -47,6 +47,7 @@ Use the repo-local virtual environment:
 .\.venv\Scripts\python.exe tools\c_source_docs\generate_c_source_docs.py --check
 .\.venv\Scripts\python.exe tools\c_source_docs\generate_c_source_docs.py --generate
 .\.venv\Scripts\python.exe tools\c_source_docs\apply_manual_review_notes.py
+.\.venv\Scripts\python.exe tools\c_source_docs\check_change_later_notes.py
 .\.venv\Scripts\python.exe tools\c_source_docs\check_markdown_links.py
 .\.venv\Scripts\python.exe tools\c_source_docs\check_regeneration_preserves_manual.py
 ```
@@ -56,6 +57,7 @@ Command roles:
 - `generate_c_source_docs.py --check` verifies every C/H file under `eprover/` maps to exactly one documented source unit.
 - `generate_c_source_docs.py --generate` refreshes mechanical inventory sections while preserving manual-review sections.
 - `apply_manual_review_notes.py` updates the preserved manual-review sections from the source-aware review-note helper.
+- `check_change_later_notes.py` verifies C-source review docs use the standard `Change Later` section wording and do not reintroduce legacy candidate/observation headings.
 - `check_markdown_links.py` checks local Markdown links in the C-source docs and this `DOCS.md` file.
 - `check_regeneration_preserves_manual.py` regenerates docs and confirms manual-review sections are unchanged.
 
@@ -67,6 +69,6 @@ Command roles:
 4. For new porting work and retroactive review of already-ported code, document aspects of the C implementation that may make sense to change later, including accidental behavior, portability hazards, obsolete allocation patterns, global-state quirks, or performance tradeoffs that should be revisited after compatibility is secured.
 5. For C-source pages, edit manual-review sections by hand when adding source-review knowledge.
 6. Use generation only for source inventory and other mechanical updates.
-7. Run the coverage, link, and regeneration-preservation checks.
+7. Run the coverage, Change Later terminology, link, and regeneration-preservation checks.
 8. Confirm the main worktree and the nested `eprover/` checkout are clean except for intended documentation changes.
 9. Commit and push scoped documentation changes.

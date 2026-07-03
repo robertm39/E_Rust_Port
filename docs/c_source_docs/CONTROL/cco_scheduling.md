@@ -96,7 +96,7 @@ Source files reviewed: `CONTROL/cco_scheduling.h`, `CONTROL/cco_scheduling.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
-### Change-Later Observations
+### Change Later
 
 - `ScheduleTimesInit` casts `time_fraction * limit` directly to `rlim_t`, truncating fractional seconds for all but the final strategy; `ScheduleTimesInitMultiCore` instead uses `ceil` and may allocate preprocessing schedules more total CPU seconds than wall-clock seconds because it multiplies by per-strategy cores. Rust preserves both shapes in pure helpers over owned schedule copies.
 - `InitializePlaceholderSearchSchedule` mutates the generated search schedule in place: without forced preprocessing it writes a NULL terminator at the placeholder, and with forced preprocessing it overwrites the placeholder with the selected preprocessing strategy, rescales earlier fractions, then swaps the inserted entry into slot 1. Rust models this over owned vectors so callers can avoid mutating shared generated data; if C-style cross-run mutation becomes observable, scheduler ownership will need another audit.

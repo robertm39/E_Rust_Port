@@ -101,7 +101,7 @@ Source files reviewed: `BASICS/clb_dstacks.h`, `BASICS/clb_dstacks.c`.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `DStackPop`, `DStackTop`, `DStackBelowTop`, and `DStackElement` assert their non-empty, two-element, and in-range preconditions instead of returning sentinel values.
 
-### Change-Later Candidates
+### Change Later
 
 - Empty or out-of-range stack access is assertion failure behavior in C. The compatibility-shaped Rust methods should keep panicking, while any future Rust-only optional/checked accessors should be separate APIs.
 

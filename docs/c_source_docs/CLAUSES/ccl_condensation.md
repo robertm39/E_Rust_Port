@@ -94,7 +94,7 @@ Source files reviewed: `CLAUSES/ccl_condensation.h`, `CLAUSES/ccl_condensation.c
 - The Rust port preserves the C gate that only attempts full condensation when there are at least two positive literals or at least two negative literals, while still counting every `Condense` call as an attempt.
 - The `DCCondense` derivation-stack side effect is ported when at least one condensation step changes the clause. An opt-in documenting helper emits the represented `DocClauseModificationDefault(..., inf_condense, NULL)` step before pushing `DCCondense`, matching C side-effect order for proof-control callers with a `ProofDocSession`.
 
-### Change-Later Observations
+### Change Later
 
 - `try_condensation` accepts a `swap` argument, and `CondenseOnce` retries with `swap=true` when either literal is unoriented, but the C helper never reads the argument or swaps literal sides. Rust preserves that no-op retry for compatibility; remove or repair it only after C/Rust comparison tests show the observable behavior intended.
 - C replaces `clause->literals` with `cand->literals` and nulls the candidate list before freeing the candidate. Rust uses owned literal transfer, but stable clause-handle/index ownership should still audit this mutation point because live C callers observe the same clause object with a new literal list.

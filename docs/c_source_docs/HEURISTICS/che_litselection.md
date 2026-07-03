@@ -413,7 +413,7 @@ Source files reviewed: `HEURISTICS/che_litselection.h`, `HEURISTICS/che_litselec
 - The Rust selector table keeps `NoSelection` and `NoGeneration` as distinct names even though their bodies are both no-ops, preserving the C distinction used by proof-control generation gates.
 - Tests cover selector table order, uniqueness, lookup misses, and rendered comma-separated output alongside selector-family behavior tests.
 
-### Change-Later Observations
+### Change Later
 
 - The literal-selection unit mixes several families of selectors with repeated "P" positive-literal variants and many near-duplicate weight helpers. Keep the initial Rust port close to the table and wrappers, but consider factoring shared scoring code only after reference tests cover representative selectors from each family.
 - Many selector functions call `ClauseDelProp(clause, CPIsOriented)` after selecting a literal even though `DoLiteralSelection` already cleared the clause-oriented property before dispatch. Preserve the redundant invalidation while porting selector bodies; it may still document orientation-cache assumptions for selectors that orient or inspect maximality internally.

@@ -107,7 +107,7 @@ Source files reviewed: `INOUT/cio_fileops.h`, `INOUT/cio_fileops.c`.
 - `InputClose` now skips stdin like C and explicitly closes owned file descriptors/handles through a narrow platform boundary so close failures can surface as diagnostics instead of being hidden by `Drop`.
 - Tests cover stdin selection, missing-file fail-or-null behavior, directory rejection, explicit input close, byte-preserving load/concat/copy/print helpers, remove errors, read-open based existence checks, and the Unix-style directory/base/suffix helper quirks.
 
-### Change-Later Observations
+### Change Later
 
 - C `FileNameIsAbsolute`, `FileNameDirName`, `FileFindBaseName`, `FileNameBaseName`, and `FileNameStrip` treat only `/` as a separator. Rust preserves this in the low-level helper API even on Windows, while scanner file opening now applies a narrow Windows-native path normalization before C-style default-directory/include resolution; keep any broader path-aware behavior at explicit executable or scanner boundaries instead of changing these compatibility helpers.
 - C `FileExists` is a race-prone readability probe implemented by opening the path. Rust keeps the same observable "can open for reading" meaning; avoid replacing it with metadata-only existence checks in compatibility paths.

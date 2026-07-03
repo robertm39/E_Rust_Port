@@ -93,7 +93,7 @@ Source files reviewed: `CLAUSES/ccl_unit_simplify.h`, `CLAUSES/ccl_unit_simplify
 - `FindSimplifyingUnit` has a higher-order-specific early return after finding a descended positive unit, but the first-order path returns the same result immediately after the loop condition observes success. Treat that branch as redundant unless later higher-order indexed matching gives it a distinct effect.
 - Rust currently ports a plain-set lookup for this behavior. The C unit relies on `unit_set->demod_index`, `PDTreeSearchInit`, and live `ClausePos` results, so indexed demodulator integration remains a future ownership task.
 
-### Change-Later Observations
+### Change Later
 
 - Same-signed subsumption calls `ClauseSetProp(pos->clause, ClauseQueryProp(clause, CPIsSOS))`. Since `ClauseQueryProp` returns boolean `0` or `1`, an SOS target marks the unit `CPInitial` instead of `CPIsSOS`. Preserve this until proof-search reference tests can decide whether it is relied on.
 - Unit simplification depends on indexed demodulator lookup returning live `ClausePos` results. Rust currently ports a plain-set lookup, so the indexed ownership model should be revisited once long-lived demodulator indexes are represented.

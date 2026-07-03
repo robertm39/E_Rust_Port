@@ -108,7 +108,7 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 - Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, and pops back to the previous stream in LIFO order; `Scanner` uses this stack for automatic include splicing.
 - Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, fail-or-null missing-file opening, C-shaped stdin source labeling, string-source construction, file-named in-memory sources for stdin-like data, and stacked stream push/pop restoration.
 
-### Change-Later Observations
+### Change Later
 
 - Rust file and stdin streams still load the bytes eagerly during construction. Revisit lazy streaming if large-problem parsing, interactive stdin use, or include-stack behavior makes the C `FILE*` window observable.
 - C `CloseStackedInput` asserts that the stack is nonempty and destroys the popped stream. Rust returns `None` on an empty stack, which is safer for reusable callers; add an asserting compatibility wrapper only if a direct C-shaped API becomes necessary.

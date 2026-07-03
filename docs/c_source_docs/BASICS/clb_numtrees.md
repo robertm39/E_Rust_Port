@@ -118,7 +118,7 @@ Source files reviewed: `BASICS/clb_numtrees.h`, `BASICS/clb_numtrees.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `NumTreeLimitedTraverseInit` comments say it returns a path to the smallest element smaller than or equal to the limit, but the implementation skips keys below the limit and initializes traversal at the first key greater than or equal to it. Rust preserves the implemented behavior; the C comment should be corrected only after compatibility tests confirm no caller relied on the wording.
 <!-- END MANUAL REVIEW: c_source_docs -->

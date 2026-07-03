@@ -270,7 +270,7 @@ Source files reviewed: `TERMS/cte_signature.h`, `TERMS/cte_signature.c`.
 - `SigSupportLists` is process-global in C and affects `SigAlloc`: when true, `$nil` and `$cons` are inserted as fixed internal symbols immediately after `$false`. Rust makes this state explicit on each `Signature` so term printers can distinguish real list-enabled signatures from ordinary user symbols named `$nil` or `$cons`.
 - C `Signature` owns `ac_axioms` as a pointer stack of recognized AC clauses while the actual clauses remain owned elsewhere. Rust mirrors this as compact clause derivation refs on `Signature`; replace them with stable clause handles only when proof-state ownership can represent the same lifetime explicitly.
 
-### Change Later Candidates
+### Change Later
 
 - Bare `Signature::new(TypeBank::new())` is useful in unit tests and low-level helpers, but executable/parser-facing banks need C's internal-code block. Once parser ownership is consolidated, prefer a named constructor for C-initialized parsing signatures so temporary syntax-only/app-encode paths cannot bypass fixed-code reservation accidentally.
 - If command-line parsing eventually allows list support to change after some signatures exist, compare C's global `SigSupportLists` timing against Rust's per-signature flag before exposing a higher-level API.

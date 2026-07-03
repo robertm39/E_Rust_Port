@@ -241,7 +241,7 @@ Source files reviewed: `TERMS/cte_termtypes.h`, `TERMS/cte_termtypes.c`.
 
 - `TermDeref` expands a bound applied free variable without decrementing `DEREF_ONCE`; callers use `DEREF_LIMIT`/`CONVERT_DEREF` to avoid following bindings in the prefix copied from the applied-variable head. Rust mirrors the expansion shape and the unconsumed one-step deref rule in the global term helper, while term-bank insertion paths keep their explicit prefix conversion.
 
-### Change Later Candidates
+### Change Later
 
 - `applied_var_deref` stores expanded applied-variable terms in the source term's `binding_cache`, records the binding that made the cache fresh, inserts the expansion through the owning term bank, and marks the cached term with `TPIsDerefedAppVar`. Rust currently performs no-cache expansion for the global helper and separate bank-local expansion where callers already have a `TermBank`; add owner-bank metadata and cache invalidation before treating repeated LFHO dereference performance or cache-aware GC behavior as C-compatible.
 

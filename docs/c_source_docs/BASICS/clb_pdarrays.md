@@ -124,7 +124,7 @@ Source files reviewed: `BASICS/clb_pdarrays.h`, `BASICS/clb_pdarrays.c`.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `PDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment/integer-increment macros inherit that assertion while always succeeding for nonnegative indices.
 
-### Change-Later Candidates
+### Change Later
 
 - Negative `PDArray` access is assertion failure behavior in C. The compatibility-shaped Rust methods should keep panicking, while future Rust-only checked accessors should be separate wrappers instead of weakening the C-shaped array API.
 

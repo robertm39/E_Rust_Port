@@ -152,7 +152,7 @@ Source files reviewed: `TERMS/cte_lambda.h`, `TERMS/cte_lambda.c`.
 - The staged beta normalizer handles phony applications headed by DB lambdas, consumed-argument substitution with DB-index shifting, recursive beta normalization under lambdas and ordinary top cells, and the C `BetaNormalizeDB` special case that unwraps `$eq(logical_symbol, $true)`.
 - Full `cte_lambda` parity is not complete yet because formula CNF helper call-site integration and owner-bank/cache-backed `WHNF_deref` integration remain later slices. The KBO6 LFHO ordering path has a comparison-local weak-head dereference helper for `DEREF_ALWAYS`, but it does not model the shared term-bank cache boundary.
 
-### Change-Later Observations
+### Change Later
 
 - C `WHNF_step` writes temporary bindings into DB-variable cells and clears them manually after substitution. Rust avoids mutating DB variable cells by carrying an explicit binding vector indexed by DB index; keep this safer representation unless profiling or C trace comparison exposes a compatibility issue.
 - C `AbstractVars` temporarily writes DB-variable bindings into free-variable cells and relies on `replace_fvars` to shift them under nested lambdas. Rust keeps the same stack order and DB-index shifting with an explicit free-variable binding map instead of mutating shared variable cells.

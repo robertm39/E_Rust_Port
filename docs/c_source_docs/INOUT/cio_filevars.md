@@ -106,7 +106,7 @@ Source files reviewed: `INOUT/cio_filevars.h`, `INOUT/cio_filevars.c`.
 - The getters preserve C's borrowed-value shape through string slices, integer semantic diagnostics, identifier validation against the first parsed token, and the observable `FileVarsGetBool` `strcmp` behavior.
 - Tests cover whitespace-free value concatenation, duplicate overwrite counting, file-backed source names in diagnostics, missing semicolon handling, integer and identifier semantic errors, and the boolean inversion quirk.
 
-### Change-Later Observations
+### Change Later
 
 - C `FileVarsGetBool` appears to invert `true`/`false` and accept nearly any non-`true` spelling as true because it tests raw `strcmp` results as booleans. Rust preserves this exactly; it should be revisited only after generated schedule and strategy variable consumers have reference tests.
 - C stores source-name pointers in a stack and each variable cell points back into that stack for diagnostics. Rust uses owned `String` values instead; if large schedule files make this hot, intern source names rather than reintroducing pointer lifetime coupling.

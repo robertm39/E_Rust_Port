@@ -167,7 +167,7 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 - Positive and negative simplify-reflect now record `DCSR` derivation entries with compact references to the simplifying unit clause when a literal is removed. Opt-in documenting helpers emit represented `DocClauseModificationDefault(..., inf_simplify_reflect, ...)` output before pushing the matching `DCSR` entry.
 - Indexed simplify-reflect lookup, executable-wide proof-output/session ownership, and proof-object traversal remain pending. Rust stores C's process-global `StrongUnitForwardSubsumption` as proof-control session configuration for forward subsumption and positive simplify-reflect callers.
 
-### Change-Later Observations
+### Change Later
 
 - C's simplify-reflect functions receive indexed unit-clause sets, emit proof documentation from global output/id state, and push the raw simplifying `Clause_p` in `DCSR`. Rust currently uses plain-set lookup, explicit proof-doc sessions, and compact clause references; replace the lookup and parent representation with indexed lookup plus stable clause handles before proof-object reconstruction depends on parent identity.
 - Positive simplify-reflect's strong mode is controlled by the process-global `StrongUnitForwardSubsumption` in C. Rust now exposes the lower-level helper parameter while routing configured proof search through a `ProofControl` session flag; revisit only if later strategy scheduling needs C-global sharing semantics.

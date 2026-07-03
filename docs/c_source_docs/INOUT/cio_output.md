@@ -93,7 +93,7 @@ Source files reviewed: `INOUT/cio_output.h`, `INOUT/cio_output.c`.
 - The native MSVC Windows file-descriptor compatibility path uses a narrowly scoped external-DLL boundary to duplicate an owned file handle into a C-runtime descriptor while keeping close ownership explicit.
 - Tests cover output-level gating, `-` as stdout, file writes and diagnostics, global output reset, supported-platform descriptor values, and all dashed-status cases.
 
-### Change-Later Observations
+### Change Later
 
 - `OpenGlobalOut` stores both the `FILE*` and `fileno(GlobalOut)`, letting low-memory and signal paths write through a raw descriptor tied to process-global output. Rust mirrors this for stdout, Unix files, and native MSVC Windows files by duplicating handle ownership before creating a C-runtime descriptor; a later explicit output/session API should decide whether raw-descriptor writes remain only as a signal-compatibility shim.
 - `OutClose` uses `FILE*` identity to skip `fclose(stdout)` but still checks stream error state after `fflush`. Rust represents stdout and files as an enum and reports flush failures through diagnostics; any future C `FILE*` bridge should re-audit that close/flush ownership boundary instead of assuming Rust's enum split maps one-to-one to C pointer identity.

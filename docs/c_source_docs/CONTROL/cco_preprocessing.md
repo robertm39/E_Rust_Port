@@ -90,7 +90,7 @@ Source files reviewed: `CONTROL/cco_preprocessing.h`, `CONTROL/cco_preprocessing
 
 - The Rust executable mirrors the represented `ProofStateClausalPreproc` ordering for copying active axioms into `ax_archive`, then running clausal preprocessing and equality-definition unfolding, followed by higher-order defined-choice axiom recognition when `problemType == PROBLEM_HO` and `inst_choice_max_depth >= 0`, before first-order BCE, first-order predicate elimination, and goal-definition transformation. Initial-clause documentation resolves source annotations through the `DCCnfQuote` parent after the active clause's info is transferred to the archive. `PreinstantiateInduction` remains pending until formula-archive ownership and abstraction-trigger instantiation are integrated.
 
-### Change-Later Observations
+### Change Later
 
 - `ProofStateClausalPreproc` records `preproc_removed` only from `ClauseSetPreprocess` plus equality-definition unfolding; BCE, predicate elimination, and goal-definition transformation can remove or add clauses without contributing to that returned count. Rust preserves the currently visible statistics split, but a future reporting API should distinguish "clausal preprocess removed" from later transformation counts explicitly.
 - `ClauseSetArchiveCopy` moves the active clauses' source info and derivation pointers to flat archive copies before preprocessing continues, so later output must recover source annotations through the quote parent rather than from the active clause itself. Rust preserves that boundary with owned archive copies; stable clause handles would make the source/quote relation less dependent on compact identifiers.

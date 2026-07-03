@@ -105,7 +105,7 @@ Source files reviewed: `BASICS/clb_plist.h`, `BASICS/clb_plist.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `PListExtract` asserts that the element is a linked, non-anchor cell, while `PListInsert` trusts callers not to pass an already linked cell or an uninitialized allocation. Rust preserves the asserting extraction precondition and guards insertion, but a cleaned API should make detached-cell ownership explicit or fold insertion through checked store/move operations.
 - The C API exposes raw list cells and deletion as `void`, leaving key ownership entirely to callers. Rust returns owned values from `delete` so safe code can drop or move payloads deliberately; revisit this API shape once long-lived clause/formula owners decide whether list cells should own, borrow, or merely index payloads.

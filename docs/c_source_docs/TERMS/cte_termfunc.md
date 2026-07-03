@@ -260,7 +260,7 @@ Source files reviewed: `TERMS/cte_termfunc.h`, `TERMS/cte_termfunc.c`.
 - `TermStructEqualDeref`, `TermStructPrefixEqual`, and `TermIsSubterm` use the LFHO applied-variable `DEREF_LIMIT`/`CONVERT_DEREF` prefix rule when descending through one-step dereferenced applied variables. Rust mirrors this for no-cache, no-WHNF read-only expansion; global owner-bank/cache-backed `TermDeref`, beta normalization, and WHNF branches remain separate termtypes/lambda slices.
 - `TermTrimImplications` skips leading quantified formula wrappers, follows only the right-hand side of a `$impl` chain, and returns the consequent only after at least 10 implications; otherwise it returns the original formula pointer. Rust mirrors this threshold and right-spine-only behavior with shared `Term` handles for SInE symbol collection.
 
-### Change Later Candidates
+### Change Later
 
 - `TermPrintLists` and `SigSupportLists` are process-global formatting/allocation switches. Rust currently keeps list support explicit on `Signature` and routes bracket notation through term-bank printing; once executable option handling is complete, decide whether a global compatibility shim is needed or whether explicit per-signature state is preferable.
 - `parse_cons_list` allocates the eventual `$nil` cell through the same arity-2 default-cell path used for `$cons` placeholders. Rust uses a zero-arity `$nil` for valid shared and unshared term shapes; compare this against reference behavior before deciding whether the allocation artifact needs to be externally preserved.

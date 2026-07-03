@@ -104,7 +104,7 @@ Source files reviewed: `CLAUSES/ccl_def_handling.h`, `CLAUSES/ccl_def_handling.c
 - Rust now builds and archives the reusable non-fresh `GetFormulaDefinition` shape (`~def <=> closed(body)`) and records represented clause derivations: new definition clauses get `DCSplitEquiv` formula parents, and residual split clauses get `DCApplyDef` formula parents.
 - Fresh and reusable non-fresh arity-zero split definitions now archive represented formula parents for proof-state controlled splitting, and the archived `GetFormulaDefinition` wrappers carry formula-owned `DCIntroDef` derivations. Proof-document output side effects remain pending.
 
-### Change-Later Observations
+### Change Later
 
 - The current Rust proof state represents `DefStoreCell` as a `ClauseSet`, predicate/formula association maps, and the proof state's formula archive rather than as a single owner that also contains the term-bank pointer. Consolidate this into a fuller `DefStore`-shaped owner once all splitting paths and split-definition proof output are represented.
 - C `GetDefinitions(fresh=true)` deliberately does not insert reusable variant associations, but it still archives the introduced formula definition. Rust now mirrors this for proof-state arity-zero controlled splitting; keep the absence of reusable associations visible when later consolidating the split-definition owner.

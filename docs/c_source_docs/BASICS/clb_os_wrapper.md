@@ -130,7 +130,7 @@ Source files reviewed: `BASICS/clb_os_wrapper.h`, `BASICS/clb_os_wrapper.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `SetMemoryLimit` labels the second branch as `RLIMIT_AS` when that macro is present, but the C call still passes `RLIMIT_DATA`. Rust now mirrors that duplicated `RLIMIT_DATA` behavior on Linux; after reference tests cover memory-limit handling, decide whether this is a typo to fix or a platform-specific compatibility quirk to keep.
 - `SetSoftRlimitErr` suppresses failed `RLIMIT_DATA` warnings, warns when limits are reduced, and includes `strerror(errno)` for unmasked failures. Rust now carries the errno code from the Linux `getrlimit`/`setrlimit` boundary to the executable warning layer, formats it through `strerror`, and preserves the failed-`RLIMIT_DATA` mask.

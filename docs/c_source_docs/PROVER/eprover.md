@@ -121,7 +121,7 @@ Source files reviewed: `PROVER/eprover.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 
-### Change-Later Observations
+### Change Later
 
 - `eprover.c` handles syntax-only parsing through the same proof-state scanner/parser setup used by ordinary input processing. The Rust executable now has a parse-only path for the currently supported clause syntax and applies the configured `--free-numbers`/`--free-objects` distinct-symbol mask there, but it should be rejoined with the full proof-state/formula parser once `WFormula`/formula-list parsing and the remaining scanner owners are ported.
 - C handles TSTP include files through scanner/parser state that can collect selector names, consult a `skip_includes` tree, and fall back through the process-global `TPTP_dir` initialized by `InitIO`. In this checkout, the visible `eprover` path threads that tree into nested include parsing but does not appear to populate it, so repeated-include suppression should be made explicit later rather than assumed from the parameter. Rust now initializes the C-shaped I/O state before executable parsing and handles TSTP `include(...)` entries with `TPTP` fallback, name selectors, and missing-selector diagnostics in the supported `cnf(...)`/temporary-`fof(...)` bridge; revisit nested selector semantics, repeated-include policy, and whether `TPTP_dir` remains process-global when the full parser/proof-state input pipeline replaces the temporary bridge.

@@ -146,8 +146,6 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- Change-later candidate: C CNF conversion relies on destructive formula mutation, shared term/formula structure, polarity markers, and side-effecting definition archives. Rust should mirror the observable clause output and proof metadata first, but the final clausifier should expose ownership and mutation phases explicitly so temporary bridges do not duplicate ad hoc fragments of this pipeline.
-- Change-later candidate: `TFormulaSkolemizeOutermost` seeds recursive Skolemization with globally free variables and `tformula_rek_skolemize` mutates variable bindings while pushing/popping universal variables through a raw `PStack`. Rust now mirrors that stack order with explicit vectors and restore guards; the final formula owner should keep the dependency stack explicit and avoid exposing temporary term bindings outside the clausification phase.
 
 ### Porting Focus
 
@@ -173,7 +171,7 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 - `src/clauses/clausefunc.rs` now stages `TFormulaDistributeDisjunctions` for a single suitably preprocessed NNF formula, including recursive body rebuilding under quantifiers and C's left/right operand order when distributing an `or` over either side's `and`.
 - `src/clauses/clausefunc.rs` now stages term-level `WTFormulaConjunctiveNF` and `WTFormulaConjunctiveNF3` orchestration wrappers as `tformula_conjunctive_nf` and `tformula_conjunctive_nf3`. They preserve the C phase order, C's `1000` simplification budget, the fresh-variable seeding boundary before bound-variable renaming, conditional miniscope limit handling, optional FOOL unrolling before the final NNF pass, distribution, and the derivation opcodes that a later `WFormula` owner should attach when each phase changes the formula.
 
-### Change-Later Observations
+### Change Later
 
 - `TFormulaSimplify` represents Boolean constants as equality/disequality formulas over `$true`, uses pointer identity (`TFormulaEqual`) rather than structural equality for duplicate formula rewrites, and repeats root rewrites until stable. Rust preserves handle identity; a later formula owner should make this identity-vs-structure distinction explicit before introducing canonical formula equality.
 - `TFormulaSimplify` only removes redundant quantified variables unconditionally when `form->v_count` is zero, otherwise it runs `TFormulaVarIsFree` only when the whole quantified formula's cached weight is at or below `quopt_limit`. Rust preserves that performance gate; later cleanup should make redundant-quantifier removal a separate budgeted simplification pass.
@@ -195,4 +193,8 @@ Source files reviewed: `CLAUSES/ccl_tcnf.h`, `CLAUSES/ccl_tcnf.c`.
 - `extract_formula_core` and `extract_formula_core2`, the helpers behind C `TFormulaShiftQuantors` and `TFormulaShiftQuantors2`, rely on callers having already produced suitable NNF: they strip leading quantifiers and only search below `and`/`or`, leaving quantifiers under other connectives untouched. Rust mirrors that precondition-heavy shape; a later formula owner should make the NNF/quantifier phase boundary explicit before allowing these helpers on arbitrary formulas.
 - `TFormulaDistributeDisjunctions` recursively expands `or(and(...), ...)` and `or(..., and(...))` without a local clause-growth guard; C relies on earlier estimation/definition-renaming phases and preserves operand order rather than canonicalizing the generated disjunctions. Rust mirrors that helper-level behavior, but the final clausifier should make growth controls and canonicalization boundaries explicit.
 - `WTFormulaConjunctiveNF` and `WTFormulaConjunctiveNF3` bundle destructive formula replacement, proof-documentation calls, and derivation-stack pushes behind pointer-identity change checks. Rust keeps the lower-level term transformation and emitted phase opcodes separate, and `WFormulaCNF2` now stores those opcodes on the wrapper derivation stack; proof-document side effects should remain explicit instead of hiding inside mutation helpers.
+
+- C CNF conversion relies on destructive formula mutation, shared term/formula structure, polarity markers, and side-effecting definition archives. Rust should mirror the observable clause output and proof metadata first, but the final clausifier should expose ownership and mutation phases explicitly so temporary bridges do not duplicate ad hoc fragments of this pipeline.
+- `TFormulaSkolemizeOutermost` seeds recursive Skolemization with globally free variables and `tformula_rek_skolemize` mutates variable bindings while pushing/popping universal variables through a raw `PStack`. Rust now mirrors that stack order with explicit vectors and restore guards; the final formula owner should keep the dependency stack explicit and avoid exposing temporary term bindings outside the clausification phase.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

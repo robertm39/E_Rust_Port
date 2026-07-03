@@ -259,7 +259,7 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 - `ClauseSetExtractEntry` deletes `CPIsSIndexed` clauses from `set->fvindex` and clears the property during extraction. Rust mirrors that lifecycle for owned FV anchors while keeping the explicit-anchor helpers as transition APIs until full proof-state set ownership is wired.
 - `ClauseSetPropDocQuote` filters with the same all-bits property query as `ClauseQueryProp`, so `CPIgnoreProps` intentionally quotes every clause. Rust mirrors that filter for supported final proof-search documentation quotes before the result banner.
 
-### Change-Later Observations
+### Change Later
 
 - `ClauseSetExtractEntry` assumes `CPIsSIndexed` implies `clause->set->fvindex` is valid and calls `FVIndexDelete` unconditionally. Rust preserves the indexed-clause lifecycle for owned anchors, but later stable clause-handle APIs should make index membership explicit enough to prevent stale indexed bits, double deletes, or missing anchors from corrupting index counts.
 - C clause sets reach each clause's owner bank implicitly through the literals. Rust currently has immutable-bank and mutable-bank maximal-marking entry points; collapse that split only after clause ownership can provide the same owner-bank context without passing it through every caller.

@@ -110,7 +110,7 @@ Source files reviewed: `BASICS/clb_objmaps.h`, `BASICS/clb_objmaps.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `PObjMapFind`, `PObjMapInsert`, and `do_extract_entry` splay the raw root as a side effect, including miss-nearest rebalancing. Rust exposes successful splayed lookup/root tracking, including keys whose stored value is `NULL`, but exact miss-splay locality should wait for stable pointer/handle identity and profiling.
 - `PObjMapGetRef` allocates a candidate node before discovering duplicate keys and frees it again on hits. Rust skips that transient allocation; preserve the visible update flag/null-slot behavior, but prefer the cleaner allocation shape unless allocator churn becomes compatibility-observable in benchmarks.

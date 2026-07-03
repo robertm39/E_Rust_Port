@@ -91,7 +91,7 @@ Source files reviewed: `CLAUSES/ccl_diseq_decomp.h`, `CLAUSES/ccl_diseq_decomp.c
 - `src/clauses/diseq_decomp.rs` ports `ClauseDisEqDecomposition`, including compact-position literal selection, copying all residual literals except the selected disequality, prepending generated argument-pair disequalities, appending that temporary list, and removing resolved/duplicate literals before clause allocation.
 - Derivation-stack side effects (`ClausePushDerivation(..., DCDisEqDecompose, ...)`) are ported with a compact source-clause reference.
 
-### Change-Later Observations
+### Change Later
 
 - C builds the generated argument-pair disequalities by pushing each new literal onto a temporary list head, so argument-pair order is reversed before append. Rust preserves this order; change it only after proof-output and search-order comparisons show it is unobservable.
 - `ClauseDisEqDecomposition` assumes the selected compact position is a top-level literal and asserts equal top symbols and arities. Rust keeps those as panicking internal preconditions; a later public API could expose fallible validation if external callers need it.

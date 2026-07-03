@@ -174,12 +174,16 @@ Source files reviewed: `CLAUSES/ccl_pdtrees.h`, `CLAUSES/ccl_pdtrees.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - Initial Rust status: `src/clauses/pdtrees.rs` ports the `TermLRTraverseNext` key sequence plus an owned trie for `PDTreeInsertTerm`-style insertion, `PDTreeMatchPrefix` match/remains counting, and code/term deletion with C-shaped prefix ref-count decrementing plus dead-child pruning. `che_prefixweight` now stores its lazy conjecture-prefix terms in that trie, and `che_tfidfweight` stores document-frequency terms in the same trie subset so IDF can use node ref-counts.
-- Change-later candidate: C `PDTreeInsertTerm` eta-expands non-FO patterns or eta-reduces other terms before indexing, and full search mutates tree-local traversal state while relying on `ClausePos` leaves, substitution backtracking, age/size constraints, and a process-global traversal order switch. Keep those compatibility surfaces visible before replacing the remaining plain scans with full PDTree ownership.
-- Change-later candidate: C `PDTreeDelete` deletes clause-position entries at the leaf, subtracts the number of removed entries from every traversed node, physically frees dead nodes, and invalidates cached size/age constraints for later recomputation. Rust now mirrors the ref-count and child-pruning shape for the current trie-only term/code subset, but leaf `ClausePos` payload deletion and constraint invalidation still belong with the full demodulator/search index owner.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- C `PDTreeInsertTerm` eta-expands non-FO patterns or eta-reduces other terms before indexing, and full search mutates tree-local traversal state while relying on `ClausePos` leaves, substitution backtracking, age/size constraints, and a process-global traversal order switch. Keep those compatibility surfaces visible before replacing the remaining plain scans with full PDTree ownership.
+- C `PDTreeDelete` deletes clause-position entries at the leaf, subtracts the number of removed entries from every traversed node, physically frees dead nodes, and invalidates cached size/age constraints for later recomputation. Rust now mirrors the ref-count and child-pruning shape for the current trie-only term/code subset, but leaf `ClausePos` payload deletion and constraint invalidation still belong with the full demodulator/search index owner.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

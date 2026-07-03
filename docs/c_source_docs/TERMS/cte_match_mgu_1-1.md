@@ -116,12 +116,16 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - In higher-order problem mode, `SubstMguComplete` eta-reduces both inputs, calls `SubstComputeMguHO`, and falls back to the higher-order pattern MGU when both original inputs are non-first-order patterns. Rust currently supports the first-order-shaped arrow-binding subset through the ordinary complete-MGU path and routes explicit multi-unifier callers through the CSU iterator; the full HO complete-MGU dispatch remains a separate porting boundary.
-- Change later: `SubstComputeMguHO` reports leftover-argument information through `UnificationResult`, while `SubstMguComplete` collapses that to a boolean after checking no arguments remain. A cleaned API should expose the argument-prefix result type directly at callers that need HO constraints, rather than threading a C-style integer result plus a separate `CheckHOUnificationConstraints` hook.
-- Change later: The higher-order pattern fallback is guarded by `TermIsNonFOPattern` checks on the unreduced original inputs after the first HO MGU attempt fails. Preserve that order for compatibility until trace tests prove eta-reduced pattern detection is equivalent.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `SubstComputeMguHO` reports leftover-argument information through `UnificationResult`, while `SubstMguComplete` collapses that to a boolean after checking no arguments remain. A cleaned API should expose the argument-prefix result type directly at callers that need HO constraints, rather than threading a C-style integer result plus a separate `CheckHOUnificationConstraints` hook.
+- The higher-order pattern fallback is guarded by `TermIsNonFOPattern` checks on the unreduced original inputs after the first HO MGU attempt fails. Preserve that order for compatibility until trace tests prove eta-reduced pattern detection is equivalent.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -135,7 +135,7 @@ Source files reviewed: `CLAUSES/ccl_overlap_index.h`, `CLAUSES/ccl_overlap_index
 - `OverlapIndexInsertIntoClause` and `OverlapIndexInsertFromClause` collect positions onto a stack and then pop them for insertion, reversing insertion traversal order. Rust iterates the collected positions in reverse when inserting.
 - Indexed paramodulation collects unifiable fingerprint leaves onto a C `PStack` and then pops them before traversing the subterm trees. Rust now reverses the leaf collection before flattening occurrence payloads so generated indexed-paramodulation candidates follow the same stack-pop order.
 
-### Change Later Candidates
+### Change Later
 
 - `ClauseCollectIntoTerms2` depends on `EqnIsEquLit(lit)` through the literal's owning term bank in C. Rust has no equation back-pointer yet, so the split collectors take an explicit `&TermBank`; replace this with a typed owner handle once clause/literal ownership can provide the bank safely.
 - C overlap indexes group occurrence positions by raw clause pointer. Rust cannot use borrowed wrapper addresses for cloned clause values, so it uses stable clause identifiers for current cloned snapshots; replace cloned payloads with stable clause handles before long-lived proof-state indexes depend on deletion order or duplicate identifiers.

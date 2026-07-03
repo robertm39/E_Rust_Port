@@ -139,5 +139,9 @@ Source files reviewed: `CLAUSES/ccl_f_generality.h`, `CLAUSES/ccl_f_generality.c
 - `FunGenTGCmp` sorts by term frequency, then formula/clause frequency, then `f_code`; `FunGenCGCmp` swaps the first two keys. `ClauseComputeDRel` and `FormulaComputeDRel` sort only symbols found in the current object, filter them with `f_code >= sig->internal_symbols`, compute `least_gen*benevolence` through a C `double` to `long` conversion, cap the limit by the `generosity`-indexed symbol, and push all symbols up to that limit. Rust preserves this ordering, inclusive internal-symbol boundary, truncating limit calculation, and conjecture formula implication trimming through the ported `TermTrimImplications` helper.
 - `GenDistribSizeAdjust` extends `dist_array` to `sig->f_count+1` but frees and recreates the temporary `f_distrib` scratch array as all zeroes. Rust mirrors that behavior; callers should not rely on scratch contents surviving size adjustment.
 - `GenDistribPrint` reports the raw `GenDistrib` pointer with `%p`, sums only symbols from `sig->internal_symbols+1` onward, and uses `sig->internal_symbols+limit` as the exclusive printed-row bound. Rust preserves the address-like debug identity and this off-by-one-looking limit rule; a cleaned diagnostics path should use stable identifiers and an explicit row count after compatibility is covered.
-- Change-later candidate: `TermTrimImplications` skips leading quantifiers and then strips only a right-nested implication chain, and only if it sees at least 10 implications. Rust preserves this for SInE compatibility; after compatibility, consider replacing the magic threshold/right-spine special case with an explicit formula-normalization policy.
+
+### Change Later
+
+- `TermTrimImplications` skips leading quantifiers and then strips only a right-nested implication chain, and only if it sees at least 10 implications. Rust preserves this for SInE compatibility; after compatibility, consider replacing the magic threshold/right-spine special case with an explicit formula-normalization policy.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

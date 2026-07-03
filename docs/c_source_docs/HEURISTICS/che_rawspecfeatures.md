@@ -89,11 +89,16 @@ Source files reviewed: `HEURISTICS/che_rawspecfeatures.h`, `HEURISTICS/che_rawsp
 - Parser functions usually consume input and report fatal diagnostics on mismatch; exact token flow matters for compatibility.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
-- `RawSpecFeaturesCompute` combines clause-set cardinality, clause standard weight, clause conjecture/hypothesis counts, and signature symbol counts with formula-set cardinality/weight/counts, formula-set-only order, and active/archive formula definition statistics. C intentionally leaves `order` and `conj_order` at `1` for clause-only states even if clause terms are higher-order; Rust preserves that raw-spec compatibility surface while now honoring owned formula sets. Change later: once drop-in compatibility is secured, decide whether a cleaned classifier should expose clause-level higher-order order separately from the C raw-spec vector.
+- `RawSpecFeaturesCompute` combines clause-set cardinality, clause standard weight, clause conjecture/hypothesis counts, and signature symbol counts with formula-set cardinality/weight/counts, formula-set-only order, and active/archive formula definition statistics. C intentionally leaves `order` and `conj_order` at `1` for clause-only states even if clause terms are higher-order; Rust preserves that raw-spec compatibility surface while now honoring owned formula sets..
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- Once drop-in compatibility is secured, decide whether a cleaned classifier should expose clause-level higher-order order separately from the C raw-spec vector.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

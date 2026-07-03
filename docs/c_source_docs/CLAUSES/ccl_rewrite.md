@@ -157,7 +157,7 @@ Source files reviewed: `CLAUSES/ccl_rewrite.h`, `CLAUSES/ccl_rewrite.c`.
 - `clause_compute_li_normalform_plain_with_docs` adds the C `OutputLevel >= 4` `DocClauseRewriteDefault` side effect for callers that provide a proof-documentation session and output sink. It emits a documentation step immediately after each rewritten side, preserves the live-clause identifier mutation chain, and leaves lower output levels identical to the non-documenting normalizer.
 - Plain `ClauseSetComputeLINormalform` behavior is ported as `clause_set_compute_li_normalform_plain`. It preserves set iteration order, sums per-clause rewrite counts, and refreshes cached standard weight only on clauses with nonzero rewrite steps.
 
-### Change-Later Observations
+### Change Later
 
 - `ClauseLocalRW` and clause normal-form rewriting now preserve C's compact derivation stack shape with numeric operation codes. Replace those raw constants with a typed derivation-code module when the broader proof-object and proof-output port lands.
 - C does not directly refresh the cached clause weight after `ClauseLocalRW` unless `ClauseRemoveSuperfluousLiterals` removes something. Rust refreshes after any local rewrite to preserve the current Rust cached-weight invariant; revisit this when forward-contraction reference tests cover stale-weight observability.

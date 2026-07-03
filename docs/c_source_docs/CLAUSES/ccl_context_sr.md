@@ -83,7 +83,7 @@ Source files reviewed: `CLAUSES/ccl_context_sr.h`, `CLAUSES/ccl_context_sr.c`.
 - When a contextual subsumer is found, C inherits `CPIsSOS`, clears `CPInitial|CPLimitedRW`, removes the literal, documents the modification, and pushes a `DCContextSR` derivation entry. The Rust plain helper preserves the mutation/property changes and records `DCContextSR` with a compact subsumer reference; an opt-in documenting helper now emits represented `DocClauseModification(inf_context_simplify_reflect, subsumer)` steps for proof-control callers with a `ProofDocSession`.
 - `ClauseSetFindContextSRClauses` flips and sorts the query for each literal and pushes every subsumed set clause, including duplicate pushes for the same clause if multiple flipped literals work.
 
-### Change-Later Observations
+### Change Later
 
 - C relies on raw `Eqn_p` stack entries remaining valid across literal-list sorting. Rust matches by literal properties and term handles while ignoring the mutable position field; revisit if duplicate literal identity becomes observable outside cleanup-normalized clauses.
 - C stores the raw contextual subsumer pointer in the derivation stack. Rust currently records a compact clause reference; replace it with a stable clause handle before proof-object traversal needs the full parent object.

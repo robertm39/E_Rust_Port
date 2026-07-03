@@ -109,7 +109,7 @@ Source files reviewed: `BASICS/clb_plocalstacks.h`, `BASICS/clb_plocalstacks.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - Raw push/pop macros can write past capacity or underflow if a caller skips `EnsureSpace` or emptiness checks. After compatibility is secured, consider scoped traversal helpers that make the required checks structural rather than caller discipline.
 - `PLocalStackTop` returns the current stack pointer/count, not the top value. A later cleaned API should use clearer naming while preserving the C macro spelling for compatibility wrappers.

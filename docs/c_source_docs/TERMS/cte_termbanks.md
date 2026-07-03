@@ -236,7 +236,7 @@ Source files reviewed: `TERMS/cte_termbanks.h`, `TERMS/cte_termbanks.c`.
 - `TBTermTopInsert` treats an applied free variable that `NormalizePatternAppVar` accepts as one variable for `v_count`, `f_count`, and weight, while still setting `TPHasAppVar` and leaving `TPHasNonPatternVar` clear. Rust mirrors this metadata branch for already-normalized applied free variables whose visible arguments are DB variables and pass the C-shaped duplicate check.
 - `TBInsertOpt` assumes ground terms are already shared and, in higher-order `DEREF_ALWAYS` mode, C reaches dereferencing through `WHNF_deref`. Rust currently keeps the no-WHNF insertion path explicit but shares unshared ground terms exposed by applied-variable dereferencing so the bank invariant still holds for lambda-headed applications.
 
-### Change Later Candidates
+### Change Later
 
 - The C `$let` parser creates let-local function codes that remain in `sig->f_info`, temporarily rewires `f_index` for the body, and uses a variable-length stack array for definition parameters. Rust preserves the visible scoped-name behavior with explicit safe vectors and scope restoration for currently supported Boolean and fixed non-Boolean definitions/bodies, but future signature cleanup may need a deliberate policy for unreachable local symbols once full FOOL/formula preprocessing owns their lifetimes.
 - `ParseIte` routes all arms through `TFormulaTSTPParse`, whose infix-equation parser can return a bare fixed non-predicate term rather than a formula literal. Rust mirrors that for currently supported non-Boolean `$ite` atom and compound branches; a full FOOL parser should separate term-valued and formula-valued branch parsing instead of depending on this atom-parser fallback.

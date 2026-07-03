@@ -92,7 +92,7 @@ Source files reviewed: `HEURISTICS/che_new_autoschedule.h`, `HEURISTICS/che_new_
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
-### Change-Later Observations
+### Change Later
 
 - `schedule.vars` is generated C data included directly into `che_new_autoschedule.c`; `StrategiesPrintPredefined` and `GetHeuristicWithName` scan the `conf_map` array linearly and treat its strings as authoritative compatibility data, while `GetPreprocessingSchedule`/`GetSearchSchedule` return pointers to generated `ScheduleCell` arrays selected by class-map lookup. Rust now includes and parses the generated `conf_map`, `ScheduleCell`, `preproc_sched_map`, `search_sched_map`, and `_DEFAULT_SCHEDULE` data for lookup. A build-time extractor or checked-in Rust table may be cleaner later, but only after reference tests pin exact update and formatting behavior.
 - Plain executable `--auto` uses these generated tables as configuration names rather than as a process schedule: it selects the first preprocessing/search cell for the classified problem and then parses the named `conf_map` heuristic. Scheduled executable modes additionally treat the `ScheduleCell.ordering` field as child handoff state before the named heuristic is reparsed. Rust now uses the parsed generated tables for the supported first-order paths and preserves that ordering preload in the temporary in-process scheduler bridge; the pointer-returning/mutable-array behavior remains confined to scheduler compatibility helpers.

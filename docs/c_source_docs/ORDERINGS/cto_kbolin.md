@@ -138,7 +138,7 @@ Source files reviewed: `ORDERINGS/cto_kbolin.h`, `ORDERINGS/cto_kbolin.c`.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 
-### Change-Later Observations
+### Change Later
 
 - C `kbolincmp_ho` calls `WHNF_deref` for `DEREF_ALWAYS`, and that helper obtains the owning term bank from term cells so weak-head reductions can be shared and cached. Rust's KBO6 path currently rebuilds weak-head-reduced LFHO surfaces locally for comparison because term cells do not store owner-bank metadata yet. Preserve this until compatibility is covered; later, a shared owner-bank/cached WHNF boundary may be needed for performance and exact cache/GC behavior.
 - The C higher-order branch is selected by global `problemType` and `ocb->ho_order_kind`, not by inspecting whether the compared terms visibly contain higher-order surfaces. Rust now mirrors that dispatch for KBO6 and uses explicit capability checks only for no-bank callers or higher-order ordering branches that still lack the needed normalization surface; revisit those guards once all ordering-dependent callers can supply the right bank context.

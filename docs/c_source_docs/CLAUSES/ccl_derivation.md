@@ -202,7 +202,7 @@ Source files reviewed: `CLAUSES/ccl_derivation.h`, `CLAUSES/ccl_derivation.c`.
 - `DerivationStackPCLPrint`/`DerivationStackTSTPPrint` are ported for represented clause-side stacks, including represented formula-parent ids using generated `c_0_...`/`i_0_...` formula namespaces and context-aware `DCACRes` AC axiom parent expansion, and are used by current proof-object list and detailed DOT output alongside C-shaped source-info fallbacks. Proof-found and stopped/saturation list output now expands represented clause ancestors before extraction roots and uses display-only sequential ids with represented clause-parent and rewrite-demodulator parent references remapped for the printed list.
 - Formula-owned derivation stacks, full proof-object extraction, optional-parent replacement, topological sorting, exact renumbering, full PCL/TSTP derived-step printing over ordered clause/formula derivations, formula-aware DOT labels, and formula-aware proof-object analysis remain pending.
 
-### Change-Later Observations
+### Change Later
 
 - C stores raw `Clause_p` and `WFormula_p` parent pointers directly in the derivation `PStack`. Rust currently stores compact clause references (`ident` plus CSSCPA source) and compact formula ids because stable proof-state clause/formula handles are not represented yet; replace these with stable clause/formula handles before full proof reconstruction and parent traversal are wired.
 - `ClausePushDerivation` accepts `void*` arguments and validates them only through opcode bit assertions. Rust separates clause-parent, represented formula-parent, and numeric helpers for type safety; keep this split unless proof-output parity requires a single untyped stack API.

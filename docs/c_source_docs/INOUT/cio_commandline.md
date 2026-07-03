@@ -121,7 +121,7 @@ Source files reviewed: `INOUT/cio_commandline.h`, `INOUT/cio_commandline.c`.
 - `src/inout/commandline.rs` ports the option table shape, short/long option lookup, `CLStateAlloc` program-name removal, `CLStateInsertArg`, `CLStateGetOpt` option/argument removal rules, required and optional argument handling, `--` termination, integer/float/bool argument conversion helpers, and C-style option help rendering.
 - Tests cover long required `--name=value` enforcement, long optional defaults, short required attached and following arguments, short optional defaults while aggregating, `--` stopping behavior, C's empty-string integer and float conversions, range and bool diagnostics, float trailing-garbage/overflow rejection, and optional-argument help text.
 
-### Change-Later Observations
+### Change Later
 
 - `CLStateGetIntArg` and `CLStateGetFloatArg` accept an empty string as zero because `strtol`/`strtod` leave the end pointer on the terminating NUL without setting `errno`. Rust preserves that compatibility quirk; a cleaned CLI should reject empty numeric values outside compatibility mode.
 - C float parsing delegates to the active C library and locale through `strtod`, so platform-specific forms such as hexadecimal floats, named NaNs, or locale decimal separators can vary. Rust keeps the common decimal/named-infinity surface and rejects overflow deterministically; broaden this only if reference executable tests show callers depend on libc-specific parsing.

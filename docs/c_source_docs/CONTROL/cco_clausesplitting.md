@@ -79,7 +79,7 @@ Source files reviewed: `CONTROL/cco_clausesplitting.h`, `CONTROL/cco_clausesplit
 - Rust now ports `ControlledClauseSplit` for represented first-order clauses: the split-class mask checks for Horn, non-Horn, negative, positive, and mixed clauses are preserved, and matching clauses call the `ClauseSplit` port before requeueing results through `tmp_store`.
 - Fresh definitions and non-fresh clause-level definition reuse are both supported. Formula archives and split-definition proof-output side effects remain pending with the broader formula/proof-documentation owners.
 
-### Change-Later Observations
+### Change Later
 
 - `SplitAll` is still the C value `7`, so the wrapper's Horn/non-Horn checks make it effectively broad even though the mask does not include the later positive/mixed bits. Rust preserves this rather than normalizing the mask.
 - The C wrapper receives a full `DefStore_p`; Rust currently threads the reusable clause store plus predicate association through proof state. Reintroduce a fuller owner at this boundary when formula archives and proof-output metadata are ported.

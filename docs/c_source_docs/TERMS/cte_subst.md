@@ -118,7 +118,7 @@ Source files reviewed: `TERMS/cte_subst.h`, `TERMS/cte_subst.c`.
 
 - `SubstBindAppVar` calls `TermCreatePrefix`, overwrites the returned prefix type with the bound variable's type, and inserts any newly created non-shared prefix with `TBTermTopInsert` before storing it as the variable binding. Rust mirrors this with an explicit term-bank parameter and preserves the existing substitution-stack backtracking shape.
 
-### Change Later Candidates
+### Change Later
 
 - Because `TermCreatePrefix` can return the original already-shared term or the hidden head of an applied variable, `SubstBindAppVar` can mutate type metadata on a term it did not allocate. Keep this for compatibility, but a future cleaned API should consider returning a typed prefix view or fresh prefix only when type adjustment is required.
 

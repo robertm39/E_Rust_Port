@@ -141,7 +141,7 @@ Source files reviewed: `CLAUSES/ccl_proofstate.h`, `CLAUSES/ccl_proofstate.c`.
 - `ProofStatePropDocQuote` quotes the five main clause sets in this order: processed positive rules, processed positive equations, processed negative units, processed non-units, then unprocessed. Rust mirrors that order for supported final proof-search documentation quotes, including the `CPSubsumesWatch`/`final_subsumes_wl` watchlist-empty exit and the `CPIgnoreProps` `exists`/`final` exits.
 - `ProofStateLoadWatchlist` calls `ClauseSetDocInital` after parsing/marking/weighing/sorting active watchlist clauses. Rust mirrors the supported executable output by printing watchlist initial documentation after parsed-clause initial documentation and before proof-control initialization.
 
-### Change Later Candidates
+### Change Later
 
 - `ProofStateResetClauseSets` says it empties all clause and formula sets, but the implementation frees `f_ax_archive` twice and does not clear `definition_store` or `f_archive`. Rust preserves those omissions for now; revisit the reset contract only after definition handling, formula archives, and proof-state reuse callers are ported.
 - `ProofStateAlloc` creates `terms` and `tmp_terms` with the same mutable `Sig_p`, and `ProofStateFree` nulls both term-bank signature pointers before freeing the shared signature. Rust `TermBank` currently owns its signature, so the eventual `tmp_terms` port should use an explicit shared proof-session signature handle rather than cloning mutable signatures through proof search.

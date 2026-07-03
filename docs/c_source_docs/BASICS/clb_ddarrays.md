@@ -97,7 +97,7 @@ Source files reviewed: `BASICS/clb_ddarrays.h`, `BASICS/clb_ddarrays.c`.
 - `DDArrayElementRef` asserts that indices are nonnegative before growing the backing array, and the element/assignment macros inherit that assertion while always succeeding for nonnegative indices.
 - `DDArraySelectPart` asserts that `part` is in the inclusive `[0, 1]` range, `size` is positive, and the allocated array already covers the requested prefix before partitioning the backing array in place.
 
-### Change-Later Candidates
+### Change Later
 
 - Negative `DDArray` access is assertion failure behavior in C. The compatibility-shaped Rust methods should keep panicking, while future Rust-only checked accessors should be separate wrappers instead of weakening the C-shaped array API.
 - `DDArraySelectPart` treats invalid percentile/range requests as assertion failures. The compatibility-shaped Rust method should keep panicking, while user-facing statistics APIs should validate inputs before calling it or expose a separate checked wrapper.

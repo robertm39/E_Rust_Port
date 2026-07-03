@@ -125,7 +125,7 @@ Source files reviewed: `BASICS/clb_pdrangearrays.h`, `BASICS/clb_pdrangearrays.c
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `PDRangeArrEnlarge` is exported but assertion-sensitive: the normal inline accessor calls it only for uncovered indices, while a direct call on an already covered index can take the wrong expansion branch. Rust keeps ordinary access C-compatible and safe to call, but a cleaned API should make raw expansion preconditions explicit or hide the helper.
 - Reads through `PDRangeArrElement*` can allocate and shift the backing array even when the caller is only probing for a value. Preserve this for compatibility, especially for `IntMap`, but future Rust-only lookup APIs should use non-mutating checked accessors.

@@ -122,7 +122,7 @@ Source files reviewed: `BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - The generated source comment for `MinHeapPopMin` says "Pop the maximum element" even though the public name and implementation pop the minimum; later source cleanup should correct the comment only after compatibility docs no longer need to quote it verbatim.
 - The `MinHeapDecrKey`/`MinHeapIncrKey` names and helper directions are confusing. After all heap callers are audited, consider exposing clearer Rust-only names while retaining compatibility wrappers if needed.

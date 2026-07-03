@@ -106,7 +106,7 @@ Source files reviewed: `BASICS/clb_fixdarrays.h`, `BASICS/clb_fixdarrays.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `FixedDArray` is used as an invariant-backed feature vector in C. Keep assertion-shaped size and index contracts for drop-in compatibility, but future Rust-only APIs fed by user-derived dimensions may want explicit checked constructors or `try_` component-wise operations.
 <!-- END MANUAL REVIEW: c_source_docs -->

@@ -107,5 +107,9 @@ Source files reviewed: `HEURISTICS/che_tfidfweight.h`, `HEURISTICS/che_tfidfweig
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
-- Change later candidate: once all heuristic evaluation sites can pass the active `OCB`, mutable owner bank, and mutable clause, remove any remaining immutable TF-IDF scoring fallbacks without changing the lazy-init, mark, score, then optional-document-update sequence.
+
+### Change Later
+
+- Once all heuristic evaluation sites can pass the active `OCB`, mutable owner bank, and mutable clause, remove any remaining immutable TF-IDF scoring fallbacks without changing the lazy-init, mark, score, then optional-document-update sequence.
+
 <!-- END MANUAL REVIEW: c_source_docs -->

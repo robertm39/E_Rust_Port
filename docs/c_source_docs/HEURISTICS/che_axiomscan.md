@@ -92,7 +92,7 @@ Source files reviewed: `HEURISTICS/che_axiomscan.h`, `HEURISTICS/che_axiomscan.c
 
 - `src/heuristics/axiomscan.rs` ports commutativity and associativity detection over represented unit positive equations, including C's left-weight associativity check shape, signature property mutation, compact `sig->ac_axioms` parent-ref recording on first property transition, and `ClauseSetScanAC` set-order scanning.
 
-### Change-Later Observations
+### Change Later
 
 - `ClauseScanAC` returns `true` for commutativity detection even when the commutativity property was already present, but associativity-only detection mutates the signature and returns `false`. Rust preserves this split; a future cleaned AC API should report property changes and activation status separately once compatibility no longer depends on the single C boolean.
 

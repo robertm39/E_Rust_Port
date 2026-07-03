@@ -105,7 +105,7 @@ Source files reviewed: `CLAUSES/ccl_relevance.h`, `CLAUSES/ccl_relevance.c`.
 - `RelevanceDataCompute` records clause and formula core lists before allocating fresh empty cores, then `extract_new_core` moves matching rest-list cells into the new cores through the function-symbol index.
 - `proofstate_rel_prune` treats level `0` outside the helper: `ProofStateRelevancyProcess` returns before pruning. For requested levels beyond computed relevance levels, it moves all remaining rest clauses/formulas into the new axiom sets.
 
-### Change-Later Notes
+### Change Later
 
 - The C relevance implementation exposes raw `PList` list order in pruning results. If reference tests show the order does not matter, later Rust code could prefer source-order stable vectors for readability, but the current port should preserve the C-shaped reversed buckets.
 - `extract_new_core` repeatedly consumes the root of a `PTree` bucket keyed by raw `PList` cell addresses. That root depends on allocation addresses and splay-tree history; replacing it with deterministic handle order is a good Rust cleanup candidate only if proof/pruning behavior tests allow it.

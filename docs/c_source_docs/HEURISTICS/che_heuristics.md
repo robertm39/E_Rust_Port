@@ -90,7 +90,7 @@ Source files reviewed: `HEURISTICS/che_heuristics.h`, `HEURISTICS/che_heuristics
 - `finalize_auto_parms` is not declared in the header but mutates `ProofControl` auto-selected parameters, adjusts `delete_bad_limit` from `mem_limit`, and disables AC handling for no-equality specs. Rust ports the pure parameter-copy/adjustment behavior separately; selected-heuristic printing and `ProofControl` installation still need the proof-control/output owner.
 - Plain executable `--auto` does not call `finalize_auto_parms` directly in this C path; it selects generated preprocessing/search configuration names from `che_new_autoschedule`, parses those names into `h_parms`, and then relies on `process_options`/`strategy_io` to replay explicit user overrides. Rust now preserves that generated-strategy installation path for supported first-order runs, while process-based schedule execution remains outside `che_heuristics`.
 
-### Change-Later Observations
+### Change Later
 
 - `finalize_auto_parms` derives `delete_bad_limit` through `(float)(mem_limit-2)*0.7` before assigning to `long long`, so large memory limits lose precision and out-of-range conversions depend on C behavior. Rust preserves the single-precision narrowing in the compatibility helper; a cleaned resource policy should derive integer limits without routing through `float`.
 - `finalize_auto_parms` ignores its `modename` and `hname` arguments, and the no-equality AC disablement is based on `SpecNoEq(spec)` (`eq_clauses == 0`) rather than the precomputed `eq_content` class. Preserve those surfaces until proof-control strategy-selection tests cover them.

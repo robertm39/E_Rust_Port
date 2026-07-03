@@ -167,7 +167,7 @@ Source files reviewed: `CONTROL/cco_proofproc.h`, `CONTROL/cco_proofproc.c`.
 - `eval_clause_set` evaluates every clause currently held in `state->eval_store` with the active HCB but does not drain or otherwise route those clauses; `insert_new_clauses` performs the later extraction and insertion into `unprocessed`. Rust now exposes this eval-store evaluation step as a standalone helper and preserves eval-store membership/order.
 - The final `insert_new_clauses` tail drains evaluated clauses from `eval_store`, clears `CPIsOriented` again, emits the `"eval"` proof quote, and inserts the clauses into `unprocessed`. Rust now ports the local eval-store-to-unprocessed movement, reuses `ClauseSet` insertion to preserve evaluation indices, and exposes an opt-in documenting drain wrapper that emits the represented `eval` quote.
 
-### Change-Later Observations
+### Change Later
 
 - `ProofControlInit` mutates both the caller's heuristic-definition stack and the caller's heuristic parameter object while reconciling direct `heuristic_def` text with stacked `--define-heuristic` options. Rust preserves this in the current compatibility helper, but a later higher-level API could return an initialized control object and normalized parameter snapshot instead of exposing caller-side mutation.
 - `ProofControlInit` calls `InitUnifLimits` after writing initialized params back to the caller. In C this stores a process-global pointer to `control->heuristic_parms` for higher-order CSU enumeration rather than deriving new values. Rust stores a safe snapshot of the fields read by the CSU and binding-generation helpers; revisit exact pointer aliasing only if a later port mutates `control->heuristic_parms` after initialization and expects CSU reads to observe those writes.

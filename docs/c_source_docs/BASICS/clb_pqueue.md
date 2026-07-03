@@ -149,7 +149,7 @@ Source files reviewed: `BASICS/clb_pqueue.h`, `BASICS/clb_pqueue.c`.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 - Future non-compatibility queue APIs should avoid exposing stale absolute slots after extraction or reset and can drop/reset owned Rust payloads eagerly, but that must stay separate from the C-shaped `PQueue` surface.
 
-### Change-Later Candidates
+### Change Later
 
 - Empty queue extraction/look operations are assertion failures in the C API. The Rust compatibility surface now panics the same way, but higher-level Rust-only callers that naturally model optional work queues should use a separate `try_` API rather than weakening the C-shaped methods.
 - Absolute-slot access exposes stale payloads after extraction/reset and has raw-index preconditions. A cleaned queue API should hide absolute slots behind iteration or return checked `Option` values outside the compatibility layer.

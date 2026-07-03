@@ -172,7 +172,7 @@ Source files reviewed: `BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `PStack` mixes assertion-backed operations (`Top`, `Pop`, indexed access, and discard) with callers that often conceptually want checked draining. Preserve assertion behavior on C-shaped APIs for compatibility, but future Rust-only helpers should use explicit `try_` names so optional control flow is not confused with the original stack contract.
 <!-- END MANUAL REVIEW: c_source_docs -->

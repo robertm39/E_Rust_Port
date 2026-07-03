@@ -101,7 +101,7 @@ Source files reviewed: `CLAUSES/ccl_bce.h`, `CLAUSES/ccl_bce.c`.
 - Supported executable `--bce` preprocessing now calls the helper for first-order prune/proof-search clause-list paths after represented SInE/relevance pruning and before initial clause documentation, watchlist loading, proof-control initialization, or saturation. It also covers supported first-order-shaped THF formula fragments after the temporary formula bridge lowers them to represented clauses. It moves eliminated clauses to the represented proof-state archive and writes progress through the executable stdout side channel.
 - Full formula-owner preprocessing and pointer-stable proof-state handles remain pending integration points.
 
-### Change-Later Observations
+### Change Later
 
 - C stores BCE tasks, blockers, and occurrence maps through raw clause pointers, so duplicate identifiers and archive/requeue aliases are still distinct. Rust currently uses compact clause identifiers for the clause-level helper because stable clause handles are not represented across `ClauseSet` moves yet; replace this with stable handles before extending BCE to full formula/proof-state preprocessing where duplicate identifiers can be observable.
 - `EliminateBlockedClauses` writes progress directly to `stdout` rather than the prover's main output stream. Rust preserves that visible behavior through the executable stdout side channel; keep this isolated if the eventual output layer stops mirroring C's global stream leakage.

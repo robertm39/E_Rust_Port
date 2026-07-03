@@ -128,7 +128,7 @@ Source files reviewed: `BASICS/clb_dstrings.h`, `BASICS/clb_dstrings.c`.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
 
-### Change-Later Candidates
+### Change Later
 
 - `DStrAddress` accepts a signed `int` and checks only `index > len`; negative indices can produce a pointer before the string buffer in C. Rust intentionally does not expose negative indexes. If a byte-for-byte compatibility test ever exercises this, decide whether to reject it at the parser/caller boundary or add a narrowly named compatibility helper.
 - `DStrView` exposes a mutable C buffer pointer and relies on callers not changing its length. Rust keeps immutable byte/string views; later APIs that need writable buffer access should make length preservation explicit.

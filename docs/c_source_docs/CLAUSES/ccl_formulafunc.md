@@ -198,7 +198,7 @@ Source files reviewed: `CLAUSES/ccl_formulafunc.h`, `CLAUSES/ccl_formulafunc.c`.
 - `src/clauses/formulasets.rs` now stages the supported phase pipeline of `FormulaSetCNF2`, including higher-order named-to-DB, ITE lifting, LET lifting, definition-symbol unfolding, and lambda-to-forall preprocessing before the archive drain, optional set-level FOOL unrolling, simplification before archival, definition introduction before archival, input-order extraction, original-wrapper archival, flat-copy clausification through staged `WFormulaCNF2`, CNF-copy archival, optional post-CNF clause lambda lifting, C-thresholded term-bank GC checks, generated-clause counting, and result metadata for pre-drain phase counts, post-CNF lambda-lift counts, CNF-path GC counts, and formula-level quote sources.
 - `src/clauses/formulasets.rs` now stages the `FormulaCountNonTopLevelLambdas` and `FormulaHasAppVarLit` traversals for the `FormulaSetDefinitionStatistics` path over represented wrapped formula terms.
 
-### Change-Later Observations
+### Change Later
 
 - C `FormulaCountNonTopLevelLambdas` preserves the "top-level" state through logical symbols and lambda nodes, skips the binder/head argument of lambda and phony-application cells, and only counts lambda cells after a non-logical/non-lambda formula node has been crossed. Rust mirrors this for definition statistics; revisit the public API name/semantics once higher-order feature extraction has trace coverage.
 
