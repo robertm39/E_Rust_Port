@@ -620,14 +620,15 @@ fn compute_from_position_into_occurrence(
     pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder && pm_type == ParamodulationType::Plain {
-        return compute_plain_from_position_into_occurrence_csu(
+    if problem_type() == ProblemType::HigherOrder {
+        return compute_from_position_into_occurrence_csu(
             bank,
             ocb,
             from_pos,
             occurrence,
             store,
             parent_alias,
+            pm_type,
             doc_context,
         );
     }
@@ -716,8 +717,8 @@ fn compute_indexed_sources_into_position(
     pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
-    if problem_type() == ProblemType::HigherOrder && pm_type == ParamodulationType::Plain {
-        return compute_plain_indexed_sources_into_position_csu(
+    if problem_type() == ProblemType::HigherOrder {
+        return compute_indexed_sources_into_position_csu(
             bank,
             ocb,
             overlap_term,
@@ -725,6 +726,7 @@ fn compute_indexed_sources_into_position(
             from_index,
             store,
             parent_alias,
+            pm_type,
             doc_context,
         );
     }
@@ -795,13 +797,18 @@ fn compute_indexed_sources_into_position(
     Ok(paramod_count)
 }
 
-fn compute_plain_from_position_into_occurrence_csu(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible indexed CSU helper keeps source occurrence, target occurrence, mode, and optional docs explicit"
+)]
+fn compute_from_position_into_occurrence_csu(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     from_pos: &ClausePos,
     occurrence: &SubtermOcc,
     store: &mut ClauseSet,
     parent_alias: &Clause,
+    pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let from_term = from_pos
@@ -813,7 +820,7 @@ fn compute_plain_from_position_into_occurrence_csu(
     ensure_higher_order_paramodulation_ordering_supported(
         ocb,
         &[&from_term, &from_other, occurrence.term()],
-        higher_order_paramod_diagnostic,
+        || higher_order_paramod_diagnostic_for_type(pm_type),
     )?;
 
     let mut subst = Substitution::new();
@@ -836,68 +843,29 @@ fn compute_plain_from_position_into_occurrence_csu(
             continue;
         }
         let subst_is_ho = subst.has_ho_binding();
-        let effective_pm_type =
-            effective_paramodulation_type(bank, ocb, from_pos, ParamodulationType::Plain);
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
 
         for into_clause_pos in occurrence.position_clauses().entries() {
-            for into_cpos in into_clause_pos.positions() {
-                let into_pos = unpack_clause_pos(*into_cpos, into_clause_pos.clause().clone());
-                if let Err(err) =
-                    ensure_indexed_plain_paramodulation_ordering_supported(ocb, from_pos, &into_pos)
-                {
+            let generated = match compute_from_position_into_target_clause_entry_csu(
+                bank,
+                ocb,
+                from_pos,
+                into_clause_pos,
+                store,
+                parent_alias,
+                &mut subst,
+                subst_is_ho,
+                effective_pm_type,
+                pm_type,
+                doc_context,
+            ) {
+                Ok(generated) => generated,
+                Err(err) => {
                     iter.destroy(&mut subst);
                     return Err(err);
                 }
-                if !indexed_target_allows_under_subst(
-                    bank,
-                    ocb,
-                    &into_pos,
-                    into_clause_pos.clause(),
-                ) {
-                    continue;
-                }
-
-                let from_clause = from_pos
-                    .clause()
-                    .expect("indexed source position must be backed by a clause");
-                let freshvars =
-                    fresh_var_bank_for_clauses(bank, from_clause, into_clause_pos.clause());
-                let paramodulant = match indexed_plain_paramod_construct_with_subst(
-                    bank,
-                    from_pos,
-                    &into_pos,
-                    from_clause,
-                    into_clause_pos.clause(),
-                    &freshvars,
-                    &mut subst,
-                ) {
-                    Ok(paramodulant) => paramodulant,
-                    Err(err) => {
-                        iter.destroy(&mut subst);
-                        return Err(err);
-                    }
-                };
-                let Some(mut paramodulant) = paramodulant else {
-                    continue;
-                };
-                paramod_count += 1;
-                update_paramodulant_info(&mut paramodulant, into_clause_pos.clause(), parent_alias);
-                document_paramodulant_creation(
-                    doc_context,
-                    bank,
-                    &mut paramodulant,
-                    effective_pm_type,
-                    into_clause_pos.clause(),
-                    parent_alias,
-                )?;
-                clause_push_derivation(
-                    &mut paramodulant,
-                    paramodulation_derivation_code_with_ho(effective_pm_type, subst_is_ho),
-                    Some(into_clause_pos.clause()),
-                    Some(parent_alias),
-                );
-                store.insert(paramodulant);
-            }
+            };
+            paramod_count += generated;
         }
     }
 
@@ -907,9 +875,111 @@ fn compute_plain_from_position_into_occurrence_csu(
 
 #[expect(
     clippy::too_many_arguments,
+    reason = "C-compatible indexed CSU helper keeps source, target entry, active substitution, and optional docs explicit"
+)]
+fn compute_from_position_into_target_clause_entry_csu(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from_pos: &ClausePos,
+    target_entry: &ClauseTPos,
+    store: &mut ClauseSet,
+    parent_alias: &Clause,
+    subst: &mut Substitution,
+    subst_is_ho: bool,
+    effective_pm_type: ParamodulationType,
+    requested_pm_type: ParamodulationType,
+    doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
+    let mut paramod_count = 0;
+    let is_simultaneous = paramodulation_is_simultaneous(effective_pm_type);
+    let mut marked_term = None;
+    for into_cpos in target_entry.positions() {
+        let into_pos = unpack_clause_pos(*into_cpos, target_entry.clause().clone());
+        ensure_indexed_paramodulation_ordering_supported(
+            ocb,
+            from_pos,
+            &into_pos,
+            requested_pm_type,
+        )?;
+        if is_simultaneous {
+            let into_term = into_pos
+                .get_subterm()
+                .expect("indexed target position must select a subterm");
+            if marked_term.is_none() {
+                into_term.set_prop(TP_POTENTIAL_PARAMOD);
+                marked_term = Some(into_term.clone());
+            } else if !into_term.query_prop(TP_POTENTIAL_PARAMOD) {
+                break;
+            }
+        }
+        if !indexed_target_allows_under_subst(bank, ocb, &into_pos, target_entry.clause()) {
+            continue;
+        }
+
+        let from_clause = from_pos
+            .clause()
+            .expect("indexed source position must be backed by a clause");
+        let freshvars = fresh_var_bank_for_clauses(bank, from_clause, target_entry.clause());
+        let paramodulant = indexed_paramod_construct_with_subst(
+            bank,
+            ocb,
+            from_pos,
+            &into_pos,
+            from_clause,
+            target_entry.clause(),
+            &freshvars,
+            subst,
+            effective_pm_type,
+        );
+        let paramodulant = match paramodulant {
+            Ok(paramodulant) => paramodulant,
+            Err(err) => {
+                if let Some(term) = marked_term {
+                    term.del_prop(TP_POTENTIAL_PARAMOD);
+                }
+                return Err(err);
+            }
+        };
+        let Some(mut paramodulant) = paramodulant else {
+            continue;
+        };
+        paramod_count += 1;
+        update_paramodulant_info(&mut paramodulant, target_entry.clause(), parent_alias);
+        if let Err(err) = document_paramodulant_creation(
+            doc_context,
+            bank,
+            &mut paramodulant,
+            effective_pm_type,
+            target_entry.clause(),
+            parent_alias,
+        ) {
+            if let Some(term) = marked_term {
+                term.del_prop(TP_POTENTIAL_PARAMOD);
+            }
+            return Err(err);
+        }
+        clause_push_derivation(
+            &mut paramodulant,
+            paramodulation_derivation_code_with_ho(effective_pm_type, subst_is_ho),
+            Some(target_entry.clause()),
+            Some(parent_alias),
+        );
+        store.insert(paramodulant);
+        if is_simultaneous {
+            break;
+        }
+    }
+    if let Some(term) = marked_term {
+        term.del_prop(TP_POTENTIAL_PARAMOD);
+    }
+    Ok(paramod_count)
+}
+
+#[expect(
+    clippy::too_many_arguments,
     reason = "C-compatible indexed CSU helper keeps selected target, source occurrence, and optional docs explicit"
 )]
-fn compute_plain_indexed_sources_into_position_csu(
+fn compute_indexed_sources_into_position_csu(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     overlap_term: &Term,
@@ -917,6 +987,7 @@ fn compute_plain_indexed_sources_into_position_csu(
     from_index: &OverlapIndex<'_>,
     store: &mut ClauseSet,
     parent_alias: &Clause,
+    pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let into_side = into_pos
@@ -928,7 +999,7 @@ fn compute_plain_indexed_sources_into_position_csu(
     ensure_higher_order_paramodulation_ordering_supported(
         ocb,
         &[overlap_term, &into_side, &into_other],
-        higher_order_paramod_diagnostic,
+        || higher_order_paramod_diagnostic_for_type(pm_type),
     )?;
 
     let mut paramod_count = 0;
@@ -937,7 +1008,7 @@ fn compute_plain_indexed_sources_into_position_csu(
         ensure_higher_order_paramodulation_ordering_supported(
             ocb,
             &[overlap_term, occurrence.term()],
-            higher_order_paramod_diagnostic,
+            || higher_order_paramod_diagnostic_for_type(pm_type),
         )?;
         let mut subst = Substitution::new();
         let mut iter = CsuIterator::new(overlap_term, occurrence.term(), &subst);
@@ -963,7 +1034,7 @@ fn compute_plain_indexed_sources_into_position_csu(
                 if from_clause_pos.clause_key() == parent_key {
                     continue;
                 }
-                let generated = match compute_plain_indexed_sources_from_clause_entry_csu(
+                let generated = match compute_indexed_sources_from_clause_entry_csu(
                     bank,
                     ocb,
                     from_clause_pos,
@@ -972,6 +1043,7 @@ fn compute_plain_indexed_sources_into_position_csu(
                     parent_alias,
                     &mut subst,
                     subst_is_ho,
+                    pm_type,
                     doc_context,
                 ) {
                     Ok(generated) => generated,
@@ -994,7 +1066,7 @@ fn compute_plain_indexed_sources_into_position_csu(
     clippy::too_many_arguments,
     reason = "C-compatible indexed CSU helper keeps source entry, target position, active substitution, and optional docs explicit"
 )]
-fn compute_plain_indexed_sources_from_clause_entry_csu(
+fn compute_indexed_sources_from_clause_entry_csu(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
     source_entry: &ClauseTPos,
@@ -1003,28 +1075,41 @@ fn compute_plain_indexed_sources_from_clause_entry_csu(
     parent_alias: &Clause,
     subst: &mut Substitution,
     subst_is_ho: bool,
+    pm_type: ParamodulationType,
     doc_context: &mut Option<(&mut impl fmt::Write, &mut ProofDocSession)>,
 ) -> Result<i64, Diagnostic> {
     let mut paramod_count = 0;
     for source_cpos in source_entry.positions() {
         let source_pos = unpack_clause_pos(*source_cpos, source_entry.clause().clone());
-        ensure_indexed_plain_paramodulation_ordering_supported(ocb, &source_pos, into_pos)?;
+        ensure_indexed_paramodulation_ordering_supported(ocb, &source_pos, into_pos, pm_type)?;
         if !indexed_source_allows_under_subst(bank, ocb, &source_pos) {
             continue;
         }
 
-        let effective_pm_type =
-            effective_paramodulation_type(bank, ocb, &source_pos, ParamodulationType::Plain);
+        let effective_pm_type = effective_paramodulation_type(bank, ocb, &source_pos, pm_type);
+        let marked_term = paramodulation_is_simultaneous(effective_pm_type).then(|| {
+            let into_term = into_pos
+                .get_subterm()
+                .expect("indexed target position must select a subterm");
+            into_term.set_prop(TP_POTENTIAL_PARAMOD);
+            into_term
+        });
         let freshvars = fresh_var_bank_for_clauses(bank, source_entry.clause(), parent_alias);
-        let paramodulant = indexed_plain_paramod_construct_with_subst(
+        let paramodulant = indexed_paramod_construct_with_subst(
             bank,
+            ocb,
             &source_pos,
             into_pos,
             source_entry.clause(),
             parent_alias,
             &freshvars,
             subst,
-        )?;
+            effective_pm_type,
+        );
+        if let Some(term) = marked_term {
+            term.del_prop(TP_POTENTIAL_PARAMOD);
+        }
+        let paramodulant = paramodulant?;
         let Some(mut paramodulant) = paramodulant else {
             continue;
         };
@@ -1117,10 +1202,11 @@ fn indexed_target_allows_under_subst(
                 && eqn_is_maximal_under_subst(ocb, bank, into_clause, into_index)))
 }
 
-fn ensure_indexed_plain_paramodulation_ordering_supported(
+fn ensure_indexed_paramodulation_ordering_supported(
     ocb: &OrderControlBlock,
     from_pos: &ClausePos,
     into_pos: &ClausePos,
+    pm_type: ParamodulationType,
 ) -> Result<(), Diagnostic> {
     let from_term = from_pos
         .get_side()
@@ -1147,8 +1233,64 @@ fn ensure_indexed_plain_paramodulation_ordering_supported(
             &into_side,
             &into_other,
         ],
-        higher_order_paramod_diagnostic,
+        || higher_order_paramod_diagnostic_for_type(pm_type),
     )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible active-substitution dispatcher keeps source and target positions explicit"
+)]
+fn indexed_paramod_construct_with_subst(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from: &ClausePos,
+    into: &ClausePos,
+    from_clause: &Clause,
+    into_clause: &Clause,
+    freshvars: &VarBank,
+    subst: &mut Substitution,
+    pm_type: ParamodulationType,
+) -> Result<Option<Clause>, Diagnostic> {
+    match pm_type {
+        ParamodulationType::Plain => indexed_plain_paramod_construct_with_subst(
+            bank,
+            from,
+            into,
+            from_clause,
+            into_clause,
+            freshvars,
+            subst,
+        ),
+        ParamodulationType::Simultaneous => indexed_sim_paramod_construct_with_subst(
+            bank,
+            ocb,
+            from,
+            into,
+            from_clause,
+            into_clause,
+            freshvars,
+            subst,
+            SimParamodReplacement::SharedTarget,
+        ),
+        ParamodulationType::SuperSimultaneous => indexed_sim_paramod_construct_with_subst(
+            bank,
+            ocb,
+            from,
+            into,
+            from_clause,
+            into_clause,
+            freshvars,
+            subst,
+            SimParamodReplacement::InstantiatedTargetCopy,
+        ),
+        ParamodulationType::OrientedSimultaneous
+        | ParamodulationType::OrientedSuperSimultaneous
+        | ParamodulationType::DecreasingSimultaneous
+        | ParamodulationType::SizeDecreasingSimultaneous => {
+            unreachable!("effective paramodulation type must be concrete")
+        }
+    }
 }
 
 fn indexed_plain_paramod_construct_with_subst(
@@ -1224,6 +1366,69 @@ fn indexed_plain_paramod_construct_with_subst(
     })();
     subst.backtrack_to_pos(backtrack);
     result
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible active-substitution constructor keeps source and target positions explicit"
+)]
+fn indexed_sim_paramod_construct_with_subst(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from: &ClausePos,
+    into: &ClausePos,
+    from_clause: &Clause,
+    into_clause: &Clause,
+    freshvars: &VarBank,
+    subst: &mut Substitution,
+    replacement: SimParamodReplacement,
+) -> Result<Option<Clause>, Diagnostic> {
+    let from_index = from
+        .literal_index()
+        .expect("indexed source position must select a clause literal");
+    let into_index = into
+        .literal_index()
+        .expect("indexed target position must select a clause literal");
+    let from_literal = from
+        .literal()
+        .expect("indexed source position must select a literal");
+    let into_literal = into
+        .literal()
+        .expect("indexed target position must select a literal");
+    let from_term = from
+        .get_side()
+        .expect("indexed source position must select a side");
+    let from_other = from
+        .get_other_side()
+        .expect("indexed source position must select an opposite side");
+    let into_term = into
+        .get_subterm()
+        .expect("indexed target position must select a subterm");
+    let into_side = into
+        .get_side()
+        .expect("indexed target position must select a side");
+    let into_other = into
+        .get_other_side()
+        .expect("indexed target position must select an opposite side");
+
+    clause_ordered_sim_paramod_active_subst(
+        bank,
+        ocb,
+        from_clause,
+        into_clause,
+        from_index,
+        into_index,
+        from_literal,
+        into_literal,
+        &from_term,
+        &from_other,
+        &into_term,
+        &into_side,
+        &into_other,
+        freshvars,
+        subst,
+        replacement,
+    )
 }
 
 fn indexed_effective_paramodulation_type(
@@ -1877,24 +2082,73 @@ fn clause_ordered_sim_paramod_with_subst(
     subst: &mut Substitution,
     replacement: SimParamodReplacement,
 ) -> Result<Option<Clause>, Diagnostic> {
+    let oldstate = subst.len();
     let unified = subst_mgu_complete(from_term, into_term, subst);
     if unified
         && problem_type() == ProblemType::HigherOrder
         && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
     {
+        subst.backtrack_to_pos(oldstate);
         into_term.del_prop(TP_POTENTIAL_PARAMOD);
         return Err(higher_order_sim_paramod_diagnostic());
     }
-    if !unified
-        || (!from_literal.is_oriented()
-            && to_greater(
-                ocb,
-                bank.signature(),
-                from_other,
-                from_term,
-                DerefType::Always,
-                DerefType::Always,
-            ))
+    if !unified {
+        subst.backtrack_to_pos(oldstate);
+        into_term.del_prop(TP_POTENTIAL_PARAMOD);
+        return Ok(None);
+    }
+
+    clause_ordered_sim_paramod_active_subst(
+        bank,
+        ocb,
+        from_clause,
+        into_clause,
+        from_index,
+        into_index,
+        from_literal,
+        into_literal,
+        from_term,
+        from_other,
+        into_term,
+        into_side,
+        into_other,
+        freshvars,
+        subst,
+        replacement,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper keeps active substitution and clause-position state explicit"
+)]
+fn clause_ordered_sim_paramod_active_subst(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    from_clause: &Clause,
+    into_clause: &Clause,
+    from_index: usize,
+    into_index: usize,
+    from_literal: &Eqn,
+    into_literal: &Eqn,
+    from_term: &Term,
+    from_other: &Term,
+    into_term: &Term,
+    into_side: &Term,
+    into_other: &Term,
+    freshvars: &VarBank,
+    subst: &mut Substitution,
+    replacement: SimParamodReplacement,
+) -> Result<Option<Clause>, Diagnostic> {
+    if !from_literal.is_oriented()
+        && to_greater(
+            ocb,
+            bank.signature(),
+            from_other,
+            from_term,
+            DerefType::Always,
+            DerefType::Always,
+        )
     {
         into_term.del_prop(TP_POTENTIAL_PARAMOD);
         return Ok(None);
@@ -1928,44 +2182,49 @@ fn clause_ordered_sim_paramod_with_subst(
 
     into_term.del_prop(TP_POTENTIAL_PARAMOD);
 
-    let _ = into_clause
-        .literals()
-        .subst_norm_except(None, subst, freshvars);
-    let _ = from_clause
-        .literals()
-        .subst_norm_except(None, subst, freshvars);
+    let backtrack = subst.len();
+    let result = (|| {
+        let _ = into_clause
+            .literals()
+            .subst_norm_except(None, subst, freshvars);
+        let _ = from_clause
+            .literals()
+            .subst_norm_except(None, subst, freshvars);
 
-    let rhs_instance = bank.insert_no_props(from_other, DerefType::Always)?;
-    let mut into_copy = match replacement {
-        SimParamodReplacement::SharedTarget => {
-            into_clause
-                .literals()
-                .copy_repl(bank, into_term, &rhs_instance)?
+        let rhs_instance = bank.insert_no_props(from_other, DerefType::Always)?;
+        let mut into_copy = match replacement {
+            SimParamodReplacement::SharedTarget => {
+                into_clause
+                    .literals()
+                    .copy_repl(bank, into_term, &rhs_instance)?
+            }
+            SimParamodReplacement::InstantiatedTargetCopy => {
+                let lhs_instance = bank.insert(into_term, DerefType::Always)?;
+                let tmp_copy = into_clause.literals().copy_to_bank(bank)?;
+                tmp_copy.copy_repl(bank, &lhs_instance, &rhs_instance)?
+            }
+        };
+        if into_copy.find_true(bank).is_some() {
+            return Ok(None);
         }
-        SimParamodReplacement::InstantiatedTargetCopy => {
-            let lhs_instance = bank.insert(into_term, DerefType::Always)?;
-            let tmp_copy = into_clause.literals().copy_to_bank(bank)?;
-            tmp_copy.copy_repl(bank, &lhs_instance, &rhs_instance)?
+
+        let mut from_copy = from_clause
+            .literals()
+            .copy_opt_except_index(Some(from_index), bank)?;
+        if from_copy.find_true(bank).is_some() {
+            return Ok(None);
         }
-    };
-    if into_copy.find_true(bank).is_some() {
-        return Ok(None);
-    }
 
-    let mut from_copy = from_clause
-        .literals()
-        .copy_opt_except_index(Some(from_index), bank)?;
-    if from_copy.find_true(bank).is_some() {
-        return Ok(None);
-    }
-
-    into_copy.del_prop(EP_FROM_CLAUSE_LIT);
-    from_copy.set_prop(EP_FROM_CLAUSE_LIT);
-    into_copy.append(from_copy);
-    into_copy.lambda_normalize(bank)?;
-    into_copy.remove_resolved(bank);
-    into_copy.remove_duplicates(bank);
-    Ok(Some(Clause::alloc(into_copy)))
+        into_copy.del_prop(EP_FROM_CLAUSE_LIT);
+        from_copy.set_prop(EP_FROM_CLAUSE_LIT);
+        into_copy.append(from_copy);
+        into_copy.lambda_normalize(bank)?;
+        into_copy.remove_resolved(bank);
+        into_copy.remove_duplicates(bank);
+        Ok(Some(Clause::alloc(into_copy)))
+    })();
+    subst.backtrack_to_pos(backtrack);
+    result
 }
 
 fn eqn_is_strictly_maximal_under_subst(
@@ -3221,6 +3480,129 @@ mod tests {
                 DerivationEntry::Operation(set_is_ho(DC_PARAMOD)),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_higher_order_simultaneous_uses_csu() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
+        let mut bank = test_bank();
+        let source_left = typed_arrow_var(&mut bank, -2_451);
+        let source_right = typed_arrow_const(&mut bank, "pm_idx_ho_sim_source_right");
+        let target_left = typed_arrow_const(&mut bank, "pm_idx_ho_sim_target_left");
+        let target_right = typed_arrow_const(&mut bank, "pm_idx_ho_sim_target_right");
+        let target_extra_right = typed_arrow_const(&mut bank, "pm_idx_ho_sim_extra_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        let target_extra = lit(&mut bank, &target_left, &target_extra_right, false);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let mut target = Clause::alloc(EqnList::from_vec(vec![target_literal, target_extra]));
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut target, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::Simultaneous,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one indexed higher-order simultaneous paramodulant");
+        assert_eq!(stored.literal_number(), 2);
+        let generated = stored.literals().as_slice();
+        assert_eq!(generated[0].left(), &source_right);
+        assert_eq!(generated[0].right(), &target_right);
+        assert_eq!(generated[1].left(), &source_right);
+        assert_eq!(generated[1].right(), &target_extra_right);
+        assert!(!generated[1].is_positive());
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(set_is_ho(DC_SIM_PARAMOD)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_all_paramodulants_indexed_higher_order_super_sim_uses_csu_from_index() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
+        let mut bank = test_bank();
+        let source_left = typed_arrow_var(&mut bank, -2_452);
+        let source_right = typed_arrow_const(&mut bank, "pm_idx_ho_super_source_right");
+        let target_left = typed_arrow_const(&mut bank, "pm_idx_ho_super_target_left");
+        let target_right = typed_arrow_const(&mut bank, "pm_idx_ho_super_target_right");
+        let target_extra_right = typed_arrow_const(&mut bank, "pm_idx_ho_super_extra_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, false);
+        let target_extra = lit(&mut bank, &target_left, &target_extra_right, false);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let mut indexed_source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let selected = Clause::alloc(EqnList::from_vec(vec![target_literal, target_extra]));
+        let index_signature = bank.signature().clone();
+        let mut indices = GlobalIndices::new(&index_signature, "NoIndex", "FP1", "FP1", 0);
+        indices.insert_clause(&mut indexed_source, &bank, false);
+        let (into_index, negp_index, from_index) =
+            indices.pm_paramodulation_indexes().expect("PM indexes");
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_paramodulants_indexed(
+            &mut bank,
+            &mut ocb,
+            &selected,
+            &selected,
+            into_index,
+            negp_index,
+            from_index,
+            &mut store,
+            ParamodulationType::SuperSimultaneous,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one indexed higher-order super-simultaneous paramodulant");
+        assert_eq!(stored.literal_number(), 2);
+        let generated = stored.literals().as_slice();
+        assert_eq!(generated[0].left(), &source_right);
+        assert_eq!(generated[0].right(), &target_right);
+        assert!(!generated[0].is_positive());
+        assert_eq!(generated[1].left(), &source_right);
+        assert_eq!(generated[1].right(), &target_extra_right);
+        assert!(!generated[1].is_positive());
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(set_is_ho(DC_SIM_PARAMOD)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&selected)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&indexed_source)),
             ]
         );
     }
