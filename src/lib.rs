@@ -22,11 +22,23 @@ pub mod terms;
 pub(crate) mod test_support {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    pub(crate) fn global_state_lock() -> MutexGuard<'static, ()> {
+    pub(crate) struct GlobalStateGuard {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for GlobalStateGuard {
+        fn drop(&mut self) {
+            crate::basics::simple_stuff::reset_problem_type();
+        }
+    }
+
+    pub(crate) fn global_state_lock() -> GlobalStateGuard {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        match LOCK.get_or_init(|| Mutex::new(())).lock() {
+        let guard = match LOCK.get_or_init(|| Mutex::new(())).lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
-        }
+        };
+        crate::basics::simple_stuff::reset_problem_type();
+        GlobalStateGuard { _guard: guard }
     }
 }

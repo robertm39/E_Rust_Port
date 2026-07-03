@@ -50,31 +50,46 @@ impl<T: Clone> PDArray<T> {
     ///
     /// # Panics
     ///
-    /// Panics if computing the new logical size overflows `usize`.
-    pub fn enlarge(&mut self, idx: PDArrayIndex) -> bool {
-        let Some(index) = checked_index(idx) else {
-            return false;
-        };
+    /// Panics when `idx` is negative, or if computing the new logical size
+    /// overflows `usize`.
+    pub fn enlarge(&mut self, idx: PDArrayIndex) {
+        let index = index_or_panic(idx, "PDArrayEnlarge");
+        self.enlarge_index(index);
+    }
+
+    fn enlarge_index(&mut self, index: usize) {
         if index < self.size {
-            return true;
+            return;
         }
 
         let new_size = self.new_size_for(index);
         self.array.resize(new_size, self.default.clone());
         self.size = new_size;
-        true
     }
 
-    pub fn element_ref(&mut self, idx: PDArrayIndex) -> Option<&mut T> {
-        self.enlarge(idx);
-        let index = checked_index(idx)?;
-        self.array.get_mut(index)
+    /// Return a mutable reference to `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `PDArrayElementRef`
+    /// assertion.
+    pub fn element_ref(&mut self, idx: PDArrayIndex) -> &mut T {
+        let index = index_or_panic(idx, "PDArrayElementRef");
+        self.enlarge_index(index);
+        &mut self.array[index]
     }
 
-    pub fn element(&mut self, idx: PDArrayIndex) -> Option<&T> {
-        self.enlarge(idx);
-        let index = checked_index(idx)?;
-        self.array.get(index)
+    /// Return a reference to `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `PDArrayElement`
+    /// assertion through `PDArrayElementRef`.
+    #[must_use]
+    pub fn element(&mut self, idx: PDArrayIndex) -> &T {
+        let index = index_or_panic(idx, "PDArrayElement");
+        self.enlarge_index(index);
+        &self.array[index]
     }
 
     #[must_use]
@@ -83,18 +98,25 @@ impl<T: Clone> PDArray<T> {
         self.array.get(index)
     }
 
-    pub fn assign(&mut self, idx: PDArrayIndex, value: T) -> bool {
-        let Some(element) = self.element_ref(idx) else {
-            return false;
-        };
+    /// Assign `value` to `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `PDArrayAssign`
+    /// assertion through `PDArrayElementRef`.
+    pub fn assign(&mut self, idx: PDArrayIndex, value: T) {
+        let element = self.element_ref(idx);
         *element = value;
-        true
     }
 
+    /// Reset an existing element to the array default.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative. In C, negative delete indices enter the
+    /// in-range branch and then assert through `PDArrayAssign`.
     pub fn delete(&mut self, idx: PDArrayIndex) -> bool {
-        let Some(index) = checked_index(idx) else {
-            return false;
-        };
+        let index = index_or_panic(idx, "PDArrayElementDelete");
         if index >= self.size {
             return false;
         }
@@ -206,19 +228,39 @@ impl PDIntArray {
         }
     }
 
-    pub fn inc_int(&mut self, idx: PDArrayIndex, value: PDArrayInt) -> Option<PDArrayInt> {
-        let element = self.element_ref(idx)?;
+    /// Increment the integer element at `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `PDArrayElementIncInt`
+    /// assertion through `PDArrayElementRef`.
+    pub fn inc_int(&mut self, idx: PDArrayIndex, value: PDArrayInt) -> PDArrayInt {
+        let element = self.element_ref(idx);
         *element += value;
-        Some(*element)
+        *element
     }
 
+    /// Return the integer element at `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `PDArrayElementInt`
+    /// assertion through `PDArrayElementRef`.
     pub fn element_int(&mut self, idx: PDArrayIndex) -> PDArrayInt {
-        self.element(idx).copied().unwrap_or(0)
+        *self.element(idx)
     }
 }
 
 fn checked_index(idx: PDArrayIndex) -> Option<usize> {
     usize::try_from(idx).ok()
+}
+
+fn index_or_panic(idx: PDArrayIndex, caller: &str) -> usize {
+    assert!(idx >= 0, "{caller} called with a negative index");
+    match usize::try_from(idx) {
+        Ok(value) => value,
+        Err(error) => panic!("{caller} index overflow: {error}"),
+    }
 }
 
 fn index_to_pd(index: usize) -> PDArrayIndex {
@@ -238,7 +280,7 @@ mod tests {
         assert_eq!(array.size(), 2);
         assert_eq!(array.members(), 0);
 
-        assert!(array.assign(1, Some("one")));
+        array.assign(1, Some("one"));
         assert_eq!(array.members(), 1);
         assert_eq!(array.first_unused(), 2);
         assert_eq!(array.store_pointer("two"), 2);
@@ -251,7 +293,7 @@ mod tests {
     #[test]
     fn fixed_growth_uses_the_smallest_covering_multiple() {
         let mut array = PDPointerArray::<usize>::new_pointer(3, 5);
-        assert!(array.assign(12, Some(99)));
+        array.assign(12, Some(99));
         assert_eq!(array.size(), 15);
         assert_eq!(array.existing_element(12), Some(&Some(99)));
         assert_eq!(array.existing_element(14), Some(&None));
@@ -260,7 +302,7 @@ mod tests {
     #[test]
     fn delete_ignores_out_of_range_indices_without_growing() {
         let mut array = PDPointerArray::new_pointer(2, GROW_EXPONENTIAL);
-        assert!(array.assign(1, Some("value")));
+        array.assign(1, Some("value"));
         assert!(!array.delete_pointer(5));
         assert_eq!(array.size(), 2);
         assert!(array.delete_pointer(1));
@@ -300,7 +342,7 @@ mod tests {
         let mut array = PDIntArray::new_int(2, GROW_EXPONENTIAL);
         assert_eq!(array.store_int(11), 0);
         assert_eq!(array.store_int(22), 1);
-        assert_eq!(array.inc_int(3, 5), Some(5));
+        assert_eq!(array.inc_int(3, 5), 5);
         assert_eq!(array.size(), 4);
         assert!(array.delete_int(1));
         assert_eq!(array.element_int(1), 0);
@@ -309,9 +351,23 @@ mod tests {
     #[test]
     fn generic_array_supports_custom_default_values() {
         let mut array = PDArray::with_default(1, 3, -1);
-        assert_eq!(array.element(4), Some(&-1));
+        assert_eq!(array.element(4), &-1);
         assert_eq!(array.size(), 6);
         array.assign(4, 10);
-        assert_eq!(array.element(4), Some(&10));
+        assert_eq!(array.element(4), &10);
+    }
+
+    #[test]
+    #[should_panic(expected = "PDArrayElementRef called with a negative index")]
+    fn element_ref_panics_on_negative_index_like_c_assertion() {
+        let mut array = PDIntArray::new_int(2, GROW_EXPONENTIAL);
+        let _value = array.element_ref(-1);
+    }
+
+    #[test]
+    #[should_panic(expected = "PDArrayElementDelete called with a negative index")]
+    fn delete_panics_on_negative_index_like_c_assertion() {
+        let mut array = PDIntArray::new_int(2, GROW_EXPONENTIAL);
+        let _deleted = array.delete_int(-1);
     }
 }

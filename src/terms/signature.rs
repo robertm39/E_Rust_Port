@@ -1477,10 +1477,7 @@ impl Signature {
                 max_arity = max_arity.max(arity);
                 let arity_index =
                     isize::try_from(arity).expect("selected arity fits dynamic-array index");
-                assert!(
-                    distrib.inc_int(arity_index, 1).is_some(),
-                    "arity distribution accepts selected arity"
-                );
+                distrib.inc_int(arity_index, 1);
             }
         }
         max_arity

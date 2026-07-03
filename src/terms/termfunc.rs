@@ -1418,10 +1418,7 @@ pub fn term_add_fun_occ(
                 if f_occur.element_int(index) == 0 {
                     count += 1;
                     res_stack.push(current.f_code());
-                    assert!(
-                        f_occur.assign(index, 1),
-                        "function-occurrence array must cover positive f-codes"
-                    );
+                    f_occur.assign(index, 1);
                 }
             }
             stack.extend(current.argument_clones().into_iter().flatten());

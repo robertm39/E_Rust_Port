@@ -78,12 +78,12 @@ impl Features {
         distrib_existing_value(&self.func_distrib, arity)
     }
 
-    pub fn assign_pred_distribution_value(&mut self, arity: i32, value: i64) -> bool {
-        self.pred_distrib.assign(arity_index(arity), value)
+    pub fn assign_pred_distribution_value(&mut self, arity: i32, value: i64) {
+        self.pred_distrib.assign(arity_index(arity), value);
     }
 
-    pub fn assign_func_distribution_value(&mut self, arity: i32, value: i64) -> bool {
-        self.func_distrib.assign(arity_index(arity), value)
+    pub fn assign_func_distribution_value(&mut self, arity: i32, value: i64) {
+        self.func_distrib.assign(arity_index(arity), value);
     }
 
     pub fn set_pred_max_arity(&mut self, max_arity: i32) {

@@ -39,10 +39,7 @@ pub fn term_add_var_distribution(term: &Term, dist_array: &mut PDIntArray) -> Fu
             let index = pd_index_from_positive(var);
             let count = dist_array.element_int(index) + 1;
             max_var = max_var.max(var);
-            assert!(
-                dist_array.assign(index, count),
-                "variable distribution array must cover variable codes"
-            );
+            dist_array.assign(index, count);
         } else {
             assert!(
                 current.f_code() > 0,

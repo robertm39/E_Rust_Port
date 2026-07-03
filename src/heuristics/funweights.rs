@@ -1480,10 +1480,7 @@ pub fn sym_offset_weight_compute(
             .f_occur
             .as_mut()
             .unwrap_or_else(|| panic!("SymOffsetWeight requires an occurrence array"));
-        assert!(
-            f_occur.assign(f_code_to_pd_index(f_code), 0),
-            "function-occurrence array must cover positive f-codes"
-        );
+        f_occur.assign(f_code_to_pd_index(f_code), 0);
     }
 
     result
@@ -1534,10 +1531,7 @@ pub fn sym_offset_weight_compute_with_ocb(
             .f_occur
             .as_mut()
             .unwrap_or_else(|| panic!("SymOffsetWeight requires an occurrence array"));
-        assert!(
-            f_occur.assign(f_code_to_pd_index(f_code), 0),
-            "function-occurrence array must cover positive f-codes"
-        );
+        f_occur.assign(f_code_to_pd_index(f_code), 0);
     }
 
     result

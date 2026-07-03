@@ -1785,6 +1785,7 @@ mod tests {
 
     #[test]
     fn unfold_lambda_peels_prefix_in_c_push_order() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
         let mut bank = test_bank();
         let i_type = bank.signature().type_bank().default_type();
         let user_sort_code = bank
