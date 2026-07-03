@@ -73,27 +73,58 @@ fn doubled_limit(old_size: usize, new_size: usize) -> Result<usize, RegMemError>
     Ok(new_limit)
 }
 
+fn regmem_failure(operation: &str, error: RegMemError) -> ! {
+    match error {
+        RegMemError::UnknownHandle(handle) => {
+            panic!("{operation} called for unregistered handle {handle:?}");
+        }
+        RegMemError::AllocationFailed { size } => {
+            panic!("{operation} failed to allocate {size} bytes");
+        }
+        RegMemError::SizeOverflow { old_size, new_size } => {
+            panic!("{operation} size overflow growing from {old_size} to {new_size}");
+        }
+    }
+}
+
+fn require_regmem<T>(operation: &str, result: Result<T, RegMemError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => regmem_failure(operation, error),
+    }
+}
+
 #[must_use]
 pub fn regmem_registered_count() -> usize {
     lock_registry().buffers.len()
 }
 
-pub fn regmem_alloc(size: usize) -> Result<RegMemHandle, RegMemError> {
+pub fn try_regmem_alloc(size: usize) -> Result<RegMemHandle, RegMemError> {
     let buffer = zeroed_buffer(size)?;
     lock_registry().insert(buffer)
 }
 
-pub fn regmem_realloc(
+#[must_use]
+pub fn regmem_alloc(size: usize) -> RegMemHandle {
+    require_regmem("RegMemAlloc", try_regmem_alloc(size))
+}
+
+pub fn try_regmem_realloc(
     handle: Option<RegMemHandle>,
     size: usize,
 ) -> Result<RegMemHandle, RegMemError> {
     match handle {
-        Some(handle) => regmem_realloc_preserving(handle, size, usize::MAX),
-        None => regmem_alloc(size),
+        Some(handle) => try_regmem_realloc_preserving(handle, size, usize::MAX),
+        None => try_regmem_alloc(size),
     }
 }
 
-fn regmem_realloc_preserving(
+#[must_use]
+pub fn regmem_realloc(handle: Option<RegMemHandle>, size: usize) -> RegMemHandle {
+    require_regmem("RegMemRealloc", try_regmem_realloc(handle, size))
+}
+
+fn try_regmem_realloc_preserving(
     handle: RegMemHandle,
     size: usize,
     prefix_limit: usize,
@@ -112,10 +143,14 @@ fn regmem_realloc_preserving(
     };
     let copy_len = old_buffer.len().min(size).min(prefix_limit);
     new_buffer[..copy_len].copy_from_slice(&old_buffer[..copy_len]);
-    registry.insert(new_buffer)
+    let new_handle = registry.insert(new_buffer);
+    if new_handle.is_err() {
+        registry.buffers.insert(handle, old_buffer);
+    }
+    new_handle
 }
 
-pub fn regmem_free(handle: RegMemHandle) -> Result<(), RegMemError> {
+pub fn try_regmem_free(handle: RegMemHandle) -> Result<(), RegMemError> {
     if lock_registry().buffers.remove(&handle).is_some() {
         Ok(())
     } else {
@@ -123,7 +158,11 @@ pub fn regmem_free(handle: RegMemHandle) -> Result<(), RegMemError> {
     }
 }
 
-pub fn regmem_provide(
+pub fn regmem_free(handle: RegMemHandle) {
+    require_regmem("RegMemFree", try_regmem_free(handle));
+}
+
+pub fn try_regmem_provide(
     handle: Option<RegMemHandle>,
     old_size: &mut usize,
     new_size: usize,
@@ -134,11 +173,23 @@ pub fn regmem_provide(
 
     let new_limit = doubled_limit(*old_size, new_size)?;
     let new_handle = match handle {
-        Some(handle) => regmem_realloc_preserving(handle, new_limit, *old_size)?,
-        None => regmem_alloc(new_limit)?,
+        Some(handle) => try_regmem_realloc_preserving(handle, new_limit, *old_size)?,
+        None => try_regmem_alloc(new_limit)?,
     };
     *old_size = new_limit;
     Ok(Some(new_handle))
+}
+
+#[must_use]
+pub fn regmem_provide(
+    handle: Option<RegMemHandle>,
+    old_size: &mut usize,
+    new_size: usize,
+) -> Option<RegMemHandle> {
+    require_regmem(
+        "RegMemProvide",
+        try_regmem_provide(handle, old_size, new_size),
+    )
 }
 
 #[must_use]
@@ -186,13 +237,16 @@ mod tests {
     use super::{
         regmem_alloc, regmem_buffer_len, regmem_cleanup, regmem_free, regmem_provide,
         regmem_realloc, regmem_registered_count, regmem_with_bytes, regmem_with_bytes_mut,
-        RegMemError,
+        try_regmem_free, try_regmem_realloc, RegMemError, RegMemHandle,
     };
     use std::sync::{Mutex, OnceLock};
 
     fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        match LOCK.get_or_init(|| Mutex::new(())).lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     #[test]
@@ -200,7 +254,7 @@ mod tests {
         let _guard = global_test_lock();
         let _ = regmem_cleanup();
 
-        let handle = regmem_alloc(4).unwrap();
+        let handle = regmem_alloc(4);
         assert_eq!(regmem_registered_count(), 1);
         assert_eq!(regmem_buffer_len(handle), Ok(4));
         assert_eq!(
@@ -208,9 +262,21 @@ mod tests {
             vec![0; 4]
         );
 
-        assert_eq!(regmem_free(handle), Ok(()));
+        regmem_free(handle);
         assert_eq!(regmem_registered_count(), 0);
-        assert_eq!(regmem_free(handle), Err(RegMemError::UnknownHandle(handle)));
+        assert_eq!(
+            try_regmem_free(handle),
+            Err(RegMemError::UnknownHandle(handle))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "RegMemFree called for unregistered handle")]
+    fn free_panics_for_unknown_handle() {
+        let _guard = global_test_lock();
+        let _ = regmem_cleanup();
+
+        regmem_free(RegMemHandle(17));
     }
 
     #[test]
@@ -218,10 +284,10 @@ mod tests {
         let _guard = global_test_lock();
         let _ = regmem_cleanup();
 
-        let handle = regmem_alloc(3).unwrap();
+        let handle = regmem_alloc(3);
         regmem_with_bytes_mut(handle, |buffer| buffer.copy_from_slice(&[1, 2, 3])).unwrap();
 
-        let grown = regmem_realloc(Some(handle), 5).unwrap();
+        let grown = regmem_realloc(Some(handle), 5);
         assert_ne!(grown, handle);
         assert_eq!(
             regmem_with_bytes(grown, <[u8]>::to_vec).unwrap(),
@@ -232,7 +298,7 @@ mod tests {
             Err(RegMemError::UnknownHandle(handle))
         );
 
-        let shrunk = regmem_realloc(Some(grown), 2).unwrap();
+        let shrunk = regmem_realloc(Some(grown), 2);
         assert_eq!(
             regmem_with_bytes(shrunk, <[u8]>::to_vec).unwrap(),
             vec![1, 2]
@@ -241,23 +307,43 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "RegMemRealloc called for unregistered handle")]
+    fn realloc_panics_for_unknown_handle() {
+        let _guard = global_test_lock();
+        let _ = regmem_cleanup();
+
+        let _ = regmem_realloc(Some(RegMemHandle(18)), 3);
+    }
+
+    #[test]
+    fn try_realloc_reports_unknown_handle() {
+        let _guard = global_test_lock();
+        let _ = regmem_cleanup();
+
+        let handle = RegMemHandle(19);
+        assert_eq!(
+            try_regmem_realloc(Some(handle), 3),
+            Err(RegMemError::UnknownHandle(handle))
+        );
+        assert_eq!(regmem_registered_count(), 0);
+    }
+
+    #[test]
     fn provide_doubles_capacity_and_zeroes_new_tail() {
         let _guard = global_test_lock();
         let _ = regmem_cleanup();
 
         let mut old_size = 0;
-        let handle = regmem_provide(None, &mut old_size, 5).unwrap().unwrap();
+        let handle = regmem_provide(None, &mut old_size, 5).unwrap();
         assert_eq!(old_size, 8);
         assert_eq!(regmem_buffer_len(handle), Ok(8));
         regmem_with_bytes_mut(handle, |buffer| buffer[..3].copy_from_slice(&[9, 8, 7])).unwrap();
 
-        let same = regmem_provide(Some(handle), &mut old_size, 7).unwrap();
+        let same = regmem_provide(Some(handle), &mut old_size, 7);
         assert_eq!(same, Some(handle));
         assert_eq!(old_size, 8);
 
-        let grown = regmem_provide(Some(handle), &mut old_size, 9)
-            .unwrap()
-            .unwrap();
+        let grown = regmem_provide(Some(handle), &mut old_size, 9).unwrap();
         assert_eq!(old_size, 16);
         assert_ne!(grown, handle);
         assert_eq!(
