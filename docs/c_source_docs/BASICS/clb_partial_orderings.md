@@ -79,6 +79,7 @@ Source files reviewed: `BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_ord
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `POInverseRelation` handles every comparison result except `to_unknown`; that default branch is an assertion failure in C. Rust now keeps an assertion-shaped inverse helper for compatibility and a separate option-returning helper for checked callers.
 
 ### Porting Focus
 
@@ -88,10 +89,11 @@ Source files reviewed: `BASICS/clb_partial_orderings.h`, `BASICS/clb_partial_ord
 
 ### Rust Port Status
 
-- Ported in `src/basics/partial_orderings.rs`, including exact `CompareResult` and `HoOrderKind` discriminants, quasi-order conversion, inverse relation handling, and comparison-symbol rendering.
+- Ported in `src/basics/partial_orderings.rs`, including exact `CompareResult` and `HoOrderKind` discriminants, quasi-order conversion, C-shaped asserting inverse relation handling plus checked optional inversion, and comparison-symbol rendering.
 
 ### Change Later
 
 - `POCompareSymbol` is an exported `char*` table whose order is coupled to the `CompareResult` discriminants. Rust preserves table-shaped rendering; a cleaned API should prefer an enum method while keeping the table only as a compatibility adapter.
+- `POInverseRelation(to_unknown)` is an assertion failure even though `to_unknown` has a printable symbol. Later ordering APIs should decide whether unknown is a valid cached relation or only an uninitialized sentinel.
 - `Q_TO_PART(res)` collapses arbitrary signed comparison integers into partial-ordering results. Rust preserves the sign-based conversion, but new callers should use typed comparison results directly once ordering backends no longer exchange raw `long` comparison values.
 <!-- END MANUAL REVIEW: c_source_docs -->

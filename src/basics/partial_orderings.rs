@@ -47,6 +47,20 @@ impl CompareResult {
         }
     }
 
+    /// Return the inverse relation with the C `POInverseRelation` assertion.
+    ///
+    /// # Panics
+    ///
+    /// Panics for `Unknown`, matching the C helper's default `assert(false)`
+    /// branch.
+    #[must_use]
+    pub fn inverse_c(self) -> Self {
+        match self.inverse() {
+            Some(value) => value,
+            None => panic!("POInverseRelation called with unknown relation"),
+        }
+    }
+
     #[must_use]
     pub fn symbol(self) -> Option<&'static str> {
         PO_COMPARE_SYMBOLS.get(usize::from(self.c_value())).copied()
@@ -122,28 +136,28 @@ mod tests {
 
     #[test]
     fn inverse_relation_matches_c_switch_cases() {
-        assert_eq!(CompareResult::Equal.inverse(), Some(CompareResult::Equal));
+        assert_eq!(CompareResult::Equal.inverse_c(), CompareResult::Equal);
         assert_eq!(
-            CompareResult::Uncomparable.inverse(),
-            Some(CompareResult::Uncomparable)
+            CompareResult::Uncomparable.inverse_c(),
+            CompareResult::Uncomparable
+        );
+        assert_eq!(CompareResult::Greater.inverse_c(), CompareResult::Lesser);
+        assert_eq!(CompareResult::Lesser.inverse_c(), CompareResult::Greater);
+        assert_eq!(
+            CompareResult::NotGreaterEqual.inverse_c(),
+            CompareResult::NotLessEqual
         );
         assert_eq!(
-            CompareResult::Greater.inverse(),
-            Some(CompareResult::Lesser)
-        );
-        assert_eq!(
-            CompareResult::Lesser.inverse(),
-            Some(CompareResult::Greater)
-        );
-        assert_eq!(
-            CompareResult::NotGreaterEqual.inverse(),
-            Some(CompareResult::NotLessEqual)
-        );
-        assert_eq!(
-            CompareResult::NotLessEqual.inverse(),
-            Some(CompareResult::NotGreaterEqual)
+            CompareResult::NotLessEqual.inverse_c(),
+            CompareResult::NotGreaterEqual
         );
         assert_eq!(CompareResult::Unknown.inverse(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "POInverseRelation called with unknown relation")]
+    fn inverse_c_panics_on_unknown_like_c_assertion() {
+        let _value = CompareResult::Unknown.inverse_c();
     }
 
     #[test]
