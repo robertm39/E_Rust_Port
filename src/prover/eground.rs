@@ -5,6 +5,7 @@ use crate::basics::os_wrapper::{
 };
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::set_verbose_level;
+use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::clausefunc::clause_set_remove_superfluous_literals;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::grounding::{
@@ -24,7 +25,9 @@ use crate::inout::initio::{exit_io, init_io};
 use crate::inout::output::set_output_level;
 use crate::inout::scanner::{IoFormat, Scanner};
 use crate::inout::signals::{configure_time_limits, RLIM_INFINITY_COMPAT};
-use crate::prover::eprover::{parse_clause_scanner_into_sets, FoolUnroll, FormulaPreprocessing};
+use crate::prover::eprover::{
+    parse_clause_scanner_into_sets_with_options, FoolUnroll, FormulaPreprocessing,
+};
 use crate::prover::version::{footer, VERSION};
 use crate::terms::functypes::FunCode;
 use crate::terms::signature::Signature;
@@ -396,6 +399,7 @@ struct EgroundConfig {
     tautology_detection: bool,
     add_single_instance: bool,
     constraints: bool,
+    local_constraints: bool,
     fix_minisat: bool,
     give_up: i64,
     formula_def_limit: i64,
@@ -423,6 +427,7 @@ impl Default for EgroundConfig {
             tautology_detection: true,
             add_single_instance: false,
             constraints: false,
+            local_constraints: false,
             fix_minisat: false,
             give_up: 0,
             formula_def_limit: 24,
@@ -572,7 +577,11 @@ where
             }
             OptionCode::PartComplete => config.add_single_instance = true,
             OptionCode::GiveUp => config.give_up = get_int_arg(parsed.option(), arg)?,
-            OptionCode::Constraints | OptionCode::LocalConstraints => config.constraints = true,
+            OptionCode::Constraints => config.constraints = true,
+            OptionCode::LocalConstraints => {
+                config.constraints = true;
+                config.local_constraints = true;
+            }
             OptionCode::FixMinisat => config.fix_minisat = true,
         }
     }
@@ -647,13 +656,15 @@ fn parse_input_files(
 ) -> Result<IoFormat, Diagnostic> {
     let mut dummy = ClauseSet::new();
     let mut output_format = config.output_format;
+    let clause_parse_options = clause_parse_options(config);
 
     for file in &config.files {
         let mut scanner = scanner_for_input(file, stdin)?;
-        let parsed = parse_clause_scanner_into_sets(
+        let parsed = parse_clause_scanner_into_sets_with_options(
             &mut scanner,
             config.parse_format,
             FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
+            clause_parse_options,
             bank,
             clauses,
             &mut dummy,
@@ -663,6 +674,17 @@ fn parse_input_files(
         }
     }
     Ok(output_format)
+}
+
+fn clause_parse_options(config: &EgroundConfig) -> ClauseParseOptions {
+    if config.local_constraints {
+        ClauseParseOptions {
+            clauses_have_local_variables: false,
+            clauses_have_disjoint_variables: true,
+        }
+    } else {
+        ClauseParseOptions::default()
+    }
 }
 
 fn prepare_clauses_for_grounding(
@@ -1065,10 +1087,11 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        process_options, run, EgroundConfig, RunCommand, DEFAULT_COMCHAR_RAW, OUTPUT_CLOSE_ERROR,
-        PROGRAM_NAME,
+        clause_parse_options, process_options, run, EgroundConfig, RunCommand, DEFAULT_COMCHAR_RAW,
+        OUTPUT_CLOSE_ERROR, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
+    use crate::clauses::clause::ClauseParseOptions;
     use crate::inout::scanner::IoFormat;
     use crate::prover::version::VERSION;
     use crate::test_support::global_state_lock;
@@ -1156,6 +1179,7 @@ mod tests {
                 tautology_detection: false,
                 add_single_instance: false,
                 constraints: true,
+                local_constraints: true,
                 fix_minisat: true,
                 give_up: 12,
                 formula_def_limit: 7,
@@ -1164,6 +1188,23 @@ mod tests {
                 soft_cpu_limit: None,
                 files: vec!["-".to_owned()],
             }
+        );
+    }
+
+    #[test]
+    fn local_constraints_select_c_disjoint_clause_variable_policy() {
+        let config = EgroundConfig {
+            local_constraints: true,
+            constraints: true,
+            ..EgroundConfig::default()
+        };
+        let options = clause_parse_options(&config);
+        assert!(!options.clauses_have_local_variables);
+        assert!(options.clauses_have_disjoint_variables);
+
+        assert_eq!(
+            clause_parse_options(&EgroundConfig::default()),
+            ClauseParseOptions::default()
         );
     }
 

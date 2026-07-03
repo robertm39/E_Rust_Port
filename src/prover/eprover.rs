@@ -28,8 +28,9 @@ use crate::basics::stringtrees::StrTree;
 use crate::basics::verbose::set_verbose_level;
 use crate::clauses::bce::eliminate_blocked_clauses_with_output;
 use crate::clauses::clause::{
-    clause_parse, clause_print_lop_format_string_with_options,
+    clause_parse, clause_parse_with_options, clause_print_lop_format_string_with_options,
     clause_print_tptp_format_string_with_options, clause_write_tstp_with_type_suffixes, Clause,
+    ClauseParseOptions,
 };
 use crate::clauses::clause_props::{
     clause_type_from_identifier, FormulaProperties, CP_IGNORE_PROPS, CP_INITIAL, CP_INPUT_FORMULA,
@@ -8595,6 +8596,26 @@ pub(crate) fn parse_clause_scanner_into_sets(
     clauses: &mut ClauseSet,
     watchlist: &mut ClauseSet,
 ) -> Result<ParsedClauseFile, Diagnostic> {
+    parse_clause_scanner_into_sets_with_options(
+        scanner,
+        parse_format,
+        formula_preprocessing,
+        ClauseParseOptions::default(),
+        bank,
+        clauses,
+        watchlist,
+    )
+}
+
+pub(crate) fn parse_clause_scanner_into_sets_with_options(
+    scanner: &mut Scanner,
+    parse_format: IoFormat,
+    formula_preprocessing: FormulaPreprocessing,
+    clause_parse_options: ClauseParseOptions,
+    bank: &mut TermBank,
+    clauses: &mut ClauseSet,
+    watchlist: &mut ClauseSet,
+) -> Result<ParsedClauseFile, Diagnostic> {
     set_problem_type(ProblemType::FirstOrder)?;
     scanner.set_format(parse_format);
     let detected_format = scanner.format();
@@ -8611,6 +8632,7 @@ pub(crate) fn parse_clause_scanner_into_sets(
                 watchlist,
                 None,
                 formula_preprocessing,
+                clause_parse_options,
             )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
@@ -8624,13 +8646,19 @@ pub(crate) fn parse_clause_scanner_into_sets(
                 watchlist,
                 None,
                 formula_preprocessing,
+                clause_parse_options,
             )?;
             formula_conjecture_seen = parsed.formula_conjecture_seen;
             raw_formula_features.add(parsed.raw_formula_features);
             input_owner_seen = parsed.input_owner_seen;
         }
         _ => {
-            clauses.parse_list(scanner, bank, ProblemType::FirstOrder)?;
+            clauses.parse_list_with_options(
+                scanner,
+                bank,
+                ProblemType::FirstOrder,
+                clause_parse_options,
+            )?;
             input_owner_seen = clauses.len() != start_clause_count;
         }
     }
@@ -8869,11 +8897,17 @@ fn parse_tptp_entry_list(
     watchlist: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
+    clause_parse_options: ClauseParseOptions,
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("input_clause") {
-            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let clause = clause_parse_with_options(
+                scanner,
+                bank,
+                ProblemType::FirstOrder,
+                clause_parse_options,
+            )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
             if tstp_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
@@ -8907,6 +8941,7 @@ fn parse_tptp_entry_list(
                     watchlist,
                     Some(&mut include_selectors),
                     formula_preprocessing,
+                    clause_parse_options,
                 )?);
             }
         } else {
@@ -8933,11 +8968,17 @@ fn parse_tstp_entry_list(
     watchlist: &mut ClauseSet,
     mut selectors: Option<&mut StrTree<i64, i64>>,
     formula_preprocessing: FormulaPreprocessing,
+    clause_parse_options: ClauseParseOptions,
 ) -> Result<ParsedEntryList, Diagnostic> {
     let mut result = ParsedEntryList::default();
     while !scanner.test_tok(TokenType::NO_TOKEN) {
         if scanner.test_id("cnf") {
-            let clause = clause_parse(scanner, bank, ProblemType::FirstOrder)?;
+            let clause = clause_parse_with_options(
+                scanner,
+                bank,
+                ProblemType::FirstOrder,
+                clause_parse_options,
+            )?;
             let is_input_owner = clause.query_tptp_type() != CP_TYPE_WATCH_CLAUSE;
             if tstp_entry_selected(
                 clause.info().and_then(ClauseInfo::name),
@@ -8971,6 +9012,7 @@ fn parse_tstp_entry_list(
                     watchlist,
                     Some(&mut include_selectors),
                     formula_preprocessing,
+                    clause_parse_options,
                 )?);
             }
         } else {
@@ -12716,18 +12758,19 @@ mod tests {
         apply_proof_state_sine_silent, apply_relevance_pruning, auto_memory_limit_from_system_mb,
         core_limit_failure_messages, cpu_rlimit_to_apply, fv_index_params_from_config,
         heuristic_parms_from_config, open_configured_output, order_parms_from_config,
-        parse_app_encode_file, preprocessing_config_debug_line, process_options,
-        proof_control_from_config, proof_object_list_display_clauses,
-        resource_limit_warning_from_outcome, resource_limit_warning_from_result,
-        rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
-        simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
-        temporary_executable_term_bank, write_resource_setup_messages,
-        write_saturation_proof_object_clause, write_stopped_proof_output, AcHandling,
-        DocOutputFormat, EProverAction, EProverConfig, EProverFlag, EtaNormalization,
-        ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
-        ParamodulationType, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
-        SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
+        parse_app_encode_file, parse_clause_scanner_into_sets_with_options,
+        preprocessing_config_debug_line, process_options, proof_control_from_config,
+        proof_object_list_display_clauses, resource_limit_warning_from_outcome,
+        resource_limit_warning_from_result, rlimit_warning_from_result, run, run_config,
+        schedule_heuristic_selection, simple_app_encoded_formula_set,
+        simple_fof_bool_term_to_formulas, temporary_executable_term_bank,
+        write_resource_setup_messages, write_saturation_proof_object_clause,
+        write_stopped_proof_output, AcHandling, DocOutputFormat, EProverAction, EProverConfig,
+        EProverFlag, EtaNormalization, ExtInferenceType, FoolUnroll, FormulaPreprocessing,
+        FvIndexFeatureType, GroundingStrategy, LiteralComparison, ParamodulationType,
+        PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard, SimpleFofBoolEqnReplacement,
+        SimpleFofFormula, TermOrdering, UnificationMode, WatchlistSource,
+        LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
         THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -12735,9 +12778,10 @@ mod tests {
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::verbose::{set_verbose_level, verbose_level};
-    use crate::clauses::clause::{clause_parse, Clause};
+    use crate::clauses::clause::{clause_parse, Clause, ClauseParseOptions};
     use crate::clauses::clause_props::{CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
     use crate::clauses::clauseinfo::ClauseInfo;
+    use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE, DC_EQ_RES,
     };
@@ -12875,6 +12919,32 @@ mod tests {
         clause
     }
 
+    fn parse_bridge_first_args(
+        format: IoFormat,
+        source: &str,
+        options: ClauseParseOptions,
+    ) -> Vec<Term> {
+        let mut bank = temporary_executable_term_bank(FP_IGNORE_PROPS).unwrap();
+        let mut clauses = ClauseSet::new();
+        let mut watchlist = ClauseSet::new();
+        let mut scanner = Scanner::from_user_string(source, false).unwrap();
+        parse_clause_scanner_into_sets_with_options(
+            &mut scanner,
+            format,
+            FormulaPreprocessing::parse_only(FoolUnroll::Enabled),
+            options,
+            &mut bank,
+            &mut clauses,
+            &mut watchlist,
+        )
+        .unwrap();
+        assert!(watchlist.is_empty());
+        clauses
+            .iter()
+            .map(|clause| clause.literals().as_slice()[0].left().argument(0).unwrap())
+            .collect()
+    }
+
     fn bool_const(bank: &mut TermBank, name: &str) -> Term {
         let bool_type = bank.signature().type_bank().bool_type();
         let f_code = bank.signature_mut().insert_id(name, 0, false);
@@ -12913,6 +12983,29 @@ mod tests {
             "{}% Scanning for AC axioms\n",
             default_preprocessing_debug_line()
         )
+    }
+
+    #[test]
+    fn shared_clause_scanner_bridge_accepts_disjoint_clause_variable_policy() {
+        let tptp_source = "\
+input_clause(c1,axiom,[++p(X)]).
+input_clause(c2,axiom,[++q(X)]).
+";
+        let default_vars =
+            parse_bridge_first_args(IoFormat::Tptp, tptp_source, ClauseParseOptions::default());
+        assert_eq!(default_vars[0], default_vars[1]);
+
+        let disjoint_options = ClauseParseOptions {
+            clauses_have_local_variables: false,
+            clauses_have_disjoint_variables: true,
+        };
+        let disjoint_vars = parse_bridge_first_args(IoFormat::Tptp, tptp_source, disjoint_options);
+        assert_ne!(disjoint_vars[0], disjoint_vars[1]);
+
+        let lop_source = "p(X).\nq(X).\n";
+        let disjoint_lop_vars =
+            parse_bridge_first_args(IoFormat::Lop, lop_source, disjoint_options);
+        assert_ne!(disjoint_lop_vars[0], disjoint_lop_vars[1]);
     }
 
     fn without_selected_clause_progress(output: &str) -> String {
