@@ -88,8 +88,7 @@ impl Annotation {
     /// Panics when `index` is negative or cannot fit the dynamic-array index
     /// type. The original `DDArrayElementRef` asserts the same precondition.
     pub fn assign_value(&mut self, index: i64, value: f64) {
-        let assigned = self.values.assign(dd_index_or_panic(index), value);
-        assert!(assigned, "annotation value assignment failed");
+        self.values.assign(dd_index_or_panic(index), value);
     }
 
     #[must_use]
@@ -156,7 +155,7 @@ impl Annotation {
     }
 
     fn value_growing(&mut self, index: i64) -> f64 {
-        self.values.element(dd_index_or_panic(index)).unwrap_or(0.0)
+        self.values.element(dd_index_or_panic(index))
     }
 }
 

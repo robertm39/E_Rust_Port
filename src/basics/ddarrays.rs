@@ -46,13 +46,16 @@ impl DDArray {
     ///
     /// # Panics
     ///
-    /// Panics if computing the new logical size overflows `usize`.
-    pub fn enlarge(&mut self, idx: DDArrayIndex) -> bool {
-        let Some(index) = checked_index(idx) else {
-            return false;
-        };
+    /// Panics when `idx` is negative, or if computing the new logical size
+    /// overflows `usize`.
+    pub fn enlarge(&mut self, idx: DDArrayIndex) {
+        let index = index_or_panic(idx, "DDArrayEnlarge");
+        self.enlarge_index(index);
+    }
+
+    fn enlarge_index(&mut self, index: usize) {
         if index < self.size {
-            return true;
+            return;
         }
 
         let Some(block) = index
@@ -66,19 +69,31 @@ impl DDArray {
         };
         self.array.resize(new_size, 0.0);
         self.size = new_size;
-        true
     }
 
-    pub fn element_ref(&mut self, idx: DDArrayIndex) -> Option<&mut f64> {
-        self.enlarge(idx);
-        let index = checked_index(idx)?;
-        self.array.get_mut(index)
+    /// Return a mutable reference to `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `DDArrayElementRef`
+    /// assertion.
+    pub fn element_ref(&mut self, idx: DDArrayIndex) -> &mut f64 {
+        let index = index_or_panic(idx, "DDArrayElementRef");
+        self.enlarge_index(index);
+        &mut self.array[index]
     }
 
-    pub fn element(&mut self, idx: DDArrayIndex) -> Option<f64> {
-        self.enlarge(idx);
-        let index = checked_index(idx)?;
-        self.array.get(index).copied()
+    /// Return the value at `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `DDArrayElement`
+    /// assertion through `DDArrayElementRef`.
+    #[must_use]
+    pub fn element(&mut self, idx: DDArrayIndex) -> f64 {
+        let index = index_or_panic(idx, "DDArrayElement");
+        self.enlarge_index(index);
+        self.array[index]
     }
 
     #[must_use]
@@ -87,19 +102,22 @@ impl DDArray {
         self.array.get(index).copied()
     }
 
-    pub fn assign(&mut self, idx: DDArrayIndex, value: f64) -> bool {
-        let Some(element) = self.element_ref(idx) else {
-            return false;
-        };
+    /// Assign `value` to `idx`, enlarging the array if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `idx` is negative, matching the C `DDArrayAssign`
+    /// assertion through `DDArrayElementRef`.
+    pub fn assign(&mut self, idx: DDArrayIndex, value: f64) {
+        let element = self.element_ref(idx);
         *element = value;
-        true
     }
 
     pub fn add_prefix(&mut self, data: &mut Self, limit: usize) {
         for index in 0..limit {
             let idx = index_to_dd(index);
-            let old = self.element(idx).unwrap_or(0.0);
-            let new = data.element(idx).unwrap_or(0.0);
+            let old = self.element(idx);
+            let new = data.element(idx);
             self.assign(idx, old + new);
         }
     }
@@ -108,7 +126,7 @@ impl DDArray {
     pub fn debug_print_string(&mut self, size: usize) -> String {
         let mut result = String::new();
         for index in 0..size {
-            let value = self.element(index_to_dd(index)).unwrap_or(0.0);
+            let value = self.element(index_to_dd(index));
             let write_result = write!(&mut result, " {value:5.3} ");
             debug_assert!(write_result.is_ok());
             if (index + 1).is_multiple_of(10) {
@@ -195,10 +213,18 @@ fn checked_index(idx: DDArrayIndex) -> Option<usize> {
     usize::try_from(idx).ok()
 }
 
+fn index_or_panic(idx: DDArrayIndex, caller: &str) -> usize {
+    assert!(idx >= 0, "{caller} called with a negative index");
+    match usize::try_from(idx) {
+        Ok(value) => value,
+        Err(error) => panic!("{caller} index overflow: {error}"),
+    }
+}
+
 fn index_to_dd(index: usize) -> DDArrayIndex {
     match DDArrayIndex::try_from(index) {
         Ok(value) => value,
-        Err(_) => DDArrayIndex::MAX,
+        Err(_error) => DDArrayIndex::MAX,
     }
 }
 
@@ -215,8 +241,8 @@ mod tests {
         let mut array = DDArray::new(3, 4);
         assert_eq!(array.size(), 3);
         assert_eq!(array.grow(), 4);
-        assert_eq!(array.element(2), Some(0.0));
-        assert!(array.assign(6, 6.5));
+        assert_same_f64(array.element(2), 0.0);
+        array.assign(6, 6.5);
         assert_eq!(array.size(), 8);
         assert_eq!(array.existing_element(6), Some(6.5));
         assert_eq!(array.existing_element(7), Some(0.0));
@@ -291,5 +317,19 @@ mod tests {
         );
         assert_eq!(array.size(), 12);
         assert_eq!(array.existing_element(11), Some(0.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "DDArrayElementRef called with a negative index")]
+    fn element_ref_panics_on_negative_index_like_c_assertion() {
+        let mut array = DDArray::new(2, 2);
+        let _value = array.element_ref(-1);
+    }
+
+    #[test]
+    #[should_panic(expected = "DDArrayElement called with a negative index")]
+    fn element_panics_on_negative_index_like_c_assertion() {
+        let mut array = DDArray::new(2, 2);
+        let _value = array.element(-1);
     }
 }

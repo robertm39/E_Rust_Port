@@ -334,7 +334,7 @@ fn anno_term_starts(scanner: &Scanner, bank: &TermBank) -> bool {
 fn annotation_collect_max(max_values: &mut DDArray, annotation: &Annotation) {
     let elements = annotation.length().saturating_sub(1);
     for index in 0..elements {
-        let old_max = max_values.element(dd_index(index)).unwrap_or(0.0);
+        let old_max = max_values.element(dd_index(index));
         let old_val = annotation.value(index + 1).unwrap_or(0.0);
         max_values.assign(dd_index(index), old_max.max(old_val));
     }
@@ -344,7 +344,7 @@ fn annotation_collect_max(max_values: &mut DDArray, annotation: &Annotation) {
 fn annotation_normalize(annotation: &mut Annotation, max_values: &mut DDArray) {
     let elements = annotation.length().saturating_sub(1);
     for index in 0..elements {
-        let old_max = max_values.element(dd_index(index)).unwrap_or(0.0);
+        let old_max = max_values.element(dd_index(index));
         if old_max != 0.0 {
             let old_val = annotation.value(index + 1).unwrap_or(0.0);
             annotation.assign_value(index + 1, old_val / old_max);
