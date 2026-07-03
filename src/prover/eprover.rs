@@ -73,7 +73,8 @@ use crate::clauses::proofstate::{
 use crate::clauses::relevance::clause_set_relevance_prune;
 use crate::clauses::satinterface::picosat_error_to_diagnostic;
 use crate::clauses::sine::{
-    select_axioms_clause_sets, select_threshold_clause_sets, ClauseSineParams,
+    pstack_clauses_move, pstack_formulas_move, select_axioms_clause_formula_sets,
+    select_threshold_clause_formula_sets, ClauseSineParams, SineSetStacks,
 };
 use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
@@ -6596,12 +6597,21 @@ fn apply_threshold_sine_filter(
     state: &mut crate::clauses::proofstate::ProofState,
     threshold: i64,
 ) -> i64 {
-    let original_axioms = state.axioms().members();
+    let original_axioms = state.axiom_count();
     let selected_axioms = {
         let mut clause_sets = PStack::new();
+        let mut formula_sets = PStack::new();
         let mut selected_clauses = PStack::new();
+        let mut selected_formulas = PStack::new();
         clause_sets.push(state.axioms());
-        select_threshold_clause_sets(&clause_sets, 0, threshold, &mut selected_clauses)
+        formula_sets.push(state.f_axioms());
+        select_threshold_clause_formula_sets(
+            &clause_sets,
+            &formula_sets,
+            threshold,
+            &mut selected_clauses,
+            &mut selected_formulas,
+        )
     };
 
     if selected_axioms == original_axioms {
@@ -6609,6 +6619,7 @@ fn apply_threshold_sine_filter(
     }
 
     state.axioms_mut().clear();
+    state.f_axioms_mut().clear();
     original_axioms - selected_axioms
 }
 
@@ -6616,13 +6627,17 @@ fn apply_gsine_clause_filter(
     state: &mut crate::clauses::proofstate::ProofState,
     filter: &AxFilter,
 ) -> i64 {
-    let original_axioms = state.axioms().members();
-    let selected_idents = {
+    let original_axioms = state.axiom_count();
+    let (selected_clause_ids, selected_formula_ids) = {
         let mut clause_sets = PStack::new();
+        let mut formula_sets = PStack::new();
         clause_sets.push(state.axioms());
+        formula_sets.push(state.f_axioms());
         let mut generality = GenDistrib::new(state.terms().signature());
         generality.add_clause_sets(&clause_sets);
+        generality.add_formula_sets(state.terms().signature(), &formula_sets, false);
         let mut selected_clauses = PStack::new();
+        let mut selected_formulas = PStack::new();
         let params = ClauseSineParams {
             gen_measure: filter.gen_measure,
             use_hypotheses: filter.use_hypotheses,
@@ -6637,58 +6652,106 @@ fn apply_gsine_clause_filter(
             },
             add_no_symbol_axioms: filter.add_no_symbol_axioms,
         };
-        select_axioms_clause_sets(
+        select_axioms_clause_formula_sets(
             &mut generality,
-            &clause_sets,
+            state.terms().signature(),
+            SineSetStacks {
+                clauses: &clause_sets,
+                formulas: &formula_sets,
+            },
             0,
             params,
             &mut selected_clauses,
+            &mut selected_formulas,
         );
-        selected_clauses
-            .as_slice()
-            .iter()
-            .map(|clause| clause.ident())
-            .collect::<Vec<_>>()
+        (
+            selected_clauses
+                .as_slice()
+                .iter()
+                .map(|clause| clause.ident())
+                .collect::<Vec<_>>(),
+            selected_formulas
+                .as_slice()
+                .iter()
+                .map(|formula| formula.entry_id())
+                .collect::<Vec<_>>(),
+        )
     };
 
-    replace_axioms_with_selected_idents(state, original_axioms, selected_idents)
+    replace_axiom_owners_with_selected_ids(
+        state,
+        original_axioms,
+        selected_clause_ids,
+        selected_formula_ids,
+    )
 }
 
 fn apply_lambda_defines_filter(state: &mut crate::clauses::proofstate::ProofState) -> i64 {
-    let original_axioms = state.axioms().members();
-    if state.raw_formula_features().sentence_no == 0 {
+    let original_axioms = state.axiom_count();
+    let has_raw_formula_input = state.raw_formula_features().sentence_no != 0;
+    if !has_raw_formula_input && state.f_axioms().is_empty() {
         state.axioms_mut().clear();
+        state.f_axioms_mut().clear();
         return original_axioms;
     }
 
-    let selected_idents = state
-        .axioms()
+    let selected_clause_ids = if has_raw_formula_input {
+        state
+            .axioms()
+            .iter()
+            .filter(|clause| {
+                clause.query_prop(CP_IS_LAMBDA_DEF)
+                    || clause.is_conjecture()
+                    || clause.is_hypothesis()
+            })
+            .map(Clause::ident)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let selected_formula_ids = state
+        .f_axioms()
         .iter()
-        .filter(|clause| {
-            clause.query_prop(CP_IS_LAMBDA_DEF) || clause.is_conjecture() || clause.is_hypothesis()
+        .filter(|formula| {
+            formula.query_prop(CP_IS_LAMBDA_DEF)
+                || formula.is_conjecture()
+                || formula.is_hypothesis()
         })
-        .map(Clause::ident)
+        .map(WrappedFormula::entry_id)
         .collect::<Vec<_>>();
-    replace_axioms_with_selected_idents(state, original_axioms, selected_idents)
+    replace_axiom_owners_with_selected_ids(
+        state,
+        original_axioms,
+        selected_clause_ids,
+        selected_formula_ids,
+    )
 }
 
-fn replace_axioms_with_selected_idents(
+fn replace_axiom_owners_with_selected_ids(
     state: &mut crate::clauses::proofstate::ProofState,
     original_axioms: i64,
-    selected_idents: Vec<i64>,
+    selected_clause_ids: Vec<i64>,
+    selected_formula_ids: Vec<u64>,
 ) -> i64 {
-    let mut selected_axioms = ClauseSet::new();
-    let mut moved = BTreeSet::new();
-    for ident in selected_idents {
-        if !moved.insert(ident) {
-            continue;
-        }
-        if let Some(clause) = state.axioms_mut().extract_by_id(ident) {
-            selected_axioms.insert(clause);
-        }
+    let mut selected_clauses = ClauseSet::new();
+    let mut clause_stack = PStack::new();
+    for ident in selected_clause_ids {
+        clause_stack.push(ident);
     }
-    let selected_count = selected_axioms.members();
-    *state.axioms_mut() = selected_axioms;
+    let _ = pstack_clauses_move(&clause_stack, state.axioms_mut(), &mut selected_clauses);
+
+    let mut selected_formulas = FormulaSet::new();
+    let mut formula_stack = PStack::new();
+    for entry_id in selected_formula_ids {
+        formula_stack.push(entry_id);
+    }
+    let _ = pstack_formulas_move(&formula_stack, state.f_axioms_mut(), &mut selected_formulas);
+
+    let selected_count = selected_clauses
+        .members()
+        .saturating_add(selected_formulas.cardinality());
+    *state.axioms_mut() = selected_clauses;
+    *state.f_axioms_mut() = selected_formulas;
     original_axioms - selected_count
 }
 
@@ -12644,10 +12707,11 @@ fn apply_auto_parse_output_side_effects(config: &mut EProverConfig, detected_for
 mod tests {
     use super::{
         apply_choice_axiom_recognition, apply_clause_set_preprocessing,
-        auto_memory_limit_from_system_mb, core_limit_failure_messages, cpu_rlimit_to_apply,
-        fv_index_params_from_config, heuristic_parms_from_config, open_configured_output,
-        order_parms_from_config, parse_app_encode_file, preprocessing_config_debug_line,
-        process_options, proof_control_from_config, proof_object_list_display_clauses,
+        apply_proof_state_sine_silent, auto_memory_limit_from_system_mb,
+        core_limit_failure_messages, cpu_rlimit_to_apply, fv_index_params_from_config,
+        heuristic_parms_from_config, open_configured_output, order_parms_from_config,
+        parse_app_encode_file, preprocessing_config_debug_line, process_options,
+        proof_control_from_config, proof_object_list_display_clauses,
         resource_limit_warning_from_outcome, resource_limit_warning_from_result,
         rlimit_warning_from_result, run, run_config, schedule_heuristic_selection,
         simple_app_encoded_formula_set, simple_fof_bool_term_to_formulas,
@@ -12666,13 +12730,14 @@ mod tests {
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::basics::verbose::{set_verbose_level, verbose_level};
     use crate::clauses::clause::{clause_parse, Clause};
-    use crate::clauses::clause_props::CP_TYPE_AXIOM;
+    use crate::clauses::clause_props::{CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_HYPOTHESIS};
     use crate::clauses::clauseinfo::ClauseInfo;
     use crate::clauses::derivation::{
         clause_push_derivation, ClauseDerivationRef, DerivationEntry, DC_CNF_QUOTE, DC_EQ_RES,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::WrappedFormula;
     use crate::clauses::freqvectors::FvIndexType;
     use crate::clauses::proofstate::{proof_state_alloc, ProofObjectGraph, ProofObjectGraphEdge};
     use crate::heuristics::new_autoschedule::ScheduleCell;
@@ -12801,6 +12866,35 @@ mod tests {
         scanner.set_format(IoFormat::Lop);
         let mut clause = clause_parse(&mut scanner, bank, ProblemType::FirstOrder).unwrap();
         clause.set_ident(ident);
+        clause
+    }
+
+    fn bool_const(bank: &mut TermBank, name: &str) -> Term {
+        let bool_type = bank.signature().type_bank().bool_type();
+        let f_code = bank.signature_mut().insert_id(name, 0, false);
+        if bank.signature().get_type(f_code).is_none() {
+            bank.signature_mut()
+                .declare_final_type(f_code, bool_type)
+                .unwrap();
+        }
+        bank.create_const_term(f_code).unwrap()
+    }
+
+    fn wrapped_bool_formula(
+        bank: &mut TermBank,
+        name: &str,
+        formula_type: crate::clauses::clause_props::FormulaProperties,
+    ) -> WrappedFormula {
+        let mut formula = WrappedFormula::wt_formula_alloc(bool_const(bank, name));
+        formula.set_tptp_type(formula_type);
+        formula
+    }
+
+    fn bool_equality_clause(bank: &mut TermBank, left: &Term, right: &Term, ident: i64) -> Clause {
+        let literal = Eqn::alloc(left.clone(), right.clone(), bank, true).unwrap();
+        let mut clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        clause.set_ident(ident);
+        clause.set_tptp_type(CP_TYPE_AXIOM);
         clause
     }
 
@@ -17032,6 +17126,101 @@ mod tests {
                 .and_then(|derivation| derivation.as_slice().first()),
             Some(&DerivationEntry::Operation(DC_CNF_QUOTE))
         );
+    }
+
+    #[test]
+    fn proof_state_threshold_sine_counts_formula_axioms() {
+        let _guard = global_state_lock();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = parse_lop_test_clause(state.terms_mut(), "p(a).", 31);
+        let formula =
+            wrapped_bool_formula(state.terms_mut(), "threshold_sine_formula", CP_TYPE_AXIOM);
+        state.axioms_mut().insert(clause);
+        state.f_axioms_mut().insert(formula);
+
+        let removed = apply_proof_state_sine_silent(Some("Threshold(1)"), &mut state).unwrap();
+
+        assert_eq!(removed, 2);
+        assert_eq!(state.axioms().members(), 0);
+        assert_eq!(state.f_axioms().cardinality(), 0);
+    }
+
+    #[test]
+    fn proof_state_gsine_selects_related_formula_axioms() {
+        let _guard = global_state_lock();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let goal = bool_const(state.terms_mut(), "proof_state_gsine_goal");
+        let bridge = bool_const(state.terms_mut(), "proof_state_gsine_bridge");
+        let unrelated = bool_const(state.terms_mut(), "proof_state_gsine_unrelated");
+        let bridge_clause = bool_equality_clause(state.terms_mut(), &goal, &bridge, 41);
+        let unrelated_clause = bool_equality_clause(state.terms_mut(), &unrelated, &unrelated, 43);
+        state.axioms_mut().insert(bridge_clause);
+        state.axioms_mut().insert(unrelated_clause);
+
+        let mut goal_formula = WrappedFormula::wt_formula_alloc(goal);
+        goal_formula.set_tptp_type(CP_TYPE_CONJECTURE);
+        let goal_formula_id = goal_formula.entry_id();
+        let mut bridge_formula = WrappedFormula::wt_formula_alloc(bridge);
+        bridge_formula.set_tptp_type(CP_TYPE_AXIOM);
+        let bridge_formula_id = bridge_formula.entry_id();
+        let unrelated_formula = WrappedFormula::wt_formula_alloc(bool_const(
+            state.terms_mut(),
+            "proof_state_gsine_far",
+        ));
+        let unrelated_formula_id = unrelated_formula.entry_id();
+        state.f_axioms_mut().insert(goal_formula);
+        state.f_axioms_mut().insert(bridge_formula);
+        state.f_axioms_mut().insert(unrelated_formula);
+
+        let removed = apply_proof_state_sine_silent(
+            Some("GSinE(CountTerms,,false,10.0,,3,10,1.0)"),
+            &mut state,
+        )
+        .unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(state.axioms().find_by_id(41).is_some());
+        assert!(state.axioms().find_by_id(43).is_none());
+        let remaining_formula_ids = state
+            .f_axioms()
+            .iter()
+            .map(WrappedFormula::entry_id)
+            .collect::<Vec<_>>();
+        assert!(remaining_formula_ids.contains(&goal_formula_id));
+        assert!(remaining_formula_ids.contains(&bridge_formula_id));
+        assert!(!remaining_formula_ids.contains(&unrelated_formula_id));
+    }
+
+    #[test]
+    fn proof_state_lambda_def_sine_keeps_represented_formula_roles() {
+        let _guard = global_state_lock();
+        let mut state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+        let clause = parse_lop_test_clause(state.terms_mut(), "lambda_def_clause(a).", 51);
+        state.axioms_mut().insert(clause);
+        let mut hypothesis = wrapped_bool_formula(
+            state.terms_mut(),
+            "lambda_def_formula_hyp",
+            CP_TYPE_HYPOTHESIS,
+        );
+        let hypothesis_id = hypothesis.entry_id();
+        hypothesis.set_tptp_type(CP_TYPE_HYPOTHESIS);
+        let axiom =
+            wrapped_bool_formula(state.terms_mut(), "lambda_def_formula_axiom", CP_TYPE_AXIOM);
+        let axiom_id = axiom.entry_id();
+        state.f_axioms_mut().insert(hypothesis);
+        state.f_axioms_mut().insert(axiom);
+
+        let removed = apply_proof_state_sine_silent(Some("LambdaDef"), &mut state).unwrap();
+
+        assert_eq!(removed, 2);
+        assert_eq!(state.axioms().members(), 0);
+        let remaining_formula_ids = state
+            .f_axioms()
+            .iter()
+            .map(WrappedFormula::entry_id)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining_formula_ids, vec![hypothesis_id]);
+        assert!(!remaining_formula_ids.contains(&axiom_id));
     }
 
     #[test]
