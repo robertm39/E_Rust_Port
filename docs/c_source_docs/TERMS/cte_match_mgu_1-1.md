@@ -102,7 +102,7 @@ Exported declarations are primarily taken from headers. For standalone program s
 <!-- BEGIN MANUAL REVIEW: c_source_docs -->
 ## Manual Review
 
-Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order `SubstMguComplete` porting boundaries on 2026-07-03.
+Manual review status: reviewed for porting-relevant behavior on 2026-06-22; updated for higher-order `SubstMguComplete` porting boundaries and applied-variable dereference coverage on 2026-07-03.
 
 Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 
@@ -115,6 +115,7 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `OccurCheck`, `SubstComputeMgu`, and `VerifyMatch` reach applied free-variable expansion through ordinary dereference/equality helpers. Rust now has regression coverage that the first-order match/MGU boundary follows bound applied free-variable heads instead of treating that as an unported path.
 - In higher-order problem mode, `SubstMguComplete` eta-reduces both inputs, calls `SubstComputeMguHO`, and falls back to the higher-order pattern MGU when both original inputs are non-first-order patterns. Rust currently supports the first-order-shaped arrow-binding subset through the ordinary complete-MGU path and routes explicit multi-unifier callers through the CSU iterator; the full HO complete-MGU dispatch remains a separate porting boundary.
 
 ### Porting Focus
@@ -127,5 +128,6 @@ Source files reviewed: `TERMS/cte_match_mgu_1-1.h`, `TERMS/cte_match_mgu_1-1.c`.
 
 - `SubstComputeMguHO` reports leftover-argument information through `UnificationResult`, while `SubstMguComplete` collapses that to a boolean after checking no arguments remain. A cleaned API should expose the argument-prefix result type directly at callers that need HO constraints, rather than threading a C-style integer result plus a separate `CheckHOUnificationConstraints` hook.
 - The higher-order pattern fallback is guarded by `TermIsNonFOPattern` checks on the unreduced original inputs after the first HO MGU attempt fails. Preserve that order for compatibility until trace tests prove eta-reduced pattern detection is equivalent.
+- The C first-order helpers inherit LFHO `TermDeref` binding-cache refreshes when applied-variable dereferencing is active. Rust currently matches the expansion shape through no-cache term handles; add owner-bank/cache behavior only after profiling or trace tests show the cache side effects matter.
 
 <!-- END MANUAL REVIEW: c_source_docs -->

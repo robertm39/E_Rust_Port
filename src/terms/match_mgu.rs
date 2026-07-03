@@ -35,8 +35,7 @@ pub const fn unif_failed(result: UnificationResult) -> bool {
 ///
 /// # Panics
 ///
-/// Panics if a traversed term argument is uninitialized or if dereferencing an
-/// applied variable reaches an unported higher-order term-bank path.
+/// Panics if a traversed term argument is uninitialized.
 #[must_use]
 pub fn occur_check(term: &Term, var: &Term) -> bool {
     let mut deref = DerefType::Always;
@@ -135,8 +134,7 @@ pub fn subst_compute_match(matcher: &Term, to_match: &Term, subst: &mut Substitu
 ///
 /// Panics if non-variable terms with the same function code have inconsistent
 /// arity/type metadata, if variable bindings would be untyped, if a traversed
-/// argument is uninitialized, or if applied-variable dereferencing reaches an
-/// unported higher-order term-bank path.
+/// argument is uninitialized.
 pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool {
     if (t1.query_prop(TP_PRED_POS) && t2.is_free_var())
         || (t2.query_prop(TP_PRED_POS) && t1.is_free_var())
@@ -244,8 +242,7 @@ pub fn term_has_higher_order_unification_surface(term: &Term) -> bool {
 ///
 /// # Panics
 ///
-/// Panics if dereferencing reaches an unported applied-variable path or if a
-/// traversed argument is uninitialized.
+/// Panics if a traversed argument is uninitialized.
 #[must_use]
 pub fn verify_match(matcher: &Term, to_match: &Term) -> bool {
     term_struct_equal_deref(matcher, to_match, DerefType::Once, DerefType::Never)
@@ -274,6 +271,7 @@ mod tests {
         subst_mgu_complete, unif_failed, verify_match, OracleUnifResult, UnifTermSide, UNIF_FAILED,
         UNIF_SUCC,
     };
+    use crate::terms::signature::SIG_PHONY_APP_CODE;
     use crate::terms::simpletypes::Type;
     use crate::terms::subst::Substitution;
     use crate::terms::termtypes::{Term, TP_PRED_POS};
@@ -300,6 +298,16 @@ mod tests {
         term
     }
 
+    fn applied_free_var(head: &Term, args: &[Term], type_: &Type) -> Term {
+        let term = Term::top_alloc(SIG_PHONY_APP_CODE, args.len() + 1);
+        term.set_type(Some(type_.clone()));
+        term.set_argument(0, head.clone());
+        for (index, arg) in args.iter().enumerate() {
+            term.set_argument(index + 1, arg.clone());
+        }
+        term
+    }
+
     #[test]
     fn public_result_shapes_match_c_discriminants() {
         assert_eq!(UnifTermSide::NoTerm as i32, 0);
@@ -320,6 +328,19 @@ mod tests {
         assert!(!occur_check(&y, &x));
         y.set_binding(Some(x.clone()));
         assert!(occur_check(&y, &x));
+    }
+
+    #[test]
+    fn occur_check_expands_bound_applied_free_variable_heads() {
+        let type_ = TypeBank::new().i_type();
+        let x = typed_var(-2, &type_);
+        let head = typed_var(-4, &type_);
+        let suffix = typed_const(10, &type_);
+        let prefix = typed_term(20, std::slice::from_ref(&x), &type_);
+        head.set_binding(Some(prefix));
+        let applied = applied_free_var(&head, &[suffix], &type_);
+
+        assert!(occur_check(&applied, &x));
     }
 
     #[test]
@@ -411,6 +432,23 @@ mod tests {
     }
 
     #[test]
+    fn mgu_expands_bound_applied_free_variable_heads() {
+        let type_ = TypeBank::new().i_type();
+        let head = typed_var(-2, &type_);
+        let prefix_arg = typed_const(10, &type_);
+        let suffix_arg = typed_const(11, &type_);
+        let prefix = typed_term(20, std::slice::from_ref(&prefix_arg), &type_);
+        let target = typed_term(20, &[prefix_arg, suffix_arg.clone()], &type_);
+        let applied = applied_free_var(&head, &[suffix_arg], &type_);
+        let mut subst = Substitution::new();
+
+        head.set_binding(Some(prefix));
+
+        assert!(subst_compute_mgu(&applied, &target, &mut subst));
+        assert!(subst.is_empty());
+    }
+
+    #[test]
     fn mgu_rejects_predicate_position_variable_side() {
         let type_ = TypeBank::new().i_type();
         let x = typed_var(-2, &type_);
@@ -432,5 +470,20 @@ mod tests {
         assert!(subst_match_complete(&x, &a, &mut subst));
         subst.backtrack();
         assert!(subst_mgu_complete(&x, &a, &mut subst));
+    }
+
+    #[test]
+    fn verify_match_expands_bound_applied_free_variable_once() {
+        let type_ = TypeBank::new().i_type();
+        let head = typed_var(-2, &type_);
+        let prefix_arg = typed_const(10, &type_);
+        let suffix_arg = typed_const(11, &type_);
+        let prefix = typed_term(20, std::slice::from_ref(&prefix_arg), &type_);
+        let target = typed_term(20, &[prefix_arg, suffix_arg.clone()], &type_);
+        let applied = applied_free_var(&head, &[suffix_arg], &type_);
+
+        head.set_binding(Some(prefix));
+
+        assert!(verify_match(&applied, &target));
     }
 }
