@@ -149,7 +149,8 @@ pub fn paramodulation_pair_positions(
 ///
 /// Returns diagnostics from the low-level paramodulation constructor. Plain,
 /// simultaneous, and super-simultaneous paramodulation are currently supported
-/// for first-order unindexed generation.
+/// for first-order unindexed generation and the KBO6 first-order-shaped
+/// higher-order selected-overlap subset.
 pub fn compute_clause_clause_paramodulants(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -1467,12 +1468,6 @@ fn indexed_effective_paramodulation_type(
         subst.backtrack();
         return Ok(None);
     }
-    if problem_type() == ProblemType::HigherOrder
-        && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
-    {
-        subst.backtrack();
-        return Err(higher_order_paramod_diagnostic_for_type(pm_type));
-    }
     let effective = effective_paramodulation_type(bank, ocb, from_pos, pm_type);
     subst.backtrack();
     Ok(Some(effective))
@@ -1653,13 +1648,6 @@ pub fn compute_overlap(
         subst.backtrack_to_pos(oldstate);
         return Ok(None);
     }
-    if problem_type() == ProblemType::HigherOrder
-        && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
-    {
-        subst.backtrack_to_pos(oldstate);
-        return Err(higher_order_paramod_diagnostic());
-    }
-
     if !from_literal.is_oriented()
         && to_greater(
             ocb,
@@ -2084,14 +2072,6 @@ fn clause_ordered_sim_paramod_with_subst(
 ) -> Result<Option<Clause>, Diagnostic> {
     let oldstate = subst.len();
     let unified = subst_mgu_complete(from_term, into_term, subst);
-    if unified
-        && problem_type() == ProblemType::HigherOrder
-        && subst.has_ho_binding_for_problem(ProblemType::HigherOrder)
-    {
-        subst.backtrack_to_pos(oldstate);
-        into_term.del_prop(TP_POTENTIAL_PARAMOD);
-        return Err(higher_order_sim_paramod_diagnostic());
-    }
     if !unified {
         subst.backtrack_to_pos(oldstate);
         into_term.del_prop(TP_POTENTIAL_PARAMOD);
@@ -3016,6 +2996,109 @@ mod tests {
             .as_slice()
             .iter()
             .any(|literal| { literal.left().is_applied_free_var() && literal.right() == &truth }));
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_allows_first_order_shaped_binding() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let source_left = typed_arrow_var(&mut bank, -2_403);
+        let source_right = typed_arrow_const(&mut bank, "pm_ho_plain_source_right");
+        let target_left = typed_arrow_const(&mut bank, "pm_ho_plain_target_left");
+        let target_right = typed_arrow_const(&mut bank, "pm_ho_plain_target_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal]));
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Plain,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one unindexed higher-order paramodulant");
+        assert_eq!(stored.literal_number(), 1);
+        let generated = &stored.literals().as_slice()[0];
+        assert!(generated.is_positive());
+        assert_eq!(generated.left(), &source_right);
+        assert_eq!(generated.right(), &target_right);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
+    }
+
+    #[test]
+    fn compute_clause_clause_paramodulants_higher_order_simultaneous_allows_binding() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = test_bank();
+        let source_left = typed_arrow_var(&mut bank, -2_404);
+        let source_right = typed_arrow_const(&mut bank, "pm_ho_sim_source_right");
+        let target_left = typed_arrow_const(&mut bank, "pm_ho_sim_target_left");
+        let target_right = typed_arrow_const(&mut bank, "pm_ho_sim_target_right");
+        let target_extra_right = typed_arrow_const(&mut bank, "pm_ho_sim_target_extra_right");
+        let mut source_literal = lit(&mut bank, &source_left, &source_right, true);
+        let mut target_literal = lit(&mut bank, &target_left, &target_right, true);
+        let target_extra = lit(&mut bank, &target_left, &target_extra_right, false);
+        maximal_oriented(&mut source_literal);
+        maximal_oriented(&mut target_literal);
+        let source = Clause::alloc(EqnList::from_vec(vec![source_literal]));
+        let target = Clause::alloc(EqnList::from_vec(vec![target_literal, target_extra]));
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_clause_clause_paramodulants(
+            &mut bank,
+            &mut ocb,
+            &source,
+            &source,
+            &target,
+            &mut store,
+            ParamodulationType::Simultaneous,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let stored = store
+            .iter()
+            .next()
+            .expect("one unindexed higher-order simultaneous paramodulant");
+        assert_eq!(stored.literal_number(), 2);
+        let generated = stored.literals().as_slice();
+        assert!(generated[0].is_positive());
+        assert_eq!(generated[0].left(), &source_right);
+        assert_eq!(generated[0].right(), &target_right);
+        assert!(!generated[1].is_positive());
+        assert_eq!(generated[1].left(), &source_right);
+        assert_eq!(generated[1].right(), &target_extra_right);
+        assert_eq!(
+            stored.derivation().unwrap().as_slice(),
+            &[
+                DerivationEntry::Operation(DC_SIM_PARAMOD),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&target)),
+                DerivationEntry::ClauseParent(ClauseDerivationRef::from(&source)),
+            ]
+        );
     }
 
     #[test]
