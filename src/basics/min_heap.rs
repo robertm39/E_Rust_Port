@@ -160,6 +160,19 @@ where
         result
     }
 
+    #[must_use]
+    pub fn debug_print_pointer_string(&self) -> String
+    where
+        T: Copy + std::fmt::Pointer,
+    {
+        let mut result = String::new();
+        for entry in &self.entries {
+            let write_result = write!(&mut result, "{:p}; ", *entry);
+            debug_assert!(write_result.is_ok());
+        }
+        result
+    }
+
     fn compare_indices(&self, left: usize, right: usize) -> Ordering {
         (self.cmp)(&self.entries[left], &self.entries[right])
     }
@@ -385,5 +398,26 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(remaining.contains(&1));
         assert!(remaining.contains(&2));
+    }
+
+    #[test]
+    fn pointer_debug_print_uses_address_shape_in_heap_order() {
+        let first = Task {
+            id: 1,
+            priority: 20,
+        };
+        let second = Task {
+            id: 2,
+            priority: 10,
+        };
+        let mut heap = MinHeap::new(|left: &&Task, right: &&Task| task_cmp(left, right));
+
+        heap.add_ptr(&first);
+        heap.add_ptr(&second);
+
+        assert_eq!(
+            heap.debug_print_pointer_string(),
+            format!("{:p}; {:p}; ", &second, &first)
+        );
     }
 }

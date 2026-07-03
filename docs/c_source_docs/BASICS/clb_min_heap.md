@@ -112,6 +112,7 @@ Source files reviewed: `BASICS/clb_min_heap.h`, `BASICS/clb_min_heap.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `DBGPrintHeap` has separate integer and `%p` pointer-address output branches, both in the heap's internal array order. Rust keeps separate debug-string helpers so pointer-shaped heaps do not accidentally display pointee values.
 
 ### Porting Focus
 
