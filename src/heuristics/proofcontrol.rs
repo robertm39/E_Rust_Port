@@ -57,13 +57,17 @@ use crate::clauses::paramodulation::{
     compute_all_paramodulants_indexed_with_docs, compute_all_paramodulants_with_docs,
     ParamodulationType as ClauseParamodulationType,
 };
+use crate::clauses::picosat::{PicoSat, PicoSatError};
 use crate::clauses::proofstate::{ProofState, ProofStateGenerationContext};
 use crate::clauses::rewrite::find_rewritable_clauses;
 use crate::clauses::rewrite::{
     clause_compute_li_normalform_plain, clause_compute_li_normalform_plain_with_docs,
     clause_local_rw,
 };
-use crate::clauses::satinterface::{sat_check_proof_state, SatCheckReport};
+use crate::clauses::satinterface::{
+    picosat_error_to_diagnostic, sat_check_proof_state, sat_check_proof_state_with_picosat,
+    SatCheckReport,
+};
 use crate::clauses::splitting::{
     clause_split, ClauseSplitOutcome, ClauseSplitType as ClauseSplitMethod, SplitDefinitionStore,
 };
@@ -115,6 +119,7 @@ use crate::terms::termvars::VarBank;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    path::Path,
     time::Instant,
 };
 
@@ -210,6 +215,27 @@ impl SatSolverState {
 impl Default for SatSolverState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SatSolverBackendKind {
+    Internal,
+    PicoSat,
+}
+
+enum SatSolverBackend {
+    Internal,
+    PicoSat(PicoSat),
+}
+
+impl SatSolverBackend {
+    #[must_use]
+    const fn kind(&self) -> SatSolverBackendKind {
+        match self {
+            Self::Internal => SatSolverBackendKind::Internal,
+            Self::PicoSat(_) => SatSolverBackendKind::PicoSat,
+        }
     }
 }
 
@@ -393,6 +419,7 @@ pub struct ProofControl {
     fvi_parms: FvIndexParams,
     problem_specs: SpecFeatureCell,
     solver: SatSolverState,
+    sat_solver_backend: SatSolverBackend,
     record_gc_selection: bool,
     strong_unit_forward_subsumption: bool,
 }
@@ -410,6 +437,7 @@ impl ProofControl {
             fvi_parms: FvIndexParams::default(),
             problem_specs: SpecFeatureCell::default(),
             solver: SatSolverState::new(),
+            sat_solver_backend: SatSolverBackend::Internal,
             record_gc_selection: false,
             strong_unit_forward_subsumption: false,
         }
@@ -501,8 +529,30 @@ impl ProofControl {
         self.solver
     }
 
-    pub fn reset_sat_solver(&mut self) {
+    #[must_use]
+    pub const fn sat_solver_backend_kind(&self) -> SatSolverBackendKind {
+        self.sat_solver_backend.kind()
+    }
+
+    pub fn install_picosat_solver(&mut self, path: &Path) -> Result<Option<String>, PicoSatError> {
+        let solver = PicoSat::open(path)?;
+        let version = solver.version();
+        self.solver = SatSolverState::new();
+        self.sat_solver_backend = SatSolverBackend::PicoSat(solver);
+        Ok(version)
+    }
+
+    pub fn clear_picosat_solver(&mut self) {
+        self.solver = SatSolverState::new();
+        self.sat_solver_backend = SatSolverBackend::Internal;
+    }
+
+    pub fn reset_sat_solver(&mut self) -> Result<(), PicoSatError> {
+        if let SatSolverBackend::PicoSat(solver) = &mut self.sat_solver_backend {
+            solver.reset()?;
+        }
         self.solver.reset();
+        Ok(())
     }
 
     #[must_use]
@@ -535,8 +585,8 @@ pub fn proof_control_alloc() -> ProofControl {
     ProofControl::new()
 }
 
-pub fn proof_control_reset_sat_solver(control: &mut ProofControl) {
-    control.reset_sat_solver();
+pub fn proof_control_reset_sat_solver(control: &mut ProofControl) -> Result<(), PicoSatError> {
+    control.reset_sat_solver()
 }
 
 /// Initializes the currently ported proof-control state handled by C
@@ -6791,13 +6841,24 @@ fn proof_state_sat_check(
         }
     }
 
-    let report = sat_check_proof_state(
-        state,
-        sat_check_grounding,
-        sat_check_normconst,
-        sat_check_decision_limit,
-    )?;
-    control.reset_sat_solver();
+    let report = match &mut control.sat_solver_backend {
+        SatSolverBackend::Internal => sat_check_proof_state(
+            state,
+            sat_check_grounding,
+            sat_check_normconst,
+            sat_check_decision_limit,
+        )?,
+        SatSolverBackend::PicoSat(solver) => sat_check_proof_state_with_picosat(
+            state,
+            sat_check_grounding,
+            sat_check_normconst,
+            sat_check_decision_limit,
+            solver,
+        )?,
+    };
+    control
+        .reset_sat_solver()
+        .map_err(|error| picosat_error_to_diagnostic(&error))?;
     apply_sat_check_report(state, preproc_time, &report);
     Ok(report.empty)
 }
@@ -7815,8 +7876,8 @@ mod tests {
         ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
         ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
         ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
-        DEFAULT_WEIGHT_FUNCTIONS,
+        SatSolverBackendKind, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
+        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -7847,6 +7908,7 @@ mod tests {
     use crate::clauses::global_indices::{global_indices_null, GlobalIndices};
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::clauses::neweval::{evals_alloc, PRIO_LARGEST_REASONABLE, PRIO_NORMAL};
+    use crate::clauses::picosat::PicoSatError;
     use crate::clauses::proofstate::{proof_state_alloc, ProofState, WatchlistSource};
     use crate::clauses::subsumption::clause_subsume_order_sort_lits;
     use crate::heuristics::hcb::{
@@ -7867,6 +7929,7 @@ mod tests {
     use crate::terms::termtypes::{DerefType, RewriteLevel, Term, TP_IS_REWRITABLE};
     use crate::terms::typebanks::TypeBank;
     use crate::test_support::global_state_lock;
+    use std::path::Path;
 
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
@@ -8314,16 +8377,36 @@ mod tests {
         assert_eq!(control.problem_specs().clauses, 0);
         assert_eq!(control.solver().generation(), 1);
         assert!(control.solver().trace_generation_enabled());
+        assert_eq!(
+            control.sat_solver_backend_kind(),
+            SatSolverBackendKind::Internal
+        );
     }
 
     #[test]
     fn proof_control_reset_sat_solver_reinitializes_trace_state() {
         let mut control = proof_control_alloc();
 
-        proof_control_reset_sat_solver(&mut control);
+        proof_control_reset_sat_solver(&mut control).unwrap();
 
         assert_eq!(control.solver().generation(), 2);
         assert!(control.solver().trace_generation_enabled());
+    }
+
+    #[test]
+    fn proof_control_keeps_internal_backend_after_missing_picosat_install() {
+        let mut control = proof_control_alloc();
+
+        let error = control
+            .install_picosat_solver(Path::new("missing-picosat-for-proof-control-test.dll"))
+            .unwrap_err();
+
+        assert!(matches!(error, PicoSatError::LoadLibrary { .. }));
+        assert_eq!(
+            control.sat_solver_backend_kind(),
+            SatSolverBackendKind::Internal
+        );
+        assert_eq!(control.solver().generation(), 1);
     }
 
     #[test]

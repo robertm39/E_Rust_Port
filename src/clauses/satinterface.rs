@@ -472,6 +472,56 @@ pub fn sat_check_proof_state(
     norm_const: bool,
     decision_limit: i32,
 ) -> Result<SatCheckReport, Diagnostic> {
+    let (mut satset, encoding_time) = encode_sat_check_set(state, grounding, norm_const)?;
+    let solver_start = Instant::now();
+    let (result, empty) = satset.check_unsat(decision_limit);
+    let solver_time = solver_start.elapsed().as_secs_f64();
+
+    Ok(sat_check_report(
+        &satset,
+        result,
+        empty,
+        encoding_time,
+        solver_time,
+    ))
+}
+
+pub fn sat_check_proof_state_with_picosat(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+    decision_limit: i32,
+    solver: &mut PicoSat,
+) -> Result<SatCheckReport, Diagnostic> {
+    let (mut satset, encoding_time) = encode_sat_check_set(state, grounding, norm_const)?;
+    let solver_start = Instant::now();
+    let (result, empty) = satset
+        .check_unsat_with_picosat(solver, decision_limit)
+        .map_err(|error| picosat_error_to_diagnostic(&error))?;
+    let solver_time = solver_start.elapsed().as_secs_f64();
+
+    Ok(sat_check_report(
+        &satset,
+        result,
+        empty,
+        encoding_time,
+        solver_time,
+    ))
+}
+
+#[must_use]
+pub fn picosat_error_to_diagnostic(error: &PicoSatError) -> Diagnostic {
+    Diagnostic::new(
+        ErrorCode::INTERFACE_ERROR,
+        format!("PicoSAT communication failed: {error}"),
+    )
+}
+
+fn encode_sat_check_set(
+    state: &mut ProofState,
+    grounding: GroundingStrategy,
+    norm_const: bool,
+) -> Result<(SatClauseSet, f64), Diagnostic> {
     let encoding_start = Instant::now();
     let source_clauses = proof_state_sat_source_clauses(state);
     let mut dist_array = signature_distribution_array(state);
@@ -498,11 +548,17 @@ pub fn sat_check_proof_state(
     }
     let encoding_time = encoding_start.elapsed().as_secs_f64();
 
-    let solver_start = Instant::now();
-    let (result, empty) = satset.check_unsat(decision_limit);
-    let solver_time = solver_start.elapsed().as_secs_f64();
+    Ok((satset, encoding_time))
+}
 
-    Ok(SatCheckReport {
+fn sat_check_report(
+    satset: &SatClauseSet,
+    result: ProverResult,
+    empty: Option<Clause>,
+    encoding_time: f64,
+    solver_time: f64,
+) -> SatCheckReport {
+    SatCheckReport {
         result,
         empty,
         full_size: usize_to_u64(satset.cardinality()),
@@ -510,7 +566,7 @@ pub fn sat_check_proof_state(
         core_size: satset.core_size(),
         encoding_time,
         solver_time,
-    })
+    }
 }
 
 fn proof_state_sat_source_clauses(state: &ProofState) -> Vec<Clause> {
