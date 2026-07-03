@@ -3,7 +3,7 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::basics::defines::{DEFAULT_COMCHAR_RAW, MEGA};
 use crate::basics::error::{check_option_letter_string, Diagnostic, ErrorCode};
@@ -61,8 +61,9 @@ use crate::clauses::inferencedoc::{
     pcl_print_end, pcl_print_start, ClauseCreationInference, ClauseCreationParents,
     PclStepPrintOptions, ProofDocIdSource, ProofDocOutputFormat, ProofDocSession,
 };
+use crate::clauses::picosat::PicoSat;
 use crate::clauses::pred_elim::{
-    eliminate_predicates_singular_with_output,
+    eliminate_predicates_singular, eliminate_predicates_singular_with_picosat,
     PredicateEliminationConfig as ClausePredicateEliminationConfig,
 };
 use crate::clauses::proofstate::{
@@ -70,6 +71,7 @@ use crate::clauses::proofstate::{
     WatchlistSource as ProofStateWatchlistSource,
 };
 use crate::clauses::relevance::clause_set_relevance_prune;
+use crate::clauses::satinterface::picosat_error_to_diagnostic;
 use crate::clauses::sine::{
     select_axioms_clause_sets, select_threshold_clause_sets, ClauseSineParams,
 };
@@ -214,6 +216,7 @@ const DEFAULT_MINISCOPE_LIMIT: i64 = 1_048_576;
 const DEFAULT_OUTPUT_DESCRIPTOR: &str = "eigEIG";
 const DEFAULT_SYMBOL_OCCURRENCES: i64 = 512;
 const DEFAULT_FILTER_DESCRIPTOR: &str = "Fc";
+const PICOSAT_LIBRARY_ENV: &str = "E_RUST_PORT_PICOSAT_LIBRARY";
 const NO_HIGHER_ORDER_DEPTH: i64 = -1;
 const THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE: &str =
     "THF formula requires the full higher-order formula pipeline; this port currently supports only simple first-order-shaped and application-based THF fragments";
@@ -1254,6 +1257,7 @@ pub struct EProverConfig {
     pub sine: Option<String>,
     pub preprocessing: PreprocessingConfig,
     pub search: SearchControlConfig,
+    pub picosat_library: Option<PathBuf>,
     pub strategy_scheduling: bool,
     pub schedule_cores: i64,
     pub serialize_schedule: bool,
@@ -1346,6 +1350,7 @@ impl Default for EProverConfig {
             sine: None,
             preprocessing: PreprocessingConfig::default(),
             search: SearchControlConfig::default(),
+            picosat_library: None,
             strategy_scheduling: false,
             schedule_cores: 1,
             serialize_schedule: false,
@@ -1560,7 +1565,8 @@ pub fn heuristic_parms_from_config(
 /// # Errors
 ///
 /// Returns a diagnostic if manually constructed config values cannot be
-/// represented by the C-shaped proof-control parameter fields.
+/// represented by the C-shaped proof-control parameter fields, or if the
+/// configured runtime `PicoSAT` library cannot be opened.
 pub fn proof_control_from_config(config: &EProverConfig) -> Result<ProofControl, Diagnostic> {
     proof_control_from_heuristic_parms(config, heuristic_parms_with_strategy_io(config)?)
 }
@@ -1575,7 +1581,21 @@ fn proof_control_from_heuristic_parms(
     control.set_record_gc_selection(config.flags.contains(EProverFlag::RecordGivenClauses));
     control
         .set_strong_unit_forward_subsumption(config.search.support.strong_unit_forward_subsumption);
+    install_configured_picosat_solver(config, &mut control)?;
     Ok(control)
+}
+
+fn install_configured_picosat_solver(
+    config: &EProverConfig,
+    control: &mut ProofControl,
+) -> Result<(), Diagnostic> {
+    let Some(path) = &config.picosat_library else {
+        return Ok(());
+    };
+    control
+        .install_picosat_solver(path)
+        .map(|_| ())
+        .map_err(|error| picosat_error_to_diagnostic(&error))
 }
 
 fn heuristic_parms_with_strategy_io(
@@ -2747,7 +2767,10 @@ where
     S: Into<String>,
 {
     let mut state = CommandLineState::new(argv);
-    let mut config = EProverConfig::default();
+    let mut config = EProverConfig {
+        picosat_library: runtime_picosat_library_from_env(),
+        ..EProverConfig::default()
+    };
     loop {
         let Some(parsed) = (match state.next_opt(EPROVER_OPTIONS) {
             Ok(parsed) => parsed,
@@ -2779,6 +2802,12 @@ where
         action: EProverAction::Run(Box::new(config)),
         warnings: Vec::new(),
     })
+}
+
+fn runtime_picosat_library_from_env() -> Option<PathBuf> {
+    std::env::var_os(PICOSAT_LIBRARY_ENV)
+        .filter(|value| !value.as_os_str().is_empty())
+        .map(PathBuf::from)
 }
 
 fn apply_parsed_option(
@@ -5679,6 +5708,7 @@ fn run_prune_only<W: Write + ?Sized>(
                     .contains(PredicateEliminationFlag::RecognizeGates),
             },
         },
+        config.picosat_library.as_deref(),
         &mut state,
     )?;
     apply_goal_definition_transformation(
@@ -5739,6 +5769,7 @@ fn run_proof_search<W: Write + ?Sized>(
                 recognize_gates: heuristic_params.pred_elim_gates,
             },
         },
+        config.picosat_library.as_deref(),
         &mut state,
     )?;
     apply_goal_definition_transformation(
@@ -6841,6 +6872,7 @@ fn apply_blocked_clause_elimination<W: Write + ?Sized>(
 fn apply_predicate_elimination<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: PredicateEliminationPreprocessingConfig,
+    picosat_library: Option<&Path>,
     state: &mut crate::clauses::proofstate::ProofState,
 ) -> Result<i64, EProverError> {
     if !config.enabled || problem_type() != ProblemType::FirstOrder {
@@ -6850,18 +6882,38 @@ fn apply_predicate_elimination<W: Write + ?Sized>(
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
     let fresh_vars = state.fresh_vars().clone();
     let mut pred_elim_output = String::new();
+    let start_count = state.axioms().members();
+    let _ = writeln!(&mut pred_elim_output, "% PE start: {start_count}");
     let result = {
         let (bank, axioms, archive) = state.terms_axioms_archive_mut();
-        eliminate_predicates_singular_with_output(
-            axioms,
-            archive,
-            bank,
-            &mut tmp_bank,
-            &fresh_vars,
-            config.clause_config,
-            &mut pred_elim_output,
-        )?
+        if let Some(path) = picosat_library {
+            let mut solver =
+                PicoSat::open(path).map_err(|error| picosat_error_to_diagnostic(&error))?;
+            eliminate_predicates_singular_with_picosat(
+                axioms,
+                archive,
+                bank,
+                &mut tmp_bank,
+                &fresh_vars,
+                config.clause_config,
+                &mut solver,
+            )?
+        } else {
+            eliminate_predicates_singular(
+                axioms,
+                archive,
+                bank,
+                &mut tmp_bank,
+                &fresh_vars,
+                config.clause_config,
+            )?
+        }
     };
+    let _ = writeln!(
+        &mut pred_elim_output,
+        "% PE eliminated: {}",
+        result.eliminated_count
+    );
     output.write_stdout_side_channel(pred_elim_output.as_bytes())?;
     Ok(result.eliminated_count)
 }
@@ -12676,7 +12728,7 @@ mod tests {
         ExtInferenceType, FoolUnroll, FvIndexFeatureType, GroundingStrategy, LiteralComparison,
         ParamodulationType, PredicateEliminationFlag, PrimEnumMode, ProblemTypeRunGuard,
         SimpleFofBoolEqnReplacement, SimpleFofFormula, TermOrdering, UnificationMode,
-        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA,
+        WatchlistSource, LPO_RECURSION_LIMIT_WARNING, MEGA, PICOSAT_LIBRARY_ENV,
         THF_FORMULA_REQUIRES_FULL_PIPELINE_MESSAGE, TSTP_FORMULA_FREE_VARIABLES_MESSAGE,
     };
     use crate::basics::error::ErrorCode;
@@ -12718,6 +12770,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fmt::Write as _;
     use std::io::Write as _;
+    use std::path::PathBuf;
 
     struct EnvGuard {
         name: &'static str,
@@ -14171,6 +14224,38 @@ mod tests {
         assert!(!control.fvi_parms().eliminate_uninformative());
         assert_eq!(control.fvi_parms().max_symbols(), 19);
         assert_eq!(control.fvi_parms().symbol_slack(), 2);
+    }
+
+    #[test]
+    fn process_options_records_runtime_picosat_library_from_env() {
+        let _lock = global_state_lock();
+        let _guard = set_env_var(PICOSAT_LIBRARY_ENV, "target/test-picosat-runtime.dll");
+
+        let action = process_options(["eprover"]).unwrap();
+        let EProverAction::Run(config) = action else {
+            panic!("expected run config");
+        };
+
+        assert_eq!(
+            config.picosat_library,
+            Some(PathBuf::from("target/test-picosat-runtime.dll"))
+        );
+    }
+
+    #[test]
+    fn proof_control_from_config_reports_missing_runtime_picosat_library() {
+        let config = EProverConfig {
+            picosat_library: Some(PathBuf::from("missing-picosat-runtime-test.dll")),
+            ..EProverConfig::default()
+        };
+
+        let Err(error) = proof_control_from_config(&config) else {
+            panic!("missing PicoSAT library should reject proof-control config");
+        };
+
+        assert_eq!(error.code(), ErrorCode::INTERFACE_ERROR);
+        assert!(error.message().contains("PicoSAT communication failed"));
+        assert!(error.message().contains("missing-picosat-runtime-test.dll"));
     }
 
     #[test]

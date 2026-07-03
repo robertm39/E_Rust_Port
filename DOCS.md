@@ -8,6 +8,10 @@ Rust implementation work must follow [`docs/rust-code-standards.md`](docs/rust-c
 
 Current Rust port implementation status is tracked in [`docs/rust-port-status.md`](docs/rust-port-status.md).
 
+## Runtime PicoSAT Selection
+
+The Rust executable can opt into the runtime-loaded PicoSAT backend by setting `E_RUST_PORT_PICOSAT_LIBRARY` to the PicoSAT DLL/shared-library path before running `eprover`. This is a Rust-port-specific selection surface; the default executable path still uses the internal solver unless that environment variable is set.
+
 ## C Source Documentation
 
 The original C implementation in `eprover/` is documented under [`docs/c_source_docs/`](docs/c_source_docs/). Treat `eprover/` as read-only original source; update documentation around it, not the source itself.
