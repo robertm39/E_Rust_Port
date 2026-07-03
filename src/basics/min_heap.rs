@@ -99,52 +99,41 @@ where
         Some(result)
     }
 
-    #[must_use]
-    pub fn update_element(&mut self, index: usize) -> bool {
-        if index >= self.entries.len() {
-            return false;
+    pub fn update_element(&mut self, index: usize) {
+        if self.entries.is_empty() && index == 0 {
+            return;
         }
+        self.assert_valid_index(index, "MinHeapUpdateElement");
 
         if index > 0 && self.compare_indices(index, parent(index)).is_lt() {
             self.bubble_up(index);
         } else {
             self.drop_down(index);
         }
-        true
     }
 
-    #[must_use]
-    pub fn remove_element(&mut self, index: usize) -> Option<T> {
-        if index >= self.entries.len() {
-            return None;
-        }
+    pub fn remove_element(&mut self, index: usize) -> T {
+        self.assert_valid_index(index, "MinHeapRemoveElement");
 
         let result = self.entries.swap_remove(index);
         self.call_setter_for_value(&result, -1);
         if index < self.entries.len() {
             self.call_setter_at(index, heap_index(index));
-            let updated = self.update_element(index);
-            debug_assert!(updated);
+            self.update_element(index);
         }
-        Some(result)
+        result
     }
 
-    #[must_use]
-    pub fn decr_key(&mut self, index: usize) -> bool {
-        if index >= self.entries.len() {
-            return false;
-        }
+    pub fn decr_key(&mut self, index: usize) {
         self.drop_down(index);
-        true
     }
 
-    #[must_use]
-    pub fn incr_key(&mut self, index: usize) -> bool {
-        if index >= self.entries.len() {
-            return false;
+    pub fn incr_key(&mut self, index: usize) {
+        if self.entries.is_empty() && index == 0 {
+            return;
         }
+        self.assert_valid_index(index, "MinHeapIncrKey");
         self.bubble_up(index);
-        true
     }
 
     #[must_use]
@@ -177,6 +166,13 @@ where
         (self.cmp)(&self.entries[left], &self.entries[right])
     }
 
+    fn assert_valid_index(&self, index: usize, caller: &str) {
+        assert!(
+            index < self.entries.len(),
+            "{caller} called with invalid index {index}"
+        );
+    }
+
     fn bubble_up(&mut self, mut child_index: usize) {
         while child_index > 0 {
             let parent_index = parent(child_index);
@@ -190,9 +186,8 @@ where
     }
 
     fn drop_down(&mut self, mut current_index: usize) {
-        while left_child(current_index) < self.entries.len() {
+        while let Some(left) = left_child_if_present(current_index, self.entries.len()) {
             let mut min_child_index = current_index;
-            let left = left_child(current_index);
             let right = right_child(current_index);
 
             if self.compare_indices(left, min_child_index).is_lt() {
@@ -239,6 +234,11 @@ const fn left_child(index: usize) -> usize {
 
 const fn right_child(index: usize) -> usize {
     left_child(index) + 1
+}
+
+fn left_child_if_present(index: usize, size: usize) -> Option<usize> {
+    let left = index.checked_mul(2)?.checked_add(1)?;
+    (left < size).then_some(left)
 }
 
 #[cfg(test)]
@@ -334,11 +334,11 @@ mod tests {
 
         let id1_index = usize::try_from(indices.borrow()[1]).unwrap();
         heap.get_mut(id1_index).unwrap().priority = 5;
-        assert!(heap.update_element(id1_index));
+        heap.update_element(id1_index);
         assert_eq!(heap.peek_min().unwrap().id, 1);
 
         heap.get_mut(0).unwrap().priority = 50;
-        assert!(heap.update_element(0));
+        heap.update_element(0);
         assert_eq!(heap.peek_min().unwrap().id, 2);
     }
 
@@ -350,7 +350,7 @@ mod tests {
         heap.add(10);
 
         *heap.get_mut(0).unwrap() = 20;
-        assert!(heap.decr_key(0));
+        heap.decr_key(0);
         assert_eq!(heap.peek_min(), Some(&5));
 
         let ten_index = heap
@@ -359,7 +359,7 @@ mod tests {
             .position(|value| *value == 10)
             .unwrap();
         *heap.get_mut(ten_index).unwrap() = 2;
-        assert!(heap.incr_key(ten_index));
+        heap.incr_key(ten_index);
         assert_eq!(heap.peek_min(), Some(&2));
     }
 
@@ -385,7 +385,7 @@ mod tests {
         });
 
         let id3_index = usize::try_from(indices.borrow()[3]).unwrap();
-        let removed = heap.remove_element(id3_index).unwrap();
+        let removed = heap.remove_element(id3_index);
         assert_eq!(removed.id, 3);
         assert_eq!(indices.borrow()[3], -1);
         assert_eq!(heap.size(), 2);
@@ -398,6 +398,51 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(remaining.contains(&1));
         assert!(remaining.contains(&2));
+    }
+
+    #[test]
+    fn update_and_incr_preserve_c_empty_root_noop() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        heap.update_element(0);
+        heap.incr_key(0);
+
+        assert!(heap.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "MinHeapUpdateElement called with invalid index 1")]
+    fn update_element_panics_on_positive_out_of_range_index() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        heap.update_element(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "MinHeapRemoveElement called with invalid index 0")]
+    fn remove_element_panics_on_out_of_range_index() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        heap.remove_element(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "MinHeapIncrKey called with invalid index 1")]
+    fn incr_key_panics_on_positive_out_of_range_index() {
+        let mut heap = MinHeap::new(i64::cmp);
+
+        heap.incr_key(1);
+    }
+
+    #[test]
+    fn decr_key_preserves_c_out_of_range_leaf_noop() {
+        let mut heap = MinHeap::new(i64::cmp);
+        heap.add(3);
+        heap.add(7);
+
+        heap.decr_key(usize::MAX);
+
+        assert_eq!(heap.as_slice(), &[3, 7]);
     }
 
     #[test]
