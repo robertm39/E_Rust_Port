@@ -1,7 +1,7 @@
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc, wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_bool, parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -452,8 +452,9 @@ pub fn rdag_weight_wfcb_init(
     max_literal_multiplier: f64,
     pos_multiplier: f64,
 ) -> Wfcb<RDagWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         rdag_weight_wfcb_compute,
+        rdag_weight_wfcb_compute_with_bank,
         prio_fun,
         rdag_weight_exit,
         Some(rdag_weight_init(
@@ -540,6 +541,21 @@ pub fn rdag_weight_compute_with_ocb(
 ) -> f64 {
     clause.cond_mark_maximal_terms(ocb, bank);
     rdag_weight_compute(param, clause)
+}
+
+/// Computes C `RDAGWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn rdag_weight_compute_with_bank(
+    param: &RDagWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(rdag_weight_compute(param, clause))
 }
 
 #[must_use]
@@ -823,6 +839,18 @@ fn rdag_weight_wfcb_compute(
     }
 }
 
+fn rdag_weight_wfcb_compute_with_bank(
+    data: Option<&mut RDagWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    match data {
+        Some(data) => rdag_weight_compute_with_bank(data, ocb, bank, clause),
+        None => panic!("RDAGweight WFCB requires initialized weight parameters"),
+    }
+}
+
 fn rdag_weight2_wfcb_compute(
     data: Option<&mut RDagWeightParam>,
     _bank: &TermBank,
@@ -1068,6 +1096,31 @@ mod tests {
         assert_close(actual, expected);
         assert!(target.query_prop(CP_IS_ORIENTED));
         assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn refined_dag_weight_parse_banked_callback_marks_clause_like_c() {
+        let mut bank = test_bank();
+        let mut target = positive_equation_clause(&mut bank);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let param = rdag_weight_init(10, 3, 1, 5.0, 2.0, 7.0, 4.0);
+        let expected = rdag_weight_compute(&param, &manually_marked);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,10,3,1,5.0,2.0,7.0,4.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = rdag_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, &mut bank, &mut target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]

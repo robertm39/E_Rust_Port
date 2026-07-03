@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::basics::error::Diagnostic;
 use crate::clauses::clause::Clause;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -158,8 +158,9 @@ pub fn diversity_weight_wfcb_init(
     vdiff2weight: f64,
     app_var_mult: f64,
 ) -> Wfcb<DiversityWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         diversity_weight_wfcb_compute,
+        diversity_weight_wfcb_compute_with_bank,
         prio_fun,
         diversity_weight_exit,
         Some(diversity_weight_init(
@@ -268,6 +269,21 @@ pub fn diversity_weight_compute_with_ocb(
     diversity_weight_compute(param, bank, clause)
 }
 
+/// Computes C `DiversityWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+pub fn diversity_weight_compute_with_bank(
+    param: &DiversityWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(diversity_weight_compute(param, bank, clause))
+}
+
 fn diversity_weight_wfcb_compute(
     data: Option<&mut DiversityWeightParam>,
     bank: &TermBank,
@@ -275,6 +291,18 @@ fn diversity_weight_wfcb_compute(
 ) -> f64 {
     match data {
         Some(data) => diversity_weight_compute(data, bank, clause),
+        None => panic!("Diversityweight WFCB requires initialized weight parameters"),
+    }
+}
+
+fn diversity_weight_wfcb_compute_with_bank(
+    data: Option<&mut DiversityWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    match data {
+        Some(data) => diversity_weight_compute_with_bank(data, ocb, bank, clause),
         None => panic!("Diversityweight WFCB requires initialized weight parameters"),
     }
 }
@@ -412,6 +440,33 @@ mod tests {
         assert_close(actual, expected);
         assert!(target.query_prop(CP_IS_ORIENTED));
         assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn diversity_weight_parse_banked_callback_marks_clause_like_c() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let mut target = parsed_unit_clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let param = diversity_weight_init(2, 1, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0, 1.0);
+        let expected = diversity_weight_compute(&param, &bank, &manually_marked);
+        let mut scanner = Scanner::from_user_string(
+            "(ConstPrio,2,1,3.0,5.0,7.0,11.0,13.0,17.0,19.0) tail",
+            false,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = diversity_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, &mut bank, &mut target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]
