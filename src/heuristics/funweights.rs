@@ -6,7 +6,7 @@ use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::relevance::RelevanceData;
 use crate::heuristics::prio_funs::parse_prio_fun;
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::{parse_float, parse_int};
 use crate::inout::scanner::{token_pos_rep, Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -822,8 +822,9 @@ pub fn fun_weight_wfcb_init(
     fweights: Vec<(String, i64)>,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(fun_weight_init(
@@ -853,8 +854,9 @@ pub fn sym_offset_weight_wfcb_init(
     fweights: Vec<(String, i64)>,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         sym_offset_weight_wfcb_compute,
+        sym_offset_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(sym_offset_weight_init(
@@ -890,8 +892,9 @@ pub fn conjecture_symbol_weight_wfcb_init(
     conj_pweight: i64,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(conjecture_symbol_weight_init(
@@ -932,8 +935,9 @@ pub fn conjecture_symbol_type_weight_wfcb_init(
     conj_pweight: i64,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(conjecture_symbol_type_weight_init(
@@ -963,8 +967,9 @@ pub fn conjecture_type_based_weight_wfcb_init(
     vweight: i64,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(conjecture_type_based_weight_init(
@@ -999,8 +1004,9 @@ pub fn relevance_level_weight_wfcb_init(
     default_level_penalty: i64,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(relevance_level_weight_init(
@@ -1042,8 +1048,9 @@ pub fn relevance_level_weight2_wfcb_init(
     default_level_penalty: i64,
     app_var_mult: f64,
 ) -> Wfcb<FunWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
         prio_fun,
         fun_weight_exit,
         Some(relevance_level_weight2_init(
@@ -1407,8 +1414,8 @@ pub fn generic_fun_weight_compute(
 /// Computes C `GenericFunWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 ///
 /// # Panics
 ///
@@ -1437,6 +1444,40 @@ pub fn generic_fun_weight_compute_with_ocb(
         param.app_var_mult,
         param.type_freqs.as_ref(),
     )
+}
+
+/// Computes C `GenericFunWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+///
+/// # Panics
+///
+/// Panics if fun-weight initialization did not populate the function-weight
+/// vector, which would violate the parameter-cell invariant.
+pub fn generic_fun_weight_compute_with_bank(
+    param: &mut FunWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    param.ensure_fun_weights(bank);
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(clause.fun_weight(
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.vweight,
+        param.flimit,
+        param
+            .fweights
+            .as_deref()
+            .unwrap_or_else(|| panic!("FunWeight vector must be initialized")),
+        param.fweight,
+        param.app_var_mult,
+        param.type_freqs.as_ref(),
+    ))
 }
 
 pub fn fun_weight_compute(param: &mut FunWeightParam, bank: &TermBank, clause: &Clause) -> f64 {
@@ -1489,8 +1530,8 @@ pub fn sym_offset_weight_compute(
 /// Computes C `SymOffsetWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 ///
 /// # Panics
 ///
@@ -1537,6 +1578,56 @@ pub fn sym_offset_weight_compute_with_ocb(
     result
 }
 
+/// Computes C `SymOffsetWeightCompute` with bank-backed ordering preparation.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+///
+/// # Panics
+///
+/// Panics if the parameter cell was not initialized for symbol-offset scoring,
+/// or if occurrence-array index conversion fails for a positive f-code.
+pub fn sym_offset_weight_compute_with_bank(
+    param: &mut FunWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    param.ensure_fun_weights(bank);
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    let mut result = clause.literal_weight(
+        bank,
+        param.max_term_multiplier,
+        param.max_literal_multiplier,
+        param.pos_multiplier,
+        param.vweight,
+        param.fweight,
+        param.app_var_mult,
+        false,
+    );
+
+    let mut symbols = Vec::new();
+    {
+        let f_occur = param
+            .f_occur
+            .as_mut()
+            .unwrap_or_else(|| panic!("SymOffsetWeight requires an occurrence array"));
+        clause.add_fun_occs(f_occur, &mut symbols);
+    }
+
+    while let Some(f_code) = symbols.pop() {
+        result += i64_to_f64(param.weight_for_f_code(f_code));
+        let f_occur = param
+            .f_occur
+            .as_mut()
+            .unwrap_or_else(|| panic!("SymOffsetWeight requires an occurrence array"));
+        f_occur.assign(f_code_to_pd_index(f_code), 0);
+    }
+
+    Ok(result)
+}
+
 fn generic_fun_weight_wfcb_compute(
     data: Option<&mut FunWeightParam>,
     bank: &TermBank,
@@ -1549,6 +1640,20 @@ fn generic_fun_weight_wfcb_compute(
     )
 }
 
+fn generic_fun_weight_wfcb_compute_with_bank(
+    data: Option<&mut FunWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    generic_fun_weight_compute_with_bank(
+        data.unwrap_or_else(|| panic!("FunWeight WFCB requires initialized parameters")),
+        ocb,
+        bank,
+        clause,
+    )
+}
+
 fn sym_offset_weight_wfcb_compute(
     data: Option<&mut FunWeightParam>,
     bank: &TermBank,
@@ -1556,6 +1661,20 @@ fn sym_offset_weight_wfcb_compute(
 ) -> f64 {
     sym_offset_weight_compute(
         data.unwrap_or_else(|| panic!("SymOffsetWeight WFCB requires initialized parameters")),
+        bank,
+        clause,
+    )
+}
+
+fn sym_offset_weight_wfcb_compute_with_bank(
+    data: Option<&mut FunWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    sym_offset_weight_compute_with_bank(
+        data.unwrap_or_else(|| panic!("SymOffsetWeight WFCB requires initialized parameters")),
+        ocb,
         bank,
         clause,
     )
@@ -1919,6 +2038,39 @@ mod tests {
     }
 
     #[test]
+    fn fun_weight_parse_uses_banked_wfcb_callback() {
+        let mut bank = test_bank();
+        let mut target = ordering_clause(&mut bank);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = fun_weight_init(
+            3.0,
+            5.0,
+            7.0,
+            1,
+            2,
+            vec![("f".to_owned(), 10), ("a".to_owned(), 20)],
+            1.0,
+        );
+        let expected = fun_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,f:10,a:20) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = fun_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, &mut bank, &mut target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+        assert_eq!(scanner.current_token().literal(), "tail");
+    }
+
+    #[test]
     fn conjecture_simplified_symbol_weight_parse_marks_negated_conjecture_symbols() {
         let mut bank = test_bank();
         let axioms = negated_conjecture_axioms(&mut bank);
@@ -2153,6 +2305,39 @@ mod tests {
         assert_close(actual, expected);
         assert!(target.query_prop(CP_IS_ORIENTED));
         assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn sym_offset_weight_parse_uses_banked_wfcb_callback() {
+        let mut bank = test_bank();
+        let mut target = ordering_clause(&mut bank);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = sym_offset_weight_init(
+            3.0,
+            5.0,
+            7.0,
+            1,
+            2,
+            vec![("f".to_owned(), 10), ("a".to_owned(), -3)],
+            1.0,
+        );
+        let expected = sym_offset_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,2,1,3.0,5.0,7.0,f:10,a:-3) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = sym_offset_weight_parse(&mut scanner).unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, &mut bank, &mut target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]
