@@ -34,6 +34,8 @@ pub mod neweval;
 pub mod overlap_index;
 pub mod paramodulation;
 pub mod pdtrees;
+#[allow(unsafe_code)]
+pub mod picosat;
 pub mod pred_elim;
 pub mod proofstate;
 pub mod propclauses;
