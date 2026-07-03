@@ -127,23 +127,30 @@ pub fn normalize_int_rep(int_rep: &str) -> String {
 #[must_use]
 pub fn normalize_rational_rep(rational_rep: &str) -> Option<String> {
     let (numerator_text, denominator_text) = rational_rep.split_once('/')?;
-    let numerator = numerator_text.parse::<i128>().ok()?;
-    let denominator = denominator_text.parse::<i128>().ok()?;
+    let numerator = parse_lp64_strtoll_saturating_decimal(numerator_text)?;
+    let denominator = parse_lp64_strtoll_saturating_decimal(denominator_text)?;
     if denominator == 0 {
+        return None;
+    }
+    if numerator == i64::MIN || denominator == i64::MIN {
         return None;
     }
 
     let negative = (numerator < 0) ^ (denominator < 0);
-    let numerator = numerator.checked_abs()?;
-    let denominator = denominator.checked_abs()?;
-    let gcd = gcd_i128(numerator, denominator);
+    let numerator = numerator.unsigned_abs();
+    let denominator = denominator.unsigned_abs();
+    let gcd = gcd_u64(numerator, denominator);
     if gcd == 0 {
         return None;
     }
 
     let numerator = numerator / gcd;
     let denominator = denominator / gcd;
-    let signed_numerator = if negative { -numerator } else { numerator };
+    let signed_numerator = if negative && numerator != 0 {
+        format!("-{numerator}")
+    } else {
+        numerator.to_string()
+    };
     Some(format!("{signed_numerator}/{denominator}"))
 }
 
@@ -181,7 +188,56 @@ fn c_exp_format(value: f64) -> String {
     format!("{mantissa}e{sign}{:02}", exponent.abs())
 }
 
-fn gcd_i128(mut left: i128, mut right: i128) -> i128 {
+fn parse_lp64_strtoll_saturating_decimal(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let (negative, digits) = match bytes.first() {
+        Some(b'+') => (false, &bytes[1..]),
+        Some(b'-') => (true, &bytes[1..]),
+        Some(_) => (false, bytes),
+        None => return None,
+    };
+    if digits.is_empty() {
+        return None;
+    }
+
+    let limit = if negative {
+        u128::from(i64::MIN.unsigned_abs())
+    } else {
+        u128::from(i64::MAX.unsigned_abs())
+    };
+    let mut value = 0_u128;
+    let mut overflowed = false;
+
+    for byte in digits {
+        let digit = match byte {
+            b'0'..=b'9' => u128::from(byte - b'0'),
+            _ => return None,
+        };
+        if value > (limit - digit) / 10 {
+            overflowed = true;
+            value = limit;
+        } else if !overflowed {
+            value = value * 10 + digit;
+        }
+    }
+
+    if overflowed {
+        return Some(if negative { i64::MIN } else { i64::MAX });
+    }
+
+    let magnitude = u64::try_from(value).ok()?;
+    if negative {
+        if magnitude == i64::MIN.unsigned_abs() {
+            Some(i64::MIN)
+        } else {
+            Some(-i64::try_from(magnitude).ok()?)
+        }
+    } else {
+        i64::try_from(magnitude).ok()
+    }
+}
+
+fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
     while right != 0 {
         let next = left % right;
         left = right;
@@ -247,6 +303,24 @@ mod tests {
         assert_eq!(normalize_rational_rep("-6/-8").as_deref(), Some("3/4"));
         assert_eq!(normalize_rational_rep("0/-10").as_deref(), Some("0/1"));
         assert_eq!(normalize_rational_rep("1/0"), None);
+    }
+
+    #[test]
+    fn rational_normalization_matches_c_strtoll_overflow_shape() {
+        assert_eq!(
+            normalize_rational_rep("9223372036854775808/2").as_deref(),
+            Some("9223372036854775807/2")
+        );
+        assert_eq!(
+            normalize_rational_rep("2/9223372036854775808").as_deref(),
+            Some("2/9223372036854775807")
+        );
+        assert_eq!(
+            normalize_rational_rep("+18446744073709551616/+3").as_deref(),
+            Some("9223372036854775807/3")
+        );
+        assert_eq!(normalize_rational_rep("-9223372036854775808/1"), None);
+        assert_eq!(normalize_rational_rep("1/-9223372036854775808"), None);
     }
 
     #[test]
