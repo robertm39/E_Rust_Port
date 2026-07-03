@@ -62,6 +62,10 @@ where
     }
 
     pub fn find(&mut self, key: &K) -> Option<&V> {
+        self.find_splayed(key)
+    }
+
+    pub fn find_splayed(&mut self, key: &K) -> Option<&V> {
         if self.entries.contains_key(key) {
             self.root_key = Some(key.clone());
         }
@@ -137,6 +141,19 @@ mod tests {
         assert!(!created);
         *slot = Some(7);
         assert_eq!(map.find(&"x"), Some(&7));
+    }
+
+    #[test]
+    fn splayed_find_tracks_root_even_for_null_value_slots() {
+        let mut map: ObjMap<&str, i32> = ObjMap::new();
+        map.get_ref("x");
+        map.store("y", 7);
+        assert_eq!(map.root_key(), Some(&"y"));
+
+        assert_eq!(map.find_splayed(&"x"), None);
+        assert_eq!(map.root_key(), Some(&"x"));
+        assert_eq!(map.find_splayed(&"missing"), None);
+        assert_eq!(map.root_key(), Some(&"x"));
     }
 
     #[test]
