@@ -91,8 +91,8 @@ use crate::heuristics::new_autoschedule::{
     DEFAULT_SCHED_TIME_LIMIT,
 };
 use crate::heuristics::proofcontrol::{
-    proof_control_init, proof_state_filter_unprocessed, proof_state_init_with_output,
-    proof_state_reset_processed_with_global_indices,
+    proof_control_init_with_formula_axioms, proof_state_filter_unprocessed,
+    proof_state_init_with_output, proof_state_reset_processed_with_global_indices,
     proof_state_saturate_with_global_indices_and_output, ProofControl, SaturateOutcome,
     SaturateReturnReason, SaturateStopReason,
 };
@@ -5747,11 +5747,12 @@ fn run_proof_search<W: Write + ?Sized>(
     let wfcb_defs = &config.search.heuristic.weight_function_definitions;
     let mut hcb_defs = config.search.heuristic.heuristic_definitions.clone();
     {
-        let (bank, axioms) = state.terms_and_axioms_mut();
-        proof_control_init(
+        let (bank, axioms, formula_axioms) = state.terms_axioms_f_axioms_mut();
+        proof_control_init_with_formula_axioms(
             &mut control,
             bank,
             axioms,
+            formula_axioms,
             &mut params,
             &fvi_params,
             wfcb_defs,

@@ -104,7 +104,7 @@ Source files reviewed: `CLAUSES/ccl_relevance.h`, `CLAUSES/ccl_relevance.c`.
 - `RelevanceDataInit` splits conjecture and non-conjecture clauses/formulas into `PList` buckets with `PListStoreP(anchor, ...)`; because insertion is after the anchor, each bucket is reversed relative to source set traversal.
 - `RelevanceDataCompute` records clause and formula core lists before allocating fresh empty cores, then `extract_new_core` moves matching rest-list cells into the new cores through the function-symbol index.
 - `proofstate_rel_prune` treats level `0` outside the helper: `ProofStateRelevancyProcess` returns before pruning. For requested levels beyond computed relevance levels, it moves all remaining rest clauses/formulas into the new axiom sets.
-- Rust now shares the C-shaped relevance traversal over represented clause and formula axiom owners, including formula `PList` indexing and axiom-count pruning deltas. Parser-owned formula population and `che_funweights` formula-context scoring remain separate follow-up work.
+- Rust now shares the C-shaped relevance traversal over represented clause and formula axiom owners, including formula `PList` indexing and axiom-count pruning deltas. `che_funweights` relevance-level weights can consume the same represented formula axiom context; parser-owned formula population remains separate follow-up work.
 
 ### Change Later
 

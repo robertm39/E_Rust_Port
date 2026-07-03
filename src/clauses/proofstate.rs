@@ -328,6 +328,16 @@ impl ProofState {
         (terms, axioms)
     }
 
+    pub fn terms_axioms_f_axioms_mut(&mut self) -> (&mut TermBank, &mut ClauseSet, &FormulaSet) {
+        let Self {
+            terms,
+            axioms,
+            f_axioms,
+            ..
+        } = self;
+        (terms, axioms, f_axioms)
+    }
+
     pub fn terms_axioms_ax_archive_mut(
         &mut self,
     ) -> (&mut TermBank, &mut ClauseSet, &mut ClauseSet) {

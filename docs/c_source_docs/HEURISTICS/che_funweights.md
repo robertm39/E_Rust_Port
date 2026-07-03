@@ -135,6 +135,11 @@ Source files reviewed: `HEURISTICS/che_funweights.h`, `HEURISTICS/che_funweights
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
 - `GenericFunWeightCompute` calls the configured `init_fun` lazily, then `ClauseCondMarkMaximalTerms(data->ocb, clause)`, then `ClauseFunWeight` with `data->fweights` and optional `type_freqs`; Rust preserves that init/mark/score order with an OCB-backed helper and a banked WFCB callback for callers that can pass the owner bank.
 - `SymOffsetWeightCompute` follows the same lazy-init and `ClauseCondMarkMaximalTerms` order before ordinary clause weighting, then calls `ClauseAddFunOccs`, adds one configured offset per distinct symbol, and resets each touched occurrence-array slot to zero; Rust preserves the sequence with an OCB-backed helper and banked WFCB callback.
+- `init_relevance_vector` and `init_relevance_vector2` call `RelevanceDataCompute(data->proofstate)`, so C relevance-level symbol weights see both `state->axioms` and `state->f_axioms`. Rust now preserves that for represented owners by carrying optional formula axioms through the weight-parse context while retaining clause-only compatibility helpers for staged tests.
+
+### Change Later
+
+- `FunWeightParam` stores the whole `ProofState_p` mostly so lazy relevance/type initializers can reach axiom sets and the active OCB. Rust splits this into explicit clause/formula axiom snapshots plus banked OCB callbacks; once proof-control owns stable proof-state handles end to end, consider replacing the cloned snapshots with borrowed owner handles to avoid stale heuristic context.
 
 ### Porting Focus
 

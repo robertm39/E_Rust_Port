@@ -1,5 +1,6 @@
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::FormulaSet;
 use crate::heuristics::clauseweight::{
     clause_weight_parse, cmax_weight_parse, default_weight_parse, lmax_weight_parse,
     uniq_weight_parse,
@@ -13,7 +14,8 @@ use crate::heuristics::funweights::{
     conjecture_relative_symbol_type_weight_parse, conjecture_relative_symbol_weight_parse,
     conjecture_simplified_symbol_weight_parse, conjecture_symbol_weight_parse,
     conjecture_type_based_weight_parse, fun_weight_parse, relevance_level_weight2_parse,
-    relevance_level_weight_parse, sym_offset_weight_parse,
+    relevance_level_weight2_parse_with_formulas, relevance_level_weight_parse,
+    relevance_level_weight_parse_with_formulas, sym_offset_weight_parse,
 };
 use crate::heuristics::gdweight::gd_clause_weight_parse;
 use crate::heuristics::learning::{tsm_weight_parse, tsmr_weight_parse};
@@ -88,24 +90,42 @@ pub const WEIGHT_FUN_PARSE_FUN_NAMES: [&str; 46] = [
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WeightParseContext<'a> {
     axioms: Option<&'a ClauseSet>,
+    formula_axioms: Option<&'a FormulaSet>,
 }
 
 impl<'a> WeightParseContext<'a> {
     #[must_use]
     pub const fn empty() -> Self {
-        Self { axioms: None }
+        Self {
+            axioms: None,
+            formula_axioms: None,
+        }
     }
 
     #[must_use]
     pub const fn new(axioms: &'a ClauseSet) -> Self {
         Self {
             axioms: Some(axioms),
+            formula_axioms: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn new_with_formulas(axioms: &'a ClauseSet, formula_axioms: &'a FormulaSet) -> Self {
+        Self {
+            axioms: Some(axioms),
+            formula_axioms: Some(formula_axioms),
         }
     }
 
     #[must_use]
     pub const fn axioms(self) -> Option<&'a ClauseSet> {
         self.axioms
+    }
+
+    #[must_use]
+    pub const fn formula_axioms(self) -> Option<&'a FormulaSet> {
+        self.formula_axioms
     }
 
     fn require_axioms(self, scanner: &Scanner, name: &str) -> Result<&'a ClauseSet, Diagnostic> {
@@ -372,11 +392,23 @@ pub fn weight_fun_parse_with_context(
         }
         "RelevanceLevelWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
-            Ok(Box::new(relevance_level_weight_parse(scanner, axioms)?))
+            if let Some(formulas) = context.formula_axioms() {
+                Ok(Box::new(relevance_level_weight_parse_with_formulas(
+                    scanner, axioms, formulas,
+                )?))
+            } else {
+                Ok(Box::new(relevance_level_weight_parse(scanner, axioms)?))
+            }
         }
         "RelevanceLevelWeight2" => {
             let axioms = context.require_axioms(scanner, &name)?;
-            Ok(Box::new(relevance_level_weight2_parse(scanner, axioms)?))
+            if let Some(formulas) = context.formula_axioms() {
+                Ok(Box::new(relevance_level_weight2_parse_with_formulas(
+                    scanner, axioms, formulas,
+                )?))
+            } else {
+                Ok(Box::new(relevance_level_weight2_parse(scanner, axioms)?))
+            }
         }
         "ConjectureLevDistanceWeight" => {
             let axioms = context.require_axioms(scanner, &name)?;
@@ -442,6 +474,7 @@ mod tests {
     };
     use crate::clauses::clause::Clause;
     use crate::clauses::clausesets::ClauseSet;
+    use crate::clauses::formulasets::FormulaSet;
     use crate::clauses::neweval::{evals_alloc, PRIO_NORMAL};
     use crate::heuristics::wfcb::{wfcb_alloc, BoxedWfcb};
     use crate::inout::scanner::Scanner;
@@ -738,7 +771,8 @@ mod tests {
         let clause = Clause::empty();
         let bank = term_bank();
         let axioms = ClauseSet::new();
-        let context = WeightParseContext::new(&axioms);
+        let formulas = FormulaSet::new();
+        let context = WeightParseContext::new_with_formulas(&axioms, &formulas);
         let specs = [
             "StaggeredWeight(ConstPrio,1.0) tail",
             "GDWeight(ConstPrio,2,1,1.0,0.0,5) tail",
@@ -758,6 +792,10 @@ mod tests {
         ];
 
         assert_eq!(context.axioms().map(ClauseSet::len), Some(0));
+        assert_eq!(
+            context.formula_axioms().map(FormulaSet::cardinality),
+            Some(0)
+        );
         for spec in specs {
             let mut scanner =
                 Scanner::from_user_string(spec, false).unwrap_or_else(|err| panic!("{err}"));

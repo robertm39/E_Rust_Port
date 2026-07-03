@@ -4,6 +4,7 @@ use crate::basics::pdarrays::{PDArrayIndex, PDIntArray};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::CP_TYPE_NEG_CONJECTURE;
 use crate::clauses::clausesets::ClauseSet;
+use crate::clauses::formulasets::FormulaSet;
 use crate::clauses::relevance::RelevanceData;
 use crate::heuristics::prio_funs::parse_prio_fun;
 use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
@@ -48,6 +49,7 @@ pub struct FunWeightParam {
     default_level_penalty: i64,
     weight_stack: Vec<(String, i64)>,
     axioms: Option<ClauseSet>,
+    formula_axioms: Option<FormulaSet>,
     init_kind: FunWeightInitKind,
     flimit: FunCode,
     fweights: Option<Vec<i64>>,
@@ -89,6 +91,7 @@ impl FunWeightParam {
             default_level_penalty: 0,
             weight_stack,
             axioms: None,
+            formula_axioms: None,
             init_kind: FunWeightInitKind::ExplicitSymbols,
             flimit: 0,
             fweights: None,
@@ -135,6 +138,7 @@ impl FunWeightParam {
             default_level_penalty: 0,
             weight_stack: Vec::new(),
             axioms: Some(axioms.clone()),
+            formula_axioms: None,
             init_kind: FunWeightInitKind::ConjectureSymbols,
             flimit: 0,
             fweights: None,
@@ -165,6 +169,7 @@ impl FunWeightParam {
     ) -> Self {
         Self {
             axioms: Some(axioms.clone()),
+            formula_axioms: None,
             init_kind: FunWeightInitKind::ConjectureSymbolTypes,
             ..Self::with_conjecture_symbols(
                 max_term_multiplier,
@@ -194,6 +199,7 @@ impl FunWeightParam {
     ) -> Self {
         Self {
             axioms: Some(axioms.clone()),
+            formula_axioms: None,
             init_kind: FunWeightInitKind::ConjectureTypeBased,
             ..Self::with_conjecture_symbols(
                 max_term_multiplier,
@@ -251,6 +257,7 @@ impl FunWeightParam {
             default_level_penalty,
             weight_stack: Vec::new(),
             axioms: Some(axioms.clone()),
+            formula_axioms: None,
             init_kind: if special_symbols_level_one {
                 FunWeightInitKind::RelevanceLevelsSpecialOne
             } else {
@@ -260,6 +267,49 @@ impl FunWeightParam {
             fweights: None,
             type_freqs: None,
             f_occur: None,
+        }
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "C-compatible constructor mirrors RelevanceLevelWeightInit without OCB"
+    )]
+    pub fn with_relevance_levels_and_formulas(
+        max_term_multiplier: f64,
+        max_literal_multiplier: f64,
+        pos_multiplier: f64,
+        vweight: i64,
+        fweight: i64,
+        cweight: i64,
+        pweight: i64,
+        level_poly_const: i64,
+        level_poly_lin: f64,
+        level_poly_square: f64,
+        default_level_penalty: i64,
+        axioms: &ClauseSet,
+        formula_axioms: &FormulaSet,
+        app_var_mult: f64,
+        special_symbols_level_one: bool,
+    ) -> Self {
+        Self {
+            formula_axioms: Some(formula_axioms.clone()),
+            ..Self::with_relevance_levels(
+                max_term_multiplier,
+                max_literal_multiplier,
+                pos_multiplier,
+                vweight,
+                fweight,
+                cweight,
+                pweight,
+                level_poly_const,
+                level_poly_lin,
+                level_poly_square,
+                default_level_penalty,
+                axioms,
+                app_var_mult,
+                special_symbols_level_one,
+            )
         }
     }
 
@@ -341,6 +391,11 @@ impl FunWeightParam {
     #[must_use]
     pub const fn axioms(&self) -> Option<&ClauseSet> {
         self.axioms.as_ref()
+    }
+
+    #[must_use]
+    pub const fn formula_axioms(&self) -> Option<&FormulaSet> {
+        self.formula_axioms.as_ref()
     }
 
     #[must_use]
@@ -554,7 +609,11 @@ impl FunWeightParam {
             .axioms
             .as_ref()
             .unwrap_or_else(|| panic!("RelevanceLevelWeight requires proof-state axioms"));
-        let relevance = RelevanceData::compute(signature, axioms);
+        let relevance = if let Some(formulas) = self.formula_axioms.as_ref() {
+            RelevanceData::compute_with_formulas(signature, axioms, formulas)
+        } else {
+            RelevanceData::compute(signature, axioms)
+        };
 
         for f_code in 1..self.flimit {
             let index = usize::try_from(f_code)
@@ -772,6 +831,46 @@ pub fn relevance_level_weight_init(
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit without prio/OCB"
+)]
+pub fn relevance_level_weight_init_with_formulas(
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+    app_var_mult: f64,
+) -> FunWeightParam {
+    FunWeightParam::with_relevance_levels_and_formulas(
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        level_poly_const,
+        level_poly_lin,
+        level_poly_square,
+        default_level_penalty,
+        axioms,
+        formula_axioms,
+        app_var_mult,
+        false,
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
     reason = "C-compatible helper mirrors RelevanceLevelWeightInit2 without prio/OCB"
 )]
 pub fn relevance_level_weight2_init(
@@ -802,6 +901,46 @@ pub fn relevance_level_weight2_init(
         level_poly_square,
         default_level_penalty,
         axioms,
+        app_var_mult,
+        true,
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit2 without prio/OCB"
+)]
+pub fn relevance_level_weight2_init_with_formulas(
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+    app_var_mult: f64,
+) -> FunWeightParam {
+    FunWeightParam::with_relevance_levels_and_formulas(
+        max_term_multiplier,
+        max_literal_multiplier,
+        pos_multiplier,
+        vweight,
+        fweight,
+        cweight,
+        pweight,
+        level_poly_const,
+        level_poly_lin,
+        level_poly_square,
+        default_level_penalty,
+        axioms,
+        formula_axioms,
         app_var_mult,
         true,
     )
@@ -1030,6 +1169,52 @@ pub fn relevance_level_weight_wfcb_init(
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit parameters without OCB"
+)]
+pub fn relevance_level_weight_wfcb_init_with_formulas(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    app_var_mult: f64,
+) -> Wfcb<FunWeightParam> {
+    wfcb_alloc_with_bank(
+        generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
+        prio_fun,
+        fun_weight_exit,
+        Some(relevance_level_weight_init_with_formulas(
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            axioms,
+            formula_axioms,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
     reason = "C-compatible helper mirrors RelevanceLevelWeightInit2 parameters without OCB"
 )]
 pub fn relevance_level_weight2_wfcb_init(
@@ -1066,6 +1251,52 @@ pub fn relevance_level_weight2_wfcb_init(
             level_poly_square,
             default_level_penalty,
             axioms,
+            app_var_mult,
+        )),
+    )
+}
+
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible helper mirrors RelevanceLevelWeightInit2 parameters without OCB"
+)]
+pub fn relevance_level_weight2_wfcb_init_with_formulas(
+    prio_fun: ClausePrioFun,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+    max_term_multiplier: f64,
+    max_literal_multiplier: f64,
+    pos_multiplier: f64,
+    vweight: i64,
+    fweight: i64,
+    cweight: i64,
+    pweight: i64,
+    level_poly_const: i64,
+    level_poly_lin: f64,
+    level_poly_square: f64,
+    default_level_penalty: i64,
+    app_var_mult: f64,
+) -> Wfcb<FunWeightParam> {
+    wfcb_alloc_with_bank(
+        generic_fun_weight_wfcb_compute,
+        generic_fun_weight_wfcb_compute_with_bank,
+        prio_fun,
+        fun_weight_exit,
+        Some(relevance_level_weight2_init_with_formulas(
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            axioms,
+            formula_axioms,
             app_var_mult,
         )),
     )
@@ -1305,19 +1536,36 @@ pub fn relevance_level_weight_parse(
     scanner: &mut Scanner,
     axioms: &ClauseSet,
 ) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
-    parse_relevance_level_weight(scanner, axioms, false)
+    parse_relevance_level_weight(scanner, axioms, None, false)
+}
+
+pub fn relevance_level_weight_parse_with_formulas(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    parse_relevance_level_weight(scanner, axioms, Some(formula_axioms), false)
 }
 
 pub fn relevance_level_weight2_parse(
     scanner: &mut Scanner,
     axioms: &ClauseSet,
 ) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
-    parse_relevance_level_weight(scanner, axioms, true)
+    parse_relevance_level_weight(scanner, axioms, None, true)
+}
+
+pub fn relevance_level_weight2_parse_with_formulas(
+    scanner: &mut Scanner,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
+    parse_relevance_level_weight(scanner, axioms, Some(formula_axioms), true)
 }
 
 fn parse_relevance_level_weight(
     scanner: &mut Scanner,
     axioms: &ClauseSet,
+    formula_axioms: Option<&FormulaSet>,
     special_symbols_level_one: bool,
 ) -> Result<Wfcb<FunWeightParam>, Diagnostic> {
     scanner.accept_tok(TokenType::OPEN_BRACKET)?;
@@ -1347,8 +1595,25 @@ fn parse_relevance_level_weight(
     let app_var_mult = parse_optional_app_var_mult(scanner)?;
     scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
 
-    if special_symbols_level_one {
-        Ok(relevance_level_weight2_wfcb_init(
+    match (special_symbols_level_one, formula_axioms) {
+        (true, Some(formulas)) => Ok(relevance_level_weight2_wfcb_init_with_formulas(
+            prio_fun,
+            axioms,
+            formulas,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            app_var_mult,
+        )),
+        (true, None) => Ok(relevance_level_weight2_wfcb_init(
             prio_fun,
             axioms,
             max_term_multiplier,
@@ -1363,9 +1628,25 @@ fn parse_relevance_level_weight(
             level_poly_square,
             default_level_penalty,
             app_var_mult,
-        ))
-    } else {
-        Ok(relevance_level_weight_wfcb_init(
+        )),
+        (false, Some(formulas)) => Ok(relevance_level_weight_wfcb_init_with_formulas(
+            prio_fun,
+            axioms,
+            formulas,
+            max_term_multiplier,
+            max_literal_multiplier,
+            pos_multiplier,
+            vweight,
+            fweight,
+            cweight,
+            pweight,
+            level_poly_const,
+            level_poly_lin,
+            level_poly_square,
+            default_level_penalty,
+            app_var_mult,
+        )),
+        (false, None) => Ok(relevance_level_weight_wfcb_init(
             prio_fun,
             axioms,
             max_term_multiplier,
@@ -1380,7 +1661,7 @@ fn parse_relevance_level_weight(
             level_poly_square,
             default_level_penalty,
             app_var_mult,
-        ))
+        )),
     }
 }
 
@@ -1843,15 +2124,19 @@ mod tests {
         conjecture_simplified_symbol_weight_parse, conjecture_symbol_weight_parse,
         conjecture_type_based_weight_parse, fun_weight_compute, fun_weight_init, fun_weight_parse,
         generic_fun_weight_compute_with_ocb, relevance_level_weight2_parse,
-        relevance_level_weight_parse, sym_offset_weight_compute,
-        sym_offset_weight_compute_with_ocb, sym_offset_weight_init, sym_offset_weight_parse,
+        relevance_level_weight_parse, relevance_level_weight_parse_with_formulas,
+        sym_offset_weight_compute, sym_offset_weight_compute_with_ocb, sym_offset_weight_init,
+        sym_offset_weight_parse,
     };
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::{CP_IS_ORIENTED, CP_TYPE_AXIOM, CP_TYPE_NEG_CONJECTURE};
+    use crate::clauses::clause_props::{
+        CP_IS_ORIENTED, CP_TYPE_AXIOM, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE,
+    };
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::formulasets::{FormulaSet, WrappedFormula};
     use crate::clauses::neweval::PRIO_NORMAL;
     use crate::heuristics::to_params::TermOrdering;
     use crate::inout::scanner::Scanner;
@@ -1944,6 +2229,24 @@ mod tests {
         let mut axiom = Clause::alloc(EqnList::from_vec(vec![axiom_literal]));
         axiom.set_tptp_type(CP_TYPE_AXIOM);
         ClauseSet::from_clauses([conjecture, axiom])
+    }
+
+    fn relevance_formula_axioms_and_clause(bank: &mut TermBank) -> (FormulaSet, Clause) {
+        let a = typed_const(bank, "a");
+        let b = typed_const(bank, "b");
+        let f_of_a = typed_unary(bank, "f", &a);
+        let g_of_b = typed_unary(bank, "g", &b);
+        let f_of_g_of_b = typed_unary(bank, "f", &g_of_b);
+        let mut conjecture = WrappedFormula::wt_formula_alloc(f_of_a.clone());
+        conjecture.set_tptp_type(CP_TYPE_CONJECTURE);
+        let mut axiom = WrappedFormula::wt_formula_alloc(f_of_g_of_b);
+        axiom.set_tptp_type(CP_TYPE_AXIOM);
+        let mut formulas = FormulaSet::new();
+        formulas.insert(conjecture);
+        formulas.insert(axiom);
+        let literal = Eqn::alloc(f_of_a, g_of_b, bank, true).unwrap();
+        let clause = Clause::alloc(EqnList::from_vec(vec![literal]));
+        (formulas, clause)
     }
 
     fn negated_conjecture_axioms(bank: &mut TermBank) -> ClauseSet {
@@ -2215,6 +2518,25 @@ mod tests {
         assert_close(data.level_poly_lin(), 1.0);
         assert_close(data.level_poly_square(), 0.0);
         assert_eq!(data.default_level_penalty(), 10);
+    }
+
+    #[test]
+    fn relevance_level_weight_parse_can_use_formula_axioms() {
+        let mut bank = test_bank();
+        let (formulas, clause) = relevance_formula_axioms_and_clause(&mut bank);
+        let axioms = ClauseSet::new();
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,0.0,1.0,0.0,10,2,3,5,7,1.0,1.0,1.0) tail", false)
+                .unwrap_or_else(|err| panic!("{err}"));
+        let mut wfcb = relevance_level_weight_parse_with_formulas(&mut scanner, &axioms, &formulas)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_close(wfcb.compute_eval(&bank, &clause), 15.0);
+        assert_eq!(wfcb.compute_priority(&bank, &clause), PRIO_NORMAL);
+        assert_eq!(scanner.current_token().literal(), "tail");
+        let data = wfcb.data().expect("parser should install funweight data");
+        assert_eq!(data.axioms().map(ClauseSet::len), Some(0));
+        assert_eq!(data.formula_axioms().map(FormulaSet::cardinality), Some(2));
     }
 
     #[test]

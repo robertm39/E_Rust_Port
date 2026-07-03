@@ -48,6 +48,7 @@ use crate::clauses::factor::{
 };
 use crate::clauses::fcvindexing::fv_index_pack_clause;
 use crate::clauses::fcvindexing::FvIndexParams;
+use crate::clauses::formulasets::FormulaSet;
 use crate::clauses::freqvectors::FvPackedClause;
 use crate::clauses::global_indices::GlobalIndices;
 use crate::clauses::inferencedoc::{ClauseModificationInference, ProofDocSession};
@@ -622,6 +623,37 @@ pub fn proof_control_init(
     proof_control_init_heuristics(control, axioms, params, fvi_params, wfcb_defs, hcb_defs)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible ProofControlInit bridge keeps the original inputs visible"
+)]
+pub fn proof_control_init_with_formula_axioms(
+    control: &mut ProofControl,
+    bank: &mut TermBank,
+    axioms: &mut ClauseSet,
+    formula_axioms: &FormulaSet,
+    params: &mut HeuristicParmsCell,
+    fvi_params: &FvIndexParams,
+    wfcb_defs: &[String],
+    hcb_defs: &mut Vec<String>,
+    higher_order_problem: bool,
+) -> Result<(), Diagnostic> {
+    debug_assert!(control.ocb.is_none());
+    debug_assert!(control.active_hcb.is_none());
+
+    let ocb = to_select_ordering(bank, axioms, params, higher_order_problem)?;
+    control.ocb = Some(ocb);
+    proof_control_init_heuristics_with_formula_axioms(
+        control,
+        axioms,
+        formula_axioms,
+        params,
+        fvi_params,
+        wfcb_defs,
+        hcb_defs,
+    )
+}
+
 /// Installs the heuristic definition state handled by C `ProofControlInit`.
 ///
 /// This helper is available separately for tests and staged integration points
@@ -643,6 +675,36 @@ pub fn proof_control_init_heuristics(
     debug_assert!(control.active_hcb.is_none());
 
     let context = WeightParseContext::new(axioms);
+    proof_control_init_heuristics_with_context(
+        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+    )
+}
+
+pub fn proof_control_init_heuristics_with_formula_axioms(
+    control: &mut ProofControl,
+    axioms: &ClauseSet,
+    formula_axioms: &FormulaSet,
+    params: &mut HeuristicParmsCell,
+    fvi_params: &FvIndexParams,
+    wfcb_defs: &[String],
+    hcb_defs: &mut Vec<String>,
+) -> Result<(), Diagnostic> {
+    debug_assert!(control.active_hcb.is_none());
+
+    let context = WeightParseContext::new_with_formulas(axioms, formula_axioms);
+    proof_control_init_heuristics_with_context(
+        control, params, fvi_params, wfcb_defs, hcb_defs, context,
+    )
+}
+
+fn proof_control_init_heuristics_with_context(
+    control: &mut ProofControl,
+    params: &mut HeuristicParmsCell,
+    fvi_params: &FvIndexParams,
+    wfcb_defs: &[String],
+    hcb_defs: &mut Vec<String>,
+    context: WeightParseContext<'_>,
+) -> Result<(), Diagnostic> {
     install_default_weight_functions(control, context)?;
     for definition in wfcb_defs {
         install_option_weight_functions(control, definition, context)?;
@@ -930,7 +992,7 @@ fn proof_state_init_axioms_impl<W: fmt::Write>(
             "ProofStateInit requires initialized proof-control heuristic",
         )
     })?;
-    let context = WeightParseContext::new(state.axioms());
+    let context = WeightParseContext::new_with_formulas(state.axioms(), state.f_axioms());
     let uniq_hcb_handle =
         get_heuristic_handle_with_context("Uniq", &mut control.hcbs, &mut control.wfcbs, context)?;
 
