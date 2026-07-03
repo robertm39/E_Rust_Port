@@ -85,14 +85,14 @@ Source files reviewed: `CONTROL/cco_factoring.h`, `CONTROL/cco_factoring.c`.
 ### Rust Port Status
 
 - `src/clauses/factor.rs` ports first-order `ComputeAllOrderedFactors`: it skips Horn clauses and `CPNoGeneration`, iterates ordered-factor candidates, inserts generated clauses into the caller-owned `ClauseSet`, and copies proof depth, proof size, TPTP type, and SOS status from the parent.
-- `src/clauses/factor.rs` ports the first-order MGU subset of `ComputeAllEqualityFactors`: it uses the C equality-factor side cursor, skips Horn clauses and `CPNoGeneration`, inserts generated factors into the caller-owned `ClauseSet`, and copies parent proof depth, proof size, TPTP type, and SOS status.
-- Derivation pushes (`ClausePushDerivation`) are ported for the first-order all-factor wrappers through compact clause-parent references.
-- Opt-in proof-documentation wrappers emit represented `DocClauseCreationDefault(..., inf_factor, ...)` and `DocClauseCreationDefault(..., inf_efactor, ...)` output for first-order all-factor generation while keeping the plain helpers output-free.
-- Higher-order `ComputeAllEqualityFactors` behavior remains pending with the underlying CSU/lambda-normalization path.
+- `src/clauses/factor.rs` ports `ComputeAllEqualityFactors` for first-order complete-MGU candidates and higher-order CSU enumeration: it uses the C equality-factor side cursor, skips Horn clauses and `CPNoGeneration`, inserts generated factors into the caller-owned `ClauseSet`, and copies parent proof depth, proof size, TPTP type, and SOS status.
+- Derivation pushes (`ClausePushDerivation`) are ported for the all-factor wrappers through compact clause-parent references, including higher-order `DCEqFactor` tagging when the C candidate-level flag is set.
+- Opt-in proof-documentation wrappers emit represented `DocClauseCreationDefault(..., inf_factor, ...)` and `DocClauseCreationDefault(..., inf_efactor, ...)` output for all-factor generation while keeping the plain helpers output-free.
 
 ### Change-Later Observations
 
-- `ComputeAllEqualityFactors` drains generated equality factors by popping a `PStack`, which reverses the order in which `ComputeEqualityFactor` pushed CSU-derived clauses. Rust's first-order MGU path inserts directly because each candidate yields at most one factor; preserve the C reversal before adding multi-CSU results.
+- `ComputeAllEqualityFactors` drains generated equality factors by popping a `PStack`, which reverses the order in which `ComputeEqualityFactor` pushed CSU-derived clauses. Rust mirrors this with a temporary vector and `pop`; keep this compatibility behavior visible if a later API returns an iterator instead.
+- The wrapper receives one `is_ho` flag per candidate after `ComputeEqualityFactor` has generated all factors. Because the C generator overwrites rather than aggregates the flag for accepted CSU elements, all popped factors for that candidate inherit the last accepted substitution's higher-order status. Rust mirrors this quirk until reference traces justify per-factor metadata.
 - Both all-factor wrappers duplicate the same parent-metadata propagation sequence. Rust currently mirrors it locally; a future shared helper could reduce drift once proof-output metadata is represented.
 
 ### Porting Focus

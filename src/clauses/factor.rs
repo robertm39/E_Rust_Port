@@ -3,7 +3,9 @@ use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
 use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION};
 use crate::clauses::clausesets::ClauseSet;
-use crate::clauses::derivation::{clause_push_derivation, DC_EQ_FACTOR, DC_ORDERED_FACTOR};
+use crate::clauses::derivation::{
+    clause_push_derivation, set_is_ho, DC_EQ_FACTOR, DC_ORDERED_FACTOR,
+};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::EqnSide;
 use crate::clauses::inferencedoc::{
@@ -11,12 +13,13 @@ use crate::clauses::inferencedoc::{
 };
 use crate::orderings::cto_orderings::to_greater;
 use crate::orderings::ocb::OrderControlBlock;
-use crate::terms::match_mgu::{subst_mgu_complete, term_has_higher_order_unification_surface};
+use crate::terms::ho_csu::CsuIterator;
+use crate::terms::match_mgu::subst_mgu_complete;
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termvars::VarBank;
 use crate::{
-    basics::error::{Diagnostic, ErrorCode},
+    basics::error::Diagnostic,
     terms::termtypes::{DerefType, Term},
 };
 use std::{collections::BTreeMap, fmt};
@@ -66,6 +69,15 @@ pub struct EqualityFactorPosition {
     first_side: EqnSide,
     second_literal_index: usize,
     second_side: EqnSide,
+}
+
+struct EqualityFactorInput {
+    max_term: Term,
+    with_term: Term,
+    min_term: Term,
+    second_other: Term,
+    first_is_equ_lit: bool,
+    second_is_equ_lit: bool,
 }
 
 impl EqualityFactorPosition {
@@ -259,17 +271,16 @@ pub fn compute_ordered_factor(
     result
 }
 
-/// Builds the first-order C `ComputeEqualityFactor` result for one candidate.
+/// Builds one equality-factor result for one candidate.
 ///
-/// The C implementation enumerates CSU elements and lambda-normalizes every
-/// generated literal list. In higher-order problem mode, this staged Rust path
-/// handles the ordinary first-order MGU subset and reports an explicit
-/// diagnostic when the candidate needs full CSU enumeration.
+/// This is a convenience wrapper over C's result-stack shape. First-order mode
+/// uses the complete-MGU path, while higher-order mode enumerates the CSU stack
+/// and returns the first factor in C wrapper insertion order.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic if a higher-order candidate needs full CSU enumeration,
-/// or if term-bank insertion fails while copying the generated factor.
+/// Returns a diagnostic if term-bank insertion fails while copying the generated
+/// factor or if higher-order CSU limits have not been initialized.
 ///
 /// # Panics
 ///
@@ -283,6 +294,19 @@ pub fn compute_equality_factor(
     clause: &Clause,
     position: EqualityFactorPosition,
 ) -> Result<Option<Clause>, Diagnostic> {
+    if problem_type() == ProblemType::HigherOrder {
+        let (mut factors, _) = compute_equality_factor_csu_factors(bank, ocb, clause, position)?;
+        return Ok(factors.pop());
+    }
+    let (factor, _) = compute_equality_factor_mgu(bank, ocb, clause, position)?;
+    Ok(factor)
+}
+
+fn equality_factor_input(
+    bank: &TermBank,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+) -> EqualityFactorInput {
     let literals = clause.literals().as_slice();
     assert_ne!(
         position.first_literal_index, position.second_literal_index,
@@ -313,54 +337,122 @@ pub fn compute_equality_factor(
         "oriented equality-factor first literal can only use its left side"
     );
 
-    let max_term = literal_side(first, position.first_side).clone();
-    let with_term = literal_side(second, position.second_side).clone();
-    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
-    if higher_order_problem
-        && (term_has_higher_order_unification_surface(&max_term)
-            || term_has_higher_order_unification_surface(&with_term))
-    {
-        return Err(higher_order_eq_factor_diagnostic());
+    EqualityFactorInput {
+        max_term: literal_side(first, position.first_side).clone(),
+        with_term: literal_side(second, position.second_side).clone(),
+        min_term: literal_other_side(first, position.first_side).clone(),
+        second_other: literal_other_side(second, position.second_side).clone(),
+        first_is_equ_lit: first.is_equ_lit(bank),
+        second_is_equ_lit: second.is_equ_lit(bank),
     }
-    if (max_term.is_free_var() && !second.is_equ_lit(bank))
-        || (with_term.is_free_var() && !first.is_equ_lit(bank))
-    {
-        return Ok(None);
-    }
+}
 
-    let mut subst = Substitution::new();
-    if !subst_mgu_complete(&max_term, &with_term, &mut subst) {
-        return Ok(None);
-    }
-    if higher_order_problem && subst.has_ho_binding_for_problem(ProblemType::HigherOrder) {
-        subst.backtrack();
-        return Err(higher_order_eq_factor_diagnostic());
-    }
+fn equality_factor_free_var_guard(input: &EqualityFactorInput) -> bool {
+    (input.max_term.is_free_var() && !input.second_is_equ_lit)
+        || (input.with_term.is_free_var() && !input.first_is_equ_lit)
+}
 
-    let min_term = literal_other_side(first, position.first_side).clone();
-    let result = if !to_greater(
+fn equality_factor_order_allows(
+    bank: &TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+    input: &EqualityFactorInput,
+) -> bool {
+    !to_greater(
         ocb,
         bank.signature(),
-        &min_term,
-        &max_term,
+        &input.min_term,
+        &input.max_term,
         DerefType::Always,
         DerefType::Always,
     ) && eqn_is_maximal_under_subst(ocb, bank, clause, position.first_literal_index)
-    {
-        let second_other = literal_other_side(second, position.second_side).clone();
-        build_equality_factor(bank, clause, position, &min_term, &second_other, &mut subst)
+}
+
+fn compute_equality_factor_mgu(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+) -> Result<(Option<Clause>, bool), Diagnostic> {
+    let input = equality_factor_input(bank, clause, position);
+    if equality_factor_free_var_guard(&input) {
+        return Ok((None, false));
+    }
+
+    let mut subst = Substitution::new();
+    if !subst_mgu_complete(&input.max_term, &input.with_term, &mut subst) {
+        return Ok((None, false));
+    }
+
+    let subst_is_ho = subst.has_ho_binding();
+    let result = if equality_factor_order_allows(bank, ocb, clause, position, &input) {
+        build_equality_factor(
+            bank,
+            clause,
+            position,
+            &input.min_term,
+            &input.second_other,
+            &mut subst,
+        )
     } else {
         Ok(None)
     };
     subst.backtrack();
-    result
+    Ok((result?, subst_is_ho))
 }
 
-fn higher_order_eq_factor_diagnostic() -> Diagnostic {
-    Diagnostic::new(
-        ErrorCode::OTHER_ERROR,
-        "higher-order equality-factoring CSU enumeration is not ported yet",
-    )
+fn compute_equality_factor_csu_factors(
+    bank: &mut TermBank,
+    ocb: &mut OrderControlBlock,
+    clause: &Clause,
+    position: EqualityFactorPosition,
+) -> Result<(Vec<Clause>, bool), Diagnostic> {
+    let input = equality_factor_input(bank, clause, position);
+    if equality_factor_free_var_guard(&input) {
+        return Ok((Vec::new(), false));
+    }
+
+    let mut subst = Substitution::new();
+    let mut iter = CsuIterator::new(&input.max_term, &input.with_term, &subst);
+    let mut factors = Vec::new();
+    let mut subst_is_ho = false;
+
+    loop {
+        let has_next = match iter.next_csu_element(bank, &mut subst) {
+            Ok(has_next) => has_next,
+            Err(err) => {
+                iter.destroy(&mut subst);
+                return Err(err);
+            }
+        };
+        if !has_next {
+            break;
+        }
+
+        if equality_factor_order_allows(bank, ocb, clause, position, &input) {
+            subst_is_ho = subst.has_ho_binding();
+            let factor = match build_equality_factor(
+                bank,
+                clause,
+                position,
+                &input.min_term,
+                &input.second_other,
+                &mut subst,
+            ) {
+                Ok(Some(factor)) => factor,
+                Ok(None) => continue,
+                Err(err) => {
+                    iter.destroy(&mut subst);
+                    return Err(err);
+                }
+            };
+            factors.push(factor);
+        }
+    }
+
+    iter.destroy(&mut subst);
+    Ok((factors, subst_is_ho))
 }
 
 /// Computes all first-order ordered factors and inserts them into `store`.
@@ -437,16 +529,16 @@ fn compute_all_ordered_factors_impl<W: fmt::Write>(
     Ok(factor_count)
 }
 
-/// Computes all first-order equality factors and inserts them into `store`.
+/// Computes all equality factors and inserts them into `store`.
 ///
-/// This mirrors C `ComputeAllEqualityFactors` for the first-order MGU path.
-/// Higher-order CSU enumeration remains pending. Use
-/// [`compute_all_equality_factors_with_docs`] for represented proof-documentation
-/// output.
+/// This mirrors C `ComputeAllEqualityFactors`: first-order mode uses the
+/// complete-MGU path, while higher-order mode enumerates the CSU stack through
+/// `CsuIterator`. Use [`compute_all_equality_factors_with_docs`] for represented
+/// proof-documentation output.
 ///
 /// # Errors
 ///
-/// Returns diagnostics from [`compute_equality_factor`].
+/// Returns diagnostics from factor construction or higher-order CSU iteration.
 pub fn compute_all_equality_factors(
     bank: &mut TermBank,
     ocb: &mut OrderControlBlock,
@@ -456,7 +548,7 @@ pub fn compute_all_equality_factors(
     compute_all_equality_factors_impl::<String>(bank, ocb, clause, store, None)
 }
 
-/// Computes all first-order equality factors while emitting represented C
+/// Computes all equality factors while emitting represented C
 /// `DocClauseCreationDefault(..., inf_efactor, ...)` output.
 ///
 /// # Errors
@@ -486,8 +578,16 @@ fn compute_all_equality_factors_impl<W: fmt::Write>(
         return Ok(factor_count);
     }
 
+    let higher_order_problem = problem_type() == ProblemType::HigherOrder;
     for position in equality_factor_positions(clause) {
-        if let Some(mut factor) = compute_equality_factor(bank, ocb, clause, position)? {
+        let (mut factors, subst_is_ho) = if higher_order_problem {
+            compute_equality_factor_csu_factors(bank, ocb, clause, position)?
+        } else {
+            let (factor, subst_is_ho) = compute_equality_factor_mgu(bank, ocb, clause, position)?;
+            (factor.into_iter().collect(), subst_is_ho)
+        };
+
+        while let Some(mut factor) = factors.pop() {
             factor_count += 1;
             factor.set_proof_depth(clause.proof_depth().saturating_add(1));
             factor.set_proof_size(clause.proof_size().saturating_add(1));
@@ -503,7 +603,12 @@ fn compute_all_equality_factors_impl<W: fmt::Write>(
                     None,
                 )?;
             }
-            clause_push_derivation(&mut factor, DC_EQ_FACTOR, Some(clause), None);
+            let operation = if subst_is_ho {
+                set_is_ho(DC_EQ_FACTOR)
+            } else {
+                DC_EQ_FACTOR
+            };
+            clause_push_derivation(&mut factor, operation, Some(clause), None);
             store.insert(factor);
         }
     }
@@ -617,21 +722,22 @@ mod tests {
         equality_factor_positions, ordered_factor_positions, EqualityFactorPosition,
         OrderedFactorPosition,
     };
-    use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
     use crate::clauses::clause_props::{CP_IS_SOS, CP_NO_GENERATION, CP_TYPE_NEG_CONJECTURE};
     use crate::clauses::clausesets::ClauseSet;
     use crate::clauses::derivation::{
-        ClauseDerivationRef, DerivationEntry, DC_EQ_FACTOR, DC_ORDERED_FACTOR,
+        set_is_ho, ClauseDerivationRef, DerivationEntry, DC_EQ_FACTOR, DC_ORDERED_FACTOR,
     };
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqn_props::{EqnSide, EP_IS_MAXIMAL, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
     use crate::clauses::eqnlist::EqnList;
     use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
+    use crate::heuristics::hcb::{HeuristicParmsCell, UnifMode};
     use crate::heuristics::to_params::TermOrdering;
     use crate::orderings::ocb::OrderControlBlock;
+    use crate::terms::ho_csu::init_unif_limits;
     use crate::terms::lambda::{apply_terms, close_with_type_prefix};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
@@ -654,6 +760,16 @@ mod tests {
         ProblemTypeReset
     }
 
+    fn init_unif_limits_for_test(unif_mode: UnifMode) {
+        let mut parms = HeuristicParmsCell {
+            unif_mode,
+            ..HeuristicParmsCell::default()
+        };
+        parms.max_unifiers = 8;
+        parms.max_unif_steps = 64;
+        init_unif_limits(&parms);
+    }
+
     fn test_bank() -> TermBank {
         let mut signature = Signature::new(TypeBank::new());
         signature.insert_internal_codes().unwrap();
@@ -663,6 +779,15 @@ mod tests {
     fn kbo_ocb(bank: &TermBank) -> OrderControlBlock {
         OrderControlBlock::alloc(
             TermOrdering::Kbo,
+            true,
+            bank.signature(),
+            HoOrderKind::LfhoOrder,
+        )
+    }
+
+    fn kbo6_ocb(bank: &TermBank) -> OrderControlBlock {
+        OrderControlBlock::alloc(
+            TermOrdering::Kbo6,
             true,
             bank.signature(),
             HoOrderKind::LfhoOrder,
@@ -1043,6 +1168,7 @@ mod tests {
     fn compute_all_equality_factors_higher_order_uses_first_order_subset() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Single);
         let mut bank = test_bank();
         let x = typed_var(&bank, -2);
         let a = typed_const(&mut bank, "ef_ho_fo_a");
@@ -1071,9 +1197,46 @@ mod tests {
     }
 
     #[test]
-    fn compute_equality_factor_higher_order_arrow_binding_remains_diagnostic() {
+    fn compute_all_equality_factors_higher_order_enumerates_csu_pattern_results() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
+        let mut bank = test_bank();
+        let i_type = bank.signature().type_bank().default_type();
+        let function = typed_arrow_var(&mut bank, -2);
+        let db0 = bank.request_db_var(&i_type, 0);
+        let applied = apply_terms(&mut bank, &function, std::slice::from_ref(&db0)).unwrap();
+        let a = typed_const(&mut bank, "ef_ho_csu_a");
+        let b = typed_const(&mut bank, "ef_ho_csu_b");
+        let c = typed_const(&mut bank, "ef_ho_csu_c");
+        let mut first = lit(&mut bank, &applied, &a, true);
+        let second = lit(&mut bank, &b, &c, true);
+        first.set_prop(EP_IS_MAXIMAL);
+        let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
+        let mut ocb = kbo6_ocb(&bank);
+        let mut store = ClauseSet::new();
+
+        let count = compute_all_equality_factors(&mut bank, &mut ocb, &clause, &mut store)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(count, 2);
+        assert_eq!(store.members(), 2);
+        for factor in store.iter() {
+            assert_eq!(
+                factor.derivation().unwrap().as_slice(),
+                &[
+                    DerivationEntry::Operation(set_is_ho(DC_EQ_FACTOR)),
+                    DerivationEntry::ClauseParent(ClauseDerivationRef::from(&clause)),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn compute_equality_factor_higher_order_arrow_binding_uses_csu_path() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        init_unif_limits_for_test(UnifMode::Multi);
         let mut bank = test_bank();
         let x = typed_arrow_var(&mut bank, -2);
         let f = typed_arrow_const(&mut bank, "ef_ho_arrow_f");
@@ -1085,16 +1248,16 @@ mod tests {
         let clause = Clause::alloc(EqnList::from_vec(vec![first, second]));
         let mut ocb = kbo_ocb(&bank);
 
-        let error = compute_equality_factor(
+        let factor = compute_equality_factor(
             &mut bank,
             &mut ocb,
             &clause,
             EqualityFactorPosition::new(0, EqnSide::LeftSide, 1, EqnSide::LeftSide),
         )
-        .unwrap_err();
+        .unwrap()
+        .expect("higher-order equality factor should be generated");
 
-        assert_eq!(error.code(), ErrorCode::OTHER_ERROR);
-        assert!(error.message().contains("CSU enumeration"));
+        assert_eq!(factor.literal_number(), 2);
     }
 
     #[test]
