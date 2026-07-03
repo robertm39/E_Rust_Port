@@ -2,6 +2,7 @@ use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
 use crate::basics::verbose::{set_verbose_level, verbout, verbout2, verbout_arg};
+use crate::clauses::clause::ClauseParseOptions;
 use crate::clauses::inferencedoc::ProofDocOutputFormat;
 use crate::inout::commandline::{
     get_int_arg, print_options, CommandLineState, OptArgType, OptCell,
@@ -340,7 +341,10 @@ fn parse_options() -> PclStepParseOptions {
     PclStepParseOptions {
         problem_type: ProblemType::FirstOrder,
         support_shell_pcl: false,
-        ..PclStepParseOptions::default()
+        clause_parse_options: ClauseParseOptions {
+            clauses_have_local_variables: false,
+            ..ClauseParseOptions::default()
+        },
     }
 }
 
@@ -430,8 +434,8 @@ fn i64_to_i32_saturating(value: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        print_help, process_options, run, stored_example_path, EkbGinsertConfig, RunCommand,
-        DEFAULT_KB_NAME, PROGRAM_NAME,
+        parse_options, print_help, process_options, run, stored_example_path, EkbGinsertConfig,
+        RunCommand, DEFAULT_KB_NAME, PROGRAM_NAME,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::verbose::verbose_level;
@@ -593,6 +597,39 @@ mod tests {
         assert!(clausepatterns.contains("1:("));
 
         remove_dir_if_present(&kb_path);
+    }
+
+    #[test]
+    fn generated_protocol_examples_share_external_variable_names_like_c() {
+        let _guard = global_state_lock();
+        let kb_path = temp_path("shared-vars-kb");
+        create_empty_kb(&kb_path);
+        let kb_arg = kb_path.to_str().expect("path is utf8");
+        let kb_option = format!("--knowledge-base={kb_arg}");
+
+        let (status, stdout, stderr) = run_with_args(
+            &[PROGRAM_NAME, "--name=shared_vars", &kb_option],
+            "1 : : [++p(X,Y)] : initial\n2 : : [++q(Y,X)] : initial\n",
+        );
+
+        assert_eq!(status, 0);
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        let stored = std::fs::read_to_string(kb_path.join("FILES").join("shared_vars"))
+            .expect("stored generated example is readable");
+        assert!(stored.contains("p(X1,X2) <- ."));
+        assert!(stored.contains("q(X2,X1) <- ."));
+
+        remove_dir_if_present(&kb_path);
+    }
+
+    #[test]
+    fn parse_options_disable_local_clause_variables_like_c() {
+        assert!(
+            !parse_options()
+                .clause_parse_options
+                .clauses_have_local_variables
+        );
     }
 
     #[test]
