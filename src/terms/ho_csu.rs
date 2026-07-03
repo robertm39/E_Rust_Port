@@ -5,8 +5,9 @@ use crate::heuristics::hcb::{HeuristicParmsCell, UnifMode};
 use crate::terms::fixpoint_unif::subst_compute_fixpoint_mgu;
 use crate::terms::functypes::FunCode;
 use crate::terms::ho_bindings::compute_next_binding;
-use crate::terms::lambda::{apply_terms, shift_db, unfold_lambda, whnf_deref};
+use crate::terms::lambda::whnf_deref;
 use crate::terms::match_mgu::{subst_mgu_complete, OracleUnifResult};
+use crate::terms::pattern_match_mgu::{prune_lambda_prefix, subst_compute_mgu_pattern};
 use crate::terms::subst::Substitution;
 use crate::terms::termbanks::TermBank;
 use crate::terms::termfunc::term_is_ground;
@@ -235,7 +236,7 @@ impl CsuIterator {
             result = subst_compute_fixpoint_mgu(bank, lhs, rhs, subst)?;
         }
         if result == OracleUnifResult::NotInFragment && params.pattern_oracle {
-            result = subst_compute_mgu_pattern_placeholder(lhs, rhs, subst);
+            result = subst_compute_mgu_pattern(bank, lhs, rhs, subst)?;
         }
         Ok(result)
     }
@@ -417,53 +418,6 @@ fn whnf_and_prune(bank: &mut TermBank, lhs: &Term, rhs: &Term) -> Result<(Term, 
     prune_lambda_prefix(bank, lhs, rhs)
 }
 
-fn prune_lambda_prefix(
-    bank: &mut TermBank,
-    mut lhs: Term,
-    mut rhs: Term,
-) -> Result<(Term, Term), Diagnostic> {
-    while lhs.is_lambda() && rhs.is_lambda() {
-        let lhs_binder = required_arg(&lhs, 0);
-        let rhs_binder = required_arg(&rhs, 0);
-        assert_eq!(lhs_binder.type_(), rhs_binder.type_());
-        lhs = required_arg(&lhs, 1);
-        rhs = required_arg(&rhs, 1);
-    }
-
-    if lhs.is_lambda() {
-        eta_expand_on_the_fly(bank, &lhs, &rhs)
-    } else if rhs.is_lambda() {
-        let (rhs, lhs) = eta_expand_on_the_fly(bank, &rhs, &lhs)?;
-        Ok((lhs, rhs))
-    } else {
-        Ok((lhs, rhs))
-    }
-}
-
-fn eta_expand_on_the_fly(
-    bank: &mut TermBank,
-    lambda: &Term,
-    non_lambda: &Term,
-) -> Result<(Term, Term), Diagnostic> {
-    assert!(lambda.is_lambda());
-    assert!(!non_lambda.is_lambda());
-
-    let mut dbvars = Vec::new();
-    let lambda_body = unfold_lambda(lambda, &mut dbvars);
-    let prefix_len = dbvars.len();
-    for (index, dbvar) in dbvars.iter_mut().enumerate() {
-        let dbvar_type = dbvar.type_().expect("lambda binder must have a type");
-        let db_index = FunCode::try_from(prefix_len - index - 1)
-            .expect("lambda prefix length fits in FunCode");
-        *dbvar = bank.request_db_var(&dbvar_type, db_index);
-    }
-
-    let shift = FunCode::try_from(prefix_len).expect("lambda prefix length fits in FunCode");
-    let shifted = shift_db(bank, non_lambda, shift)?;
-    let expanded = apply_terms(bank, &shifted, &dbvars)?;
-    Ok((lambda_body, expanded))
-}
-
 fn build_new_queue(old: &PQueue<Term>, lhs: &Term, rhs: &Term) -> PQueue<Term> {
     let mut result = old.clone();
     result.store(rhs.clone());
@@ -518,14 +472,6 @@ fn head_id(term: &Term) -> FunCode {
 fn required_arg(term: &Term, index: usize) -> Term {
     term.argument(index)
         .unwrap_or_else(|| panic!("CSU term argument {index} is uninitialized"))
-}
-
-fn subst_compute_mgu_pattern_placeholder(
-    _lhs: &Term,
-    _rhs: &Term,
-    _subst: &mut Substitution,
-) -> OracleUnifResult {
-    OracleUnifResult::NotInFragment
 }
 
 /// Mirrors C `CONSTRAINT_STATE(c)`.

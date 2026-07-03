@@ -9,6 +9,7 @@ pub mod ho_csu;
 pub mod idx_fp;
 pub mod lambda;
 pub mod match_mgu;
+pub mod pattern_match_mgu;
 pub mod replace;
 pub mod signature;
 pub mod simplesorts;
