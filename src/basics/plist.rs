@@ -77,63 +77,78 @@ impl<T> PListArena<T> {
         self.handles(anchor).len()
     }
 
-    pub fn clear_list(&mut self, anchor: PListHandle) -> bool {
-        if !self.is_anchor(anchor) {
-            return false;
-        }
+    /// Delete every element from the list headed by `anchor`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `anchor` is not a valid list anchor, matching the C
+    /// `PListFree`/`PListEmpty` expectation that callers pass a real anchor.
+    pub fn clear_list(&mut self, anchor: PListHandle) {
+        assert!(
+            self.is_anchor(anchor),
+            "PListFree expects a valid list anchor"
+        );
         while let Some(first) = self.first(anchor) {
-            if self.delete(first).is_none() {
-                return false;
-            }
+            let _ = self.delete(first);
         }
-        true
     }
 
-    pub fn free_list(&mut self, anchor: PListHandle) -> bool {
-        if !self.clear_list(anchor) {
-            return false;
-        }
-        self.free_cell(anchor).is_some()
+    /// Delete every element and free the anchor cell.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `anchor` is not a valid list anchor.
+    pub fn free_list(&mut self, anchor: PListHandle) {
+        self.clear_list(anchor);
+        let _ = self.free_cell_or_panic(anchor, "PListFree");
     }
 
-    pub fn store_after(&mut self, where_handle: PListHandle, value: T) -> Option<PListHandle> {
+    /// Allocate a value cell and insert it after `where_handle`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `where_handle` is not linked into a valid list.
+    pub fn store_after(&mut self, where_handle: PListHandle, value: T) -> PListHandle {
         let cell = self.alloc_detached(value);
-        if self.insert_after(where_handle, cell) {
-            Some(cell)
-        } else {
-            self.drop_detached(cell);
-            None
-        }
+        self.insert_after(where_handle, cell);
+        cell
     }
 
-    pub fn insert_after(&mut self, where_handle: PListHandle, cell_handle: PListHandle) -> bool {
-        if where_handle == cell_handle || !self.is_detached(cell_handle) {
-            return false;
-        }
-        let Some(successor) = self.cell(where_handle).and_then(|cell| cell.succ) else {
-            return false;
-        };
-        if successor == cell_handle || !self.is_valid(successor) {
-            return false;
-        }
+    /// Insert a detached cell after `where_handle`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `where_handle` is not linked into a valid list, when
+    /// `cell_handle` is not a detached value cell, or when the handles would
+    /// create an invalid self-link. These are safe Rust checks for the raw C
+    /// `PListInsert` pointer preconditions.
+    pub fn insert_after(&mut self, where_handle: PListHandle, cell_handle: PListHandle) {
+        assert_ne!(
+            where_handle, cell_handle,
+            "PListInsert expects distinct where and cell handles"
+        );
+        assert!(
+            self.is_detached(cell_handle),
+            "PListInsert expects a detached cell"
+        );
+        let successor = self
+            .cell_or_panic(where_handle, "PListInsert")
+            .succ
+            .unwrap_or_else(|| panic!("PListInsert expects where cell to be linked"));
+        assert_ne!(
+            successor, cell_handle,
+            "PListInsert expects successor to differ from inserted cell"
+        );
+        assert!(
+            self.is_valid(successor),
+            "PListInsert successor must be a valid cell"
+        );
 
-        if let Some(cell) = self.cell_mut(cell_handle) {
-            cell.pred = Some(where_handle);
-            cell.succ = Some(successor);
-        } else {
-            return false;
-        }
-        if let Some(successor_cell) = self.cell_mut(successor) {
-            successor_cell.pred = Some(cell_handle);
-        } else {
-            return false;
-        }
-        if let Some(where_cell) = self.cell_mut(where_handle) {
-            where_cell.succ = Some(cell_handle);
-            true
-        } else {
-            false
-        }
+        let cell = self.cell_mut_or_panic(cell_handle, "PListInsert");
+        cell.pred = Some(where_handle);
+        cell.succ = Some(successor);
+        self.cell_mut_or_panic(successor, "PListInsert").pred = Some(cell_handle);
+        self.cell_mut_or_panic(where_handle, "PListInsert").succ = Some(cell_handle);
     }
 
     /// # Panics
@@ -141,9 +156,10 @@ impl<T> PListArena<T> {
     /// Panics when `element` names a valid anchor or a detached/corrupt cell.
     /// This mirrors the C `PListExtract` assertions that the input cell is
     /// linked into a list and is not the anchor.
-    pub fn extract(&mut self, element: PListHandle) -> Option<PListHandle> {
+    #[must_use]
+    pub fn extract(&mut self, element: PListHandle) -> PListHandle {
         let (is_anchor, pred, succ) = {
-            let cell = self.cell(element)?;
+            let cell = self.cell_or_panic(element, "PListExtract");
             (cell.is_anchor, cell.pred, cell.succ)
         };
         assert!(!is_anchor, "PListExtract expects a non-anchor cell");
@@ -166,17 +182,26 @@ impl<T> PListArena<T> {
             "PListExtract successor must be a valid cell"
         );
 
-        self.cell_mut(pred)?.succ = Some(succ);
-        self.cell_mut(succ)?.pred = Some(pred);
-        let cell = self.cell_mut(element)?;
+        self.cell_mut_or_panic(pred, "PListExtract").succ = Some(succ);
+        self.cell_mut_or_panic(succ, "PListExtract").pred = Some(pred);
+        let cell = self.cell_mut_or_panic(element, "PListExtract");
         cell.pred = None;
         cell.succ = None;
-        Some(element)
+        element
     }
 
-    pub fn delete(&mut self, element: PListHandle) -> Option<T> {
-        let extracted = self.extract(element)?;
-        self.free_cell(extracted)?.key
+    /// Delete a linked value cell and return its owned payload.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `element` is not a valid linked value cell, matching the C
+    /// `PListDelete` call through `PListExtract`.
+    #[must_use]
+    pub fn delete(&mut self, element: PListHandle) -> T {
+        let extracted = self.extract(element);
+        self.free_cell_or_panic(extracted, "PListDelete")
+            .key
+            .unwrap_or_else(|| panic!("PListDelete expects a value cell"))
     }
 
     #[must_use]
@@ -263,13 +288,6 @@ impl<T> PListArena<T> {
         handle
     }
 
-    fn drop_detached(&mut self, handle: PListHandle) -> Option<T> {
-        if !self.is_detached(handle) {
-            return None;
-        }
-        self.free_cell(handle)?.key
-    }
-
     fn alloc_slot(&mut self) -> PListHandle {
         if let Some(index) = self.free_cells.pop() {
             debug_assert!(self.cells.get(index).is_some_and(Option::is_none));
@@ -287,29 +305,36 @@ impl<T> PListArena<T> {
         Some(cell)
     }
 
+    fn free_cell_or_panic(&mut self, handle: PListHandle, caller: &str) -> PListCell<T> {
+        self.free_cell(handle)
+            .unwrap_or_else(|| panic!("{caller} called with invalid handle {}", handle.index()))
+    }
+
     fn cell(&self, handle: PListHandle) -> Option<&PListCell<T>> {
         self.cells.get(handle.index())?.as_ref()
+    }
+
+    fn cell_or_panic(&self, handle: PListHandle, caller: &str) -> &PListCell<T> {
+        self.cell(handle)
+            .unwrap_or_else(|| panic!("{caller} called with invalid handle {}", handle.index()))
     }
 
     fn cell_mut(&mut self, handle: PListHandle) -> Option<&mut PListCell<T>> {
         self.cells.get_mut(handle.index())?.as_mut()
     }
+
+    fn cell_mut_or_panic(&mut self, handle: PListHandle, caller: &str) -> &mut PListCell<T> {
+        self.cell_mut(handle)
+            .unwrap_or_else(|| panic!("{caller} called with invalid handle {}", handle.index()))
+    }
 }
 
 impl<P> PListArena<IntOrP<P>> {
-    pub fn store_int_after(
-        &mut self,
-        where_handle: PListHandle,
-        value: IntOrPInt,
-    ) -> Option<PListHandle> {
+    pub fn store_int_after(&mut self, where_handle: PListHandle, value: IntOrPInt) -> PListHandle {
         self.store_after(where_handle, IntOrP::Int(value))
     }
 
-    pub fn store_pointer_after(
-        &mut self,
-        where_handle: PListHandle,
-        value: P,
-    ) -> Option<PListHandle> {
+    pub fn store_pointer_after(&mut self, where_handle: PListHandle, value: P) -> PListHandle {
         self.store_after(where_handle, IntOrP::Pointer(value))
     }
 
@@ -347,13 +372,10 @@ mod tests {
         let first = arena.store_after(anchor, 1);
         let second = arena.store_after(anchor, 2);
 
-        assert_eq!(arena.handles(anchor), vec![second.unwrap(), first.unwrap()]);
-        assert_eq!(
-            arena.entries(anchor),
-            vec![(second.unwrap(), &2), (first.unwrap(), &1)]
-        );
-        assert_eq!(arena.first(anchor), second);
-        assert_eq!(arena.last(anchor), first);
+        assert_eq!(arena.handles(anchor), vec![second, first]);
+        assert_eq!(arena.entries(anchor), vec![(second, &2), (first, &1)]);
+        assert_eq!(arena.first(anchor), Some(second));
+        assert_eq!(arena.last(anchor), Some(first));
     }
 
     #[test]
@@ -361,13 +383,13 @@ mod tests {
         let mut arena = PListArena::new();
         let source = arena.alloc_list();
         let target = arena.alloc_list();
-        let one = arena.store_after(source, "one").unwrap();
-        let two = arena.store_after(source, "two").unwrap();
+        let one = arena.store_after(source, "one");
+        let two = arena.store_after(source, "two");
 
-        assert_eq!(arena.extract(one), Some(one));
+        assert_eq!(arena.extract(one), one);
         assert!(arena.is_detached(one));
         assert_eq!(arena.handles(source), vec![two]);
-        assert!(arena.insert_after(target, one));
+        arena.insert_after(target, one);
         assert_eq!(arena.entries(target), vec![(one, &"one")]);
         assert_eq!(arena.predecessor(target, one), None);
         assert_eq!(arena.successor(target, one), None);
@@ -377,24 +399,34 @@ mod tests {
     fn delete_removes_cell_and_returns_owned_value() {
         let mut arena = PListArena::new();
         let anchor = arena.alloc_list();
-        let first = arena.store_after(anchor, 10).unwrap();
-        let second = arena.store_after(first, 20).unwrap();
+        let first = arena.store_after(anchor, 10);
+        let second = arena.store_after(first, 20);
 
-        assert_eq!(arena.delete(first), Some(10));
+        assert_eq!(arena.delete(first), 10);
         assert!(!arena.is_valid(first));
         assert_eq!(arena.entries(anchor), vec![(second, &20)]);
-        assert_eq!(arena.delete(first), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "PListExtract called with invalid handle")]
+    fn delete_panics_on_invalid_handle_like_c_pointer_contract() {
+        let mut arena = PListArena::new();
+        let anchor = arena.alloc_list();
+        let first = arena.store_after(anchor, 10);
+
+        assert_eq!(arena.delete(first), 10);
+        let _ = arena.delete(first);
     }
 
     #[test]
     fn deleted_cells_are_reused_by_later_allocations() {
         let mut arena = PListArena::new();
         let anchor = arena.alloc_list();
-        let first = arena.store_after(anchor, 10).unwrap();
-        let second = arena.store_after(first, 20).unwrap();
+        let first = arena.store_after(anchor, 10);
+        let second = arena.store_after(first, 20);
 
-        assert_eq!(arena.delete(first), Some(10));
-        let reused = arena.store_after(anchor, 30).unwrap();
+        assert_eq!(arena.delete(first), 10);
+        let reused = arena.store_after(anchor, 30);
 
         assert_eq!(reused, first);
         assert_eq!(arena.entries(anchor), vec![(reused, &30), (second, &20)]);
@@ -404,13 +436,13 @@ mod tests {
     fn clear_and_free_list_preserve_c_anchor_lifetime_shapes() {
         let mut arena = PListArena::new();
         let anchor = arena.alloc_list();
-        let first = arena.store_after(anchor, "a").unwrap();
+        let first = arena.store_after(anchor, "a");
         arena.store_after(first, "b");
 
-        assert!(arena.clear_list(anchor));
+        arena.clear_list(anchor);
         assert!(arena.is_empty(anchor));
         assert!(arena.is_anchor(anchor));
-        assert!(arena.free_list(anchor));
+        arena.free_list(anchor);
         assert!(!arena.is_valid(anchor));
     }
 
@@ -420,7 +452,7 @@ mod tests {
         let anchor = arena.alloc_list();
         arena.store_after(anchor, "x");
 
-        assert!(arena.free_list(anchor));
+        arena.free_list(anchor);
         let reused_anchor = arena.alloc_list();
 
         assert_eq!(reused_anchor, anchor);
@@ -428,13 +460,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_attached_reinsertion() {
+    #[should_panic(expected = "PListInsert expects a detached cell")]
+    fn attached_reinsertion_panics_like_c_contract_violation() {
         let mut arena = PListArena::new();
         let anchor = arena.alloc_list();
-        let first = arena.store_after(anchor, 1).unwrap();
+        let first = arena.store_after(anchor, 1);
 
-        assert!(!arena.insert_after(anchor, first));
-        assert_eq!(arena.handles(anchor), vec![first]);
+        arena.insert_after(anchor, first);
     }
 
     #[test]
@@ -451,8 +483,8 @@ mod tests {
     fn extract_asserts_on_detached_cell_like_c() {
         let mut arena = PListArena::new();
         let source = arena.alloc_list();
-        let cell = arena.store_after(source, 1).unwrap();
-        assert_eq!(arena.extract(cell), Some(cell));
+        let cell = arena.store_after(source, 1);
+        assert_eq!(arena.extract(cell), cell);
 
         let _ = arena.extract(cell);
     }
@@ -461,15 +493,12 @@ mod tests {
     fn mixed_int_pointer_helpers_share_int_or_pointer_shape() {
         let mut arena = PListArena::<IntOrP<&str>>::new();
         let anchor = arena.alloc_list();
-        let int_cell = arena.store_int_after(anchor, 5).unwrap();
-        let ptr_cell = arena.store_pointer_after(anchor, "formula").unwrap();
+        let int_cell = arena.store_int_after(anchor, 5);
+        let ptr_cell = arena.store_pointer_after(anchor, "formula");
 
         assert_eq!(arena.value_int(int_cell), Some(5));
         assert_eq!(arena.value_pointer(ptr_cell), Some(&"formula"));
         assert_eq!(arena.value_int(ptr_cell), None);
-        assert_eq!(
-            arena.delete(ptr_cell).and_then(IntOrP::into_pointer),
-            Some("formula")
-        );
+        assert_eq!(arena.delete(ptr_cell).into_pointer(), Some("formula"));
     }
 }

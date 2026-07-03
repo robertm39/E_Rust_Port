@@ -313,8 +313,8 @@ mod tests {
         let second_clause = unit_clause(&mut bank, &shared, &shared, 41);
         let mut clauses = PListArena::new();
         let anchor = clauses.alloc_list();
-        let first = clauses.store_after(anchor, first_clause).unwrap();
-        let second = clauses.store_after(first, second_clause).unwrap();
+        let first = clauses.store_after(anchor, first_clause);
+        let second = clauses.store_after(first, second_clause);
         let mut index = FIndex::new();
 
         assert_eq!(index.add_pl_clause(&clauses, first), 1);
@@ -339,8 +339,8 @@ mod tests {
         let second_clause = unit_clause(&mut bank, &shared, &shared, 51);
         let mut clauses = PListArena::new();
         let anchor = clauses.alloc_list();
-        let first = clauses.store_after(anchor, first_clause).unwrap();
-        let second = clauses.store_after(first, second_clause).unwrap();
+        let first = clauses.store_after(anchor, first_clause);
+        let second = clauses.store_after(first, second_clause);
         let mut index = FIndex::new();
 
         assert_eq!(index.add_pl_clause_set(&clauses, anchor), 2);

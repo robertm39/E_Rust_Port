@@ -185,11 +185,8 @@ fn extract_new_core(work: &mut ClauseRelevanceWork) {
     while let Some(f_code) = work.new_codes.pop() {
         while let Some(entry) = work.clauses_index.first_pl_clause(f_code) {
             let _ = work.clauses_index.remove_pl_clause(&work.clauses, entry);
-            if work.clauses.extract(entry).is_none() {
-                break;
-            }
-            let inserted = work.clauses.insert_after(work.clauses_core, entry);
-            debug_assert!(inserted);
+            let _ = work.clauses.extract(entry);
+            work.clauses.insert_after(work.clauses_core, entry);
         }
     }
 }
@@ -207,8 +204,7 @@ fn store_clause_after_anchor(
     anchor: PListHandle,
     clause: &Clause,
 ) {
-    let stored = clauses.store_after(anchor, clause.clone());
-    debug_assert!(stored.is_some());
+    let _stored = clauses.store_after(anchor, clause.clone());
 }
 
 fn signature_f_limit(signature: &Signature) -> usize {
