@@ -185,10 +185,31 @@ impl TermBank {
     ///
     /// Panics if a non-constant term has an uninitialized argument.
     pub fn write_bank_in_order(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        self.write_bank_in_order_with_internal_info(output, false)
+    }
+
+    /// Writes the C `TBPrintBankInOrder` DAG view with the optional
+    /// `TBPrintInternalInfo` property comment.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a non-constant term has an uninitialized argument.
+    pub fn write_bank_in_order_with_internal_info(
+        &self,
+        output: &mut impl fmt::Write,
+        print_internal_info: bool,
+    ) -> fmt::Result {
         let mut terms = self.term_store.terms();
         terms.sort_by_key(Term::entry_no);
         for term in terms {
             self.write_dag_term(output, &term)?;
+            if print_internal_info {
+                write!(
+                    output,
+                    "\t/*  Properties: {:10} */",
+                    term.properties().bits()
+                )?;
+            }
             writeln!(output)?;
         }
         Ok(())
@@ -198,6 +219,13 @@ impl TermBank {
     pub fn bank_in_order_string(&self) -> String {
         let mut output = String::new();
         let _ = self.write_bank_in_order(&mut output);
+        output
+    }
+
+    #[must_use]
+    pub fn bank_in_order_string_with_internal_info(&self, print_internal_info: bool) -> String {
+        let mut output = String::new();
+        let _ = self.write_bank_in_order_with_internal_info(&mut output, print_internal_info);
         output
     }
 
@@ -6249,6 +6277,9 @@ mod tests {
             bank.bank_in_order_string(),
             "*1 : $true   =   $true\n*2 : $false   =   $false\n*3 : a   =   a\n*4 : f(*3,*3)   =   f(a,a)\n"
         );
+        assert!(bank
+            .bank_in_order_string_with_internal_info(true)
+            .contains("*4 : f(*3,*3)   =   f(a,a)\t/*  Properties:"));
         assert_eq!(bank.term_string(&shared_root, true), "f(a,a)");
     }
 

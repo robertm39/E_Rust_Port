@@ -26,6 +26,10 @@ name = "termprops"
 path = "src/bin/termprops.rs"
 
 [[bin]]
+name = "term2dag"
+path = "src/bin/term2dag.rs"
+
+[[bin]]
 name = "epclextract"
 path = "src/bin/epclextract.rs"
 

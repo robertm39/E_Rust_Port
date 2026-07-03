@@ -573,6 +573,33 @@ Change-later notes:
 - C calls `OpenGlobalOut(outname)` after defaulting missing input to `-` but before scanner creation, so `-o` can create or truncate an output file before later input failures while `-o -` stays on stdout. Rust preserves this ordering; transactional output should be a separate cleaned mode.
 - The C `com` probe reads a second argument from a child whose arity was just checked to be one. Rust does not reproduce that undefined memory access; decide later whether to remove the flag, preserve the safe false result, or implement the likely intended first-child comparison behind compatibility tests.
 
+## term2dag Executable
+
+Rust files:
+
+- `Cargo.toml`
+- `src/simple_apps/term2dag.rs`
+- `src/bin/term2dag.rs`
+
+C source references:
+
+- `eprover/SIMPLE_APPS/term2dag.c`
+- `eprover/TERMS/cte_termbanks.c`
+- `eprover/TERMS/cte_termbanks.h`
+
+Implemented:
+
+- Standalone `term2dag` binary integration, including C-shaped help text, verbosity, output-file redirection including `-o -`, default stdin input through `-`, sequential input parsing through one shared term bank, top-position marking of parsed terms, signature printing, `TBPrintBankInOrder`-style entry-number DAG output, forced `TBPrintInternalInfo` property comments, early output-file creation before later input-open failure, C-shaped two-line file-open diagnostics, and C `OutClose` wording on final flush failure with unit coverage.
+
+Pending:
+
+- Direct byte-for-byte comparison against a built C `term2dag` executable remains pending for the full help stream, exact internal property values across larger typed/higher-order term corpora, and platform-specific system-error suffixes.
+
+Change-later notes:
+
+- C parses `-r`/`--print-reference-number` into the global `TBPrintInternalInfo`, then `main` immediately sets `TBPrintInternalInfo = true` before printing. Rust validates the option but preserves the observable forced-on comments; a cleaned CLI should either honor the option or remove it.
+- C's `TBPrintBankInOrder` builds a temporary numeric tree by traversing all term-store hash buckets before printing in ascending `entry_no`. Rust sorts the collected bank terms directly, which preserves the observable order; revisit only if future profiling needs to model the temporary allocation shape.
+
 ## epclextract Executable
 
 Rust files:

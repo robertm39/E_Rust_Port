@@ -15,6 +15,7 @@ pub mod orderings;
 pub mod pcl2;
 pub mod propositional;
 pub mod prover;
+pub mod simple_apps;
 pub mod terms;
 
 #[cfg(test)]

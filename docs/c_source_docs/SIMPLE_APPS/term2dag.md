@@ -83,10 +83,16 @@ Source files reviewed: `SIMPLE_APPS/term2dag.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `src/simple_apps/term2dag.rs` and the `term2dag` Cargo binary now port the standalone wrapper: C-shaped help/verbosity/output/print-reference option parsing, default stdin input through `-`, sequential term parsing through one shared term bank, `TPTopPos` marking, signature printing, entry-number-ordered DAG output with forced internal property comments, C-shaped two-line input/output file-open diagnostics, and `OutClose`-style final flush diagnostics.
 
 ### Porting Focus
 
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `process_options()` accepts `-r`/`--print-reference-number` and mutates `TBPrintInternalInfo`, but `main()` unconditionally sets `TBPrintInternalInfo = true` after options have been processed. The Rust wrapper validates the option and keeps comments forced on for compatibility; after drop-in compatibility is secured, decide whether this option should be honored or removed.
+- `TBPrintBankInOrder` builds a temporary numeric tree solely to sort term-bank cells by `entry_no`. The Rust port sorts the collected shared terms directly; if profiling ever identifies this path as hot, keep the observable order while choosing the simpler allocation strategy.
 <!-- END MANUAL REVIEW: c_source_docs -->
