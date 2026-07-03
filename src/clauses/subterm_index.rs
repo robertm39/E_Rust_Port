@@ -56,7 +56,21 @@ impl<'sig> SubtermIndex<'sig> {
         let start = result.len();
         let mut payloads = Vec::new();
         self.index.find_matchable(term, &mut payloads);
-        for payload in payloads.into_iter().flatten() {
+        for payload in payloads.into_iter().rev().flatten() {
+            result.extend(payload.iter());
+        }
+        result.len() - start
+    }
+
+    pub fn collect_unifiable_occurrences<'idx>(
+        &'idx self,
+        term: &Term,
+        result: &mut Vec<&'idx SubtermOcc>,
+    ) -> usize {
+        let start = result.len();
+        let mut payloads = Vec::new();
+        self.index.find_unifiable(term, &mut payloads);
+        for payload in payloads.into_iter().rev().flatten() {
             result.extend(payload.iter());
         }
         result.len() - start
@@ -261,6 +275,14 @@ mod tests {
         terms.contains_key(&term_identity_id(term))
     }
 
+    fn full_clause_idents(occurrences: &[&crate::clauses::subterm_tree::SubtermOcc]) -> Vec<i64> {
+        occurrences
+            .iter()
+            .flat_map(|occurrence| occurrence.full_clauses().values())
+            .map(Clause::ident)
+            .collect()
+    }
+
     #[test]
     fn direct_occurrence_insert_delete_updates_fingerprint_payload() {
         let mut bank = test_bank();
@@ -404,5 +426,30 @@ mod tests {
             .collect::<Vec<_>>();
         identifiers.sort_unstable();
         assert_eq!(identifiers, vec![21, 22]);
+    }
+
+    #[test]
+    fn occurrence_queries_flatten_fingerprint_candidates_in_c_stack_pop_order() {
+        let mut bank = test_bank();
+        let x = Term::const_cell_alloc(-3);
+        x.set_type(Some(bank.signature().type_bank().default_type()));
+        let a = typed_const(&mut bank, "stack_order_a");
+        let f_a = typed_unary(&mut bank, "stack_order_f", &a);
+        let g_a = typed_unary(&mut bank, "stack_order_g", &a);
+        let first = singleton_clause(eqn(&mut bank, &x, &a, true), 31);
+        let second = singleton_clause(eqn(&mut bank, &f_a, &a, true), 32);
+        let third = singleton_clause(eqn(&mut bank, &g_a, &a, true), 33);
+        let mut index = SubtermIndex::new(index_fp1_create, bank.signature());
+        index.insert_occurrence(&first, &x, false);
+        index.insert_occurrence(&second, &f_a, false);
+        index.insert_occurrence(&third, &g_a, false);
+
+        let mut matchable = Vec::new();
+        assert_eq!(index.collect_matchable_occurrences(&x, &mut matchable), 3);
+        assert_eq!(full_clause_idents(&matchable), vec![33, 32, 31]);
+
+        let mut unifiable = Vec::new();
+        assert_eq!(index.collect_unifiable_occurrences(&x, &mut unifiable), 3);
+        assert_eq!(full_clause_idents(&unifiable), vec![33, 32, 31]);
     }
 }

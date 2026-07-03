@@ -77,7 +77,7 @@ impl<'sig> OverlapIndex<'sig> {
         let start = result.len();
         let mut leaves = Vec::new();
         self.index.find_unifiable(term, &mut leaves);
-        for payload in leaves.into_iter().flatten() {
+        for payload in leaves.into_iter().rev().flatten() {
             result.extend(payload.iter());
         }
         result.len() - start
@@ -795,5 +795,31 @@ mod tests {
         );
         assert!(natom_index.find_occurrence(&atom).is_none());
         assert!(term_index.find_occurrence(&f_a).is_none());
+    }
+
+    #[test]
+    fn unifiable_occurrence_query_uses_c_candidate_stack_pop_order() {
+        let mut bank = test_bank();
+        let x = Term::const_cell_alloc(-4);
+        x.set_type(Some(bank.signature().type_bank().default_type()));
+        let a = typed_const(&mut bank, "oi_stack_order_a");
+        let f_a = typed_unary(&mut bank, "oi_stack_order_f", &a);
+        let g_a = typed_unary(&mut bank, "oi_stack_order_g", &a);
+        let first = singleton_clause(eqn(&mut bank, &x, &a, true), 51);
+        let second = singleton_clause(eqn(&mut bank, &f_a, &a, true), 52);
+        let third = singleton_clause(eqn(&mut bank, &g_a, &a, true), 53);
+        let mut index = OverlapIndex::new(index_fp1_create, bank.signature());
+        index.insert_pos(&first, 0, Some(&x));
+        index.insert_pos(&second, 0, Some(&f_a));
+        index.insert_pos(&third, 0, Some(&g_a));
+
+        let mut occurrences = Vec::new();
+        assert_eq!(index.find_unifiable_occurrences(&x, &mut occurrences), 3);
+        let idents = occurrences
+            .iter()
+            .flat_map(|occurrence| occurrence.position_clauses().entries())
+            .map(|entry| entry.clause().ident())
+            .collect::<Vec<_>>();
+        assert_eq!(idents, vec![53, 52, 51]);
     }
 }

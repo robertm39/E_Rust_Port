@@ -133,6 +133,7 @@ Source files reviewed: `CLAUSES/ccl_overlap_index.h`, `CLAUSES/ccl_overlap_index
 - Into-position collection skips descent under lambda terms, while the non-position into-term collector recurses through all arguments. Rust mirrors that asymmetry.
 - `term_collect_into_terms2` and `term_collect_into_terms_pos2` send only the top negative non-equational atom term to the `natoms` collection; its subterms are collected into the normal term collection. Rust preserves that top-only split.
 - `OverlapIndexInsertIntoClause` and `OverlapIndexInsertFromClause` collect positions onto a stack and then pop them for insertion, reversing insertion traversal order. Rust iterates the collected positions in reverse when inserting.
+- Indexed paramodulation collects unifiable fingerprint leaves onto a C `PStack` and then pops them before traversing the subterm trees. Rust now reverses the leaf collection before flattening occurrence payloads so generated indexed-paramodulation candidates follow the same stack-pop order.
 
 ### Change Later Candidates
 
