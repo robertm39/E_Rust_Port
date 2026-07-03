@@ -8,7 +8,7 @@ use crate::heuristics::termweights::{
     parse_c_int, parse_related_term_set, parse_term_weight_extension_style, parse_var_norm_style,
     tb_count_term_freqs, tb_insert_clause_terms_normalized, RelatedTermSet, TermFrequencyTree,
 };
-use crate::heuristics::wfcb::{wfcb_alloc, ClausePrioFun, Wfcb};
+use crate::heuristics::wfcb::{wfcb_alloc_with_bank, ClausePrioFun, Wfcb};
 use crate::inout::basicparser::parse_float;
 use crate::inout::scanner::{Scanner, TokenType};
 use crate::orderings::ocb::OrderControlBlock;
@@ -223,8 +223,9 @@ pub fn conjecture_term_tfidf_weight_init(
     max_literal_multiplier: f64,
     pos_multiplier: f64,
 ) -> Wfcb<TfIdfWeightParam> {
-    wfcb_alloc(
+    wfcb_alloc_with_bank(
         conjecture_term_tfidf_weight_wfcb_compute,
+        conjecture_term_tfidf_weight_wfcb_compute_with_bank,
         prio_fun,
         tfidf_weight_exit,
         Some(tfidf_weight_param_alloc(
@@ -312,8 +313,8 @@ pub fn conjecture_term_tfidf_weight_compute(
 /// Computes C `ConjectureTermTfIdfWeightCompute` with the OCB-backed
 /// `ClauseCondMarkMaximalTerms` side effect.
 ///
-/// The existing WFCB compute callback cannot mutate clauses yet, so this
-/// explicit entry point is used by callers that already own a mutable clause.
+/// This no-bank compatibility entry point uses the legacy immutable-bank
+/// ordering path; WFCB callers that own the active bank use the banked callback.
 /// As in C, generated-document updates happen after term-extension scoring.
 ///
 /// # Panics
@@ -348,6 +349,31 @@ pub fn conjecture_term_tfidf_weight_compute_with_ocb(
     result
 }
 
+/// Computes C `ConjectureTermTfIdfWeightCompute` with bank-backed ordering
+/// preparation.
+///
+/// As in C, generated-document updates happen after conditional marking and
+/// term-extension scoring.
+///
+/// # Errors
+///
+/// Returns a diagnostic if bank-backed maximal-term marking fails.
+///
+/// # Panics
+///
+/// Panics if TF-IDF initialization did not populate the evaluation bank while
+/// generated-document updates are enabled.
+pub fn conjecture_term_tfidf_weight_compute_with_bank(
+    param: &mut TfIdfWeightParam,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    param.ensure_init(bank.signature());
+    clause.cond_mark_maximal_terms_with_bank(ocb, bank)?;
+    Ok(conjecture_term_tfidf_weight_compute(param, bank, clause))
+}
+
 fn conjecture_term_tfidf_weight_wfcb_compute(
     data: Option<&mut TfIdfWeightParam>,
     bank: &TermBank,
@@ -357,6 +383,22 @@ fn conjecture_term_tfidf_weight_wfcb_compute(
         data.unwrap_or_else(|| {
             panic!("ConjectureTermTfIdfWeight WFCB requires initialized parameters")
         }),
+        bank,
+        clause,
+    )
+}
+
+fn conjecture_term_tfidf_weight_wfcb_compute_with_bank(
+    data: Option<&mut TfIdfWeightParam>,
+    ocb: &mut OrderControlBlock,
+    bank: &mut TermBank,
+    clause: &mut Clause,
+) -> Result<f64, Diagnostic> {
+    conjecture_term_tfidf_weight_compute_with_bank(
+        data.unwrap_or_else(|| {
+            panic!("ConjectureTermTfIdfWeight WFCB requires initialized parameters")
+        }),
+        ocb,
         bank,
         clause,
     )
@@ -602,6 +644,43 @@ mod tests {
         );
         assert!(target.query_prop(CP_IS_ORIENTED));
         assert!(target.literals().as_slice()[0].is_maximal());
+    }
+
+    #[test]
+    fn conjecture_tfidf_weight_parse_uses_banked_wfcb_callback() {
+        let mut bank = TermBank::new(Signature::new(TypeBank::new())).unwrap();
+        let axioms = mixed_axioms(&mut bank);
+        let mut target = unit_clause(&mut bank, "a", "f(a)", true);
+        let mut manually_marked = target.clone();
+        let mut manual_ocb = kbo_ocb(&bank);
+        assert!(manually_marked.cond_mark_maximal_terms(&mut manual_ocb, &bank));
+        let mut expected_param = tfidf_weight_param_alloc(
+            &axioms,
+            VarNormStyle::None,
+            RelatedTermSet::ConjectureTerms,
+            1,
+            1.0,
+            TermWeightExtensionStyle::Simple,
+            1.0,
+            7.0,
+            1.0,
+        );
+        let expected =
+            conjecture_term_tfidf_weight_compute(&mut expected_param, &bank, &manually_marked);
+        let mut scanner =
+            Scanner::from_user_string("(ConstPrio,-1,0,1,1.0,0,1.0,7.0,1.0) tail", false).unwrap();
+        let mut wfcb = conjecture_term_tfidf_weight_parse(&mut scanner, &axioms)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let mut ocb = kbo_ocb(&bank);
+
+        let actual = wfcb
+            .compute_eval_with_bank(&mut ocb, &mut bank, &mut target)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_f64_bits_eq(actual, expected);
+        assert!(target.query_prop(CP_IS_ORIENTED));
+        assert!(target.literals().as_slice()[0].is_maximal());
+        assert_eq!(scanner.current_token().literal(), "tail");
     }
 
     #[test]
