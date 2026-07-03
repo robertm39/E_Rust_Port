@@ -105,13 +105,13 @@ Source files reviewed: `INOUT/cio_streams.h`, `INOUT/cio_streams.c`.
 ### Rust Port Status Notes
 
 - `src/inout/streams.rs` ports the stream type discriminants, 64-character lookahead window, source label storage, string/file-backed stream constructors including `CreateStream`-style fail-or-null file opening and `NULL`/`"-"` stdin labeling as `"<stdin>"`, C line/column update rules, NUL/end-of-input infinite EOF behavior, and `STREAMREALPOS` circular-buffer indexing.
-- Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, and pops back to the previous stream in LIFO order; `Scanner` uses this stack for automatic include splicing.
-- Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, fail-or-null missing-file opening, C-shaped stdin source labeling, string-source construction, file-named in-memory sources for stdin-like data, and stacked stream push/pop restoration.
+- Rust now also represents `OpenStackedInput`/`CloseStackedInput` with an owned `InputStreamStack` that pushes a new top stream, exposes top access, pops back to the previous stream in LIFO order, and offers a C-shaped asserting close for nonempty-stack compatibility paths; `Scanner` uses this stack for automatic include splicing.
+- Tests cover lookahead prefill, line/column movement, NUL-triggered EOF, file source labels, fail-or-null missing-file opening, C-shaped stdin source labeling, string-source construction, file-named in-memory sources for stdin-like data, stacked stream push/pop restoration, and the `CloseStackedInput` nonempty-stack assertion.
 
 ### Change Later
 
 - Rust file and stdin streams still load the bytes eagerly during construction. Revisit lazy streaming if large-problem parsing, interactive stdin use, or include-stack behavior makes the C `FILE*` window observable.
-- C `CloseStackedInput` asserts that the stack is nonempty and destroys the popped stream. Rust returns `None` on an empty stack, which is safer for reusable callers; add an asserting compatibility wrapper only if a direct C-shaped API becomes necessary.
+- C `CloseStackedInput` asserts that the stack is nonempty and destroys the popped stream. Rust keeps the optional pop for reusable callers and now exposes an asserting compatibility wrapper for direct C-shaped paths.
 - C `DestroyStream` can report `fclose` failures for file streams. Rust owns file-backed stream bytes eagerly, so close-time diagnostics are not represented; revisit only if a lazy `FILE*`-style stream backend is introduced.
 
 ### Porting Focus

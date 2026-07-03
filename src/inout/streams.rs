@@ -257,6 +257,16 @@ impl InputStreamStack {
     pub fn close_stacked_input(&mut self) -> Option<InputStream> {
         self.streams.pop()
     }
+
+    /// Pops the top stream, asserting the C `CloseStackedInput` precondition.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the stack is empty, matching the C assertion.
+    pub fn close_stacked_input_asserting(&mut self) -> InputStream {
+        self.close_stacked_input()
+            .expect("CloseStackedInput requires a nonempty stack")
+    }
 }
 
 #[must_use]
@@ -431,8 +441,15 @@ mod tests {
         assert_eq!(stack.len(), 1);
         assert_eq!(stack.top().and_then(InputStream::current_char), Some(b'o'));
 
-        _ = stack.close_stacked_input();
+        let closed = stack.close_stacked_input_asserting();
+        assert_eq!(closed.current_char(), Some(b'o'));
         assert!(stack.is_empty());
         assert!(stack.close_stacked_input().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "CloseStackedInput requires a nonempty stack")]
+    fn stream_stack_asserting_close_matches_c_precondition() {
+        InputStreamStack::new().close_stacked_input_asserting();
     }
 }
