@@ -135,4 +135,13 @@ Source files reviewed: `BASICS/clb_newmem.h`, `BASICS/clb_newmem.c`.
 - Keep the generated public-surface inventory above in sync with the source, but treat this manual section as the place for compatibility judgments.
 - Before replacing C idioms with safer Rust abstractions, identify whether callers depend on object identity, global state, allocation reuse, or fatal-error behavior.
 - If behavior is unclear, prefer matching the C source first and adding Rust-side tests around the observed C behavior.
+
+### Change Later
+
+- `MemFlushFreeList` is intentionally a dummy in `clb_newmem.c`, unlike the old allocator in `clb_memory.c`. Rust's `newmem` facade preserves the no-op while the shared memory state still supports real flushing for the old policy.
+- `SizeMallocReal` rounds requests up to `MEM_ALIGN` buckets and fills empty small buckets with `MEM_MULTIPLIER` blocks at once. This is a hot-path performance policy, not just an implementation detail; replace it only with benchmark evidence.
+- Large newmem blocks are stored in the same `free_mem_list[mem_index]` shape as chunked blocks even when created one at a time. Rust models the bucketed reuse with safe `MemoryBlock`s, but not allocator-address identity or debug poison words.
+- `MemAddNewChunk` computes `MEM_MULTIPLIER * mem_index * MEM_ALIGN` with C `int` arithmetic. Rust checks overflow and exposes the fatal wrapper plus `try_*` helper split; cleaned allocator APIs should avoid accepting raw bucket indices from ordinary callers.
+- The header notes that `SizeMallocReal` blocks are not freeable with plain `free()`, while `SecureMalloc` blocks are. Rust's owned block type prevents mixing those deallocation paths; future typed arenas should keep that distinction private.
+- As with `clb_memory`, allocation exhaustion ultimately terminates through the C error path. Rust keeps C-shaped panic wrappers and separate `try_*` helpers until executable-wide fatal-error routing owns allocation failures.
 <!-- END MANUAL REVIEW: c_source_docs -->

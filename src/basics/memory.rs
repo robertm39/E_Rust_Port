@@ -131,6 +131,24 @@ pub enum MemoryError {
     SizeOverflow { size: usize, multiplier: usize },
 }
 
+fn memory_failure(operation: &str, error: MemoryError) -> ! {
+    match error {
+        MemoryError::AllocationFailed { size } => {
+            panic!("{operation} failed to allocate {size} bytes");
+        }
+        MemoryError::SizeOverflow { size, multiplier } => {
+            panic!("{operation} size overflow multiplying {size} by {multiplier}");
+        }
+    }
+}
+
+fn require_memory<T>(operation: &str, result: Result<T, MemoryError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => memory_failure(operation, error),
+    }
+}
+
 #[derive(Debug, Default)]
 struct MemoryState {
     stats: MemoryStats,
@@ -246,11 +264,16 @@ pub fn mem_flush_free_list() -> (usize, usize) {
     lock_state().flush_free_lists()
 }
 
-pub fn secure_malloc(size: usize) -> Result<MemoryBlock, MemoryError> {
+pub fn try_secure_malloc(size: usize) -> Result<MemoryBlock, MemoryError> {
     lock_state().secure_malloc_block(size, size)
 }
 
-pub fn secure_realloc(
+#[must_use]
+pub fn secure_malloc(size: usize) -> MemoryBlock {
+    require_memory("SecureMalloc", try_secure_malloc(size))
+}
+
+pub fn try_secure_realloc(
     block: Option<MemoryBlock>,
     size: usize,
 ) -> Result<Option<MemoryBlock>, MemoryError> {
@@ -284,7 +307,12 @@ pub fn secure_realloc(
     Ok(Some(new_block))
 }
 
-pub fn size_malloc(
+#[must_use]
+pub fn secure_realloc(block: Option<MemoryBlock>, size: usize) -> Option<MemoryBlock> {
+    require_memory("SecureRealloc", try_secure_realloc(block, size))
+}
+
+pub fn try_size_malloc(
     policy: MemoryPolicy,
     requested_size: usize,
 ) -> Result<MemoryBlock, MemoryError> {
@@ -321,6 +349,11 @@ pub fn size_malloc(
     state.secure_malloc_block(requested_size, allocation_size)
 }
 
+#[must_use]
+pub fn size_malloc(policy: MemoryPolicy, requested_size: usize) -> MemoryBlock {
+    require_memory("SizeMalloc", try_size_malloc(policy, requested_size))
+}
+
 pub fn size_free(policy: MemoryPolicy, block: MemoryBlock) {
     let effective_size = policy.effective_size(block.requested_size());
     let bucket_size = policy.bucket_size(block.requested_size());
@@ -340,37 +373,57 @@ pub fn size_free(policy: MemoryPolicy, block: MemoryBlock) {
     }
 }
 
-pub fn mem_add_new_chunk(mem_index: usize) -> Result<usize, MemoryError> {
+pub fn try_mem_add_new_chunk(mem_index: usize) -> Result<usize, MemoryError> {
     lock_state().add_newmem_chunk(mem_index)
 }
 
-pub fn secure_strdup(source: &str) -> Result<MemoryBlock, MemoryError> {
-    let mut block = secure_malloc(source.len().saturating_add(1))?;
+#[must_use]
+pub fn mem_add_new_chunk(mem_index: usize) -> usize {
+    require_memory("MemAddNewChunk", try_mem_add_new_chunk(mem_index))
+}
+
+pub fn try_secure_strdup(source: &str) -> Result<MemoryBlock, MemoryError> {
+    let mut block = try_secure_malloc(source.len().saturating_add(1))?;
     block.allocation_bytes_mut()[..source.len()].copy_from_slice(source.as_bytes());
     Ok(block)
 }
 
-pub fn secure_strndup(source: &str, count: usize) -> Result<MemoryBlock, MemoryError> {
+#[must_use]
+pub fn secure_strdup(source: &str) -> MemoryBlock {
+    require_memory("SecureStrdup", try_secure_strdup(source))
+}
+
+pub fn try_secure_strndup(source: &str, count: usize) -> Result<MemoryBlock, MemoryError> {
     let copy_len = source.len().min(count);
-    let mut block = secure_malloc(copy_len.saturating_add(1))?;
+    let mut block = try_secure_malloc(copy_len.saturating_add(1))?;
     block.allocation_bytes_mut()[..copy_len].copy_from_slice(&source.as_bytes()[..copy_len]);
     Ok(block)
 }
 
-pub fn int_array_alloc(size: usize) -> Result<Vec<i64>, MemoryError> {
+#[must_use]
+pub fn secure_strndup(source: &str, count: usize) -> MemoryBlock {
+    require_memory("SecureStrndup", try_secure_strndup(source, count))
+}
+
+pub fn try_int_array_alloc(size: usize) -> Result<Vec<i64>, MemoryError> {
     let Some(bytes) = size.checked_mul(mem::size_of::<i64>()) else {
         return Err(MemoryError::SizeOverflow {
             size,
             multiplier: mem::size_of::<i64>(),
         });
     };
-    let _block = size_malloc(MemoryPolicy::OldExact, bytes)?;
+    let _block = try_size_malloc(MemoryPolicy::OldExact, bytes)?;
     let mut values = Vec::new();
     if values.try_reserve_exact(size).is_err() {
         return Err(MemoryError::AllocationFailed { size: bytes });
     }
     values.resize(size, 0);
     Ok(values)
+}
+
+#[must_use]
+pub fn int_array_alloc(size: usize) -> Vec<i64> {
+    require_memory("IntArrayAlloc", try_int_array_alloc(size))
 }
 
 #[must_use]
@@ -428,7 +481,8 @@ mod tests {
         int_array_alloc, mem_add_new_chunk, mem_debug_print_stats, mem_flush_free_list,
         mem_free_list_print, mem_is_low, memory_stats, memory_test_lock, reset_memory_for_tests,
         secure_malloc, secure_realloc, secure_strdup, secure_strndup, set_mem_is_low, size_free,
-        size_malloc, MemoryPolicy, MEM_ALIGN, MEM_MULTIPLIER,
+        size_malloc, try_int_array_alloc, try_mem_add_new_chunk, MemoryError, MemoryPolicy,
+        MEM_ALIGN, MEM_MULTIPLIER,
     };
 
     #[test]
@@ -436,7 +490,7 @@ mod tests {
         let _guard = memory_test_lock();
         reset_memory_for_tests();
 
-        let mut block = size_malloc(MemoryPolicy::OldExact, 64).unwrap();
+        let mut block = size_malloc(MemoryPolicy::OldExact, 64);
         block.allocation_bytes_mut()[0] = 7;
         size_free(MemoryPolicy::OldExact, block);
 
@@ -444,7 +498,7 @@ mod tests {
         assert_eq!(stats.free_list_blocks, 1);
         assert_eq!(stats.free_list_bytes, 64);
 
-        let reused = size_malloc(MemoryPolicy::OldExact, 64).unwrap();
+        let reused = size_malloc(MemoryPolicy::OldExact, 64);
         assert_eq!(reused.allocation_size(), 64);
         assert_eq!(reused.allocation_bytes()[0], 7);
         assert_eq!(mem_flush_free_list(), (0, 0));
@@ -455,7 +509,7 @@ mod tests {
         let _guard = memory_test_lock();
         reset_memory_for_tests();
 
-        let block = size_malloc(MemoryPolicy::NewAligned, 1).unwrap();
+        let block = size_malloc(MemoryPolicy::NewAligned, 1);
         assert_eq!(block.allocation_size(), MEM_ALIGN);
         assert_eq!(block.requested_size(), 1);
 
@@ -470,10 +524,33 @@ mod tests {
         let _guard = memory_test_lock();
         reset_memory_for_tests();
 
-        assert_eq!(mem_add_new_chunk(2), Ok(MEM_MULTIPLIER));
+        assert_eq!(mem_add_new_chunk(2), MEM_MULTIPLIER);
         let stats = memory_stats();
         assert_eq!(stats.free_list_blocks, MEM_MULTIPLIER);
         assert_eq!(stats.free_list_bytes, MEM_MULTIPLIER * MEM_ALIGN * 2);
+    }
+
+    #[test]
+    fn try_newmem_chunk_reports_size_overflow() {
+        let _guard = memory_test_lock();
+        reset_memory_for_tests();
+
+        assert_eq!(
+            try_mem_add_new_chunk(usize::MAX),
+            Err(MemoryError::SizeOverflow {
+                size: usize::MAX,
+                multiplier: MEM_ALIGN
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "MemAddNewChunk size overflow")]
+    fn c_shaped_newmem_chunk_panics_on_size_overflow() {
+        let _guard = memory_test_lock();
+        reset_memory_for_tests();
+
+        let _ = mem_add_new_chunk(usize::MAX);
     }
 
     #[test]
@@ -493,13 +570,13 @@ mod tests {
         let _guard = memory_test_lock();
         reset_memory_for_tests();
 
-        let mut block = secure_malloc(3).unwrap();
+        let mut block = secure_malloc(3);
         block.allocation_bytes_mut().copy_from_slice(&[1, 2, 3]);
-        let grown = secure_realloc(Some(block), 5).unwrap().unwrap();
+        let grown = secure_realloc(Some(block), 5).unwrap();
         assert_eq!(grown.allocation_bytes(), &[1, 2, 3, 0, 0]);
 
-        assert_eq!(secure_realloc(Some(grown), 0).unwrap(), None);
-        let allocated = secure_realloc(None, 2).unwrap().unwrap();
+        assert_eq!(secure_realloc(Some(grown), 0), None);
+        let allocated = secure_realloc(None, 2).unwrap();
         assert_eq!(allocated.allocation_size(), 2);
 
         let stats = memory_stats();
@@ -513,15 +590,9 @@ mod tests {
         let _guard = memory_test_lock();
         reset_memory_for_tests();
 
-        assert_eq!(secure_strdup("abc").unwrap().allocation_bytes(), b"abc\0");
-        assert_eq!(
-            secure_strndup("abcdef", 3).unwrap().allocation_bytes(),
-            b"abc\0"
-        );
-        assert_eq!(
-            secure_strndup("abc", 9).unwrap().allocation_bytes(),
-            b"abc\0"
-        );
+        assert_eq!(secure_strdup("abc").allocation_bytes(), b"abc\0");
+        assert_eq!(secure_strndup("abcdef", 3).allocation_bytes(), b"abc\0");
+        assert_eq!(secure_strndup("abc", 9).allocation_bytes(), b"abc\0");
     }
 
     #[test]
@@ -529,9 +600,32 @@ mod tests {
         let _guard = memory_test_lock();
         reset_memory_for_tests();
 
-        assert_eq!(int_array_alloc(4).unwrap(), vec![0; 4]);
+        assert_eq!(int_array_alloc(4), vec![0; 4]);
         let stats_output = mem_debug_print_stats();
         assert!(stats_output.contains("Total SizeMalloc()ed memory"));
         assert!(mem_free_list_print().contains("MemFreeListPrint"));
+    }
+
+    #[test]
+    fn try_int_array_alloc_reports_size_overflow() {
+        let _guard = memory_test_lock();
+        reset_memory_for_tests();
+
+        assert_eq!(
+            try_int_array_alloc(usize::MAX),
+            Err(MemoryError::SizeOverflow {
+                size: usize::MAX,
+                multiplier: std::mem::size_of::<i64>()
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "IntArrayAlloc size overflow")]
+    fn c_shaped_int_array_alloc_panics_on_size_overflow() {
+        let _guard = memory_test_lock();
+        reset_memory_for_tests();
+
+        let _ = int_array_alloc(usize::MAX);
     }
 }
