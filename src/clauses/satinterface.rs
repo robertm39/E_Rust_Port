@@ -5,6 +5,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_CNF_ADD_ARG, DC_SAT_GEN};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::PatEqnDirection;
+use crate::clauses::picosat::{PicoSat, PicoSatError, PicoSatSolveResult};
 use crate::clauses::proofstate::ProofState;
 use crate::heuristics::hcb::GroundingStrategy;
 use crate::terms::functypes::FunCode;
@@ -272,6 +273,20 @@ impl SatClauseSet {
         Some(self.clauses_for_indices(&core))
     }
 
+    pub fn check_and_get_core_with_picosat(
+        &mut self,
+        solver: &mut PicoSat,
+    ) -> Result<Option<Vec<Clause>>, PicoSatError> {
+        let solver_clauses = self.export_non_pure_to_solver_clauses();
+        solver.add_clauses(&solver_clauses)?;
+        if solver.solve(10_000) != PicoSatSolveResult::Unsatisfiable {
+            return Ok(None);
+        }
+        let solver_core = solver.core_indices(self.exported.len())?;
+        let core = self.exported_core_from_solver_core(&solver_core);
+        Ok(Some(self.clauses_for_indices(&core)))
+    }
+
     fn translate_literal(&mut self, bank: &mut TermBank, literal: &Eqn) -> Result<i32, Diagnostic> {
         let atom_term = if literal.is_equ_lit(bank) {
             let left = bank.insert_instantiated(literal.left())?;
@@ -325,6 +340,31 @@ impl SatClauseSet {
         }
     }
 
+    pub fn check_unsat_with_picosat(
+        &mut self,
+        solver: &mut PicoSat,
+        decision_limit: i32,
+    ) -> Result<(ProverResult, Option<Clause>), PicoSatError> {
+        self.core.clear();
+        self.core_size = 0;
+
+        let solver_clauses = self.export_non_pure_to_solver_clauses();
+        solver.add_clauses(&solver_clauses)?;
+        match solver.solve(decision_limit) {
+            PicoSatSolveResult::Satisfiable => Ok((ProverResult::Satisfiable, None)),
+            PicoSatSolveResult::GaveUp => Ok((ProverResult::GaveUp, None)),
+            PicoSatSolveResult::Unsatisfiable => {
+                let solver_core = solver.core_indices(self.exported.len())?;
+                self.core = self.exported_core_from_solver_core(&solver_core);
+                self.core_size = usize_to_u64(self.core.len());
+                Ok((
+                    ProverResult::Unsatisfiable,
+                    Some(self.empty_clause_from_core()),
+                ))
+            }
+        }
+    }
+
     fn solver_clauses_for_indices(&self, indices: &[usize]) -> Vec<Vec<i32>> {
         indices
             .iter()
@@ -336,6 +376,13 @@ impl SatClauseSet {
         indices
             .iter()
             .map(|index| self.clauses[*index].source.clone())
+            .collect()
+    }
+
+    fn exported_core_from_solver_core(&self, solver_core: &[usize]) -> Vec<usize> {
+        solver_core
+            .iter()
+            .map(|solver_index| self.exported[*solver_index])
             .collect()
     }
 
@@ -1160,6 +1207,19 @@ mod tests {
                 DerivationEntry::Operation(DC_CNF_ADD_ARG),
                 DerivationEntry::ClauseParent(ClauseDerivationRef::from(&positive)),
             ]
+        );
+    }
+
+    #[test]
+    fn picosat_core_positions_map_through_exported_subset() {
+        let set = SatClauseSet {
+            exported: vec![1, 3, 4],
+            ..SatClauseSet::default()
+        };
+
+        assert_eq!(
+            set.exported_core_from_solver_core(&[2, 0, 1]),
+            vec![4, 1, 3]
         );
     }
 

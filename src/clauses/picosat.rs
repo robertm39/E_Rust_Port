@@ -165,18 +165,21 @@ impl PicoSat {
     pub fn open(path: &Path) -> Result<Self, PicoSatError> {
         let library = DynamicLibrary::open(path)?;
         let api = PicoSatApi::load(&library)?;
-        // SAFETY: picosat_init is a constructor loaded from picosat.h's ABI.
-        // It takes no Rust pointers and returns an owned solver pointer or
-        // NULL on failure.
-        let solver = NonNull::new(unsafe { (api.init)() }).ok_or(PicoSatError::InitFailed)?;
-        // SAFETY: solver is the non-null pointer returned by picosat_init, and
-        // E calls trace-generation setup immediately after initialization.
-        let _ = unsafe { (api.enable_trace_generation)(solver.as_ptr()) };
+        let solver = init_trace_enabled_solver(api)?;
         Ok(Self {
             solver,
             api,
             _library: library,
         })
+    }
+
+    pub fn reset(&mut self) -> Result<(), PicoSatError> {
+        let replacement = init_trace_enabled_solver(self.api)?;
+        let previous = std::mem::replace(&mut self.solver, replacement);
+        // SAFETY: previous is the unique owned pointer returned by picosat_init
+        // and has been replaced in self, so this call releases it exactly once.
+        unsafe { (self.api.reset)(previous.as_ptr()) };
+        Ok(())
     }
 
     #[must_use]
@@ -258,6 +261,17 @@ impl PicoSat {
         }
         Ok(core)
     }
+}
+
+fn init_trace_enabled_solver(api: PicoSatApi) -> Result<NonNull<PicoSatOpaque>, PicoSatError> {
+    // SAFETY: picosat_init is a constructor loaded from picosat.h's ABI.
+    // It takes no Rust pointers and returns an owned solver pointer or NULL on
+    // failure.
+    let solver = NonNull::new(unsafe { (api.init)() }).ok_or(PicoSatError::InitFailed)?;
+    // SAFETY: solver is the non-null pointer returned by picosat_init, and E
+    // calls trace-generation setup immediately after initialization.
+    let _ = unsafe { (api.enable_trace_generation)(solver.as_ptr()) };
+    Ok(solver)
 }
 
 impl Drop for PicoSat {
