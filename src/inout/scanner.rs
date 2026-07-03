@@ -357,13 +357,25 @@ impl Scanner {
     #[must_use]
     /// Returns the token `look` positions after the current scanner token.
     ///
+    /// This is the bounded Rust-facing lookahead accessor. Use
+    /// [`Scanner::look_token_c_modulo`] only for code that intentionally needs
+    /// C `LookToken` ring aliasing.
+    ///
     /// # Panics
     ///
-    /// Panics when `look >= MAX_TOKEN_LOOKAHEAD`, matching the assertion in
-    /// the C `LookToken` macro.
+    /// Panics when `look >= MAX_TOKEN_LOOKAHEAD`.
     pub fn look_token(&self, look: usize) -> &Token {
         assert!(look < MAX_TOKEN_LOOKAHEAD);
         &self.tok_sequence[token_real_pos(self.current + look)]
+    }
+
+    /// Returns lookahead through the C `LookToken` modulo ring index.
+    ///
+    /// C applies `TOKENREALPOS(current + look)`, so values at or beyond
+    /// `MAXTOKENLOOKAHEAD` alias earlier slots instead of failing.
+    #[must_use]
+    pub fn look_token_c_modulo(&self, look: usize) -> &Token {
+        &self.tok_sequence[token_real_pos(self.current.wrapping_add(look))]
     }
 
     pub fn next_token(&mut self) -> Result<(), Diagnostic> {
@@ -1099,7 +1111,7 @@ fn automatic_include_prefix() -> String {
 mod tests {
     use super::{
         describe_token, print_token, test_id, test_idnum, token_pos_rep, token_print_string,
-        IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL,
+        IoFormat, Scanner, TokenType, EMPTY_INCLUDE_SELECTOR_SENTINEL, MAX_TOKEN_LOOKAHEAD,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::stringtrees::StrTree;
@@ -1428,6 +1440,43 @@ mod tests {
         assert_eq!(look.literal(), "b");
         assert_eq!((look.line(), look.column()), (2, 3));
         assert!(look.skipped());
+    }
+
+    #[test]
+    fn scanner_c_modulo_lookahead_aliases_ring_positions() {
+        let scanner = Scanner::from_user_string("a b c d e", false).unwrap();
+        assert_eq!(scanner.look_token_c_modulo(0).literal(), "a");
+        assert_eq!(
+            scanner.look_token_c_modulo(MAX_TOKEN_LOOKAHEAD).literal(),
+            "a"
+        );
+        assert_eq!(
+            scanner
+                .look_token_c_modulo(MAX_TOKEN_LOOKAHEAD + 1)
+                .literal(),
+            "b"
+        );
+
+        let mut scanner = scanner;
+        scanner.next_token().unwrap();
+        assert_eq!(scanner.current_token().literal(), "b");
+        assert_eq!(
+            scanner.look_token_c_modulo(MAX_TOKEN_LOOKAHEAD).literal(),
+            "b"
+        );
+        assert_eq!(
+            scanner
+                .look_token_c_modulo(MAX_TOKEN_LOOKAHEAD + 1)
+                .literal(),
+            "c"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "look < MAX_TOKEN_LOOKAHEAD")]
+    fn scanner_bounded_lookahead_rejects_c_ring_aliasing() {
+        let scanner = Scanner::from_user_string("a b c d", false).unwrap();
+        let _ = scanner.look_token(MAX_TOKEN_LOOKAHEAD);
     }
 
     #[test]
