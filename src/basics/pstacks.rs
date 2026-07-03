@@ -143,6 +143,14 @@ impl<T> PStack<T> {
         true
     }
 
+    #[must_use]
+    pub fn contains_value(&self, value: &T) -> bool
+    where
+        T: PartialEq,
+    {
+        self.stack.iter().any(|element| element == value)
+    }
+
     pub fn discard_element(&mut self, pos: PStackPointer) -> Option<T> {
         self.element_index(pos)
             .map(|index| self.stack.swap_remove(index))
@@ -224,6 +232,11 @@ impl<T> PStack<T> {
 
 impl PStack<PStackInt> {
     #[must_use]
+    pub fn find_int(&self, value: PStackInt) -> bool {
+        self.contains_value(&value)
+    }
+
+    #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn compute_average(&self) -> (f64, f64) {
         let count = self.stack.len();
@@ -244,6 +257,15 @@ impl PStack<PStackInt> {
             / count as f64;
 
         (average, variance.sqrt())
+    }
+}
+
+impl<T> PStack<&T> {
+    #[must_use]
+    pub fn find_pointer(&self, value: &T) -> bool {
+        self.stack
+            .iter()
+            .any(|element| std::ptr::eq(*element, value))
     }
 }
 
@@ -316,6 +338,8 @@ mod tests {
         assert_eq!(stack.element(-1), None);
         assert!(stack.assign(2, 30));
         assert_eq!(stack.element(2), Some(&30));
+        assert!(stack.contains_value(&30));
+        assert!(!stack.contains_value(&3));
 
         assert_eq!(stack.discard_element(1), Some(2));
         assert_eq!(stack.as_slice(), &[1, 4, 30]);
@@ -380,10 +404,24 @@ mod tests {
         for value in [1, 2, 3] {
             stack.push(value);
         }
+        assert!(stack.find_int(2));
+        assert!(!stack.find_int(4));
 
         let (average, deviation) = stack.compute_average();
         assert!((average - 2.0).abs() < f64::EPSILON);
         assert!((deviation - (2.0_f64 / 3.0).sqrt()).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn find_pointer_uses_c_pointer_identity_not_structural_equality() {
+        let first = Box::new(String::from("same"));
+        let second = Box::new(String::from("same"));
+        let mut stack = PStack::new();
+        stack.push(first.as_ref());
+
+        assert!(stack.find_pointer(first.as_ref()));
+        assert!(!stack.find_pointer(second.as_ref()));
+        assert!(stack.contains_value(&second.as_ref()));
     }
 
     #[test]

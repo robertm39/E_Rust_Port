@@ -162,6 +162,7 @@ Source files reviewed: `BASICS/clb_pstacks.h`, `BASICS/clb_pstacks.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `PStackFindP` performs raw pointer identity comparison, while `PStackFindInt` compares integer payload values. Rust keeps these as distinct helpers so borrowed-object searches do not accidentally become structural equality checks.
 
 ### Porting Focus
 
