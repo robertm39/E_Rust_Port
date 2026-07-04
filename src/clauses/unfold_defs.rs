@@ -1,7 +1,9 @@
+use std::fmt;
+
 use crate::basics::error::Diagnostic;
 use crate::basics::simple_stuff::{problem_type, ProblemType};
 use crate::clauses::clause::Clause;
-use crate::clauses::clause_props::{CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE};
+use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_CONJECTURE, CP_TYPE_NEG_CONJECTURE};
 use crate::clauses::clausefunc::{
     clause_remove_superfluous_literals, clause_set_canonize,
     clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
@@ -10,6 +12,7 @@ use crate::clauses::clausesets::ClauseSet;
 use crate::clauses::derivation::{clause_push_derivation, DC_UNFOLD};
 use crate::clauses::eqn::Eqn;
 use crate::clauses::eqn_props::{EqnSide, EP_IS_ORIENTED, EP_MAX_IS_UP_TO_DATE};
+use crate::clauses::inferencedoc::ProofDocSession;
 use crate::terms::lambda::{abstract_vars, apply_terms, whnf_step};
 use crate::terms::match_mgu::subst_match_complete;
 use crate::terms::subst::Substitution;
@@ -68,8 +71,44 @@ pub fn clause_unfold_eq_def(
     rside: &Term,
     bank: &mut TermBank,
 ) -> Result<bool, Diagnostic> {
+    Ok(clause_unfold_eq_def_impl::<String>(clause, demodulator, lside, rside, bank, None)? != 0)
+}
+
+/// Applies one equational definition and emits C `DocClauseEqUnfold`
+/// documentation when the session output level enables it.
+///
+/// # Errors
+///
+/// Returns a diagnostic if unfolding or proof-documentation rendering fails.
+pub fn clause_unfold_eq_def_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    clause: &mut Clause,
+    demodulator: &Clause,
+    lside: &Term,
+    rside: &Term,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    Ok(clause_unfold_eq_def_impl(
+        clause,
+        demodulator,
+        lside,
+        rside,
+        bank,
+        Some((output, session)),
+    )? != 0)
+}
+
+fn clause_unfold_eq_def_impl<W: fmt::Write>(
+    clause: &mut Clause,
+    demodulator: &Clause,
+    lside: &Term,
+    rside: &Term,
+    bank: &mut TermBank,
+    doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<usize, Diagnostic> {
     if problem_type() == ProblemType::NotInitialized {
-        return Ok(false);
+        return Ok(0);
     }
 
     let mut applications = 0;
@@ -78,17 +117,22 @@ pub fn clause_unfold_eq_def(
     }
 
     if applications == 0 {
-        return Ok(false);
+        return Ok(0);
     }
 
     if demodulator.query_tptp_type() == CP_TYPE_CONJECTURE {
         clause.set_tptp_type(CP_TYPE_CONJECTURE);
     }
+    clause.del_prop(CP_INPUT_FORMULA);
+    if let Some((output, session)) = doc_context {
+        let _result =
+            session.doc_clause_eq_unfold(output, bank, clause, demodulator, applications)?;
+    }
     for _ in 0..applications {
         clause_push_derivation(clause, DC_UNFOLD, Some(demodulator), None);
     }
     clause.set_weight(clause.standard_weight());
-    Ok(true)
+    Ok(applications)
 }
 
 /// Applies one equational definition to every clause in a set.
@@ -110,6 +154,33 @@ pub fn clause_set_unfold_eq_def(
     demodulator: &Clause,
     demod_side: EqnSide,
     bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    clause_set_unfold_eq_def_impl::<String>(set, demodulator, demod_side, bank, None)
+}
+
+/// Applies one equational definition across a set while emitting C
+/// `DocClauseEqUnfold` documentation for changed clauses.
+///
+/// # Errors
+///
+/// Returns a diagnostic if unfolding or proof-documentation rendering fails.
+pub fn clause_set_unfold_eq_def_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    set: &mut ClauseSet,
+    demodulator: &Clause,
+    demod_side: EqnSide,
+    bank: &mut TermBank,
+) -> Result<bool, Diagnostic> {
+    clause_set_unfold_eq_def_impl(set, demodulator, demod_side, bank, Some((output, session)))
+}
+
+fn clause_set_unfold_eq_def_impl<W: fmt::Write>(
+    set: &mut ClauseSet,
+    demodulator: &Clause,
+    demod_side: EqnSide,
+    bank: &mut TermBank,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
 ) -> Result<bool, Diagnostic> {
     if problem_type() == ProblemType::NotInitialized {
         return Ok(false);
@@ -134,7 +205,19 @@ pub fn clause_set_unfold_eq_def(
     let mut changed = false;
 
     for clause in set.iter_mut() {
-        if clause_unfold_eq_def(clause, demodulator, &lside, &rside, bank)? {
+        let unfolded = if let Some((output, session)) = doc_context.as_mut() {
+            clause_unfold_eq_def_impl(
+                clause,
+                demodulator,
+                &lside,
+                &rside,
+                bank,
+                Some((&mut **output, &mut **session)),
+            )? != 0
+        } else {
+            clause_unfold_eq_def_impl::<W>(clause, demodulator, &lside, &rside, bank, None)? != 0
+        };
+        if unfolded {
             changed = true;
             let _removed_literals = clause_remove_superfluous_literals(clause, bank);
             if demod_is_conjecture {
@@ -173,6 +256,57 @@ pub fn clause_set_unfold_all_eq_defs(
     min_arity: usize,
     eqdef_incrlimit: i64,
 ) -> Result<i64, Diagnostic> {
+    clause_set_unfold_all_eq_defs_impl::<String>(
+        set,
+        passive,
+        archive,
+        bank,
+        min_arity,
+        eqdef_incrlimit,
+        None,
+    )
+}
+
+/// Unfolds eligible definitions while emitting C `DocClauseEqUnfold`
+/// documentation for changed active and passive clauses.
+///
+/// # Errors
+///
+/// Returns a diagnostic if unfolding or proof-documentation rendering fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible definition unfolding keeps caller state explicit"
+)]
+pub fn clause_set_unfold_all_eq_defs_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    set: &mut ClauseSet,
+    passive: Option<&mut ClauseSet>,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+    min_arity: usize,
+    eqdef_incrlimit: i64,
+) -> Result<i64, Diagnostic> {
+    clause_set_unfold_all_eq_defs_impl(
+        set,
+        passive,
+        archive,
+        bank,
+        min_arity,
+        eqdef_incrlimit,
+        Some((output, session)),
+    )
+}
+
+fn clause_set_unfold_all_eq_defs_impl<W: fmt::Write>(
+    set: &mut ClauseSet,
+    passive: Option<&mut ClauseSet>,
+    archive: &mut ClauseSet,
+    bank: &mut TermBank,
+    min_arity: usize,
+    eqdef_incrlimit: i64,
+    mut doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
     if problem_type() == ProblemType::NotInitialized {
         return Ok(0);
     }
@@ -207,9 +341,35 @@ pub fn clause_set_unfold_all_eq_defs(
         let demodulator = set
             .extract_by_id(demod_id)
             .expect("located definition clause must still be in the set");
-        let _changed = clause_set_unfold_eq_def(set, &demodulator, demod_side, bank)?;
+        let _changed = if let Some((output, session)) = doc_context.as_mut() {
+            clause_set_unfold_eq_def_impl(
+                set,
+                &demodulator,
+                demod_side,
+                bank,
+                Some((&mut **output, &mut **session)),
+            )?
+        } else {
+            clause_set_unfold_eq_def_impl::<W>(set, &demodulator, demod_side, bank, None)?
+        };
         if let Some(passive_set) = passive.as_deref_mut() {
-            let _changed = clause_set_unfold_eq_def(passive_set, &demodulator, demod_side, bank)?;
+            let _changed = if let Some((output, session)) = doc_context.as_mut() {
+                clause_set_unfold_eq_def_impl(
+                    passive_set,
+                    &demodulator,
+                    demod_side,
+                    bank,
+                    Some((&mut **output, &mut **session)),
+                )?
+            } else {
+                clause_set_unfold_eq_def_impl::<W>(
+                    passive_set,
+                    &demodulator,
+                    demod_side,
+                    bank,
+                    None,
+                )?
+            };
         }
         archive.insert(demodulator);
         removed += 1;
@@ -236,6 +396,66 @@ pub fn clause_set_unfold_eq_def_normalize(
     eqdef_incrlimit: i64,
     eqdef_maxclauses: i64,
 ) -> Result<i64, Diagnostic> {
+    clause_set_unfold_eq_def_normalize_impl::<String>(
+        set,
+        passive,
+        archive,
+        tmp_terms,
+        terms,
+        eqdef_incrlimit,
+        eqdef_maxclauses,
+        None,
+    )
+}
+
+/// Unfolds eligible definitions, refilters tautologies, and emits live C
+/// equality-unfolding proof documentation for changed clauses.
+///
+/// # Errors
+///
+/// Returns a diagnostic if unfolding, tautology filtering, or
+/// proof-documentation rendering fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "C-compatible preprocessing normalization keeps caller state explicit"
+)]
+pub fn clause_set_unfold_eq_def_normalize_with_docs(
+    output: &mut impl fmt::Write,
+    session: &mut ProofDocSession,
+    set: &mut ClauseSet,
+    passive: Option<&mut ClauseSet>,
+    archive: &mut ClauseSet,
+    tmp_terms: &mut TermBank,
+    terms: &mut TermBank,
+    eqdef_incrlimit: i64,
+    eqdef_maxclauses: i64,
+) -> Result<i64, Diagnostic> {
+    clause_set_unfold_eq_def_normalize_impl(
+        set,
+        passive,
+        archive,
+        tmp_terms,
+        terms,
+        eqdef_incrlimit,
+        eqdef_maxclauses,
+        Some((output, session)),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Shared implementation mirrors C ClauseSetUnfoldEqDefNormalize state"
+)]
+fn clause_set_unfold_eq_def_normalize_impl<W: fmt::Write>(
+    set: &mut ClauseSet,
+    passive: Option<&mut ClauseSet>,
+    archive: &mut ClauseSet,
+    tmp_terms: &mut TermBank,
+    terms: &mut TermBank,
+    eqdef_incrlimit: i64,
+    eqdef_maxclauses: i64,
+    doc_context: Option<(&mut W, &mut ProofDocSession)>,
+) -> Result<i64, Diagnostic> {
     if problem_type() == ProblemType::NotInitialized
         || eqdef_incrlimit == i64::MIN
         || set.members() > eqdef_maxclauses
@@ -244,7 +464,15 @@ pub fn clause_set_unfold_eq_def_normalize(
     }
 
     let mut removed = 0;
-    let unfolded = clause_set_unfold_all_eq_defs(set, passive, archive, terms, 1, eqdef_incrlimit)?;
+    let unfolded = clause_set_unfold_all_eq_defs_impl(
+        set,
+        passive,
+        archive,
+        terms,
+        1,
+        eqdef_incrlimit,
+        doc_context,
+    )?;
     if unfolded != 0 {
         removed += unfolded;
         removed += set.filter_tautologies(tmp_terms)?;
@@ -455,10 +683,11 @@ mod tests {
     use super::*;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::clauses::clause::Clause;
-    use crate::clauses::clause_props::CP_TYPE_AXIOM;
+    use crate::clauses::clause_props::{CP_INPUT_FORMULA, CP_TYPE_AXIOM};
     use crate::clauses::derivation::{ClauseDerivationRef, DerivationEntry, DC_UNFOLD};
     use crate::clauses::eqn::Eqn;
     use crate::clauses::eqnlist::EqnList;
+    use crate::clauses::inferencedoc::{ProofDocOutputFormat, ProofDocSession};
     use crate::terms::signature::Signature;
     use crate::terms::simpletypes::alloc_arrow_type;
     use crate::terms::termbanks::TermBank;
@@ -613,6 +842,46 @@ mod tests {
                 DerivationEntry::ClauseParent(ClauseDerivationRef::new(demodulator_id, 0)),
             ]
         );
+    }
+
+    #[test]
+    fn clause_unfold_eq_def_with_docs_prints_live_unfold_step() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut terms = test_bank();
+        let x = object_var(&terms, -2);
+        let a = object_const(&mut terms, "unfold_doc_a");
+        let b = object_const(&mut terms, "unfold_doc_b");
+        let f_code = object_unary_code(&mut terms, "unfold_doc_f");
+        let g_code = object_unary_code(&mut terms, "unfold_doc_g");
+        let f_x = unary_with_code(&mut terms, f_code, &x);
+        let g_x = unary_with_code(&mut terms, g_code, &x);
+        let f_a = unary_with_code(&mut terms, f_code, &a);
+        let f_b = unary_with_code(&mut terms, f_code, &b);
+        let mut demodulator = clause(vec![literal(&mut terms, &f_x, &g_x, true)]);
+        demodulator.set_ident(30);
+        demodulator.set_tptp_type(CP_TYPE_AXIOM);
+        let mut target = clause(vec![literal(&mut terms, &f_a, &f_b, true)]);
+        target.set_ident(7);
+        target.set_prop(CP_INPUT_FORMULA);
+        let mut session =
+            ProofDocSession::new(ProofDocOutputFormat::Pcl, 2, ProblemType::FirstOrder);
+        let mut rendered = String::new();
+
+        assert!(clause_unfold_eq_def_with_docs(
+            &mut rendered,
+            &mut session,
+            &mut target,
+            &demodulator,
+            &f_x,
+            &g_x,
+            &mut terms,
+        )
+        .unwrap());
+
+        assert_eq!(target.ident(), 1);
+        assert!(!target.query_prop(CP_INPUT_FORMULA));
+        assert!(rendered.contains("rw(rw(7,30),30) : 'unfolding'"));
+        assert_eq!(session.id_source.current_ident(), 1);
     }
 
     #[test]

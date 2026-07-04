@@ -78,7 +78,10 @@ use crate::clauses::sine::{
     pstack_clauses_move, pstack_formulas_move, select_axioms_clause_formula_sets,
     select_threshold_clause_formula_sets, ClauseSineParams, SineSetStacks,
 };
-use crate::clauses::unfold_defs::{clause_set_preprocess, clause_set_unfold_eq_def_normalize};
+use crate::clauses::unfold_defs::{
+    clause_set_preprocess, clause_set_unfold_eq_def_normalize,
+    clause_set_unfold_eq_def_normalize_with_docs,
+};
 use crate::heuristics::axfilter::{sine_get_filter, AxFilter, AxFilterType};
 use crate::heuristics::clausesetfeatures::{
     create_default_spec_limits, proof_state_print_selective_string, spec_features_add_eval,
@@ -5707,7 +5710,9 @@ fn run_prune_only<W: Write + ?Sized>(
     load_configured_watchlist_source(config, &mut state)?;
     let _sine_pruned = apply_proof_state_sine(output, config.sine.as_deref(), &mut state)?;
     let _relevancy_pruned = apply_relevance_pruning(config, &mut state);
-    let _preproc_removed = apply_clause_set_preprocessing(
+    let preproc_result = apply_clause_set_preprocessing_with_docs(
+        output,
+        config,
         &mut state,
         config.preprocessing.no_preprocessing,
         config.search.inference.higher_order.replace_inj_defs,
@@ -5758,7 +5763,8 @@ fn run_prune_only<W: Write + ?Sized>(
         config.preprocessing.goal_definitions.negative,
         config.preprocessing.goal_definitions.subterms,
     )?;
-    let _next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
+    let _next_doc_ident =
+        write_initial_clause_docs(output, config, &mut state, preproc_result.next_doc_ident)?;
     write_comment_line_after_blank(output, "Pruning successful!")?;
     write_tstp_status(output, "Unknown")?;
     Ok(())
@@ -5783,13 +5789,16 @@ fn run_proof_search<W: Write + ?Sized>(
     let sine_pruned = apply_proof_state_sine(output, heuristic_params.sine.as_deref(), &mut state)?;
     let relevancy_pruned = sine_pruned + apply_relevance_pruning(config, &mut state);
     let raw_clause_no = state.axioms().members();
-    let preproc_removed = apply_clause_set_preprocessing(
+    let preproc_result = apply_clause_set_preprocessing_with_docs(
+        output,
+        config,
         &mut state,
         heuristic_params.no_preproc,
         heuristic_params.replace_inj_defs,
         heuristic_params.eqdef_incrlimit,
         heuristic_params.eqdef_maxclauses,
     )?;
+    let preproc_removed = preproc_result.removed;
     let _choice_axioms =
         apply_choice_axiom_recognition(&mut state, heuristic_params.inst_choice_max_depth)?;
     apply_blocked_clause_elimination(
@@ -5822,7 +5831,8 @@ fn run_proof_search<W: Write + ?Sized>(
     if relevancy_pruned != 0 || config.search.completeness.incomplete {
         state.set_state_is_complete(false);
     }
-    let next_doc_ident = write_initial_clause_docs(output, config, &mut state)?;
+    let next_doc_ident =
+        write_initial_clause_docs(output, config, &mut state, preproc_result.next_doc_ident)?;
     let next_doc_ident =
         write_watchlist_initial_clause_docs(output, config, &mut state, next_doc_ident)?;
 
@@ -6913,6 +6923,13 @@ fn apply_relevance_pruning(
     removed
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClausePreprocessingResult {
+    removed: i64,
+    next_doc_ident: i64,
+}
+
+#[cfg(test)]
 fn apply_clause_set_preprocessing(
     state: &mut crate::clauses::proofstate::ProofState,
     no_preprocessing: bool,
@@ -6920,12 +6937,95 @@ fn apply_clause_set_preprocessing(
     eqdef_incrlimit: i64,
     eqdef_maxclauses: i64,
 ) -> Result<i64, EProverError> {
+    let (mut tmp_bank, mut removed) = apply_clause_set_preprocessing_prefix(
+        state,
+        no_preprocessing,
+        replace_injectivity_defs,
+        eqdef_incrlimit,
+        eqdef_maxclauses,
+    )?;
+    let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
+    removed += clause_set_unfold_eq_def_normalize(
+        axioms,
+        watchlist,
+        archive,
+        &mut tmp_bank,
+        bank,
+        eqdef_incrlimit,
+        eqdef_maxclauses,
+    )?;
+    Ok(removed)
+}
+
+fn apply_clause_set_preprocessing_with_docs<W: Write + ?Sized>(
+    output: &mut ConfiguredOutput<'_, W>,
+    config: &EProverConfig,
+    state: &mut crate::clauses::proofstate::ProofState,
+    no_preprocessing: bool,
+    replace_injectivity_defs: bool,
+    eqdef_incrlimit: i64,
+    eqdef_maxclauses: i64,
+) -> Result<ClausePreprocessingResult, EProverError> {
+    let (mut tmp_bank, mut removed) = apply_clause_set_preprocessing_prefix(
+        state,
+        no_preprocessing,
+        replace_injectivity_defs,
+        eqdef_incrlimit,
+        eqdef_maxclauses,
+    )?;
+
+    let next_doc_ident = if config.output_level >= 2 {
+        let mut rendered = String::new();
+        let mut session = clause_proof_doc_session(config, 1)?;
+        {
+            let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
+            removed += clause_set_unfold_eq_def_normalize_with_docs(
+                &mut rendered,
+                &mut session,
+                axioms,
+                watchlist,
+                archive,
+                &mut tmp_bank,
+                bank,
+                eqdef_incrlimit,
+                eqdef_maxclauses,
+            )?;
+        }
+        output.write_all(rendered.as_bytes())?;
+        session.id_source.current_ident().saturating_add(1)
+    } else {
+        let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
+        removed += clause_set_unfold_eq_def_normalize(
+            axioms,
+            watchlist,
+            archive,
+            &mut tmp_bank,
+            bank,
+            eqdef_incrlimit,
+            eqdef_maxclauses,
+        )?;
+        1
+    };
+
+    Ok(ClausePreprocessingResult {
+        removed,
+        next_doc_ident,
+    })
+}
+
+fn apply_clause_set_preprocessing_prefix(
+    state: &mut crate::clauses::proofstate::ProofState,
+    no_preprocessing: bool,
+    replace_injectivity_defs: bool,
+    eqdef_incrlimit: i64,
+    eqdef_maxclauses: i64,
+) -> Result<(TermBank, i64), EProverError> {
     let mut tmp_bank = TermBank::new(state.terms().signature().clone())?;
     {
         let (bank, axioms, ax_archive) = state.terms_axioms_ax_archive_mut();
         let _archived = clause_set_archive_copy(ax_archive, axioms, bank)?;
     }
-    let (bank, axioms, watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
+    let (bank, axioms, _watchlist, archive) = state.terms_axioms_watchlist_archive_mut();
     let mut removed = 0;
     if !no_preprocessing {
         removed += clause_set_preprocess(
@@ -6938,16 +7038,7 @@ fn apply_clause_set_preprocessing(
             eqdef_maxclauses,
         )?;
     }
-    removed += clause_set_unfold_eq_def_normalize(
-        axioms,
-        watchlist,
-        archive,
-        &mut tmp_bank,
-        bank,
-        eqdef_incrlimit,
-        eqdef_maxclauses,
-    )?;
-    Ok(removed)
+    Ok((tmp_bank, removed))
 }
 
 fn apply_choice_axiom_recognition(
@@ -7089,14 +7180,15 @@ fn write_initial_clause_docs<W: Write + ?Sized>(
     output: &mut ConfiguredOutput<'_, W>,
     config: &EProverConfig,
     state: &mut crate::clauses::proofstate::ProofState,
+    start_ident: i64,
 ) -> Result<i64, EProverError> {
     if config.output_level < 2 {
-        return Ok(1);
+        return Ok(start_ident);
     }
 
     let source_infos = initial_doc_source_infos(state, state.axioms());
     let (bank, axioms) = state.terms_and_axioms_mut();
-    write_clause_set_initial_docs(output, config, bank, axioms, 1, &source_infos)
+    write_clause_set_initial_docs(output, config, bank, axioms, start_ident, &source_infos)
 }
 
 fn write_watchlist_initial_clause_docs<W: Write + ?Sized>(
@@ -7134,19 +7226,7 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
     start_ident: i64,
     source_infos: &[Option<ClauseInfo>],
 ) -> Result<i64, EProverError> {
-    let mut session = ProofDocSession::new(
-        proof_doc_output_format(config),
-        config.output_level,
-        crate::basics::simple_stuff::ProblemType::FirstOrder,
-    );
-    session.pcl_shell_level = i32::try_from(config.pcl_output.shell_level).map_err(|_| {
-        Diagnostic::new(
-            ErrorCode::OTHER_ERROR,
-            "configured PCL shell level is outside C int range",
-        )
-    })?;
-    session.step_options = pcl_step_print_options(config);
-    session.id_source = ProofDocIdSource::from_current(start_ident.saturating_sub(1));
+    let mut session = clause_proof_doc_session(config, start_ident)?;
 
     for (index, clause) in set.iter_mut().enumerate() {
         let original_info = if clause.info().is_none() {
@@ -7183,6 +7263,26 @@ fn write_clause_set_initial_docs<W: Write + ?Sized>(
         }
     }
     Ok(session.id_source.current_ident().saturating_add(1))
+}
+
+fn clause_proof_doc_session(
+    config: &EProverConfig,
+    start_ident: i64,
+) -> Result<ProofDocSession, EProverError> {
+    let mut session = ProofDocSession::new(
+        proof_doc_output_format(config),
+        config.output_level,
+        crate::basics::simple_stuff::ProblemType::FirstOrder,
+    );
+    session.pcl_shell_level = i32::try_from(config.pcl_output.shell_level).map_err(|_| {
+        Diagnostic::new(
+            ErrorCode::OTHER_ERROR,
+            "configured PCL shell level is outside C int range",
+        )
+    })?;
+    session.step_options = pcl_step_print_options(config);
+    session.id_source = ProofDocIdSource::from_current(start_ident.saturating_sub(1));
+    Ok(session)
 }
 
 fn initial_doc_source_infos(
@@ -18247,6 +18347,14 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(printed.contains("p(a)"));
         assert!(!printed.contains("p(f(a))"));
         assert!(!printed.contains(&format!("file('{path_arg}', def)")));
+        assert!(printed.contains("inference(rw, [status(thm)]"));
+        let unfolding_index = printed
+            .find("['Unfolding']")
+            .expect("unfolded clause should be documented");
+        let initial_index = printed
+            .find(&format!("file('{path_arg}', use)"))
+            .expect("rewritten clause should still receive initial documentation");
+        assert!(unfolding_index < initial_index);
         assert!(printed.contains("\n% Pruning successful!\n% SZS status Unknown\n"));
         assert!(stderr.is_empty());
         std::fs::remove_file(&path).unwrap();
@@ -24012,14 +24120,16 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        let input_doc = format!("cnf(c_0_1, axiom, (p(a)), file('{path_arg}', input)).\n");
+        let input_doc = format!("cnf(c_0_2, axiom, (p(a)), file('{path_arg}', input)).\n");
         let watch_doc =
-            format!("cnf(c_0_2, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
+            format!("cnf(c_0_3, watchlist, (p(a)), file('{path_arg}', watch),['wl']).\n");
         let final_doc =
-            "cnf(c_0_3, plain, (p(a)), c_0_1,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+            "cnf(c_0_4, plain, (p(a)), c_0_2,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+        let unfold_doc_pos = printed.find("Unfolding").unwrap();
         let input_doc_pos = printed.find(&input_doc).unwrap();
         let watch_doc_pos = printed.find(&watch_doc).unwrap();
         let final_doc_pos = printed.find(final_doc).unwrap();
+        assert!(unfold_doc_pos < input_doc_pos);
         assert!(input_doc_pos < watch_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
         assert!(!printed.contains("p(f(a))"));
@@ -24064,14 +24174,16 @@ input_clause(c2,axiom,[++q(X)]).
 
         let printed = String::from_utf8(stdout).unwrap();
         assert_eq!(status, ErrorCode::RESOURCE_OUT.exit_status());
-        let input_doc = format!("cnf(c_0_1, axiom, (p(a)), file('{input_arg}', input)).\n");
+        let input_doc = format!("cnf(c_0_2, axiom, (p(a)), file('{input_arg}', input)).\n");
         let watch_doc =
-            format!("cnf(c_0_2, watchlist, (p(a)), file('{watch_path_arg}', watch),['wl']).\n");
+            format!("cnf(c_0_3, watchlist, (p(a)), file('{watch_path_arg}', watch),['wl']).\n");
         let final_doc =
-            "cnf(c_0_3, plain, (p(a)), c_0_1,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+            "cnf(c_0_4, plain, (p(a)), c_0_2,['final_subsumes_wl']).\n\n% Watchlist is empty!\n";
+        let unfold_doc_pos = printed.find("Unfolding").unwrap();
         let input_doc_pos = printed.find(&input_doc).unwrap();
         let watch_doc_pos = printed.find(&watch_doc).unwrap();
         let final_doc_pos = printed.find(final_doc).unwrap();
+        assert!(unfold_doc_pos < input_doc_pos);
         assert!(input_doc_pos < watch_doc_pos);
         assert!(watch_doc_pos < final_doc_pos);
         assert!(!printed.contains("p(f(a))"));
