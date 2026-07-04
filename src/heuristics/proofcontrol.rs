@@ -289,7 +289,14 @@ pub struct ForwardContractCounts {
 pub struct CleanupUnprocessedOutcome {
     pub unsatisfiable: Option<Clause>,
     pub orphaned_deleted: i64,
+    pub orphan_cleanup_triggered: bool,
+    pub orphan_cleanup_deleted: i64,
+    pub orphan_cleanup_remaining: i64,
+    pub forward_contract_triggered: bool,
     pub forward_contract_deleted: u64,
+    pub forward_contract_remaining: i64,
+    pub delete_bad_triggered: bool,
+    pub delete_bad_orphaned_deleted: i64,
     pub bad_deleted: i64,
     pub term_gc_recovered: i64,
 }
@@ -2725,6 +2732,9 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
 
     if unsigned_delta_exceeds_limit(orphan_delta, control.heuristic_parms().filter_orphans_limit) {
         let deleted = clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead);
+        outcome.orphan_cleanup_triggered = true;
+        outcome.orphan_cleanup_deleted = deleted;
+        outcome.orphan_cleanup_remaining = state.unprocessed().members();
         outcome.orphaned_deleted += deleted;
         state.statistics_mut().other_redundant_count += i64_to_u64_saturating(deleted);
         state.statistics_mut().filter_orphans_base = back_simplified;
@@ -2756,7 +2766,9 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
             }
         };
         *state.unprocessed_mut() = unprocessed;
+        outcome.forward_contract_triggered = true;
         outcome.forward_contract_deleted = count_eliminated;
+        outcome.forward_contract_remaining = state.unprocessed().members();
         state.statistics_mut().other_redundant_count += count_eliminated;
 
         if let Some(empty) = unsatisfiable {
@@ -2780,6 +2792,8 @@ pub fn proof_state_cleanup_unprocessed_clauses_with(
         let target_size = state.unprocessed().members() / 2;
         let deleted_orphans =
             clause_set_delete_orphans_with(state.unprocessed_mut(), &mut parent_is_dead);
+        outcome.delete_bad_triggered = true;
+        outcome.delete_bad_orphaned_deleted = deleted_orphans;
         outcome.orphaned_deleted += deleted_orphans;
         state.statistics_mut().non_redundant_deleted += i64_to_u64_saturating(deleted_orphans);
 
@@ -6773,6 +6787,9 @@ fn proof_state_saturate_impl(
         }
 
         let cleanup = proof_state_cleanup_unprocessed_clauses(state, control)?;
+        if let Some((output, output_level)) = output_context.as_mut() {
+            write_cleanup_unprocessed_output(&mut **output, *output_level, &cleanup)?;
+        }
         if let Some(clause) = cleanup.unsatisfiable {
             return Ok(proof_state_saturate_return_with_extract_root(
                 state,
@@ -6793,6 +6810,51 @@ fn proof_state_saturate_impl(
             ));
         }
     }
+}
+
+fn write_cleanup_unprocessed_output(
+    output: &mut dyn std::io::Write,
+    output_level: i64,
+    outcome: &CleanupUnprocessedOutcome,
+) -> Result<(), Diagnostic> {
+    if output_level == 0 {
+        return Ok(());
+    }
+
+    if outcome.orphan_cleanup_triggered {
+        let line = format!(
+            "{DEFAULT_COMCHAR_RAW} Deleted {} orphaned clauses (remaining: {})\n",
+            outcome.orphan_cleanup_deleted, outcome.orphan_cleanup_remaining
+        );
+        std::io::Write::write_all(output, line.as_bytes())
+            .map_err(|error| proof_control_io_error(&error))?;
+    }
+    if outcome.forward_contract_triggered {
+        let line = format!(
+            "{DEFAULT_COMCHAR_RAW} Special forward-contraction deletes {} clauses(remaining: {}) \n",
+            outcome.forward_contract_deleted, outcome.forward_contract_remaining
+        );
+        std::io::Write::write_all(output, line.as_bytes())
+            .map_err(|error| proof_control_io_error(&error))?;
+        if outcome.unsatisfiable.is_none() && output_level >= 1 {
+            let line = format!("{DEFAULT_COMCHAR_RAW} Reweighting unprocessed clauses...\n");
+            std::io::Write::write_all(output, line.as_bytes())
+                .map_err(|error| proof_control_io_error(&error))?;
+        }
+    }
+    if outcome.delete_bad_triggered {
+        let line = format!(
+            "{DEFAULT_COMCHAR_RAW} Deleted {} orphaned clauses and {} bad clauses (prover may be incomplete now)\n",
+            outcome.delete_bad_orphaned_deleted, outcome.bad_deleted
+        );
+        std::io::Write::write_all(output, line.as_bytes())
+            .map_err(|error| proof_control_io_error(&error))?;
+    }
+    Ok(())
+}
+
+fn proof_control_io_error(error: &std::io::Error) -> Diagnostic {
+    Diagnostic::new(ErrorCode::OTHER_ERROR, error.to_string())
 }
 
 fn proof_state_process_clause_for_saturate(
@@ -8024,12 +8086,13 @@ mod tests {
         proof_state_saturate, proof_state_saturate_with_global_indices,
         proof_state_saturate_with_output, proof_state_simplify_watchlist,
         proof_state_simplify_watchlist_with_docs, proof_state_storage_estimate,
-        select_inherited_literal, BackwardSimplificationOutcome, ForwardContractCounts,
-        ForwardContractOptions, GenerateNewClausesOutcome, LiteralSelectionOutcome,
-        ParentLivenessSnapshot, ProcessClauseOutcome, ProcessClauseReturnReason,
-        ProcessedClauseClass, ProofStateWatchlistOutcome, ReplacingInferenceOutcome,
-        SatSolverBackendKind, SaturateOutcome, SaturateReturnReason, SaturateStopReason,
-        DEFAULT_HEURISTICS, DEFAULT_WEIGHT_FUNCTIONS,
+        select_inherited_literal, write_cleanup_unprocessed_output, BackwardSimplificationOutcome,
+        CleanupUnprocessedOutcome, ForwardContractCounts, ForwardContractOptions,
+        GenerateNewClausesOutcome, LiteralSelectionOutcome, ParentLivenessSnapshot,
+        ProcessClauseOutcome, ProcessClauseReturnReason, ProcessedClauseClass,
+        ProofStateWatchlistOutcome, ReplacingInferenceOutcome, SatSolverBackendKind,
+        SaturateOutcome, SaturateReturnReason, SaturateStopReason, DEFAULT_HEURISTICS,
+        DEFAULT_WEIGHT_FUNCTIONS,
     };
     use crate::basics::error::ErrorCode;
     use crate::basics::partial_orderings::HoOrderKind;
@@ -10609,6 +10672,9 @@ mod tests {
             .unwrap_or_else(|err| panic!("{err}"));
 
         assert!(outcome.unsatisfiable.is_none());
+        assert!(outcome.orphan_cleanup_triggered);
+        assert_eq!(outcome.orphan_cleanup_deleted, 1);
+        assert_eq!(outcome.orphan_cleanup_remaining, 1);
         assert_eq!(outcome.orphaned_deleted, 1);
         assert_eq!(outcome.forward_contract_deleted, 0);
         assert_eq!(state.unprocessed().members(), 1);
@@ -10654,6 +10720,9 @@ mod tests {
             .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(outcome.orphaned_deleted, 1);
+        assert!(outcome.orphan_cleanup_triggered);
+        assert_eq!(outcome.orphan_cleanup_deleted, 1);
+        assert_eq!(outcome.orphan_cleanup_remaining, 1);
         assert_eq!(state.unprocessed().members(), 1);
         assert!(state.unprocessed().find_by_id(4_118).is_none());
         assert!(state.unprocessed().find_by_id(4_119).is_some());
@@ -10710,7 +10779,9 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{err}"));
 
         assert!(outcome.unsatisfiable.is_none());
+        assert!(outcome.forward_contract_triggered);
         assert_eq!(outcome.forward_contract_deleted, 1);
+        assert_eq!(outcome.forward_contract_remaining, 1);
         assert_eq!(state.unprocessed().members(), 1);
         let survivor = state.unprocessed().find_by_id(4_114).unwrap();
         assert!(survivor.evaluations().is_some());
@@ -10756,10 +10827,82 @@ mod tests {
         .unwrap_or_else(|err| panic!("{err}"));
 
         assert_eq!(outcome.bad_deleted, 1);
+        assert!(outcome.delete_bad_triggered);
+        assert_eq!(outcome.delete_bad_orphaned_deleted, 0);
         assert_eq!(state.unprocessed().members(), 1);
         assert!(!state.state_is_complete());
         assert_eq!(state.statistics().non_redundant_deleted, 0);
         assert!(outcome.term_gc_recovered >= 0);
+    }
+
+    #[test]
+    fn cleanup_unprocessed_output_renders_c_messages() {
+        let mut output = Vec::new();
+        let outcome = CleanupUnprocessedOutcome {
+            orphan_cleanup_triggered: true,
+            orphan_cleanup_deleted: 2,
+            orphan_cleanup_remaining: 5,
+            forward_contract_triggered: true,
+            forward_contract_deleted: 3,
+            forward_contract_remaining: 2,
+            delete_bad_triggered: true,
+            delete_bad_orphaned_deleted: 1,
+            bad_deleted: 4,
+            ..CleanupUnprocessedOutcome::default()
+        };
+
+        write_cleanup_unprocessed_output(&mut output, 1, &outcome)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Deleted 2 orphaned clauses (remaining: 5)\n\
+% Special forward-contraction deletes 3 clauses(remaining: 2) \n\
+% Reweighting unprocessed clauses...\n\
+% Deleted 1 orphaned clauses and 4 bad clauses (prover may be incomplete now)\n"
+        );
+    }
+
+    #[test]
+    fn cleanup_unprocessed_output_suppresses_reweight_after_empty_clause() {
+        let mut output = Vec::new();
+        let outcome = CleanupUnprocessedOutcome {
+            unsatisfiable: Some(Clause::empty()),
+            forward_contract_triggered: true,
+            forward_contract_deleted: 1,
+            forward_contract_remaining: 0,
+            ..CleanupUnprocessedOutcome::default()
+        };
+
+        write_cleanup_unprocessed_output(&mut output, 1, &outcome)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "% Special forward-contraction deletes 1 clauses(remaining: 0) \n"
+        );
+    }
+
+    #[test]
+    fn cleanup_unprocessed_output_is_quiet_at_output_level_zero() {
+        let mut output = Vec::new();
+        let outcome = CleanupUnprocessedOutcome {
+            orphan_cleanup_triggered: true,
+            orphan_cleanup_deleted: 2,
+            orphan_cleanup_remaining: 5,
+            forward_contract_triggered: true,
+            forward_contract_deleted: 3,
+            forward_contract_remaining: 2,
+            delete_bad_triggered: true,
+            delete_bad_orphaned_deleted: 1,
+            bad_deleted: 4,
+            ..CleanupUnprocessedOutcome::default()
+        };
+
+        write_cleanup_unprocessed_output(&mut output, 0, &outcome)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(output.is_empty());
     }
 
     #[test]
