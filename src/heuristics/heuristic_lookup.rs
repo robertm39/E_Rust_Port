@@ -1,32 +1,68 @@
 //! High-level heuristic lookup and inline-definition parsing from `che_heuristics`.
 
+use std::io::{self, Write};
+
+use crate::basics::defines::DEFAULT_COMCHAR_RAW;
 use crate::basics::error::{Diagnostic, ErrorCode};
 use crate::heuristics::clausesetfeatures::{spec_no_eq, SpecFeatureCell};
 use crate::heuristics::hcb::{
-    AcHandling, HcbCell, HeuristicParmsCell, DEFAULT_DELETE_BAD_LIMIT, HCB_DEFAULT_HEURISTIC,
+    heuristic_parms_print_string, AcHandling, HcbCell, HeuristicParmsCell,
+    DEFAULT_DELETE_BAD_LIMIT, HCB_DEFAULT_HEURISTIC,
 };
 use crate::heuristics::hcbadmin::{heuristic_def_parse_with_context, HcbAdmin};
 use crate::heuristics::wfcbadmin::{WeightParseContext, WfcbAdmin};
+use crate::inout::output::outprint_to;
 use crate::inout::scanner::{Scanner, TokenType};
 
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    reason = "C casts rlim_t through single-precision float before assigning to long long"
-)]
 pub fn finalize_auto_parms(
     parms: &HeuristicParmsCell,
     spec: &SpecFeatureCell,
 ) -> HeuristicParmsCell {
     let mut result = parms.clone();
+    apply_auto_parm_adjustments(&mut result, parms, spec);
+    result
+}
+
+pub fn finalize_auto_parms_with_output(
+    global_output: &mut impl Write,
+    stderr: &mut impl Write,
+    output_level: i64,
+    parms: &HeuristicParmsCell,
+    spec: &SpecFeatureCell,
+) -> io::Result<HeuristicParmsCell> {
+    let mut result = parms.clone();
+    if output_level != 0 {
+        global_output.write_all(b"Selected heuristic:\n")?;
+        stderr.write_all(heuristic_parms_print_string(&result).as_bytes())?;
+    }
+
+    let no_eq = spec_no_eq(spec);
+    apply_auto_parm_adjustments(&mut result, parms, spec);
+    if no_eq {
+        let message = format!("{DEFAULT_COMCHAR_RAW} No equality, disabling AC handling.\n#\n");
+        outprint_to(global_output, output_level, 1, &message)?;
+    }
+
+    Ok(result)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "C casts rlim_t through single-precision float before assigning to long long"
+)]
+fn apply_auto_parm_adjustments(
+    result: &mut HeuristicParmsCell,
+    parms: &HeuristicParmsCell,
+    spec: &SpecFeatureCell,
+) {
     if parms.mem_limit > 2 && parms.delete_bad_limit == DEFAULT_DELETE_BAD_LIMIT {
         result.delete_bad_limit = ((parms.mem_limit - 2) as f32 * 0.7) as i64;
     }
     if spec_no_eq(spec) {
         result.ac_handling = AcHandling::None;
     }
-    result
 }
 
 pub fn get_heuristic<'a>(
@@ -89,11 +125,12 @@ pub fn get_heuristic_handle_with_context(
 
 #[cfg(test)]
 mod tests {
-    use super::{finalize_auto_parms, get_heuristic};
+    use super::{finalize_auto_parms, finalize_auto_parms_with_output, get_heuristic};
     use crate::basics::error::ErrorCode;
     use crate::heuristics::clausesetfeatures::{SpecFeatureCell, SpecFeatureClass};
     use crate::heuristics::hcb::{
-        hcb_add_wfcb, hcb_alloc, AcHandling, HeuristicParmsCell, DEFAULT_DELETE_BAD_LIMIT,
+        hcb_add_wfcb, hcb_alloc, heuristic_parms_print_string, AcHandling, HeuristicParmsCell,
+        DEFAULT_DELETE_BAD_LIMIT,
     };
     use crate::heuristics::hcbadmin::HcbAdmin;
     use crate::heuristics::wfcbadmin::{weight_fun_parse, WfcbAdmin};
@@ -167,6 +204,84 @@ mod tests {
 
         assert_eq!(finalized.delete_bad_limit, DEFAULT_DELETE_BAD_LIMIT);
         assert_eq!(finalized.ac_handling, AcHandling::None);
+    }
+
+    #[test]
+    fn finalize_auto_parms_with_output_matches_c_stream_split_and_order() {
+        let parms = HeuristicParmsCell {
+            mem_limit: 1_000,
+            delete_bad_limit: DEFAULT_DELETE_BAD_LIMIT,
+            ac_handling: AcHandling::KeepOrientable,
+            ..HeuristicParmsCell::default()
+        };
+        let spec = SpecFeatureCell {
+            eq_clauses: 0,
+            ..SpecFeatureCell::default()
+        };
+        let mut global_output = Vec::new();
+        let mut stderr = Vec::new();
+
+        let finalized =
+            finalize_auto_parms_with_output(&mut global_output, &mut stderr, 1, &parms, &spec)
+                .unwrap();
+
+        assert_eq!(finalized.delete_bad_limit, 698);
+        assert_eq!(finalized.ac_handling, AcHandling::None);
+        assert_eq!(
+            String::from_utf8(global_output).unwrap(),
+            "Selected heuristic:\n% No equality, disabling AC handling.\n#\n"
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert_eq!(stderr, heuristic_parms_print_string(&parms));
+        assert!(stderr.contains("   delete_bad_limit:               9223372036854775807\n"));
+        assert!(stderr.contains("   ac_handling:                    3\n"));
+    }
+
+    #[test]
+    fn finalize_auto_parms_with_output_preserves_c_output_level_gates() {
+        let parms = HeuristicParmsCell {
+            ac_handling: AcHandling::KeepUnits,
+            ..HeuristicParmsCell::default()
+        };
+        let spec = SpecFeatureCell {
+            eq_clauses: 0,
+            ..SpecFeatureCell::default()
+        };
+        let mut zero_global_output = Vec::new();
+        let mut zero_stderr = Vec::new();
+
+        let zero_finalized = finalize_auto_parms_with_output(
+            &mut zero_global_output,
+            &mut zero_stderr,
+            0,
+            &parms,
+            &spec,
+        )
+        .unwrap();
+
+        assert_eq!(zero_finalized.ac_handling, AcHandling::None);
+        assert!(zero_global_output.is_empty());
+        assert!(zero_stderr.is_empty());
+
+        let mut negative_global_output = Vec::new();
+        let mut negative_stderr = Vec::new();
+        finalize_auto_parms_with_output(
+            &mut negative_global_output,
+            &mut negative_stderr,
+            -1,
+            &parms,
+            &spec,
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(negative_global_output).unwrap(),
+            "Selected heuristic:\n"
+        );
+        assert_eq!(
+            String::from_utf8(negative_stderr).unwrap(),
+            heuristic_parms_print_string(&parms)
+        );
     }
 
     #[test]
