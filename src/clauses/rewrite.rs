@@ -247,6 +247,7 @@ pub fn rewrite_with_clause_set_plain(
     );
 
     REWRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    demodulators.record_demod_index_search_attempt();
 
     let mut subst = Substitution::new();
     let Some(found) = find_plain_demodulator(
@@ -1903,9 +1904,12 @@ mod tests {
         let mut demod = Clause::alloc(EqnList::from_vec(vec![demod_lit]));
         demod.set_ident(41);
         demod.set_date(SysDate::from_raw(5));
-        let demods = ClauseSet::from_clauses([demod]);
+        demod.set_weight(demod.standard_weight());
+        let mut demods = ClauseSet::new_demod_indexed();
+        demods.indexed_insert_clause_owned(demod, &bank);
         let mut ocb = kbo_ocb(&bank);
 
+        assert_eq!(demods.demod_index_match_count(), 0);
         let rewritten = rewrite_with_clause_set_plain(
             &mut bank,
             &mut ocb,
@@ -1921,6 +1925,7 @@ mod tests {
         assert_eq!(f_b.rw_replace_field(), Some(a));
         assert!(f_b.is_top_rewritten());
         assert!(!f_b.is_rrewritten());
+        assert_eq!(demods.demod_index_match_count(), 1);
         assert!(REWRITE_ATTEMPTS.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_SUCCESSES.load(Ordering::Relaxed) >= 1);
         assert!(REWRITE_UNCACHED.load(Ordering::Relaxed) >= 1);

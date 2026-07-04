@@ -182,6 +182,28 @@ impl ClauseSet {
     }
 
     #[must_use]
+    pub fn demod_index_match_count(&self) -> u64 {
+        self.demod_index.as_ref().map_or(0, PdTree::match_count)
+    }
+
+    #[must_use]
+    pub fn demod_index_visited_count(&self) -> u64 {
+        self.demod_index.as_ref().map_or(0, PdTree::visited_count)
+    }
+
+    pub fn record_demod_index_search_attempt(&self) {
+        if let Some(index) = &self.demod_index {
+            index.record_search_attempt();
+        }
+    }
+
+    pub fn record_demod_index_nodes_visited(&self, count: u64) {
+        if let Some(index) = &self.demod_index {
+            index.record_nodes_visited(count);
+        }
+    }
+
+    #[must_use]
     pub fn demod_index_storage_estimate(&self) -> usize {
         self.demod_index
             .as_ref()

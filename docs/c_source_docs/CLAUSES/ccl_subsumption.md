@@ -169,7 +169,7 @@ Source files reviewed: `CLAUSES/ccl_subsumption.h`, `CLAUSES/ccl_subsumption.c`.
 
 ### Change Later
 
-- C's simplify-reflect functions receive indexed unit-clause sets, emit proof documentation from global output/id state, and push the raw simplifying `Clause_p` in `DCSR`. Rust currently uses plain-set lookup, explicit proof-doc sessions, and compact clause references; replace the lookup and parent representation with indexed lookup plus stable clause handles before proof-object reconstruction depends on parent identity.
+- C's simplify-reflect functions receive indexed unit-clause sets, emit proof documentation from global output/id state, and push the raw simplifying `Clause_p` in `DCSR`. Rust currently uses plain-set lookup with demodulator match-attempt accounting, explicit proof-doc sessions, and compact clause references; replace the lookup and parent representation with indexed lookup plus stable clause handles before proof-object reconstruction depends on parent identity.
 - Positive simplify-reflect's strong mode is controlled by the process-global `StrongUnitForwardSubsumption` in C. Rust now exposes the lower-level helper parameter while routing configured proof search through a `ProofControl` session flag; revisit only if later strategy scheduling needs C-global sharing semantics.
 - The simplify-reflect helpers mutate the target clause while iterating literal links in C. Rust uses index-based removal over owned literal vectors; keep tests around repeated removals and empty-clause return behavior before refactoring the loop.
 

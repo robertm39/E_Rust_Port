@@ -131,8 +131,9 @@ pub fn find_simplifying_unit<'set>(
     None
 }
 
-/// Simplifies `clause` with a plain unit set, matching C
-/// `ClauseSimplifyWithUnitSet` aside from the not-yet-owned demodulator index.
+/// Simplifies `clause` with a unit set, matching C
+/// `ClauseSimplifyWithUnitSet` aside from full `PDTreeFindNextDemodulator`
+/// traversal over live clause positions.
 ///
 /// Returns `false` when a same-signed unit subsumes the clause, otherwise
 /// returns `true` after applying all opposite-signed unit cuts.
@@ -221,6 +222,7 @@ fn find_top_simplifying_unit_with_sign<'set>(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<SimplifyingUnit<'set>> {
+    units.record_demod_index_search_attempt();
     units.iter().find_map(|clause| {
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
@@ -239,6 +241,7 @@ fn find_top_simplifying_unit_index(
     right: &Term,
     sign: Option<bool>,
 ) -> Option<usize> {
+    units.record_demod_index_search_attempt();
     units.iter().enumerate().find_map(|(index, clause)| {
         let literal = unit_literal(clause)?;
         if sign.is_some_and(|required| literal.is_positive() != required) {
@@ -406,6 +409,25 @@ mod tests {
             find_signed_top_simplifying_unit(&set, &b, &a, false).map(|unit| unit.clause().ident()),
             None
         );
+    }
+
+    #[test]
+    fn indexed_top_lookup_records_demodulator_search_attempts() {
+        let mut bank = test_bank();
+        let variable = typed_var(&bank, -10);
+        let a = typed_const(&mut bank, "unit_count_a");
+        let b = typed_const(&mut bank, "unit_count_b");
+        let mut positive_unit = clause_from(vec![literal(&mut bank, &variable, &a, true)]);
+        let mut set = ClauseSet::new_demod_indexed();
+
+        positive_unit.set_weight(positive_unit.standard_weight());
+        set.indexed_insert_clause_owned(positive_unit, &bank);
+
+        assert_eq!(set.demod_index_match_count(), 0);
+        assert!(find_top_simplifying_unit(&set, &b, &a).is_some());
+        assert_eq!(set.demod_index_match_count(), 1);
+        assert!(find_signed_top_simplifying_unit(&set, &b, &a, false).is_none());
+        assert_eq!(set.demod_index_match_count(), 2);
     }
 
     #[test]

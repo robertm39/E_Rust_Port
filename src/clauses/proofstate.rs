@@ -1498,7 +1498,8 @@ impl ProofState {
         self.write_processed_statistics(output)?;
         self.write_generation_statistics(output)?;
         self.write_satcheck_statistics(output)?;
-        self.write_clause_set_statistics(output, record_gc_selection)
+        self.write_clause_set_statistics(output, record_gc_selection)?;
+        self.write_demod_index_statistics(output)
     }
 
     fn write_processed_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
@@ -1739,6 +1740,19 @@ impl ProofState {
             )?;
         }
         Ok(())
+    }
+
+    fn write_demod_index_statistics(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Match attempts with oriented units   : {}",
+            self.processed_pos_rules.demod_index_match_count()
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Match attempts with unoriented units : {}",
+            self.processed_pos_eqns.demod_index_match_count()
+        )
     }
 
     #[must_use]
@@ -2452,6 +2466,25 @@ mod tests {
         assert!(state
             .statistics_string(false)
             .contains("Current number of archived formulas  : 1"));
+    }
+
+    #[test]
+    fn proof_state_statistics_reports_demod_index_match_attempts() {
+        let state = proof_state_alloc(FP_IGNORE_PROPS).unwrap();
+
+        state
+            .processed_pos_rules()
+            .record_demod_index_search_attempt();
+        state
+            .processed_pos_eqns()
+            .record_demod_index_search_attempt();
+        state
+            .processed_pos_eqns()
+            .record_demod_index_search_attempt();
+
+        let statistics = state.statistics_string(false);
+        assert!(statistics.contains("Match attempts with oriented units   : 1"));
+        assert!(statistics.contains("Match attempts with unoriented units : 2"));
     }
 
     #[test]

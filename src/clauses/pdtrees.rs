@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use crate::basics::intmap::{IntMap, IntMapKey};
@@ -28,6 +29,8 @@ pub struct PdTree {
     term_count: usize,
     live_node_count: usize,
     arr_storage_estimate: usize,
+    match_count: Cell<u64>,
+    visited_count: Cell<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -52,6 +55,8 @@ impl PdTree {
             term_count: 0,
             live_node_count: 0,
             arr_storage_estimate: 0,
+            match_count: Cell::new(0),
+            visited_count: Cell::new(0),
         }
     }
 
@@ -92,6 +97,26 @@ impl PdTree {
                 self.term_count
                     .saturating_mul(PDTREE_CELL_MEM.saturating_add(CLAUSEPOSCELL_MEM)),
             )
+    }
+
+    #[must_use]
+    pub fn match_count(&self) -> u64 {
+        self.match_count.get()
+    }
+
+    #[must_use]
+    pub fn visited_count(&self) -> u64 {
+        self.visited_count.get()
+    }
+
+    pub fn record_search_attempt(&self) {
+        self.match_count
+            .set(self.match_count.get().saturating_add(1));
+    }
+
+    pub fn record_nodes_visited(&self, count: u64) {
+        self.visited_count
+            .set(self.visited_count.get().saturating_add(count));
     }
 
     pub fn insert_term(&mut self, term: &Term) -> bool {
@@ -437,6 +462,21 @@ mod tests {
         assert_eq!(tree.node_count(), 0);
         assert_eq!(tree.arr_storage_estimate(), 0);
         assert_eq!(tree.storage_estimate(), 0);
+    }
+
+    #[test]
+    fn search_counters_start_zero_and_record_c_search_bookkeeping() {
+        let tree = PdTree::new();
+
+        assert_eq!(tree.match_count(), 0);
+        assert_eq!(tree.visited_count(), 0);
+
+        tree.record_search_attempt();
+        tree.record_nodes_visited(3);
+        tree.record_nodes_visited(2);
+
+        assert_eq!(tree.match_count(), 1);
+        assert_eq!(tree.visited_count(), 5);
     }
 
     #[test]

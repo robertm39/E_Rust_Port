@@ -263,7 +263,7 @@ Source files reviewed: `CLAUSES/ccl_clausesets.h`, `CLAUSES/ccl_clausesets.c`.
 ### Change Later
 
 - `ClauseSetExtractEntry` assumes `CPIsSIndexed` implies `clause->set->fvindex` is valid and calls `FVIndexDelete` unconditionally. Rust preserves the indexed-clause lifecycle for owned anchors, but later stable clause-handle APIs should make index membership explicit enough to prevent stale indexed bits, double deletes, or missing anchors from corrupting index counts.
-- Rust `ClauseSet` now owns an optional demodulator `PdTree`, marks `CPIsDIndexed` on C-style indexed insertion, deletes one indexed left/right-side occurrence on extraction, and includes `PDTreeStorage(set->demod_index)` in `ClauseSetStorage`. Full `PDTreeFindNextDemodulator` search still needs live `ClausePos` leaf handles and traversal state.
+- Rust `ClauseSet` now owns an optional demodulator `PdTree`, marks `CPIsDIndexed` on C-style indexed insertion, deletes one indexed left/right-side occurrence on extraction, records demodulator match attempts for indexed C search stand-ins, and includes `PDTreeStorage(set->demod_index)` in `ClauseSetStorage`. Full `PDTreeFindNextDemodulator` search still needs live `ClausePos` leaf handles and traversal state.
 - C clause sets reach each clause's owner bank implicitly through the literals. Rust currently has immutable-bank and mutable-bank maximal-marking entry points; collapse that split only after clause ownership can provide the same owner-bank context without passing it through every caller.
 
 ### Porting Focus
