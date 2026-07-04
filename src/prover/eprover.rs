@@ -8499,6 +8499,19 @@ fn write_proof_statistics(
         output,
         "{DEFAULT_COMCHAR_RAW} Condensation successes               : 0"
     )?;
+    #[cfg(feature = "measure-unification")]
+    {
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Unification attempts                 : {}",
+            crate::terms::match_mgu::unification_attempts()
+        )?;
+        writeln!(
+            output,
+            "{DEFAULT_COMCHAR_RAW} Unification successes                : {}",
+            crate::terms::match_mgu::unification_successes()
+        )?;
+    }
     writeln!(
         output,
         "{DEFAULT_COMCHAR_RAW} Termbank termtop insertions          : {}",
@@ -21417,6 +21430,16 @@ input_clause(c2,axiom,[++q(X)]).
         assert!(!printed.contains("% Match attempts with oriented units"));
         assert!(!printed.contains("% Oriented PDT nodes visited"));
         assert!(!printed.contains("% Unoriented PDT nodes visited"));
+        #[cfg(feature = "measure-unification")]
+        {
+            assert!(printed.contains("% Unification attempts                 : "));
+            assert!(printed.contains("% Unification successes                : "));
+        }
+        #[cfg(not(feature = "measure-unification"))]
+        {
+            assert!(!printed.contains("% Unification attempts"));
+            assert!(!printed.contains("% Unification successes"));
+        }
         assert!(!printed.contains("% Final garbage collected termcells"));
         assert!(!printed.contains("% Final shared term nodes"));
         assert!(printed.contains("% Termbank termtop insertions          : "));
@@ -21462,6 +21485,16 @@ input_clause(c2,axiom,[++q(X)]).
         {
             assert!(!printed.contains("% Oriented PDT nodes visited"));
             assert!(!printed.contains("% Unoriented PDT nodes visited"));
+        }
+        #[cfg(feature = "measure-unification")]
+        {
+            assert!(printed.contains("% Unification attempts                 : "));
+            assert!(printed.contains("% Unification successes                : "));
+        }
+        #[cfg(not(feature = "measure-unification"))]
+        {
+            assert!(!printed.contains("% Unification attempts"));
+            assert!(!printed.contains("% Unification successes"));
         }
         assert!(printed.contains("% Final garbage collected termcells    : "));
         assert!(printed.contains("% Final shared term nodes              : "));

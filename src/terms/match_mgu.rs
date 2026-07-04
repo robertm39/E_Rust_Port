@@ -1,7 +1,15 @@
+#[cfg(feature = "measure-unification")]
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use crate::basics::pqueue::PQueue;
 use crate::terms::subst::Substitution;
 use crate::terms::termfunc::{term_standard_weight, term_struct_equal_deref};
 use crate::terms::termtypes::{term_deref, DerefType, Term, DEFAULT_VWEIGHT, TP_PRED_POS};
+
+#[cfg(feature = "measure-unification")]
+static UNIFICATION_ATTEMPTS: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "measure-unification")]
+static UNIFICATION_SUCCESSES: AtomicI64 = AtomicI64::new(0);
 
 pub const MATCH_FAILED: i32 = -1;
 
@@ -29,6 +37,28 @@ pub const UNIF_SUCC: UnificationResult = true;
 #[must_use]
 pub const fn unif_failed(result: UnificationResult) -> bool {
     !result
+}
+
+#[cfg(feature = "measure-unification")]
+#[must_use]
+pub fn unification_attempts() -> i64 {
+    UNIFICATION_ATTEMPTS.load(Ordering::Relaxed)
+}
+
+#[cfg(feature = "measure-unification")]
+#[must_use]
+pub fn unification_successes() -> i64 {
+    UNIFICATION_SUCCESSES.load(Ordering::Relaxed)
+}
+
+#[cfg(feature = "measure-unification")]
+fn record_unification_attempt() {
+    UNIFICATION_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(feature = "measure-unification")]
+fn record_unification_success() {
+    UNIFICATION_SUCCESSES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Checks whether `var` occurs in `term` after full variable dereferencing.
@@ -136,6 +166,9 @@ pub fn subst_compute_match(matcher: &Term, to_match: &Term, subst: &mut Substitu
 /// arity/type metadata, if variable bindings would be untyped, if a traversed
 /// argument is uninitialized.
 pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool {
+    #[cfg(feature = "measure-unification")]
+    record_unification_attempt();
+
     if (t1.query_prop(TP_PRED_POS) && t2.is_free_var())
         || (t2.query_prop(TP_PRED_POS) && t1.is_free_var())
     {
@@ -196,7 +229,10 @@ pub fn subst_compute_mgu(t1: &Term, t2: &Term, subst: &mut Substitution) -> bool
         }
     }
 
-    if !result {
+    if result {
+        #[cfg(feature = "measure-unification")]
+        record_unification_success();
+    } else {
         subst.backtrack_to_pos(backtrack);
     }
     result
@@ -271,6 +307,8 @@ mod tests {
         subst_mgu_complete, unif_failed, verify_match, OracleUnifResult, UnifTermSide, UNIF_FAILED,
         UNIF_SUCC,
     };
+    #[cfg(feature = "measure-unification")]
+    use super::{unification_attempts, unification_successes};
     use crate::terms::signature::SIG_PHONY_APP_CODE;
     use crate::terms::simpletypes::Type;
     use crate::terms::subst::Substitution;
@@ -458,6 +496,25 @@ mod tests {
 
         assert!(!subst_compute_mgu(&pred, &x, &mut subst));
         assert!(subst.is_empty());
+    }
+
+    #[cfg(feature = "measure-unification")]
+    #[test]
+    fn mgu_measurement_counters_follow_c_attempt_success_points() {
+        let attempts_before = unification_attempts();
+        let successes_before = unification_successes();
+        let type_ = TypeBank::new().i_type();
+        let x = typed_var(-2, &type_);
+        let a = typed_const(10, &type_);
+        let containing_x = typed_term(20, std::slice::from_ref(&x), &type_);
+        let mut subst = Substitution::new();
+
+        assert!(subst_compute_mgu(&x, &a, &mut subst));
+        subst.backtrack();
+        assert!(!subst_compute_mgu(&x, &containing_x, &mut subst));
+
+        assert!(unification_attempts() >= attempts_before + 2);
+        assert!(unification_successes() > successes_before);
     }
 
     #[test]
