@@ -208,7 +208,7 @@ impl DynamicString {
 
     #[must_use]
     pub fn view(&self) -> Cow<'_, str> {
-        String::from_utf8_lossy(&self.bytes)
+        String::from_utf8_lossy(c_string_prefix(&self.bytes))
     }
 
     #[must_use]
@@ -461,6 +461,16 @@ mod tests {
 
         assert_eq!(string.view_bytes(), &[0xff, b'a']);
         assert_eq!(string.allocated_mem(), DSTR_GROW);
+    }
+
+    #[test]
+    fn view_returns_c_string_text_prefix() {
+        let mut string = DynamicString::new();
+
+        string.append_buffer(&[b'a', 0xff, 0, b'b']);
+
+        assert_eq!(string.view(), "a\u{fffd}");
+        assert_eq!(string.view_bytes(), &[b'a', 0xff, 0, b'b']);
     }
 
     #[test]
