@@ -223,6 +223,58 @@ impl<V: Clone> IntMap<V> {
     }
 
     #[must_use]
+    pub fn iter_range_c_mut(
+        &mut self,
+        lower_key: IntMapKey,
+        upper_key: IntMapKey,
+    ) -> Vec<(IntMapKey, V)> {
+        if lower_key > upper_key {
+            return Vec::new();
+        }
+
+        match &mut self.repr {
+            IntMapRepr::Empty => Vec::new(),
+            IntMapRepr::Single { key, value } => {
+                if *key >= lower_key && *key <= upper_key {
+                    value
+                        .as_ref()
+                        .map_or_else(Vec::new, |value| vec![(*key, value.clone())])
+                } else {
+                    Vec::new()
+                }
+            }
+            IntMapRepr::Array(array) => {
+                let upper = upper_key.min(self.max_key);
+                if lower_key > upper {
+                    return Vec::new();
+                }
+
+                let mut entries = Vec::new();
+                let mut key = lower_key;
+                loop {
+                    if let Some(value) = array.element(key).as_ref() {
+                        entries.push((key, value.clone()));
+                    }
+                    if key == upper || key == IntMapKey::MAX {
+                        break;
+                    }
+                    key += 1;
+                }
+                entries
+            }
+            IntMapRepr::Tree(tree) => {
+                let upper = upper_key.min(self.max_key);
+                if lower_key > upper {
+                    return Vec::new();
+                }
+                tree.range(lower_key..=upper)
+                    .filter_map(|(key, value)| value.as_ref().map(|value| (*key, value.clone())))
+                    .collect()
+            }
+        }
+    }
+
+    #[must_use]
     pub fn entries(&self) -> Vec<(IntMapKey, &V)> {
         match self.map_type() {
             IntMapType::Empty => Vec::new(),
@@ -559,6 +611,56 @@ mod tests {
 
         let entries = map.iter_range(3, 6);
         assert_eq!(entries, vec![(3, &30), (5, &50)]);
+    }
+
+    #[test]
+    fn c_iterator_for_array_starts_at_raw_lower_key_and_grows_backing_range() {
+        let mut map = IntMap::new();
+        map.assign(10, "ten");
+        map.assign(11, "eleven");
+        assert_eq!(map.map_type(), IntMapType::Array);
+        let before_storage = map.storage_estimate();
+
+        let entries = map.iter_range_c_mut(9, 11);
+
+        assert_eq!(entries, vec![(10, "ten"), (11, "eleven")]);
+        assert!(map.storage_estimate() > before_storage);
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(11));
+        assert_eq!(map.entry_count_estimate(), 2);
+    }
+
+    #[test]
+    fn ordinary_iter_range_stays_non_mutating_for_array_lower_miss() {
+        let mut map = IntMap::new();
+        map.assign(10, "ten");
+        map.assign(11, "eleven");
+        assert_eq!(map.map_type(), IntMapType::Array);
+        let before_storage = map.storage_estimate();
+
+        let entries = map.iter_range(9, 11);
+
+        assert_eq!(entries, vec![(10, &"ten"), (11, &"eleven")]);
+        assert_eq!(map.storage_estimate(), before_storage);
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(11));
+        assert_eq!(map.entry_count_estimate(), 2);
+    }
+
+    #[test]
+    fn c_iterator_returns_empty_for_range_above_tree_bounds() {
+        let mut map = IntMap::new();
+        map.assign(10, "ten");
+        map.assign(11, "eleven");
+        map.assign(100, "hundred");
+        assert_eq!(map.map_type(), IntMapType::Tree);
+
+        let entries = map.iter_range_c_mut(101, 200);
+
+        assert!(entries.is_empty());
+        assert_eq!(map.min_key(), Some(10));
+        assert_eq!(map.max_key(), Some(100));
+        assert_eq!(map.entry_count_estimate(), 3);
     }
 
     #[test]

@@ -126,6 +126,7 @@ Source files reviewed: `BASICS/clb_intmap.h`, `BASICS/clb_intmap.c`.
 - Compile-time branches are real behavior variants; decide whether each becomes a Cargo feature, cfg flag, or a single supported path.
 - Assertions document invariants expected by internal callers; translate important ones into debug assertions or explicit validation.
 - Global variables are often configuration or shared caches; preserve initialization and mutation timing.
+- `IntMapIterAlloc` clamps the public iterator bounds, but for array-backed maps it initializes the scan cursor from the raw caller `lower_key`; `IntMapIterNext` then calls `PDRangeArrElementP` while scanning, so iterating below the current range-array offset can allocate and shift backing storage without changing map bounds or entries.
 
 ### Porting Focus
 
@@ -136,4 +137,5 @@ Source files reviewed: `BASICS/clb_intmap.h`, `BASICS/clb_intmap.c`.
 ### Change Later
 
 - `IntMapGetVal` and `IntMapDelKey` call `PDRangeArrElementP` for array-backed maps whenever `key <= max_key`, so a failed read or delete below the current range-array offset can allocate and shift the backing array without changing `min_key`, `max_key`, or `entry_no`. Rust preserves this through mutable lookup/delete and storage-estimate tests; a cleaned API should split side-effect-free lookup from C-compatible ranged-array access after callers are audited.
+- Array-backed `IntMap` iteration can allocate and shift backing storage during a read-only-looking traversal when the requested lower bound is below the current range-array offset. Rust quarantines this behavior in an explicit C-shaped mutating iterator; cleaned callers should prefer side-effect-free iteration once compatibility-sensitive paths are identified.
 <!-- END MANUAL REVIEW: c_source_docs -->
